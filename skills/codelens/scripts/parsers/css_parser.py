@@ -1,135 +1,191 @@
 """
-CSS Parser for CodeLens
-Extracts all selectors that reference class (.xxx) or id (#xxx).
+CSS Parser for CodeLens — Tree-sitter powered
+Extracts selectors referencing class (.xxx) or id (#xxx).
 
-Rules:
-- .btn-primary { ... } → reference to class `btn-primary`
-- #sidebar-nav { ... } → reference to id `sidebar-nav`
+Handles:
+- Standard CSS selectors
 - Compound selectors: .modal .btn-primary → references BOTH
-- Same selector appearing 2+ times → flag `duplicate_define`
-- Ignore: selectors inside comments /* */
-- Ignore: selectors inside @keyframes
-- Pseudo-class stripped for matching: .btn-primary:hover → match to class `btn-primary`
+- Pseudo-classes stripped for matching: .btn-primary:hover → class "btn-primary"
+- duplicate_define detection (same selector 2+ times)
+- Comments ignored automatically by tree-sitter
+- @keyframes blocks ignored
+- SCSS/Less: basic support via fallback regex for preprocessor syntax
 """
 
 import re
 from typing import Dict, List, Any
+from tree_sitter import Node
+
+from base_parser import BaseParser
+from grammar_loader import get_grammar_loader
 
 
-def strip_css_comments(content: str) -> str:
-    """Remove CSS comments before parsing."""
-    return re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+class CSSParser(BaseParser):
+    """Parse CSS to extract class and id selector references."""
 
+    # Node types that contain selectors we care about
+    SELECTOR_TYPES = {
+        'class_selector',       # .btn-primary
+        'id_selector',          # #sidebar-nav
+        'selector',             # compound selector
+        'descendant_selector',  # .modal .btn
+        'child_selector',       # .modal > .btn
+        'sibling_selector',     # .btn + .btn
+        'adjacent_sibling_selector',
+        'pseudo_class_selector', # .btn:hover
+        'pseudo_element_selector',
+        'attribute_selector',
+        'universal_selector',
+        'nesting_selector',     # & .child (SCSS/Less)
+    }
 
-def strip_keyframes(content: str) -> str:
-    """Remove @keyframes blocks before parsing."""
-    return re.sub(r'@keyframes\s+[^{]+\{[^}]*(?:\{[^}]*\}[^}]*)*\}', '', content, flags=re.DOTALL)
+    def __init__(self):
+        loader = get_grammar_loader()
+        lang = loader.get_language('css')
+        if not lang:
+            raise RuntimeError("tree-sitter-css not installed")
+        super().__init__(lang)
 
+    def extract_references(self, content: str, file_path: str) -> Dict[str, List[Dict]]:
+        """
+        Extract class and id references from CSS content.
 
-def extract_class_names(selector: str) -> List[str]:
-    """Extract class names from a selector string."""
-    # Match .classname (not just .digit)
-    matches = re.findall(r'\.([a-zA-Z_][\w-]*)', selector)
-    return matches
+        Returns:
+            {"classes": [...], "ids": [...]}
+        """
+        source = content.encode('utf-8')
+        tree = self.parse(source)
 
+        classes = []
+        ids = []
 
-def extract_id_names(selector: str) -> List[str]:
-    """Extract id names from a selector string."""
-    matches = re.findall(r'#([a-zA-Z_][\w-]*)', selector)
-    return matches
+        # Track selectors per name for duplicate_define
+        selector_defs: Dict[str, List[int]] = {}  # "class:name" or "id:name" → [line_numbers]
 
+        def visit(node: Node, _, depth):
+            # Skip @keyframes
+            if node.type == 'keyframes_statement':
+                return False  # Don't descend into keyframes
 
-def extract_css_references(content: str, file_path: str) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Extract class and id references from CSS content.
+            if node.type == 'class_selector':
+                self._extract_class_selector(node, source, file_path, classes, selector_defs)
+            elif node.type == 'id_selector':
+                self._extract_id_selector(node, source, file_path, ids, selector_defs)
+            elif node.type == 'pseudo_class_selector':
+                self._extract_pseudo_class(node, source, file_path, classes, ids, selector_defs)
 
-    Returns:
-        {
-            "classes": [{"name": str, "line": int, "flag": str|None, "path": str}],
-            "ids": [{"name": str, "line": int, "flag": str|None, "path": str}]
-        }
-    """
-    cleaned = strip_css_comments(content)
-    cleaned = strip_keyframes(cleaned)
-    lines = cleaned.split('\n')
+        self.walk_tree(tree, source, visit)
 
-    classes = []
-    ids = []
+        # Flag duplicate_define
+        self._flag_duplicates(classes, selector_defs, "class")
+        self._flag_duplicates(ids, selector_defs, "id")
 
-    # Track selectors across the file to detect duplicate_define
-    selector_locations: Dict[str, List[int]] = {}  # selector_name → [line_numbers]
+        # Also handle SCSS/Less that tree-sitter-css might not parse well
+        # Fallback regex for preprocessor syntax
+        if content.strip().startswith(('<style', '@use', '@import', '//', '/*')) or \
+           any(x in content for x in ['$', '@mixin', '@include', '@extend', '::']):
+            self._scss_fallback(content, file_path, classes, ids, selector_defs)
+            self._flag_duplicates(classes, selector_defs, "class")
+            self._flag_duplicates(ids, selector_defs, "id")
 
-    for line_num, line in enumerate(lines, 1):
-        # Find all CSS rule blocks by looking for selectors before {
-        # This handles single-line and multi-line rules
-        line_stripped = line.strip()
+        return {"classes": classes, "ids": ids}
 
-        # Skip empty lines, @media, @import, @font-face, property-only lines
-        if not line_stripped or line_stripped.startswith('@') or line_stripped.startswith('}') or ':' in line_stripped.split('{')[0] == '' and '{' not in line_stripped:
-            pass
+    def _extract_class_selector(self, node: Node, source: bytes,
+                                 file_path: str, classes: List, selector_defs: Dict):
+        """Extract class name from a class_selector node (.xxx)."""
+        # class_selector has children: "." + class_name
+        for child in node.children:
+            if child.type == 'class_name' or child.type == 'identifier':
+                name = self.get_text(child, source)
+                line = self.get_line(node)
+                classes.append({
+                    "name": name,
+                    "line": line,
+                    "flag": None,
+                    "path": file_path
+                })
+                key = f"class:{name}"
+                if key not in selector_defs:
+                    selector_defs[key] = []
+                selector_defs[key].append(line)
+                break
 
-        # Extract selectors from lines that contain { or are part of a selector
-        if '{' in line_stripped or (not any(c in line_stripped for c in [':', ';']) and line_stripped and not line_stripped.startswith('}')):
-            # Get the selector part (before {)
-            selector_part = line_stripped.split('{')[0].strip() if '{' in line_stripped else line_stripped
+    def _extract_id_selector(self, node: Node, source: bytes,
+                              file_path: str, ids: List, selector_defs: Dict):
+        """Extract id name from an id_selector node (#xxx)."""
+        for child in node.children:
+            if child.type == 'id_name' or child.type == 'identifier':
+                name = self.get_text(child, source)
+                line = self.get_line(node)
+                ids.append({
+                    "name": name,
+                    "line": line,
+                    "flag": None,
+                    "path": file_path
+                })
+                key = f"id:{name}"
+                if key not in selector_defs:
+                    selector_defs[key] = []
+                selector_defs[key].append(line)
+                break
 
-            if not selector_part or selector_part.startswith('@'):
+    def _extract_pseudo_class(self, node: Node, source: bytes,
+                               file_path: str, classes: List, ids: List, selector_defs: Dict):
+        """Extract class/id from pseudo-class selectors like .btn:hover."""
+        # pseudo_class_selector: class_selector + ":" + "hover"
+        for child in node.children:
+            if child.type == 'class_selector':
+                self._extract_class_selector(child, source, file_path, classes, selector_defs)
+            elif child.type == 'id_selector':
+                self._extract_id_selector(child, source, file_path, ids, selector_defs)
+
+    def _flag_duplicates(self, entries: List[Dict], selector_defs: Dict, entry_type: str):
+        """Flag entries with duplicate_define."""
+        for entry in entries:
+            key = f"{entry_type}:{entry['name']}"
+            lines = selector_defs.get(key, [])
+            if len(lines) > 1 and entry['line'] != lines[0]:
+                entry['flag'] = 'duplicate_define'
+
+    def _scss_fallback(self, content: str, file_path: str,
+                        classes: List, ids: List, selector_defs: Dict):
+        """Fallback regex for SCSS/Less syntax that tree-sitter-css can't parse."""
+        existing_class_names = {c["name"] for c in classes}
+        existing_id_names = {i["name"] for i in ids}
+
+        for line_num, line in enumerate(content.split('\n'), 1):
+            # SCSS interpolation #{...} — skip lines with interpolation
+            if '#{' in line:
                 continue
 
-            # Split compound selectors (comma-separated)
-            individual_selectors = [s.strip() for s in selector_part.split(',')]
-
-            for sel in individual_selectors:
-                if not sel:
-                    continue
-
-                # Extract class references
-                class_names = extract_class_names(sel)
-                for cls_name in class_names:
-                    # Strip pseudo-classes from the name (already handled by regex)
-                    entry = {
-                        "name": cls_name,
+            # Extract class selectors
+            for match in re.finditer(r'\.([a-zA-Z_][\w-]*)', line):
+                name = match.group(1)
+                if name not in existing_class_names:
+                    classes.append({
+                        "name": name,
                         "line": line_num,
                         "flag": None,
                         "path": file_path
-                    }
-                    classes.append(entry)
+                    })
+                    key = f"class:{name}"
+                    if key not in selector_defs:
+                        selector_defs[key] = []
+                    selector_defs[key].append(line_num)
+                    existing_class_names.add(name)
 
-                    key = f"class:{cls_name}"
-                    if key not in selector_locations:
-                        selector_locations[key] = []
-                    selector_locations[key].append(line_num)
-
-                # Extract id references
-                id_names = extract_id_names(sel)
-                for id_name in id_names:
-                    entry = {
-                        "name": id_name,
+            # Extract id selectors
+            for match in re.finditer(r'#([a-zA-Z_][\w-]*)', line):
+                name = match.group(1)
+                if name not in existing_id_names:
+                    ids.append({
+                        "name": name,
                         "line": line_num,
                         "flag": None,
                         "path": file_path
-                    }
-                    ids.append(entry)
-
-                    key = f"id:{id_name}"
-                    if key not in selector_locations:
-                        selector_locations[key] = []
-                    selector_locations[key].append(line_num)
-
-    # Flag duplicate_define: same selector defined more than once in this file
-    for entry in classes:
-        key = f"class:{entry['name']}"
-        if len(selector_locations.get(key, [])) > 1:
-            # Only flag subsequent definitions, not the first
-            locs = selector_locations[key]
-            if entry['line'] != locs[0]:
-                entry['flag'] = 'duplicate_define'
-
-    for entry in ids:
-        key = f"id:{entry['name']}"
-        if len(selector_locations.get(key, [])) > 1:
-            locs = selector_locations[key]
-            if entry['line'] != locs[0]:
-                entry['flag'] = 'duplicate_define'
-
-    return {"classes": classes, "ids": ids}
+                    })
+                    key = f"id:{name}"
+                    if key not in selector_defs:
+                        selector_defs[key] = []
+                    selector_defs[key].append(line_num)
+                    existing_id_names.add(name)

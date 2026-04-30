@@ -1,91 +1,120 @@
-# Query Examples
+# Query Examples — v2
 
-## codelens_query — Contoh Use Case
+## codelens_query
 
 ### Cek sebelum buat ID baru
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" query "modal-btn" /path/to/workspace --domain frontend
 ```
-→ Cek apakah `#modal-btn` sudah ada di HTML/CSS/JS.
 
-### Cek sebelum buat class baru
+### Cek sebelum buat className baru (React/TSX)
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" query "card-wrapper" /path/to/workspace --domain frontend
 ```
 
-### Cek sebelum buat function baru di Rust/JS backend
+### Cek sebelum buat function baru di Rust
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" query "verify_token" /path/to/workspace --domain backend
 ```
-→ Return node + semua callers + semua callees.
 
-### Cek function yang spesifik di file tertentu
+### Auto-detect domain
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" query "processData" /path/to/workspace
+```
+
+### Filter berdasarkan file
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" query "hash_password" /path/to/workspace --domain backend --file "src/utils/"
 ```
 
-### Auto-detect domain (cari di semua domain)
-```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" query "modal-btn" /path/to/workspace
-```
-→ Cari di frontend dulu, kalau tidak ketemu cari di backend.
-
 ---
 
-## codelens_list — Contoh Use Case
+## codelens_list
 
 ### Audit semua dead code
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter dead
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain backend --filter dead
 python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain all --filter dead
 ```
 
-### Cari semua ID collision (bug HTML)
+### Cari ID collision
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter collision
 ```
 
-### Cari semua CSS yang duplicate define
+### Cari duplicate CSS define
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter duplicate_define
 ```
 
-### Lihat semua referensi (full audit)
+### Cari semua yang reference dari banyak tempat
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter all
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain backend --filter all
+python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter duplicate_ref
+```
+
+### Full audit
+```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain all --filter all
 ```
 
-### Cari semua duplicate reference
+---
+
+## codelens_scan
+
+### Full scan
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter duplicate_ref
+python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
+```
+
+### Incremental scan (hanya file yang berubah)
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace --incremental
+```
+
+---
+
+## codelens_init
+
+### Initialize dengan auto-detect frameworks
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" init /path/to/workspace
+```
+
+---
+
+## codelens_detect
+
+### Detect frameworks saja
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" detect /path/to/workspace
 ```
 
 ---
 
 ## Interpretasi Output untuk AI
 
-### Ketika `found: true` dan `status: "active"`
-→ Sudah ada dan aktif dipakai. **JANGAN buat ulang.**
-→ Baca `js` array untuk tahu logic apa yang sudah ada.
+### `found: true` + `status: "active"`
+→ Sudah ada dan aktif. **JANGAN buat ulang.**
+→ Baca `js` array untuk tahu logic yang sudah ada.
 → Extend atau diskusi dengan user.
 
-### Ketika `found: true` dan `status: "dead"`
+### `found: true` + `status: "dead"`
 → Ada tapi tidak dipakai. Dua pilihan:
   1. Reuse — extend yang sudah ada
-  2. Hapus dulu — lalu buat baru yang bersih
-→ Tanya user mana yang diinginkan.
+  2. Hapus dulu — lalu buat baru
+→ Tanya user.
 
-### Ketika `found: true` dan `status: "duplicate_ref"`
-→ Dipanggil dari banyak tempat. Hati-hati saat mengubah — perubahan akan berdampak ke semua caller.
-→ List semua caller ke user sebelum edit.
+### `found: true` + `status: "duplicate_ref"`
+→ Dipanggil dari banyak tempat. Perubahan berdampak luas.
+→ List semua referrers ke user sebelum edit.
 
-### Ketika `found: true` dan `status: "collision"`
-→ Bug aktif — ID muncul di lebih dari 1 elemen HTML.
-→ Flag ke user segera, jangan lanjut tanpa fix ini dulu.
+### `found: true` + `status: "collision"`
+→ BUG AKTIF — ID muncul di >1 HTML elemen.
+→ Hentikan. Report ke user. Fix dulu.
 
-### Ketika `found: false`
-→ Aman. Nama belum dipakai di mana pun.
+### `found: true` + `duplicate_define: true` (backend)
+→ Function dengan nama sama di >1 file.
+→ Tunjukkan semua lokasi ke user.
+
+### `found: false`
+→ Aman. Nama belum dipakai.
 → Lanjut buat.

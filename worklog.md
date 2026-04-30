@@ -3,32 +3,56 @@
 ---
 Task ID: 1
 Agent: main
-Task: Build complete CodeLens skill — Live Codebase Reference Intelligence
+Task: Build CodeLens v1 skill (regex-based)
 
 Work Log:
-- Read all spec files: codelens-spec.md, SKILL.md, parser-rules.md, query-examples.md, status-codes.md
-- Explored existing skills directory structure to understand patterns (5 archetypes identified)
-- Created skill directory: /home/z/my-project/skills/codelens/
-- Built 5 parsers:
-  - html_parser.py: Extract id/class from HTML, detect collisions
-  - css_parser.py: Extract selectors, detect duplicate_define, handle @keyframes/comments
-  - js_frontend_parser.py: Detect DOM selector patterns (getElementById, querySelector, jQuery, getElementsByClassName)
-  - js_backend_parser.py: Extract function declarations (function, arrow, const fn) and calls
-  - rust_parser.py: Extract fn declarations (pub/async) and calls, handle impl blocks, skip macros
-- Built registry.py: Read/write .codelens JSON files, compute status (active/dead/duplicate_ref/collision/duplicate_define), build frontend and backend registries
-- Built codelens.py CLI: 5 commands (scan, query, list, watch, init)
-- Built file watcher with watchdog (falls back to polling)
-- Created SKILL.md with proper YAML frontmatter and AI workflow instructions
-- Created reference docs: parser-rules.md, query-examples.md, status-codes.md
-- Created setup.sh, LICENSE.txt, skill.json
-- Tested all commands on sample workspace with HTML/CSS/JS/Rust files
-- Fixed collision detection (changed from path-based to count-based)
-- Verified: scan (12 classes, 7 ids, 14 nodes, 17 edges), query (found/not found/collision), list (dead/collision/duplicate_ref/duplicate_define filters all working)
+- Created initial skill structure with 5 parsers (regex-based)
+- Built CLI with scan/query/list/watch/init commands
+- Tested on sample workspace
+- All basic features working
 
 Stage Summary:
-- CodeLens skill is fully functional and tested
-- All 5 parser types implemented: HTML, CSS, JS Frontend, JS Backend, Rust
-- All 5 CLI commands implemented: scan, query, list, watch, init
-- Registry format matches spec exactly (frontend.json + backend.json)
-- Status/flag system matches spec: active, dead, duplicate_ref, collision, duplicate_define
-- AI workflow documented in SKILL.md with trigger description
+- v1 shipped with regex parsers for HTML, CSS, JS Frontend, JS Backend, Rust
+
+---
+Task ID: 2
+Agent: main
+Task: Overhaul to CodeLens v2 (Tree-sitter Edition)
+
+Work Log:
+- Installed tree-sitter + 6 grammar packages (html, css, js, ts, rust, python)
+- Explored AST structures for all languages
+- Built base_parser.py — shared tree-sitter parser class with walk/find/inspect utilities
+- Built grammar_loader.py — lazy grammar loading with caching
+- Built framework_detect.py — auto-detect React, Vue, Svelte, Tailwind, Next.js, Angular from package.json
+- Built incremental.py — mtime-based incremental scan support
+- Built edge_resolver.py — cross-file function tracking with proper resolution
+- Rewrote HTML parser with tree-sitter-html (attribute-based extraction, auto-skip comments)
+- Rewrote CSS parser with tree-sitter-css (class_selector, id_selector nodes, @keyframes skip, SCSS fallback)
+- Rewrote JS Frontend parser with tree-sitter-javascript (call_expression AST, string arg extraction)
+- Rewrote JS Backend parser with tree-sitter-javascript (function_declaration, variable_declarator, arrow_function, call_expression)
+- Built TSX parser with tree-sitter-typescript (className extraction from JSX attributes, template literals, ternary, nested expressions; component detection)
+- Rewrote Rust parser with tree-sitter-rust (function_item, impl_item, field_expression, scoped_identifier; self.method tracking, trait impl)
+- Built Vue SFC parser (template class/:class/id extraction, scoped styles, SCSS/Less support)
+- Built Svelte parser (class: directive, scoped styles, :global modifier)
+- Built Tailwind detector (utility prefix matching, dynamic pattern flagging, config parsing, @apply tracking)
+- Updated registry.py with support for TSX/Vue/Svelte data sources and Tailwind metadata
+- Updated codelens.py CLI v2 with incremental scan, detect command, fallback parsers for missing grammars
+- Updated SKILL.md, reference docs, setup.sh, skill.json for v2
+- Full test on workspace with HTML+CSS+JS+TSX+Rust files:
+  - btn-primary: duplicate_ref (2 JS + 1 TSX), duplicate_define (3 CSS)
+  - duplicate-id: collision detected correctly
+  - verify_token: backend query with caller + unresolved callee
+  - processLogin: JS backend with callers + callees (validateUser, generateToken resolved)
+  - Modal component: component: true flag, className from TSX
+  - Incremental scan: "No changes detected" on unchanged workspace
+  - Dead code: 9 entries (4 frontend IDs, 5 backend functions)
+
+Stage Summary:
+- CodeLens v2 fully shipped with tree-sitter based parsing
+- 8 file types supported: HTML, CSS, JS, TS/TSX, Rust, Vue, Svelte, SCSS/Less
+- 6 tree-sitter grammars + regex fallbacks
+- Framework auto-detection (React, Vue, Svelte, Tailwind, Next.js, Angular)
+- Incremental scan support
+- Cross-file edge resolution
+- All tests passing

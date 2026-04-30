@@ -1,48 +1,38 @@
-# Parser Rules per Bahasa
+# Parser Rules per Bahasa — v2 (Tree-sitter Edition)
 
-## HTML Parser
+## HTML Parser (tree-sitter-html)
 
-**Target:** Extract semua `id` dan `class` dari elemen HTML.
+**Target:** Extract `id` dan `class` dari elemen HTML.
 
 **Rules:**
 - `id="xxx"` → daftarkan ke registry sebagai type `id`
-- `class="a b c"` → split by space, daftarkan masing-masing sebagai type `class`
-- Jika `id` yang sama ditemukan di lebih dari 1 elemen → flag `collision`
-- Ignore: `id` dan `class` di dalam comment `<!-- -->`
-- Ignore: template literals yang belum di-render (misal `id="{{ variable }}"`)
-
-**Contoh:**
-```html
-<div id="sidebar-nav" class="container flex dark-mode">
-```
-Menghasilkan:
-- id: `sidebar-nav`
-- class: `container`, `flex`, `dark-mode`
+- `class="a b c"` → split by space, daftarkan masing-masing
+- ID collision: `id` yang sama di >1 elemen → flag `collision`
+- Comments `<!-- -->` otomatis di-skip oleh tree-sitter
+- Template literals `id="{{ variable }}"` difilter
+- Void elements, self-closing tags: handled correctly
 
 ---
 
-## CSS Parser
+## CSS Parser (tree-sitter-css)
 
 **Target:** Semua selector yang referensikan class (`.xxx`) atau id (`#xxx`).
 
 **Rules:**
 - `.btn-primary { ... }` → referensi ke class `btn-primary`
 - `#sidebar-nav { ... }` → referensi ke id `sidebar-nav`
-- Selector compound: `.modal .btn-primary` → referensi ke KEDUANYA
-- Jika selector yang sama muncul 2x di file berbeda → flag `duplicate_define`
-- Jika selector yang sama muncul 2x di file yang SAMA → flag `duplicate_define` juga
-- Ignore: selector di dalam comment `/* */`
-- Ignore: selector di dalam `@keyframes`
-
-**Pseudo-class diabaikan untuk matching:**
-- `.btn-primary:hover` → match ke class `btn-primary`
-- `#nav:focus` → match ke id `nav`
+- Compound selectors: `.modal .btn-primary` → KEDUANYA
+- duplicate_define: selector sama muncul 2+ kali (file sama atau beda)
+- @keyframes: otomatis di-skip
+- Comments: otomatis di-skip oleh tree-sitter
+- Pseudo-class: `.btn-primary:hover` → match ke `btn-primary`
+- SCSS/Less: fallback regex untuk preprocessor syntax
 
 ---
 
-## JS Parser (Frontend)
+## JS Frontend Parser (tree-sitter-javascript)
 
-**Target:** Semua referensi ke class atau id via DOM selector.
+**Target:** Semua referensi ke class/id via DOM selector.
 
 **Pattern yang dideteksi:**
 ```js
@@ -53,19 +43,20 @@ document.querySelectorAll(".btn-primary")
 document.getElementsByClassName("btn-primary")
 $(".btn-primary")           // jQuery
 $("#sidebar-nav")           // jQuery
-el.classList.add("active")  // DIABAIKAN — dynamic, bukan reference langsung
-el.classList.toggle("open") // DIABAIKAN
+el.classList.add("active")  // DIABAIKAN — dynamic
 ```
 
 **Rules:**
-- Hanya string literal yang dicount — bukan variable (`querySelector(myVar)` diabaikan)
-- Reference yang sama dari 2+ file → status node jadi `duplicate_ref`
+- Hanya string literal yang dicount
+- Variable refs (`querySelector(myVar)`) diabaikan
+- Template literals diabaikan
+- Reference dari 2+ file → `duplicate_ref`
 
 ---
 
-## JS Parser (Backend)
+## JS Backend Parser (tree-sitter-javascript)
 
-**Target:** Function declarations dan calls, sama seperti Rust parser tapi untuk JS non-frontend.
+**Target:** Function declarations dan calls.
 
 **Pattern yang dideteksi:**
 ```js
@@ -73,55 +64,159 @@ el.classList.toggle("open") // DIABAIKAN
 function processData(input) { ... }
 const processData = (input) => { ... }
 const processData = function(input) { ... }
+async function fetchData() { ... }
 
 // Call
 processData(myInput)
-utils.processData(myInput)
+obj.processData(myInput)
 ```
 
 **Rules:**
-- Method calls di-track dengan format `object.method` sebagai satu node
-- Arrow function yang di-assign ke const → diperlakukan sama seperti function declaration
-- Callback inline (anonymous function) → DIABAIKAN, tidak punya nama
+- Arrow function → sama seperti function declaration
+- Anonymous callbacks → DIABAIKAN
+- Built-in keywords → DIABAIKAN
+- Method calls tracked sebagai `method_name`
 
 ---
 
-## Rust Parser
+## TSX/JSX Parser (tree-sitter-typescript)
+
+**Target:** className, id, dan function declarations di React/TSX files.
+
+**Pattern yang dideteksi:**
+```tsx
+// className variants
+<div className="modal active">
+<div className={`modal ${isOpen ? 'active' : ''}`}>
+<div className={"btn-primary"}>
+<div className={condition ? "a" : "b"}>
+
+// id
+<div id="modal-root">
+
+// Function components
+const Modal = ({ isOpen }: Props) => { ... }
+function Modal() { ... }
+```
+
+**Rules:**
+- className: extract dari string, template literal, dan ternary expressions
+- Dynamic className (`className={variable}`): hanya track literal strings
+- React component: nama diawali huruf besar → flag `component: true`
+- Handles export default, named exports
+
+---
+
+## Rust Parser (tree-sitter-rust)
 
 **Target:** Function declarations dan calls.
 
 **Pattern yang dideteksi:**
 ```rust
-// Declaration
 fn verify_token(token: &str) -> Result<Claims> { ... }
 pub fn hash_password(pw: &str) -> String { ... }
 async fn fetch_data(url: &str) -> Response { ... }
 
-// Call
+// Calls
 verify_token(&token)?
 hash_password(&input)
 self.verify_token(&token)
+HttpClient::new()
 ```
 
 **Rules:**
 - `pub fn` dan `fn` keduanya di-track
-- `async fn` di-track dengan flag `async: true`
-- Method calls via `self.method()` → di-track sebagai edge ke struct yang sama
+- `async fn` → flag `async: true`
+- `self.method()` → tracked dengan `via_self: true`
 - Macro calls (`println!`, `vec!`) → DIABAIKAN
-- Trait implementations → di-track, dengan note `impl_for: TypeName`
+- `impl TypeName { fn method() }` → tracked dengan `impl_for`
+- `impl Trait for Type` → tracked dengan `trait_name`
+- Scoped calls: `Module::function()` → tracked
 
 ---
 
-## Penentuan Frontend vs Backend untuk JS
+## Vue SFC Parser
 
-Berdasarkan `codelens.config.json`:
+**Target:** Class/id dari template, style, dan script Vue SFC.
+
+**Pattern yang dideteksi:**
+```vue
+<template>
+  <div class="container" :class="{'active': isOpen}" id="app">
+    <span :class="['bold', isActive ? 'visible' : 'hidden']">
+  </div>
+</template>
+
+<style scoped>
+.container { ... }
+.active { ... }
+</style>
+```
+
+**Rules:**
+- Static `class="xxx"` → tracked
+- Dynamic `:class="xxx"` → extract literal strings dari binding
+- `:class="['a', condition ? 'b' : 'c']"` → track "a", "b", "c"
+- `:class="{'active': condition}"` → track "active"
+- `:class="classes.wrapper"` → track "wrapper" as dynamic ref
+- Scoped styles: otomatis detected
+- SCSS/Less in `<style lang="scss">`: supported via fallback
+
+---
+
+## Svelte Parser
+
+**Target:** Class/id dari markup dan scoped styles.
+
+**Pattern yang dideteksi:**
+```svelte
+<button class="btn-primary" class:active={isActive} id="submit-btn">
+
+<style>
+  .btn-primary { ... }
+  :global(.external-class) { ... }
+</style>
+```
+
+**Rules:**
+- `class="xxx"` → tracked
+- `class:active={condition}` → track "active" as class directive
+- `:global(.xxx)` modifier → tracked as global
+- Scoped styles: default in Svelte
+- Script section: DOM selector references tracked
+
+---
+
+## Tailwind CSS Detector
+
+**Target:** Utility class detection dan analysis.
+
+**Rules:**
+- Pattern matching against Tailwind utility prefixes
+- Responsive prefixes: `sm:`, `md:`, `lg:`, `xl:`, `2xl:`
+- State prefixes: `hover:`, `focus:`, `dark:`, `group-hover:`
+- Custom prefix from `tailwind.config.js`
+- Dynamic patterns: `text-${color}-500` → flagged as dynamic
+- `@apply` custom utilities tracked
+- Custom config (prefix, content paths, darkMode) parsed
+
+---
+
+## Penentuan Frontend vs Backend
+
+Berdasarkan `codelens.config.json` (auto-detected):
 
 ```
-frontend_paths check → cocok → JS Frontend Parser
+frontend_paths check → cocok → JS/TS Frontend Parser
       ↓ tidak cocok
 backend_paths check  → cocok → JS Backend Parser
       ↓ tidak cocok
 Default              → JS Backend Parser (safer assumption)
 ```
 
-Jika file ada di `node_modules/` atau `dist/` → SELALU diabaikan.
+**Special cases:**
+- `.tsx` / `.jsx` files → selalu pakai TSX Parser (handles both frontend + backend)
+- `.vue` files → selalu pakai Vue SFC Parser
+- `.svelte` files → selalu pakai Svelte Parser
+- `.ts` in frontend paths → TSX Parser
+- `.ts` in backend paths → JS Backend Parser

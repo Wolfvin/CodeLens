@@ -1,7 +1,12 @@
 {
   "name": "codelens",
-  "version": "1.0.0",
-  "description": "Live Codebase Reference Intelligence — track class/id/function references across HTML, CSS, JS, and Rust",
+  "version": "2.0.0",
+  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references across HTML, CSS, JS, TS/TSX, Rust, Vue, Svelte, Tailwind",
   "author": "codelens",
-  "tags": ["code-analysis", "reference-tracking", "dead-code", "duplicate-detection", "frontend", "backend", "rust", "html", "css", "javascript"]
+  "tags": [
+    "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
+    "frontend", "backend", "rust", "html", "css", "javascript", "typescript",
+    "tsx", "jsx", "react", "vue", "svelte", "tailwind", "tree-sitter",
+    "ast-parsing", "call-graph", "class-tracking"
+  ]
 }
