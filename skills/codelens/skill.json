@@ -1,0 +1,7 @@
+{
+  "name": "codelens",
+  "version": "1.0.0",
+  "description": "Live Codebase Reference Intelligence — track class/id/function references across HTML, CSS, JS, and Rust",
+  "author": "codelens",
+  "tags": ["code-analysis", "reference-tracking", "dead-code", "duplicate-detection", "frontend", "backend", "rust", "html", "css", "javascript"]
+}
