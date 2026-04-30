@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "2.1.0",
-  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references, deep trace, impact analysis, circular detection, missing-refs, and more",
+  "version": "3.0.0",
+  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references, data flow, code smells, side effects, refactoring safety, dead code, error propagation, test coverage, type inference, ownership analysis",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -9,6 +9,9 @@
     "tsx", "jsx", "react", "vue", "svelte", "tailwind", "tree-sitter",
     "ast-parsing", "call-graph", "class-tracking", "impact-analysis",
     "circular-dependency", "missing-references", "code-search",
-    "call-trace", "dependency-graph", "registry-diff", "file-outline"
+    "call-trace", "dependency-graph", "registry-diff", "file-outline",
+    "data-flow", "taint-analysis", "code-smell", "side-effects", "refactoring",
+    "error-propagation", "test-coverage", "type-inference", "ownership",
+    "security-analysis", "pure-functions", "config-drift"
   ]
 }

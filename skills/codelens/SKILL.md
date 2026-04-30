@@ -1,18 +1,21 @@
 ---
 name: codelens
 description: >
-  CodeLens v2 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   WAJIB aktifkan skill ini SETIAP KALI akan membuat, mengedit, atau menghapus HTML class/id,
   CSS selector, JSX className, atau function di Rust/JS/TS. Gunakan sebelum menulis kode baru
   yang melibatkan id, class, className, atau function name — untuk mencegah collision,
   overwrite logic lama, dan dead code. Trigger juga saat user minta "cek apakah id ini sudah ada",
   "lihat semua yang pakai class X", "ada function apa saja yang panggil Y", "scan workspace saya",
   "audit dead code", "cek duplicate CSS", "tampilkan semua reference ke N", atau "detect frameworks".
+  v3 adds: data flow analysis, code smell detection, side-effect analysis, refactoring safety,
+  enhanced dead code, error propagation, test coverage mapping, config drift detection,
+  lightweight type inference, and code ownership analysis.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v2
+# CodeLens v3
 
 Sebelum AI menulis class/id/function baru, CodeLens harus dicek. Ini bukan opsional.
 
@@ -27,6 +30,19 @@ Sebelum AI menulis class/id/function baru, CodeLens harus dicek. Ini bukan opsio
 - **Incremental scan**: hanya re-parse file yang berubah
 - **Better edge resolution**: cross-file function tracking yang akurat
 - **6 languages**: HTML, CSS, JS, TS/TSX, Rust, Python
+
+## Apa yang Baru di v3
+
+- **Data Flow Analysis**: Track data dari sources ke sinks, deteksi taint violations
+- **Code Smell Detection**: 10 kategori smell dengan health score
+- **Side Effect Analysis**: Klasifikasi pure vs impure function
+- **Refactoring Safety**: Pre-flight rename/move check dengan risk assessment
+- **Enhanced Dead Code**: Unreachable code, unused exports, zombie CSS
+- **Error Propagation**: Simulasi crash paths, temukan unhandled errors
+- **Test Coverage Map**: Fungsi mana yang sudah ditest, mana yang belum
+- **Config Drift**: Package.json vs actual imports mismatch detection
+- **Type Inference**: Lightweight type inference untuk JS/Python
+- **Code Ownership**: Git blame-based, temukan stale code dan owners
 
 ---
 
@@ -170,7 +186,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/worksp
 # Trace callees (function ini manggil apa)
 python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/workspace --direction down
 
-# Both directions
+# both directions
 python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/workspace --direction both --depth 5
 ```
 
@@ -315,6 +331,174 @@ python3 "$CODELENS_DIR/scripts/codelens.py" validate /path/to/workspace
 
 ---
 
+## v3 P0: Dataflow & Smell
+
+### 18. `codelens_dataflow` — Data Flow Analysis (Source→Sink)
+
+Trace di mana data mengalir dari sources (user input, env vars, file reads, API responses) ke sinks (DB queries, HTML output, command exec, file writes, HTTP headers). Deteksi taint violations (data yang sampai ke dangerous sinks tanpa sanitization).
+
+- Menunjukkan safe paths (data yang melewati sanitizers)
+- Risk level: none/low/medium/high/critical
+
+**AI Use Case:** "Apakah user input pernah sampai ke SQL query tanpa sanitization?"
+
+```bash
+# Full workspace scan
+python3 "$CODELENS_DIR/scripts/codelens.py" dataflow /path/to/workspace
+
+# Filter berdasarkan source type
+python3 "$CODELENS_DIR/scripts/codelens.py" dataflow /path/to/workspace --source user_input
+
+# Filter berdasarkan sink type
+python3 "$CODELENS_DIR/scripts/codelens.py" dataflow /path/to/workspace --sink db_query
+```
+
+**Options:** `--source` (user_input, dom_input, env_var, file_input, api_response), `--sink` (db_query, html_output, command_exec, file_write, http_header), `--depth`
+
+### 19. `codelens_smell` — Code Smell Detection
+
+Deteksi 10 kategori code smell: long_fn, deep_nesting, many_params, large_file, callback_hell, magic_values, god_object, complex_conditional, duplicate_pattern, inconsistent. Setiap smell punya severity (info/warning/critical) dan refactoring suggestion. Menghitung health_score (0-100).
+
+**AI Use Case:** "Apa yang harus saya refactor pertama di codebase ini?"
+
+```bash
+# Semua kategori
+python3 "$CODELENS_DIR/scripts/codelens.py" smell /path/to/workspace
+
+# Kategori spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" smell /path/to/workspace --categories long_fn god_object
+
+# Hanya smell critical
+python3 "$CODELENS_DIR/scripts/codelens.py" smell /path/to/workspace --severity critical
+```
+
+---
+
+## v3 P1: Side-effect, Refactor-safe, Dead-code
+
+### 20. `codelens_side-effect` — Side Effect Analysis
+
+Tag function sebagai pure vs impure. Deteksi 7 kategori side-effect: DOM, State, Network, IO, Timer, Random, External. Menghitung purity ratio untuk seluruh workspace.
+
+**AI Use Case:** "Apakah aman memanggil function ini berkali-kali?"
+
+```bash
+# Full workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace
+
+# Function spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" side-effect processOrder /path/to/workspace
+```
+
+### 21. `codelens_refactor-safe` — Refactoring Safety Check
+
+Pre-flight check sebelum rename/move symbol. Deteksi: string refs, dynamic access, eval refs, meta-programming, test refs, config refs, doc refs, import breaks, CSS refs. Safety level: safe/mostly_safe/cautious/risky/dangerous. Menghasilkan pre-refactor checklist.
+
+**AI Use Case:** "Bisakah saya safely rename function ini?"
+
+```bash
+# Cek rename safety
+python3 "$CODELENS_DIR/scripts/codelens.py" refactor-safe verify_token /path/to/workspace --action rename --new-name validate_token
+
+# Cek move safety
+python3 "$CODELENS_DIR/scripts/codelens.py" refactor-safe auth /path/to/workspace --action move --new-name src/auth/
+```
+
+### 22. `codelens_dead-code` — Enhanced Dead Code Detection
+
+Lebih dari sekadar 0-ref_count: deteksi unreachable code, unused exports, zombie CSS, unused variables, dead event listeners.
+
+**AI Use Case:** "Kode apa yang bisa saya hapus dengan aman?"
+
+```bash
+# Semua kategori
+python3 "$CODELENS_DIR/scripts/codelens.py" dead-code /path/to/workspace
+
+# Kategori spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" dead-code /path/to/workspace --categories unreachable unused_exports
+```
+
+---
+
+## v3 P2: Stack-trace, Test-map, Config-drift
+
+### 23. `codelens_stack-trace` — Error Propagation Simulation
+
+Simulasi apa yang terjadi jika sebuah function throw: trace error ke atas call stack. Tunjukkan caller mana yang punya try/catch (handled) dan yang tidak (unhandled → crash). Crash risk: low/medium/high/critical.
+
+**AI Use Case:** "Kalau ini gagal, apa yang rusak?"
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" stack-trace verify_token /path/to/workspace
+
+# Dengan tipe error spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" stack-trace processOrder /path/to/workspace --error-type NetworkError
+```
+
+### 24. `codelens_test-map` — Test Coverage Mapping
+
+Map function mana yang punya test coverage. Strategi: file name matching, function name matching, import matching. Temukan file tanpa test sama sekali.
+
+**AI Use Case:** "Apakah function ini sudah ditest sebelum saya modifikasi?"
+
+```bash
+# Full workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" test-map /path/to/workspace
+
+# Function spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" test-map /path/to/workspace --function verify_token
+```
+
+### 25. `codelens_config-drift` — Dependency Drift Detection
+
+Validasi package.json/Cargo.toml/requirements.txt vs actual imports. Temukan: missing deps, unused deps, phantom imports.
+
+**AI Use Case:** "Apakah ada package yang lupa di-install atau dideklarasikan tapi tidak pernah dipakai?"
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" config-drift /path/to/workspace
+```
+
+---
+
+## v3 P3: Type-infer, Ownership
+
+### 26. `codelens_type-infer` — Lightweight Type Inference
+
+Infer tipe untuk variabel dan function JS/Python. Strategi: literal inference, return type inference, known API return types, propagation. Skip file yang sudah punya TypeScript annotations.
+
+**AI Use Case:** "Tipe apa yang dikembalikan function ini?"
+
+```bash
+# Full workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" type-infer /path/to/workspace
+
+# File spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" type-infer /path/to/workspace --file src/utils.ts
+
+# Function spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" type-infer /path/to/workspace --function processOrder
+```
+
+### 27. `codelens_ownership` — Code Ownership Analysis
+
+Git blame-based ownership: siapa yang terakhir menyentuh apa, seberapa tua kode ini. Temukan stale code, hotspots (banyak author), orphan files (tidak ada perubahan baru). Fallback ke mtime kalau git tidak tersedia.
+
+**AI Use Case:** "Siapa yang harus saya tanya sebelum mengubah ini?"
+
+```bash
+# Full workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace
+
+# File spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace --file src/auth.ts
+
+# Function spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace --function verify_token
+```
+
+---
+
 ## Alur Kerja AI
 
 ### Basic Flow (Pre-write Check)
@@ -393,6 +577,56 @@ User: "Hapus function X"
           ▼
 5. codelens_diff workspace
    → Verify perubahan yang terjadi
+```
+
+### Security Auditing Flow (v3)
+
+```
+User: "Is this API endpoint secure?"
+          │
+          ▼
+1. codelens dataflow workspace --source user_input
+   → Find where user input flows
+          │
+          ▼
+2. codelens dataflow workspace --sink db_query
+   → Check if unsanitized data reaches SQL
+          │
+          ▼
+3. codelens side-effect processOrder workspace
+   → Check if function has network/IO side effects
+          │
+          ▼
+4. codelens smell workspace --severity critical
+   → Find critical code smells nearby
+          │
+          ▼
+5. Report: "Security findings..."
+```
+
+### Pre-Refactoring Flow (v3)
+
+```
+User: "Rename verify_token to validate_token"
+          │
+          ▼
+1. codelens refactor-safe verify_token workspace --action rename --new-name validate_token
+   → Check for hidden risks
+          │
+          ├─ safety: dangerous → STOP. Report risks.
+          ├─ safety: risky → Warning. List string refs.
+          └─ safety: safe → Proceed with rename.
+          │
+          ▼
+2. codelens impact verify_token workspace --action modify
+   → Check how many files affected
+          │
+          ▼
+3. codelens test-map workspace --function verify_token
+   → Check if tested (update test names too)
+          │
+          ▼
+4. Rename + codelens scan workspace --incremental
 ```
 
 ---

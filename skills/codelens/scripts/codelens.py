@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeLens v2 — Live Codebase Reference Intelligence (Tree-sitter Edition)
+CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition)
 
 Usage:
     python3 codelens.py scan <workspace>              # Scan workspace and build registry
@@ -19,6 +19,16 @@ Usage:
     python3 codelens.py context <name> <workspace>     # Get rich symbol context
     python3 codelens.py dependents <file> <workspace>  # Module-level import tracking
     python3 codelens.py validate <workspace>           # Validate registry vs file system
+    python3 codelens.py dataflow <workspace>           # Trace data flow source→sink
+    python3 codelens.py smell <workspace>              # Detect code smells
+    python3 codelens.py side-effect <name> <workspace> # Analyze function side effects
+    python3 codelens.py refactor-safe <name> <workspace> # Pre-flight rename/move check
+    python3 codelens.py dead-code <workspace>          # Enhanced dead code detection
+    python3 codelens.py stack-trace <name> <workspace> # Error propagation simulation
+    python3 codelens.py test-map <workspace>           # Test coverage mapping
+    python3 codelens.py config-drift <workspace>       # Dependency drift detection
+    python3 codelens.py type-infer <workspace>         # Lightweight type inference
+    python3 codelens.py ownership <workspace>          # Git blame code ownership
 """
 
 import sys
@@ -53,6 +63,16 @@ from circular_engine import detect_circular
 from context_engine import get_symbol_context
 from dependents_engine import get_dependents, get_dependencies, get_dependency_graph
 from validate_engine import validate_registry
+from dataflow_engine import trace_dataflow
+from smell_engine import detect_smells
+from sideeffect_engine import analyze_side_effects
+from refactor_safe_engine import check_refactor_safety
+from deadcode_engine import detect_dead_code
+from stacktrace_engine import trace_error_propagation
+from testmap_engine import map_test_coverage
+from configdrift_engine import detect_config_drift
+from typeinfer_engine import infer_types
+from ownership_engine import analyze_ownership
 
 
 # ─── File Discovery ───────────────────────────────────────────
@@ -821,7 +841,7 @@ def _watch_polling(workspace: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CodeLens v2 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description="CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -957,6 +977,83 @@ def main():
     validate_parser = subparsers.add_parser("validate", help="Validate registry against file system")
     validate_parser.add_argument("workspace", help="Path to workspace root")
 
+    # ─── v3 P0: Dataflow, Smell ─────────────────────────
+
+    # dataflow command
+    dataflow_parser = subparsers.add_parser("dataflow", help="Trace data flow source→sink (security)")
+    dataflow_parser.add_argument("workspace", help="Path to workspace root")
+    dataflow_parser.add_argument("--source", default=None,
+                                  help="Source filter (user_input, env_var, file_input, api_response)")
+    dataflow_parser.add_argument("--sink", default=None,
+                                  help="Sink filter (db_query, html_output, command_exec, file_write, http_header)")
+    dataflow_parser.add_argument("--depth", type=int, default=15, help="Max data flow chain depth (default 15)")
+
+    # smell command
+    smell_parser = subparsers.add_parser("smell", help="Detect code smells across workspace")
+    smell_parser.add_argument("workspace", help="Path to workspace root")
+    smell_parser.add_argument("--categories", nargs="+", default=None,
+                               help="Categories: long_fn, deep_nesting, many_params, large_file, callback_hell, magic_values, god_object, complex_conditional, duplicate_pattern, inconsistent")
+    smell_parser.add_argument("--severity", choices=["info", "warning", "critical"], default=None,
+                               help="Filter by severity level")
+
+    # ─── v3 P1: Side-effect, Refactor-safe, Dead-code ────
+
+    # side-effect command
+    sideeffect_parser = subparsers.add_parser("side-effect", help="Analyze function side effects (pure vs impure)")
+    sideeffect_parser.add_argument("name", nargs="?", default=None, help="Function name (optional, omit for full workspace)")
+    sideeffect_parser.add_argument("workspace", help="Path to workspace root")
+    sideeffect_parser.add_argument("--file", default=None, help="Filter by file path")
+
+    # refactor-safe command
+    refactor_parser = subparsers.add_parser("refactor-safe", help="Pre-flight rename/move safety check")
+    refactor_parser.add_argument("name", help="Symbol name to rename/move")
+    refactor_parser.add_argument("workspace", help="Path to workspace root")
+    refactor_parser.add_argument("--action", choices=["rename", "move"], default="rename",
+                                  help="Action type (rename or move)")
+    refactor_parser.add_argument("--new-name", default=None, help="New name (for rename) or new path (for move)")
+
+    # dead-code command
+    deadcode_parser = subparsers.add_parser("dead-code", help="Enhanced dead code detection")
+    deadcode_parser.add_argument("workspace", help="Path to workspace root")
+    deadcode_parser.add_argument("--categories", nargs="+", default=None,
+                                  help="Categories: unreachable, unused_exports, zombie_css, unused_vars, dead_listeners")
+
+    # ─── v3 P2: Stack-trace, Test-map, Config-drift ──────
+
+    # stack-trace command
+    stacktrace_parser = subparsers.add_parser("stack-trace", help="Error propagation simulation")
+    stacktrace_parser.add_argument("name", help="Function name that might throw")
+    stacktrace_parser.add_argument("workspace", help="Path to workspace root")
+    stacktrace_parser.add_argument("--error-type", default=None, help="Error type (e.g., TypeError)")
+    stacktrace_parser.add_argument("--depth", type=int, default=20, help="Max trace depth (default 20)")
+
+    # test-map command
+    testmap_parser = subparsers.add_parser("test-map", help="Map test coverage for functions")
+    testmap_parser.add_argument("workspace", help="Path to workspace root")
+    testmap_parser.add_argument("--function", dest="function_name", default=None,
+                                help="Check specific function test coverage")
+    testmap_parser.add_argument("--file", default=None, help="Filter by source file path")
+
+    # config-drift command
+    configdrift_parser = subparsers.add_parser("config-drift", help="Detect dependency drift (package.json vs code)")
+    configdrift_parser.add_argument("workspace", help="Path to workspace root")
+
+    # ─── v3 P3: Type-infer, Ownership ─────────────────────
+
+    # type-infer command
+    typeinfer_parser = subparsers.add_parser("type-infer", help="Lightweight type inference for JS/Python")
+    typeinfer_parser.add_argument("workspace", help="Path to workspace root")
+    typeinfer_parser.add_argument("--file", default=None, help="Specific file to analyze")
+    typeinfer_parser.add_argument("--function", dest="function_name", default=None,
+                                  help="Specific function to infer types for")
+
+    # ownership command
+    ownership_parser = subparsers.add_parser("ownership", help="Git blame-based code ownership")
+    ownership_parser.add_argument("workspace", help="Path to workspace root")
+    ownership_parser.add_argument("--file", default=None, help="Specific file to analyze")
+    ownership_parser.add_argument("--function", dest="function_name", default=None,
+                                  help="Specific function to check ownership")
+
     # ─── Parse and dispatch ─────────────────────────────
 
     args = parser.parse_args()
@@ -1088,6 +1185,90 @@ def main():
 
     elif args.command == "validate":
         result = validate_registry(args.workspace)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── v3 P0 Commands ─────────────────────────────────
+
+    elif args.command == "dataflow":
+        result = trace_dataflow(
+            args.workspace,
+            source=args.source,
+            sink=args.sink,
+            max_depth=args.depth
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "smell":
+        result = detect_smells(
+            args.workspace,
+            categories=args.categories,
+            severity_filter=args.severity
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── v3 P1 Commands ─────────────────────────────────
+
+    elif args.command == "side-effect":
+        result = analyze_side_effects(
+            args.workspace,
+            function_name=args.name,
+            file_filter=args.file
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "refactor-safe":
+        result = check_refactor_safety(
+            args.name, args.workspace,
+            action=args.action,
+            new_name=args.new_name
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "dead-code":
+        result = detect_dead_code(
+            args.workspace,
+            categories=args.categories
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── v3 P2 Commands ─────────────────────────────────
+
+    elif args.command == "stack-trace":
+        result = trace_error_propagation(
+            args.name, args.workspace,
+            error_type=args.error_type,
+            max_depth=args.depth
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "test-map":
+        result = map_test_coverage(
+            args.workspace,
+            function_name=args.function_name,
+            file_filter=args.file
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "config-drift":
+        result = detect_config_drift(args.workspace)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── v3 P3 Commands ─────────────────────────────────
+
+    elif args.command == "type-infer":
+        result = infer_types(
+            args.workspace,
+            file_path=args.file,
+            function_name=args.function_name
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "ownership":
+        result = analyze_ownership(
+            args.workspace,
+            file_path=args.file,
+            function_name=args.function_name
+        )
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
     else:
