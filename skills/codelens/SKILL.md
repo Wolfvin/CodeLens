@@ -122,7 +122,202 @@ python3 "$CODELENS_DIR/scripts/codelens.py" watch /path/to/workspace
 
 ---
 
+## P1 Tools — Search, Trace, Impact
+
+### 7. `codelens_search` — Code Search
+
+Cari regex pattern di seluruh workspace. Seperti ripgrep tapi built-in.
+
+```bash
+# Cari semua useEffect
+python3 "$CODELENS_DIR/scripts/codelens.py" search "useEffect" /path/to/workspace
+
+# Cari di file tertentu saja
+python3 "$CODELENS_DIR/scripts/codelens.py" search "router\\.post" /path/to/workspace --type js
+
+# Case-insensitive + context lines
+python3 "$CODELENS_DIR/scripts/codelens.py" search "CREATE TABLE" /path/to/workspace --ignore-case --context 3
+
+# Whole word
+python3 "$CODELENS_DIR/scripts/codelens.py" search "Button" /path/to/workspace --type tsx --whole-word
+```
+
+**Options:** `--type`, `--file`, `--max-results`, `--context`, `--ignore-case`, `--whole-word`
+
+### 8. `codelens_symbols` — Symbol Search
+
+Cari symbol di registry (bukan di file). Lebih cepat dari search.
+
+```bash
+# Exact match
+python3 "$CODELENS_DIR/scripts/codelens.py" symbols "btn" /path/to/workspace
+
+# Fuzzy search (partial match)
+python3 "$CODELENS_DIR/scripts/codelens.py" symbols "modal" /path/to/workspace --fuzzy
+
+# Backend only
+python3 "$CODELENS_DIR/scripts/codelens.py" symbols "auth" /path/to/workspace --domain backend --fuzzy
+```
+
+### 9. `codelens_trace` — Deep Call Chain
+
+Trace call chain dari symbol. Untuk root cause analysis dan impact assessment.
+
+```bash
+# Trace callers (siapa yang manggil function ini)
+python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/workspace --direction up
+
+# Trace callees (function ini manggil apa)
+python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/workspace --direction down
+
+# Both directions
+python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/workspace --direction both --depth 5
+```
+
+**AI Use Case:** "Bug di render() → trace ke mana asalnya" → `trace render workspace --direction up`
+
+### 10. `codelens_impact` — Change Impact Analysis
+
+Prediksi dampak jika symbol diubah atau dihapus. Wajib sebelum refactoring.
+
+```bash
+# Cek impact kalau modify
+python3 "$CODELENS_DIR/scripts/codelens.py" impact "verify_token" /path/to/workspace --action modify
+
+# Cek impact kalau delete
+python3 "$CODELENS_DIR/scripts/codelens.py" impact "btn-primary" /path/to/workspace --action delete
+```
+
+**Output:** risk level (low/medium/high/critical), affected files, direct/indirect dependents, recommendations.
+
+**AI Action:**
+- `risk: critical` → JANGAN ubah. Report ke user.
+- `risk: high` → Warning. List semua affected dulu.
+- `risk: medium` → Hati-hati. Jalankan tests.
+- `risk: low` → Aman, lanjut.
+
+---
+
+## P2 Tools — Outline, Missing-refs, Diff, Circular
+
+### 11. `codelens_outline` — File Structure Outline
+
+Lihat struktur file tanpa baca full content. Semua function, class, import, export.
+
+```bash
+# Outline satu file
+python3 "$CODELENS_DIR/scripts/codelens.py" outline src/auth.ts /path/to/workspace
+
+# Outline dengan detail level
+python3 "$CODELENS_DIR/scripts/codelens.py" outline src/auth.ts /path/to/workspace --detail full
+
+# Outline semua file di workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --all
+```
+
+### 12. `codelens_missing-refs` — CSS/HTML Mismatch Detection
+
+Detek bug: class di HTML tapi gak ada di CSS, CSS selector tapi gak ada HTML, typo.
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" missing-refs /path/to/workspace
+```
+
+**Detects:**
+- `css_no_html` — CSS class didefinisikan tapi gak pernah dipakai
+- `html_no_css` — HTML/JSX class dipakai tapi gak ada CSS definition
+- `css_id_no_html` — CSS style ID tapi gak ada HTML definition
+- `js_id_no_html` — JS reference ID tapi gak ada HTML definition
+- `possible_typos` — Dead class yang mirip active class (kemungkinan typo)
+
+### 13. `codelens_diff` — Registry Diff
+
+Compare registry sekarang vs snapshot terakhir. Track apa yang berubah.
+
+```bash
+# Diff vs snapshot terakhir
+python3 "$CODELENS_DIR/scripts/codelens.py" diff /path/to/workspace
+
+# List semua snapshot
+python3 "$CODELENS_DIR/scripts/codelens.py" diff /path/to/workspace --list-snapshots
+
+# Compare dua snapshot spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" diff /path/to/workspace --snapshot1 20240101T120000Z --snapshot2 20240102T090000Z
+```
+
+**Note:** Snapshot otomatis disimpan setiap kali `scan` dijalankan.
+
+### 14. `codelens_circular` — Circular Dependency Detection
+
+Deteksi circular: function calls, import chains, CSS @import.
+
+```bash
+# Cek semua
+python3 "$CODELENS_DIR/scripts/codelens.py" circular /path/to/workspace
+
+# Hanya function call cycles
+python3 "$CODELENS_DIR/scripts/codelens.py" circular /path/to/workspace --domain backend
+
+# Hanya import cycles
+python3 "$CODELENS_DIR/scripts/codelens.py" circular /path/to/workspace --domain imports
+```
+
+**Severity:** `critical` (2-node cycle), `warning` (3+ node cycle), `info` (long chain)
+
+---
+
+## P3 Tools — Context, Dependents, Validate
+
+### 15. `codelens_context` — Rich Symbol Context
+
+Semua yang AI butuh tentang symbol: definition code, callers, callees, file outline, imports.
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" /path/to/workspace
+
+# Tanpa source code
+python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" /path/to/workspace --no-code
+
+# Context lines lebih banyak
+python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" /path/to/workspace --context-lines 10
+```
+
+**Returns:** definition, code_snippet, callers, callees, nearby_symbols, file_outline, imports
+
+### 16. `codelens_dependents` — Module-Level Import Tracking
+
+Siapa yang import file ini? Level module, bukan function.
+
+```bash
+# Siapa yang import file ini?
+python3 "$CODELENS_DIR/scripts/codelens.py" dependents src/utils/auth.ts /path/to/workspace
+
+# File ini import apa?
+python3 "$CODELENS_DIR/scripts/codelens.py" dependents src/utils/auth.ts /path/to/workspace --direction dependencies
+
+# Full dependency graph
+python3 "$CODELENS_DIR/scripts/codelens.py" dependents src/utils/auth.ts /path/to/workspace --direction graph
+```
+
+### 17. `codelens_validate` — Registry Sanity Check
+
+Cek apakah registry masih sinkron dengan file system.
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" validate /path/to/workspace
+```
+
+**Detects:**
+- `missing_files` — File di registry tapi sudah dihapus
+- `unregistered_files` — File baru yang belum di-scan
+- `stale_references` — Line number yang sudah berubah
+- `orphan_entries` — Entry yang semua file referensinya sudah hilang
+
+---
+
 ## Alur Kerja AI
+
+### Basic Flow (Pre-write Check)
 
 ```
 User minta buat fitur baru yang ada id/class/function
@@ -145,6 +340,59 @@ User minta buat fitur baru yang ada id/class/function
           │
           ▼
 4. Flag dead code dan collision ke user
+```
+
+### Advanced Flow (Bug Investigation)
+
+```
+User: "Bug di modal gak close"
+          │
+          ▼
+1. codelens_search "closeModal" workspace
+   → Cari di mana closeModal didefinisikan dan dipanggil
+          │
+          ▼
+2. codelens_context "closeModal" workspace
+   → Lihat definition code, callers, callees, imports
+          │
+          ▼
+3. codelens_trace "closeModal" workspace --direction up
+   → Trace siapa yang manggil closeModal (full chain)
+          │
+          ▼
+4. codelens_missing-refs workspace
+   → Cek apakah ada CSS class yang kelewat atau ID yang salah
+          │
+          ▼
+5. Report ke user: "Bug ditemukan di ..."
+```
+
+### Pre-Delete Flow (Safe Removal)
+
+```
+User: "Hapus function X"
+          │
+          ▼
+1. codelens_impact "X" workspace --action delete
+   → Cek risk level dan affected files
+          │
+          ├─ risk: critical → STOP. Report ke user.
+          ├─ risk: high → Warning. List affected.
+          └─ risk: low → Lanjut.
+          │
+          ▼
+2. Hapus function X
+          │
+          ▼
+3. codelens_scan workspace --incremental
+          │
+          ▼
+4. codelens_list workspace --filter dead
+   → Cek dead code baru yang mungkin tercipta
+          │
+          ▼
+5. codelens_diff workspace
+   → Verify perubahan yang terjadi
 ```
 
 ---

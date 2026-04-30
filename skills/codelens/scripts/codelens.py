@@ -9,6 +9,16 @@ Usage:
     python3 codelens.py watch <workspace>              # Start file watcher
     python3 codelens.py init <workspace>               # Initialize .codelens config
     python3 codelens.py detect <workspace>             # Detect frameworks
+    python3 codelens.py search <pattern> <workspace>   # Search code pattern across workspace
+    python3 codelens.py trace <name> <workspace>       # Trace deep call chain
+    python3 codelens.py impact <name> <workspace>      # Analyze change impact
+    python3 codelens.py outline <file> [workspace]     # Get file structure outline
+    python3 codelens.py missing-refs <workspace>       # Detect CSS/HTML mismatches
+    python3 codelens.py diff <workspace>               # Compare registry snapshots
+    python3 codelens.py circular <workspace>           # Detect circular dependencies
+    python3 codelens.py context <name> <workspace>     # Get rich symbol context
+    python3 codelens.py dependents <file> <workspace>  # Module-level import tracking
+    python3 codelens.py validate <workspace>           # Validate registry vs file system
 """
 
 import sys
@@ -33,6 +43,16 @@ from grammar_loader import get_grammar_loader
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import find_changed_files, update_mtimes_cache, remove_from_mtimes_cache
 from edge_resolver import resolve_edges, get_callers, get_callees
+from search_engine import search_workspace, search_symbols
+from trace_engine import trace_symbol
+from impact_engine import analyze_impact
+from outline_engine import get_file_outline, get_workspace_outline
+from missing_refs import detect_missing_refs
+from diff_engine import diff_current_vs_last, diff_snapshots, save_snapshot, list_snapshots
+from circular_engine import detect_circular
+from context_engine import get_symbol_context
+from dependents_engine import get_dependents, get_dependencies, get_dependency_graph
+from validate_engine import validate_registry
 
 
 # ─── File Discovery ───────────────────────────────────────────
@@ -805,6 +825,8 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+    # ─── Original 6 commands ────────────────────────────
+
     # scan command
     scan_parser = subparsers.add_parser("scan", help="Scan workspace and build registry")
     scan_parser.add_argument("workspace", help="Path to workspace root")
@@ -840,10 +862,114 @@ def main():
     detect_parser = subparsers.add_parser("detect", help="Detect frameworks in workspace")
     detect_parser.add_argument("workspace", help="Path to workspace root")
 
+    # ─── P1: Search, Trace, Impact ──────────────────────
+
+    # search command
+    search_parser = subparsers.add_parser("search", help="Search code pattern across workspace")
+    search_parser.add_argument("pattern", help="Regex pattern to search for")
+    search_parser.add_argument("workspace", help="Path to workspace root")
+    search_parser.add_argument("--type", dest="file_type", default=None,
+                                help="File type filter (html, css, js, ts, tsx, rust, python, vue, svelte)")
+    search_parser.add_argument("--file", default=None, help="Filter by file path substring")
+    search_parser.add_argument("--max-results", type=int, default=200, help="Max results (default 200)")
+    search_parser.add_argument("--context", type=int, default=0, help="Context lines around match")
+    search_parser.add_argument("--ignore-case", action="store_true", help="Case-insensitive search")
+    search_parser.add_argument("--whole-word", action="store_true", help="Match whole words only")
+
+    # symbols command (search registry instead of files)
+    symbols_parser = subparsers.add_parser("symbols", help="Search symbols in registry by name")
+    symbols_parser.add_argument("name", help="Symbol name to search")
+    symbols_parser.add_argument("workspace", help="Path to workspace root")
+    symbols_parser.add_argument("--domain", choices=["frontend", "backend", "all"], default="all",
+                                 help="Domain to search")
+    symbols_parser.add_argument("--fuzzy", action="store_true", help="Allow partial/fuzzy matching")
+
+    # trace command
+    trace_parser = subparsers.add_parser("trace", help="Trace deep call chain from a symbol")
+    trace_parser.add_argument("name", help="Symbol name to trace")
+    trace_parser.add_argument("workspace", help="Path to workspace root")
+    trace_parser.add_argument("--direction", choices=["up", "down", "both"], default="up",
+                               help="Trace direction: up=callers, down=callees, both")
+    trace_parser.add_argument("--depth", type=int, default=10, help="Max trace depth (default 10)")
+    trace_parser.add_argument("--domain", choices=["frontend", "backend", "auto"], default="auto",
+                               help="Domain to trace")
+
+    # impact command
+    impact_parser = subparsers.add_parser("impact", help="Analyze change impact for a symbol")
+    impact_parser.add_argument("name", help="Symbol name to analyze")
+    impact_parser.add_argument("workspace", help="Path to workspace root")
+    impact_parser.add_argument("--action", choices=["modify", "delete"], default="modify",
+                                help="Planned action (modify or delete)")
+    impact_parser.add_argument("--domain", choices=["frontend", "backend", "auto"], default="auto",
+                                help="Domain to analyze")
+    impact_parser.add_argument("--depth", type=int, default=5, help="Trace depth (default 5)")
+
+    # ─── P2: Outline, Missing-refs, Diff, Circular ─────
+
+    # outline command
+    outline_parser = subparsers.add_parser("outline", help="Get file structure outline")
+    outline_parser.add_argument("file", help="File path to outline")
+    outline_parser.add_argument("workspace", nargs="?", default=None, help="Workspace root (optional)")
+    outline_parser.add_argument("--detail", choices=["minimal", "normal", "full"], default="normal",
+                                 help="Detail level")
+    outline_parser.add_argument("--all", action="store_true", dest="all_files",
+                                 help="Outline all files in workspace")
+
+    # missing-refs command
+    missing_refs_parser = subparsers.add_parser("missing-refs", help="Detect CSS/HTML mismatch bugs")
+    missing_refs_parser.add_argument("workspace", help="Path to workspace root")
+
+    # diff command
+    diff_parser = subparsers.add_parser("diff", help="Compare registry snapshots")
+    diff_parser.add_argument("workspace", help="Path to workspace root")
+    diff_parser.add_argument("--snapshot1", default=None, help="First snapshot ID (default: second-to-last)")
+    diff_parser.add_argument("--snapshot2", default=None, help="Second snapshot ID (default: last)")
+    diff_parser.add_argument("--list-snapshots", action="store_true", help="List available snapshots")
+
+    # circular command
+    circular_parser = subparsers.add_parser("circular", help="Detect circular dependencies")
+    circular_parser.add_argument("workspace", help="Path to workspace root")
+    circular_parser.add_argument("--domain", choices=["backend", "imports", "css", "all"], default="all",
+                                  help="Which dependency types to check")
+
+    # ─── P3: Context, Dependents, Validate ──────────────
+
+    # context command
+    context_parser = subparsers.add_parser("context", help="Get rich symbol context (code + callers + callees)")
+    context_parser.add_argument("name", help="Symbol name")
+    context_parser.add_argument("workspace", help="Path to workspace root")
+    context_parser.add_argument("--domain", choices=["frontend", "backend", "auto"], default="auto",
+                                 help="Domain")
+    context_parser.add_argument("--context-lines", type=int, default=5,
+                                 help="Lines of code context around symbol (default 5)")
+    context_parser.add_argument("--no-code", action="store_true", help="Skip source code in output")
+
+    # dependents command
+    dependents_parser = subparsers.add_parser("dependents", help="Module-level import tracking")
+    dependents_parser.add_argument("file", help="File path to check")
+    dependents_parser.add_argument("workspace", help="Path to workspace root")
+    dependents_parser.add_argument("--direction", choices=["dependents", "dependencies", "graph"],
+                                    default="dependents",
+                                    help="Show who imports this file, what this file imports, or full graph")
+    dependents_parser.add_argument("--depth", type=int, default=3, help="Trace depth (default 3)")
+
+    # validate command
+    validate_parser = subparsers.add_parser("validate", help="Validate registry against file system")
+    validate_parser.add_argument("workspace", help="Path to workspace root")
+
+    # ─── Parse and dispatch ─────────────────────────────
+
     args = parser.parse_args()
 
     if args.command == "scan":
         result = cmd_scan(args.workspace, args.incremental)
+        # Auto-save snapshot after scan
+        try:
+            frontend = load_frontend_registry(args.workspace)
+            backend = load_backend_registry(args.workspace)
+            save_snapshot(args.workspace, frontend, backend)
+        except Exception:
+            pass
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
     elif args.command == "query":
@@ -863,6 +989,105 @@ def main():
 
     elif args.command == "detect":
         result = cmd_detect(args.workspace)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── P1 Commands ────────────────────────────────────
+
+    elif args.command == "search":
+        config = load_config(os.path.abspath(args.workspace))
+        result = search_workspace(
+            args.workspace, args.pattern,
+            file_type=args.file_type,
+            file_filter=args.file,
+            max_results=args.max_results,
+            context_lines=args.context,
+            case_sensitive=not args.ignore_case,
+            whole_word=args.whole_word,
+            config=config
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "symbols":
+        result = search_symbols(
+            args.workspace, args.name,
+            domain=args.domain,
+            fuzzy=args.fuzzy
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "trace":
+        result = trace_symbol(
+            args.name, args.workspace,
+            direction=args.direction,
+            max_depth=args.depth,
+            domain=args.domain
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "impact":
+        result = analyze_impact(
+            args.name, args.workspace,
+            action=args.action,
+            domain=args.domain,
+            depth=args.depth
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── P2 Commands ────────────────────────────────────
+
+    elif args.command == "outline":
+        if args.all_files:
+            ws = args.workspace or os.getcwd()
+            result = get_workspace_outline(ws)
+        else:
+            result = get_file_outline(
+                args.file,
+                workspace=args.workspace,
+                detail_level=args.detail
+            )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "missing-refs":
+        result = detect_missing_refs(args.workspace)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "diff":
+        if args.list_snapshots:
+            snaps = list_snapshots(args.workspace)
+            print(json.dumps({"snapshots": snaps}, indent=2, ensure_ascii=False))
+        elif args.snapshot1 or args.snapshot2:
+            result = diff_snapshots(args.workspace, args.snapshot1, args.snapshot2)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            result = diff_current_vs_last(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "circular":
+        result = detect_circular(args.workspace, domain=args.domain)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    # ─── P3 Commands ────────────────────────────────────
+
+    elif args.command == "context":
+        result = get_symbol_context(
+            args.name, args.workspace,
+            domain=args.domain,
+            context_lines=args.context_lines,
+            include_code=not args.no_code
+        )
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "dependents":
+        if args.direction == "graph":
+            result = get_dependency_graph(args.workspace)
+        elif args.direction == "dependencies":
+            result = get_dependencies(args.file, args.workspace, depth=args.depth)
+        else:
+            result = get_dependents(args.file, args.workspace, depth=args.depth)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    elif args.command == "validate":
+        result = validate_registry(args.workspace)
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
     else:

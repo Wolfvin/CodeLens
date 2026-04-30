@@ -80,3 +80,33 @@ Stage Summary:
 - Complete JSON schemas for all command outputs
 - Decision trees, error handling, multi-agent coordination covered
 - SKILL.md updated with integration section and reference link
+
+---
+Task ID: 4
+Agent: main
+Task: Add P1-P3 tools to CodeLens (10 new commands)
+
+Work Log:
+- P1: Created search_engine.py — regex pattern search across workspace with type/file/context/ignore-case/whole-word filters
+- P1: Created trace_engine.py — BFS-based deep call chain tracing (up/down/both directions, configurable depth)
+- P1: Created impact_engine.py — change impact analysis with risk assessment (low/medium/high/critical), direct+indirect dependents, test file detection, recommendations
+- P2: Created outline_engine.py — file structure outline with tree-sitter + regex fallback for JS/TS/TSX/Rust/Python/HTML/CSS/Vue/Svelte, 3 detail levels
+- P2: Created missing_refs.py — CSS/HTML mismatch detection (css_no_html, html_no_css, css_id_no_html, js_id_no_html, possible_typos via Levenshtein distance)
+- P2: Created diff_engine.py — registry diff with auto-snapshots (saved on every scan), compare snapshots, track added/removed/changed entries
+- P2: Created circular_engine.py — circular dependency detection (function calls via DFS coloring, import chains, CSS @import chains)
+- P3: Created context_engine.py — rich symbol context (definition code, callers, callees, nearby symbols, file outline, imports)
+- P3: Created dependents_engine.py — module-level import tracking (JS/TS/Rust/Python/CSS imports), full dependency graph
+- P3: Created validate_engine.py — registry vs filesystem validation (missing files, unregistered files, stale references, orphan entries)
+- Updated codelens.py CLI — added 11 new subcommands (search, symbols, trace, impact, outline, missing-refs, diff, circular, context, dependents, validate)
+- Auto-snapshot on scan command
+- Updated SKILL.md with all 17 tools documented, new AI workflows (Bug Investigation, Pre-Delete)
+- Updated skill.json to v2.1.0 with new tags
+- Tested: search, outline, validate, circular, symbols all working correctly
+
+Stage Summary:
+- 10 new engine modules created (search, trace, impact, outline, missing-refs, diff, circular, context, dependents, validate)
+- 11 new CLI commands wired up (search + symbols as separate commands)
+- Total commands: 17 (original 6 + 11 new)
+- All commands tested and producing valid JSON output
+- SKILL.md updated with P1/P2/P3 sections and advanced AI workflows
+- Version bumped to 2.1.0
