@@ -56,3 +56,27 @@ Stage Summary:
 - Incremental scan support
 - Cross-file edge resolution
 - All tests passing
+
+---
+Task ID: 3
+Agent: main
+Task: Add Agent Integration Guide to CodeLens
+
+Work Log:
+- Created `references/agent-integration.md` — comprehensive 12-section integration guide
+- Covers 3 integration methods: CLI subprocess, Python API (direct import), JSON file read
+- Documented JSON output schemas for all 6 commands (scan, query frontend class, query frontend id, query backend, list, init, detect)
+- Created 3 agent decision trees: pre-write, post-write, refactoring
+- Built 4 integration pattern examples: Code Editor, Code Reviewer, Refactoring, Documentation Generator
+- Documented error handling with graceful degradation patterns
+- Added multi-agent coordination section with file locking
+- Created integration checklist (10 items)
+- Updated SKILL.md with new "Integrasi ke AI Agent" section including quick-start code snippets
+- Added agent-integration.md to references list in SKILL.md
+
+Stage Summary:
+- Agent integration guide shipped with full documentation
+- 3 integration methods documented (CLI, Python API, JSON read)
+- Complete JSON schemas for all command outputs
+- Decision trees, error handling, multi-agent coordination covered
+- SKILL.md updated with integration section and reference link

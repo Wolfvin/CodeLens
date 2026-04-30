@@ -185,10 +185,71 @@ User minta buat fitur baru yang ada id/class/function
 
 ---
 
+## Integrasi ke AI Agent
+
+CodeLens menggunakan **passive integration** — AI agent memanggil CLI/API secara manual saat dibutuhkan.
+
+### 3 Cara Integrasikan
+
+| Method | Best For | Latency |
+|--------|----------|---------|
+| **CLI (subprocess)** | Agent apapun, non-Python | ~200-500ms |
+| **Python API (import)** | Python-based agents | ~50-100ms |
+| **JSON file read** | Read-only, dashboard | ~1ms |
+
+### Quick Integration (CLI)
+
+```python
+import subprocess, json
+CLI = "/path/to/skills/codelens/scripts/codelens.py"
+
+def cl_query(name, workspace):
+    r = subprocess.run(["python3", CLI, "query", name, workspace],
+                       capture_output=True, text=True, timeout=30)
+    return json.loads(r.stdout)
+```
+
+### Quick Integration (Python API)
+
+```python
+import sys; sys.path.insert(0, "/path/to/skills/codelens/scripts")
+from codelens import cmd_scan, cmd_query, cmd_list, cmd_init
+
+cmd_init("/workspace")                    # Once
+cmd_scan("/workspace")                    # Before work
+result = cmd_query("btn-primary", "/workspace")  # Before write
+cmd_scan("/workspace", incremental=True)  # After write
+```
+
+### Aturan Integrasi WAJIB
+
+1. **Query sebelum write** — SELALU panggil `codelens_query` sebelum membuat class/id/function baru
+2. **Scan setelah write** — Jalankan `codelens_scan --incremental` setelah modifikasi kode
+3. **STOP pada collision** — Jangan lanjut kalau ada ID collision, report ke user
+4. **Report dead code** — Jangan silently ignore, tunjukkan ke user
+5. **Handle errors gracefully** — Tangani ImportError dan FileNotFoundError
+
+### Integration Guide Lengkap
+
+Untuk detail lengkap cara integrasikan CodeLens ke berbagai tipe AI agent,
+baca: **`references/agent-integration.md`**
+
+Covers:
+- CLI & Python API integration patterns
+- JSON output schemas untuk setiap command
+- Decision trees (pre-write, post-write, refactoring)
+- Integration patterns per agent type (editor, reviewer, refactoring, docs)
+- Error handling & graceful degradation
+- Multi-agent coordination
+- Integration checklist
+
+---
+
 ## Referensi Lebih Lanjut
 
 Load file referensi berikut untuk detail:
 
+- `references/agent-integration.md` — **Panduan integrasi ke AI agent (CLI, Python API, JSON schemas, decision trees)**
 - `references/parser-rules.md` — Aturan parsing per bahasa
 - `references/query-examples.md` — Contoh query dan interpretasi output
 - `references/status-codes.md` — Detail semua status dan flag
