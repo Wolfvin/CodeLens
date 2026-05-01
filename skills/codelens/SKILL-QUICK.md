@@ -1,181 +1,170 @@
 ---
 name: codelens
 description: >
-  CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter).
-  Activate BEFORE creating/editing/deleting HTML class/id, CSS selector, JSX className,
-  or function in Rust/JS/TS/Python. Prevents collision, overwrite, and dead code.
+  CodeLens v5 Quick Reference — concise trigger map, core commands, and decision rules
+  for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v4 — Quick Reference for AI Agents
+# CodeLens v5 — Quick Reference
 
-## 1. Activation Rules
+**MUST activate before writing/editing/deleting any class, id, or function.**
 
-MUST activate CodeLens when:
-- **Writing code**: Any new class/id/className/function creation or modification
-- **Querying codebase**: "does X exist", "who uses Y", "find references", "trace call chain"
-- **Auditing**: Security, quality, dead code, accessibility, refactoring safety checks
+## State Prerequisites
 
-## 2. Priority System
+1. No `.codelens/` → auto-run `init` → `scan` first
+2. Registry stale (>24h) → auto-run `scan --incremental`
+3. After code changes → always `scan --incremental` before re-query
 
-| Priority | Tools | Purpose |
-|----------|-------|---------|
-| **P0** | `init`, `scan`, `query`, `list`, `detect`, `dataflow`, `smell`, `secrets`, `entrypoints` | Must-run. Pre-write checks, critical analysis |
-| **P1** | `search`, `symbols`, `trace`, `impact`, `side-effect`, `refactor-safe`, `dead-code`, `api-map`, `state-map`, `env-check` | Search, trace, impact — run on demand |
-| **P2** | `outline`, `missing-refs`, `diff`, `circular`, `stack-trace`, `test-map`, `config-drift`, `debug-leak`, `complexity` | Deep analysis, structural inspection |
-| **P3** | `context`, `dependents`, `validate`, `type-infer`, `ownership`, `regex-audit`, `a11y`, `watch` | Supplemental context, niche audits |
+## Trigger Map — User Intent → Tool
 
-**Invocation:** `python3 "$CODELENS_DIR/scripts/codelens.py" <tool> <args> /path/to/workspace`
+### Core (P0 — Always Trigger)
 
-## 3. State Prerequisites
+| User Intent | Tool | Command |
+|-------------|------|---------|
+| Create new class/id/function | `query` | `codelens query "name" ws` |
+| Edit existing code | `query` + `context` | Query first, then context |
+| Delete code | `impact` + `dead-code` | Impact check, then delete |
+| "does this exist?" | `query` | `codelens query "name" ws` |
+| "who calls this?" | `trace --direction up` | `codelens trace "name" ws` |
+| Security audit | `secrets` → `dataflow` → `env-check` → `vuln-scan` | Full chain |
+| Vulnerability scan | `vuln-scan` | `codelens vuln-scan ws` |
 
+### Search & Understanding (P1)
+
+| User Intent | Tool | Command |
+|-------------|------|---------|
+| Search pattern | `search` | `codelens search "pattern" ws` |
+| Find symbol | `symbols` | `codelens symbols "name" ws` |
+| Symbol detail | `context` | `codelens context "name" ws` |
+| File structure | `outline` | `codelens outline ws --file path` |
+| API routes | `api-map` | `codelens api-map ws` |
+| Global state | `state-map` | `codelens state-map ws` |
+| Performance issues | `perf-hint` | `codelens perf-hint ws` |
+
+### Quality & Production (P1-P2)
+
+| User Intent | Tool | Command |
+|-------------|------|---------|
+| "production ready?" | `smell` → `complexity` → `debug-leak` → `dead-code` → `a11y` → `secrets` | Quality gate |
+| "what to refactor?" | `smell` | `codelens smell ws` |
+| "too complex" | `complexity` | `codelens complexity ws` |
+| "cleanup before deploy" | `debug-leak` | `codelens debug-leak ws` |
+| "dead code?" | `dead-code` + `list --filter dead` | Full dead code |
+| "accessible?" | `a11y` | `codelens a11y ws` |
+| "CSS issues?" | `css-deep` | `codelens css-deep ws` |
+
+### Refactoring (P1-P2)
+
+| User Intent | Tool | Command |
+|-------------|------|---------|
+| "safe to rename?" | `refactor-safe` → `impact` → `test-map` | Full chain |
+| "safe to delete?" | `impact` → `dead-code` | Impact then delete |
+| "pure function?" | `side-effect` | `codelens side-effect ws` |
+| "is it tested?" | `test-map` | `codelens test-map ws` |
+
+## Query Decision Rules
+
+| Query Result | Action |
+|-------------|--------|
+| `found: false` | SAFE — create new |
+| `found: true` + `status: active` | EXTEND — don't overwrite |
+| `found: true` + `status: dead` | ASK user — reuse or delete? |
+| `found: true` + `status: duplicate_ref` | LIST all referrers first |
+| `found: true` + `status: collision` | STOP — active bug, fix first |
+
+## Negative Triggers — SKIP CodeLens
+
+- Document generation (PDF, reports, docs)
+- Image/media generation
+- Web search queries
+- Non-codebase knowledge questions
+- Non-code file editing (config, markdown)
+
+## Default Fallback Chains (Vague Requests)
+
+| Pattern | Default Chain |
+|---------|---------------|
+| General "check/review" | `smell` → `dead-code` → `secrets` |
+| "safe/secure?" | `secrets` → `dataflow` → `env-check` → `vuln-scan` |
+| "good/clean/ready?" | `complexity` → `debug-leak` → `a11y` → `smell` |
+| "slow/fast/optimize" | `perf-hint` → `complexity` → `circular` |
+| "CSS/style/layout" | `css-deep` → `missing-refs` → `list --filter duplicate_define` |
+| "deploy/ship/release" | `secrets` → `debug-leak` → `env-check` → `vuln-scan` → `dead-code` |
+
+## Colloquial Triggers
+
+| Phrase (EN/ID) | Tool Chain |
+|-----------------|------------|
+| "this is slow" / "kok lama ya" | `perf-hint` → `complexity` → `circular` |
+| "something's weird" / "aneh nih" | `search` → `context` → `trace` → `missing-refs` |
+| "help me check" / "bantu cek" | `smell` → `dead-code` → `secrets` |
+| "clean up" / "bersihkan" | `debug-leak` → `dead-code` → `smell` |
+| "is this safe?" / "aman ga" | `secrets` → `vuln-scan` → `debug-leak` → `env-check` |
+
+## All 39 Commands Quick Reference
+
+| # | Command | Priority | One-liner |
+|---|---------|----------|-----------|
+| 1 | `init` | P0 | Initialize workspace |
+| 2 | `scan` | P0 | Scan & build registry |
+| 3 | `query` | P0 | Check if name exists |
+| 4 | `list` | P3 | List with filter |
+| 5 | `detect` | P3 | Detect frameworks |
+| 6 | `watch` | P3 | File watcher |
+| 7 | `search` | P1 | Regex search |
+| 8 | `symbols` | P1 | Registry symbol search |
+| 9 | `trace` | P1 | Call chain trace |
+| 10 | `impact` | P1 | Change impact analysis |
+| 11 | `outline` | P2 | File structure outline |
+| 12 | `missing-refs` | P2 | CSS/HTML mismatch |
+| 13 | `diff` | P2 | Registry diff |
+| 14 | `circular` | P2 | Circular dependency |
+| 15 | `context` | P1 | Rich symbol context |
+| 16 | `dependents` | P2 | Module import tracking |
+| 17 | `validate` | P3 | Registry sanity check |
+| 18 | `dataflow` | P0 | Source→sink analysis |
+| 19 | `smell` | P0 | Code smell detection |
+| 20 | `side-effect` | P1 | Pure vs impure |
+| 21 | `refactor-safe` | P1 | Rename/move safety |
+| 22 | `dead-code` | P1 | Enhanced dead code |
+| 23 | `stack-trace` | P2 | Error propagation |
+| 24 | `test-map` | P2 | Test coverage |
+| 25 | `config-drift` | P2 | Dependency drift |
+| 26 | `type-infer` | P3 | Type inference |
+| 27 | `ownership` | P3 | Code ownership |
+| 28 | `secrets` | P0 | Hardcoded secret scan |
+| 29 | `entrypoints` | P0 | Entry point mapping |
+| 30 | `api-map` | P1 | Route→handler mapping |
+| 31 | `state-map` | P1 | State management |
+| 32 | `env-check` | P1 | Environment audit |
+| 33 | `debug-leak` | P2 | Debug code detection |
+| 34 | `complexity` | P2 | Complexity scoring |
+| 35 | `regex-audit` | P3 | Regex safety audit |
+| 36 | `a11y` | P3 | Accessibility audit |
+| 37 | `vuln-scan` | P0 | CVE vulnerability scan |
+| 38 | `perf-hint` | P1 | Performance hints |
+| 39 | `css-deep` | P2 | Deep CSS analysis |
+
+## CLI Usage Pattern
+
+```bash
+CODELENS_DIR="{project_path}/skills/codelens"
+CLI="python3 $CODELENS_DIR/scripts/codelens.py"
+
+# Setup
+$CLI init /workspace
+$CLI scan /workspace
+
+# Pre-write check (MOST IMPORTANT)
+$CLI query "newName" /workspace
+
+# Post-write update
+$CLI scan /workspace --incremental
+
+# Analysis
+$CLI smell /workspace
+$CLI secrets /workspace
+$CLI vuln-scan /workspace
+$CLI perf-hint /workspace
+$CLI css-deep /workspace
 ```
-REQUIRED ORDER: init → scan → [any tool]
-```
-- `init workspace` — One-time. Auto-detects frameworks, creates config
-- `scan workspace` — Builds registry. Use `--incremental` for changed files only
-- `query "name" workspace` — Pre-write collision check (MOST IMPORTANT TOOL)
-- After any code change → `scan --incremental` to update registry
-
-## 4. Context-Aware Hints
-
-- **No registry found** → Auto-run `init` + `scan` before any tool
-- **Registry stale (>24h old)** → Re-run `scan --incremental` before queries
-- **After file edits** → Always `scan --incremental` then `list --filter dead` + `list --filter collision`
-- **First session in workspace** → `init` → `scan` → `detect` to bootstrap
-
-## 5. Quick Trigger Map
-
-| User Intent | Tool(s) |
-|-------------|---------|
-| Create class/id/function | `query` → write → `scan --incremental` |
-| Edit existing symbol | `query` + `context` → edit → `scan --incremental` |
-| Delete code | `impact --action delete` + `dead-code` → delete → `scan --incremental` |
-| "does X exist?" | `query` |
-| "who uses/calls this?" | `trace --direction up` |
-| "what does this call?" | `trace --direction down` |
-| "search pattern" | `search` or `symbols --fuzzy` |
-| "explain this codebase" | `entrypoints` + `api-map` + `state-map` |
-| "is this secure?" | `secrets` → `dataflow` → `env-check` → `regex-audit` |
-| "production ready?" | `smell` → `complexity` → `debug-leak` → `dead-code` → `a11y` → `secrets` |
-| "safe to rename?" | `refactor-safe` → `impact` → `test-map` |
-| "what endpoints exist?" | `api-map` |
-| "who manages this state?" | `state-map` |
-| "dead code / unused" | `dead-code` + `list --filter dead` |
-| "CSS mismatch HTML" | `missing-refs` |
-| "circular dependency" | `circular` |
-| "what's in this file?" | `outline --file path` |
-| "who imports this file?" | `dependents path` |
-| "env var audit" | `env-check` |
-| "before deploy" | `secrets` → `debug-leak` → `env-check` → `config-drift` → `dead-code` |
-
-## 6. Colloquial Triggers
-
-Non-technical phrases that MUST activate CodeLens:
-
-| Phrase | Tool(s) |
-|--------|---------|
-| "kok lama ya" / "why so slow" / "code berat" | `perf-hint` + `complexity` + `circular` |
-| "bikin baru" / "buat class/function" | `query` (pre-write check) |
-| "ubek-ubek" / "nyari di mana" / "where is it" | `search` + `symbols --fuzzy` |
-| "bisa dihapus gak" / "safe to remove" | `impact --action delete` + `dead-code` |
-| "gak jalan" / "bug" / "broken" | `search` → `context` → `trace --direction up` → `missing-refs` |
-| "ribet banget" / "too complex" / "spaghetti" | `complexity` + `smell` + `circular` |
-| "aman gak" / "secure?" | `secrets` + `dataflow` + `env-check` + `regex-audit` |
-| "siapa yang buat" / "who touched this" | `ownership` |
-| "udah ditest belum" / "is it tested" | `test-map` |
-| "banyak yang duplicate" | `list --filter duplicate_define` + `dead-code` |
-| "ready deploy?" / "production?" | `smell` + `complexity` + `debug-leak` + `secrets` |
-| "rename boleh?" / "ganti nama" | `refactor-safe` + `impact` + `test-map` |
-
-## 7. Negative Triggers
-
-Do NOT activate CodeLens for:
-- "buat PDF" / "generate image" / "create slide" → use pdf/image/ppt skills
-- "search web" / "google" / "latest news" → use web-search skill
-- "translate" / "write email" / "summarize article" → use LLM skill
-- "install package" / "npm install" → direct bash
-- "run server" / "start dev" → direct bash
-- "explain concept" / "teach me X" → general LLM response
-- Pure text generation with no codebase interaction
-
-## 8. Default Fallback Chain
-
-When user request is vague ("review", "cek kode", "check code"):
-
-```
-1. query (if specific name mentioned) OR scan (if no registry)
-2. smell — overall health
-3. complexity — find hotspots
-4. dead-code — find removable code
-5. Report summary with prioritized findings
-```
-
-For vague security concerns ("is this safe?"):
-```
-secrets → dataflow --source user_input → env-check → regex-audit
-```
-
-For vague quality concerns ("is this good?"):
-```
-smell → complexity → debug-leak → dead-code → a11y
-```
-
-## 9. Error Recovery
-
-| Failure | Recovery Action |
-|---------|----------------|
-| `init` fails | Check `setup.sh` ran. Verify workspace path. Re-run `bash "$CODELENS_DIR/setup.sh"` |
-| `scan` fails | Check file permissions. Try full scan (no `--incremental`). Delete `.codelens/` and re-init |
-| `query` returns error | Registry may be stale → `validate` → if issues, `scan` full → retry query |
-| `validate` shows drift | Re-run `scan` (full, not incremental) to rebuild registry |
-| Tool not found | Verify `$CODELENS_DIR` env var. Check `scripts/codelens.py` exists |
-| Timeout on scan | Reduce workspace scope. Check for huge minified files in `.codelensignore` |
-| Empty results | Registry may be empty → `scan` first. Verify file extensions are supported |
-| JSON parse error | Tool output format changed → re-run `scan` to regenerate registry |
-
-## 10. Parallel Execution Hints
-
-**CAN run in parallel** (no data dependency between them):
-- `secrets` + `env-check` + `regex-audit` (independent security audits)
-- `smell` + `complexity` + `debug-leak` (independent quality checks)
-- `symbols` + `search` (read-only lookups)
-- `a11y` + `missing-refs` (independent frontend checks)
-- `entrypoints` + `api-map` + `state-map` (independent mapping tools)
-
-**MUST run sequentially** (output feeds next input):
-- `init` → `scan` → any other tool (registry must exist)
-- `query` → decision → write → `scan --incremental` (pre-write flow)
-- `refactor-safe` → `impact` → `test-map` (safety chain)
-- `search` → `context` → `trace` (investigation chain)
-- `detect` → framework-specific tool selection (e.g., `state-map` only if React detected)
-
-## 11. Decision Rules
-
-### Query Result → Action
-
-| `query` Result | Status | AI Action |
-|----------------|--------|-----------|
-| `found: false` | — | **CREATE**: Safe to create new symbol |
-| `found: true` | `active` | **EXTEND**: Do NOT overwrite. Extend existing implementation |
-| `found: true` | `dead` | **ASK**: Symbol exists but unused. Ask user: reuse or delete? |
-| `found: true` | `duplicate_ref` | **LIST**: Called from many places. Show all referrers before editing |
-| `found: true` | `collision` | **STOP**: Active bug. Report to user. Fix before proceeding |
-
-### Impact Result → Action
-
-| `impact` Risk Level | AI Action |
-|---------------------|-----------|
-| `critical` | **STOP**. Do not change. Report to user |
-| `high` | **WARNING**. List all affected files. Require explicit user confirmation |
-| `medium` | **CAUTION**. Run tests after change. Verify nothing breaks |
-| `low` | **SAFE**. Proceed with change |
-
-### Refactor-Safe Result → Action
-
-| Safety Level | AI Action |
-|-------------|-----------|
-| `dangerous` | **STOP**. Report all risks. Do not proceed |
-| `risky` | **WARNING**. List string refs, dynamic access, eval refs |
-| `cautious` | Proceed with manual review of flagged items |
-| `mostly_safe` | Proceed. Minor edge cases to watch |
-| `safe` | **PROCEED**. Automated rename/move is fine |

@@ -180,3 +180,108 @@ Stage Summary:
 - statemap_engine.py: 1308 lines (10 state management frameworks, cross-file consumer resolution)
 - envcheck_engine.py: 862 lines (3 language env var extractors, .env parser, secret detection)
 - All engines follow existing architecture pattern (main function + helper functions, consistent return format)
+
+---
+Task ID: enhance-agent-integration
+Agent: general-purpose
+Task: Enhance agent-integration.md with new sections 0.4-0.7 and 13-17
+
+Work Log:
+- Read full current file (1220 lines, sections 0-12)
+- Added Section 0.4: Context-Aware Trigger Hints (Auto-Init, Re-Scan if Stale, Post-Write Auto-Scan patterns)
+- Added Section 0.5: Colloquial Trigger Phrases (8 English/Indonesian phrase → tool chain mappings)
+- Added Section 0.6: Negative Triggers — When NOT to Activate CodeLens (6 categories to SKIP)
+- Added Section 0.7: Default Fallback Chains (6 vague request patterns → default tool chains)
+- Added Section 13: Error Recovery Guide (10 failure scenarios + auto-recovery Python pattern)
+- Added Section 14: Parallel Execution Hints (5 parallel-safe groups + 5 sequential-required chains + concurrent.futures implementation)
+- Added Section 15: Edge Case Flows (5 scenarios: empty workspace, no git, monorepo, no package.json, TypeScript-only)
+- Added Section 16: Streaming/Real-Time Integration (CodeLensWatcher webhook + CodeLensPoller polling)
+- Added Section 17: REST API Wrapper Pattern (FastAPI wrapper, usage examples, security considerations)
+- Verified all section headings are in correct order (0.1-0.7, 1-17)
+- No existing content was removed or modified — only additions made
+- Final file: 1684 lines (up from 1220)
+
+---
+Task ID: rewrite-skill-md-v5
+Agent: general-purpose
+Task: Completely rewrite SKILL.md for CodeLens v5
+
+Work Log:
+- Read the full SKILL.md file (1280 lines) to understand all existing content
+- Applied all 9 required change categories:
+
+1. Frontmatter (lines 1-35):
+   - Changed "CodeLens v4" → "CodeLens v5"
+   - Translated ALL Indonesian text to English (WAJIB→MUST, Gunakan→Use, Trigger juga→Also trigger, etc.)
+   - Added v5 line: "v5 adds: dependency vulnerability scanning, performance anti-pattern detection, deep CSS analysis"
+   - Kept all trigger phrases in English
+
+2. Version Header (line 37-65):
+   - Changed "# CodeLens v4" → "# CodeLens v5"
+   - Translated "Sebelum AI menulis..." → "Before an AI writes..."
+   - Removed old "Apa yang Baru di v2" and "Apa yang Baru di v3" sections (per changelog removal rule)
+   - Added "## What's New in v5" section with 3 features (vuln-scan, perf-hint, css-deep)
+
+3. Prerequisites section:
+   - Translated "Jalankan setup sekali sebelum menggunakan CodeLens" → "Run setup once before using CodeLens"
+
+4. Tool descriptions:
+   - Translated ALL Indonesian text in all 36 tool descriptions to English
+   - Added 3 new tool sections (37-39): vuln-scan, perf-hint, css-deep with full documentation
+
+5. Auto-Trigger Map Overhaul:
+   - Added State Prerequisites sub-section with 3 rules and auto-init behavior
+   - Added Colloquial Trigger Phrases table (7 English/Indonesian phrase → tool chain mappings)
+   - Added Negative Triggers sub-section (6 categories when NOT to activate CodeLens)
+   - Added Default Fallback Chains table (6 vague request patterns → default tool chains)
+   - Added Priority column (P0/P1/P2/P3) to ALL trigger tables
+
+6. AI Workflow Section:
+   - Translated ALL Indonesian text in all workflow diagrams to English
+   - Added 3 v5-specific workflows: Vulnerability Scanning, Performance Investigation (Enhanced), CSS Deep Audit
+
+7. Error Recovery Flows:
+   - Added new section with 8 failure → recovery pairs
+
+8. Changelog cleanup:
+   - Removed "Apa yang Baru di v2" and "Apa yang Baru di v3" sections
+   - Kept only "What's New in v5"
+
+9. General translation:
+   - ALL Indonesian text → English throughout the file
+   - Exception: Indonesian examples in Colloquial Trigger Phrases table (explicitly allowed)
+   - Section headers, table headers, AI action rules all in English
+   - "Alur Kerja AI" → "AI Workflows", "Tools yang Tersedia" → "Available Tools", etc.
+
+Verification:
+- Final file: 1458 lines (up from 1280)
+- No Indonesian text remaining except in Colloquial Trigger Phrases table (by design)
+- All 39 tools documented
+- All trigger tables have Priority column
+- All new v5 sections present (What's New, 3 new tools, 3 new workflows, Error Recovery, State Prerequisites, Colloquial Triggers, Negative Triggers, Default Fallback Chains)
+
+---
+Task ID: 1-20 (All tasks)
+Agent: Main Agent + Subagents
+Task: Execute all 20 CodeLens v5.0.0 upgrade tasks in one run
+
+Work Log:
+- Tasks 1-3, 7-10, 17, 20 (SKILL.md): Delegated to subagent — complete rewrite of SKILL.md (1458 lines), English unification, priority weights, state prerequisites, colloquial/negative triggers, fallback chains, error recovery, 3 new v5 tools added
+- Tasks 3, 7-8, 10-14 (agent-integration.md): Delegated to subagent — added 9 new sections (0.4-0.7, 13-17), 464 lines of new content covering context-aware hints, colloquial triggers, negative triggers, fallback chains, error recovery, parallel execution, edge cases, streaming/real-time, REST API wrapper
+- Task 4 (vuln-scan): Already implemented in prior session — vulnscan_engine.py with 35+ CVE entries, npm/cargo/pip/go audit support
+- Task 5 (perf-hint): Already implemented in prior session — perfhint_engine.py with 8 categories, regex+AST patterns
+- Task 6 (css-deep): Already implemented in prior session — cssdeep_engine.py with 6 categories, cross-file CSS analysis
+- Task 15 (SKILL-QUICK.md): Created 170-line concise quick reference with trigger map, decision rules, all 39 commands
+- Task 16 (changelog): Already moved to references/changelog.md in prior session
+- Task 18 (skill.json description): Optimized to ~290 chars with front-loaded trigger phrases
+- Task 19 (trigger-specific tags): Added 8 new tags: colloquial-trigger, negative-trigger, fallback-chain, error-recovery, parallel-execution, edge-case, streaming, rest-api
+- Task 20 (package): Packaged as codelens-5.0.0.zip (284KB)
+
+Stage Summary:
+- All 20 tasks completed successfully
+- SKILL.md: 1100 → 1458 lines (complete v5 rewrite, English, all enhancements)
+- SKILL-QUICK.md: New 170-line concise reference
+- agent-integration.md: 1220 → 1684 lines (+9 sections)
+- skill.json: Optimized description + 8 new trigger-specific tags
+- Package: /home/z/my-project/download/codelens-5.0.0.zip (284KB)
+- CLI already has 39 commands registered (vuln-scan, perf-hint, css-deep added in prior session)

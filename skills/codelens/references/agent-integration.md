@@ -111,6 +111,68 @@ corresponding CodeLens tools:
 | deploy, production, release | terap, produksi, rilis | Full quality gate chain |
 | slow, performance, bottleneck | lambat, kinerja | `complexity` + `side-effect` + `circular` + `state-map` |
 
+### 0.4 Context-Aware Trigger Hints
+
+The AI should automatically handle these scenarios without user intervention:
+
+**Auto-Init Pattern**: If the user asks a codebase question and no `.codelens/` directory exists:
+1. Run `init` → `scan` automatically (don't ask the user)
+2. Then proceed with the requested tool
+3. Inform the user: "Initialized CodeLens registry for this workspace"
+
+**Re-Scan if Stale Pattern**: If the registry was last updated >24 hours ago:
+1. Run `scan --incremental` automatically
+2. Then proceed with the requested tool
+3. Inform the user: "Registry was stale, re-scanned before analysis"
+
+**Post-Write Auto-Scan Pattern**: After any code modification:
+1. Always run `scan --incremental` to update the registry
+2. Then optionally run `list --filter dead` to check for new dead code
+3. This is NOT optional — stale registry = wrong analysis results
+
+### 0.5 Colloquial Trigger Phrases
+
+Users often express codebase concerns using informal language. Map these to CodeLens tools:
+
+| Phrase (English) | Phrase (Indonesian) | Tool Chain |
+|-------------------|---------------------|------------|
+| "this is slow" / "why so slow" / "takes forever" | "kok lama ya" / "kenapa lama" | `perf-hint` → `complexity` → `circular` |
+| "something's weird" / "this is broken" | "aneh nih" / "kok error" | `search` → `context` → `trace` → `missing-refs` |
+| "help me check" / "give it a look" | "bantu cek" / "tolong cek" | `smell` → `dead-code` → `secrets` |
+| "clean this up" / "tidy up" | "bersihkan" / "rapikan" | `debug-leak` → `dead-code` → `smell` |
+| "is this safe?" / "can I deploy?" | "aman ga" / "bisa deploy ga" | `secrets` → `vuln-scan` → `debug-leak` → `env-check` |
+| "make it faster" / "optimize" | "percepat" / "optimasi" | `perf-hint` → `complexity` → `circular` |
+| "the CSS is messy" / "style issues" | "CSS berantakan" | `css-deep` → `missing-refs` → `list --filter duplicate_define` |
+| "vulnerable?" / "CVE?" / "security hole?" | "rentan?" / "celah?" | `vuln-scan` → `secrets` → `dataflow` → `env-check` |
+
+### 0.6 Negative Triggers — When NOT to Activate CodeLens
+
+Do NOT activate CodeLens for these tasks:
+
+| User Intent | Keywords | Action |
+|-------------|----------|--------|
+| Document generation | "generate PDF", "create report", "write document" | SKIP CodeLens entirely |
+| Image/media generation | "generate image", "create artwork", "make logo" | SKIP CodeLens entirely |
+| Web search | "search the web", "find online", "look up" | SKIP CodeLens entirely |
+| Knowledge questions | "what is React", "explain SQL", "how does X work" | SKIP CodeLens entirely |
+| Non-code file editing | "edit config", "write markdown", "update YAML" | SKIP CodeLens (unless checking existing code references) |
+| UI/UX design | "design layout", "create mockup", "wireframe" | SKIP CodeLens (unless verifying existing component names) |
+
+**Rule**: If the task does not involve reading, writing, editing, or analyzing source code in the workspace, CodeLens is not needed. Activating it unnecessarily wastes tokens and time.
+
+### 0.7 Default Fallback Chains
+
+When a user's request is vague and doesn't clearly map to a specific tool, use these default chains:
+
+| Vague Request Pattern | Default Chain | Rationale |
+|-----------------------|---------------|-----------|
+| General "check" / "review" / "analyze" | `smell` → `dead-code` → `secrets` | Broad quality + security baseline |
+| Security-adjacent ("safe?", "secure?", "risk?") | `secrets` → `dataflow` → `env-check` → `vuln-scan` | Full security audit |
+| Quality-adjacent ("good?", "clean?", "ready?") | `complexity` → `debug-leak` → `a11y` → `smell` | Quality gate |
+| Performance-adjacent ("slow?", "fast?", "optimize?") | `perf-hint` → `complexity` → `circular` | Performance bottleneck hunt |
+| CSS-adjacent ("style?", "layout?", "CSS?") | `css-deep` → `missing-refs` → `list --filter duplicate_define` | CSS health check |
+| Pre-deploy ("deploy?", "ship?", "release?") | `secrets` → `debug-leak` → `env-check` → `config-drift` → `vuln-scan` → `dead-code` | Full pre-deploy gate |
+
 ---
 
 ## 1. Integration Overview
@@ -1218,3 +1280,405 @@ Sebelum mengintegrasikan CodeLens ke agent, pastikan:
 - [ ] **Error handling**: Agent handle ImportError dan FileNotFoundError gracefully
 - [ ] **Timeout**: Agent set appropriate timeout untuk setiap command
 - [ ] **Domain awareness**: Agent menggunakan `--domain` filter saat query
+
+---
+
+## 13. Error Recovery Guide
+
+When a CodeLens command fails, follow these recovery procedures:
+
+| Failure Scenario | Symptoms | Recovery Procedure |
+|-----------------|----------|-------------------|
+| Registry not found | `FileNotFoundError` on query/list/trace | Auto-run `init` → `scan` → retry the command |
+| Registry corrupt | `json.JSONDecodeError` on load | Delete `.codelens/` → `init` → `scan` → retry |
+| Scan fails (file read) | `IOError` on specific files | Scan continues, skipping unreadable files. Report failed files to user. |
+| Scan fails (grammar import) | `ImportError` for tree-sitter | Automatic fallback to regex parser. No action needed. |
+| Query returns unexpected | Symbol exists but query says not found | Run `scan --incremental` first (registry may be stale), then retry `query` |
+| Trace finds no edges | Empty call chain for known function | Run `scan` to rebuild edges, then retry `trace` |
+| vuln-scan: npm audit not found | `FileNotFoundError` for npm | Skip native audit, use built-in CVE database + lock-file parsing |
+| perf-hint: too many results | Overwhelming number of hints | Apply `--severity critical` or `--category` filter to narrow scope |
+| css-deep: no CSS files found | Empty results | Check if CSS is in .vue/.svelte components (still scanned). Verify config ignore paths. |
+| Timeout on large workspace | `subprocess.TimeoutExpired` | Use `--incremental` scan. For analysis tools, try per-file with `--file` flag. |
+
+### Auto-Recovery Pattern
+
+```python
+def resilient_codelens_query(name, workspace, domain=None, max_retries=2):
+    """Query with automatic error recovery."""
+    for attempt in range(max_retries + 1):
+        try:
+            result = cmd_query(name, workspace, domain=domain)
+            return result
+        except FileNotFoundError:
+            if attempt == 0:
+                # Registry doesn't exist — auto-init
+                cmd_init(workspace)
+                cmd_scan(workspace)
+                continue
+            raise
+        except json.JSONDecodeError:
+            if attempt == 0:
+                # Registry corrupt — rebuild
+                import shutil
+                shutil.rmtree(os.path.join(workspace, '.codelens'), ignore_errors=True)
+                cmd_init(workspace)
+                cmd_scan(workspace)
+                continue
+            raise
+        except Exception as e:
+            # Unexpected error — log and return safe default
+            print(f"[CodeLens] Warning: query failed: {e}")
+            return {"found": False, "query": name, "error": str(e)}
+    return {"found": False, "query": name, "error": "Max retries exceeded"}
+```
+
+---
+
+## 14. Parallel Execution Hints
+
+Some CodeLens tools can be run in parallel (independent data sources), while others must be sequential (each depends on the previous result).
+
+### Parallel-Safe Groups
+
+These tools read independent data sources and can run simultaneously:
+
+**Group A — Security Scan** (all read different sources, no dependencies):
+- `secrets` ∥ `vuln-scan` ∥ `regex-audit` ∥ `env-check`
+
+**Group B — Quality Audit** (all analyze different aspects independently):
+- `complexity` ∥ `a11y` ∥ `css-deep` ∥ `perf-hint`
+
+**Group C — Structure Discovery** (all map different structural aspects):
+- `entrypoints` ∥ `api-map` ∥ `state-map` ∥ `circular`
+
+**Group D — Dead Code Detection** (different detection strategies):
+- `dead-code` ∥ `list --filter dead` ∥ `missing-refs`
+
+**Group E — Ownership & History** (all git-based or mtime-based):
+- `ownership` ∥ `diff` ∥ `config-drift`
+
+### Sequential-Required Chains
+
+These tools MUST run in sequence because each depends on the previous result:
+
+1. **Write flow**: `query` → write code → `scan --incremental` → `missing-refs`
+2. **Bug investigation**: `search` → `context` → `trace` → `missing-refs`
+3. **Refactoring**: `refactor-safe` → `impact` → `test-map` → refactor → `scan --incremental`
+4. **Security deep-dive**: `secrets` → `dataflow` → (if taint found) → `env-check` → `vuln-scan`
+5. **Understanding**: `entrypoints` → `api-map` → `state-map` → `outline --all`
+
+### Implementation with concurrent.futures
+
+```python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def parallel_security_scan(workspace):
+    """Run security tools in parallel for faster results."""
+    tools = [
+        ("secrets", lambda: cmd_secrets(workspace)),
+        ("vuln-scan", lambda: scan_vulnerabilities(workspace)),
+        ("regex-audit", lambda: audit_regex_patterns(workspace)),
+        ("env-check", lambda: check_env_vars(workspace)),
+    ]
+    
+    results = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(fn): name
+            for name, fn in tools
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                results[name] = future.result(timeout=30)
+            except Exception as e:
+                results[name] = {"status": "error", "error": str(e)}
+    
+    return results
+```
+
+---
+
+## 15. Edge Case Flows
+
+### Empty Workspace
+```
+User: "Check this workspace" (but workspace has no source files)
+          │
+          ▼
+1. codelens scan workspace
+   → files_scanned: all zeros
+          │
+          ▼
+2. Report: "No source files found. Check:
+   - Is this the correct workspace path?
+   - Are file extensions covered? (.html, .css, .js, .ts, .tsx, .py, .rs, .vue, .svelte)
+   - Is the ignore list too aggressive? Check .codelens/codelens.config.json"
+```
+
+### No Git Available
+```
+User: "Who owns this code?" (but git is not installed)
+          │
+          ▼
+1. codelens ownership workspace
+   → Falls back to mtime-based analysis (file modification time)
+          │
+          ▼
+2. Report: "Git not available. Using file modification time for ownership analysis.
+   Results are less precise — install git for accurate blame data."
+```
+
+### Monorepo with Multiple Package.json
+```
+User: "Scan this monorepo"
+          │
+          ▼
+1. codelens scan workspace
+   → Scans all subdirectories (respects ignore list)
+          │
+          ▼
+2. codelens vuln-scan workspace
+   → Discovers ALL package.json/Cargo.toml/requirements.txt across subdirectories
+   → Reports findings per-file with relative paths
+          │
+          ▼
+3. codelens config-drift workspace
+   → Checks each package.json against its local node_modules
+```
+
+### No package.json (Pure Frontend or Static Site)
+```
+User: "Check this static site" (no package.json)
+          │
+          ▼
+1. codelens scan workspace
+   → Frontend-only scan (HTML + CSS)
+          │
+          ▼
+2. codelens css-deep workspace
+   → Full CSS analysis still works
+          │
+          ▼
+3. codelens missing-refs workspace
+   → HTML/CSS mismatch detection still works
+          │
+          ▼
+4. Report: "No backend/JS files detected. Analysis limited to HTML + CSS.
+   Framework detection may be limited without package.json."
+```
+
+### TypeScript-Only Workspace
+```
+User: "Analyze this TypeScript project"
+          │
+          ▼
+1. codelens scan workspace
+   → .ts files routed based on frontend/backend paths
+   → Frontend .ts → TSX parser, Backend .ts → JS backend parser
+          │
+          ▼
+2. If all files go to wrong domain:
+   Adjust .codelens/codelens.config.json:
+   - Add frontend/backend paths correctly
+   - Re-scan
+```
+
+---
+
+## 16. Streaming/Real-Time Integration
+
+### Watch Mode + Webhook Callback
+
+For agents that need real-time codebase updates, use the watch mode with a webhook callback:
+
+```python
+import subprocess
+import threading
+import json
+import requests
+
+class CodeLensWatcher:
+    """Watch workspace for changes and post results to a webhook."""
+    
+    def __init__(self, workspace, webhook_url):
+        self.workspace = workspace
+        self.webhook_url = webhook_url
+        self.process = None
+    
+    def start(self):
+        """Start watching in a background thread."""
+        def _watch():
+            # Use the built-in watch command
+            self.process = subprocess.Popen(
+                ["python3", CODELENS_CLI, "watch", self.workspace],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for line in self.process.stdout:
+                if "Scan complete:" in line:
+                    # Parse the JSON result
+                    try:
+                        json_start = line.index("{")
+                        result = json.loads(line[json_start:])
+                        self._notify_webhook(result)
+                    except (ValueError, json.JSONDecodeError):
+                        pass
+        
+        thread = threading.Thread(target=_watch, daemon=True)
+        thread.start()
+    
+    def _notify_webhook(self, scan_result):
+        """Post scan result to the webhook URL."""
+        try:
+            requests.post(
+                self.webhook_url,
+                json={
+                    "event": "codelens_scan_complete",
+                    "workspace": self.workspace,
+                    "result": scan_result,
+                },
+                timeout=5,
+            )
+        except requests.RequestException:
+            pass  # Webhook down — non-critical
+    
+    def stop(self):
+        """Stop the watcher."""
+        if self.process:
+            self.process.terminate()
+```
+
+### Polling Alternative (No watchdog)
+
+If `watchdog` is not installed, use polling:
+
+```python
+import time
+
+class CodeLensPoller:
+    """Poll for codebase changes at regular intervals."""
+    
+    def __init__(self, workspace, interval_seconds=30, callback=None):
+        self.workspace = workspace
+        self.interval = interval_seconds
+        self.callback = callback
+        self.running = False
+    
+    def start(self):
+        """Start polling in a background thread."""
+        self.running = True
+        def _poll():
+            while self.running:
+                result = cmd_scan(self.workspace, incremental=True)
+                if result.get("message") != "No changes detected. Registry is up to date.":
+                    if self.callback:
+                        self.callback(result)
+                time.sleep(self.interval)
+        
+        thread = threading.Thread(target=_poll, daemon=True)
+        thread.start()
+    
+    def stop(self):
+        self.running = False
+```
+
+---
+
+## 17. REST API Wrapper Pattern
+
+For non-Python agents or microservice architectures, wrap CodeLens as an HTTP API:
+
+### FastAPI Wrapper
+
+```python
+# server.py — FastAPI-based CodeLens API
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+import os
+import sys
+
+# Add CodeLens to path
+sys.path.insert(0, "/path/to/skills/codelens/scripts")
+
+from codelens import cmd_scan, cmd_query, cmd_list, cmd_init, cmd_detect
+
+app = FastAPI(title="CodeLens API", version="5.0.0")
+
+# In-memory workspace registry (for single-server deployments)
+_active_workspaces = {}
+
+@app.post("/init/{workspace:path}")
+async def init_workspace(workspace: str):
+    """Initialize CodeLens for a workspace."""
+    abs_path = os.path.abspath(workspace)
+    if not os.path.exists(abs_path):
+        raise HTTPException(status_code=404, detail=f"Workspace not found: {workspace}")
+    result = cmd_init(abs_path)
+    _active_workspaces[abs_path] = True
+    return result
+
+@app.post("/scan/{workspace:path}")
+async def scan_workspace(workspace: str, incremental: bool = False):
+    """Scan workspace and build registry."""
+    abs_path = os.path.abspath(workspace)
+    result = cmd_scan(abs_path, incremental=incremental)
+    return result
+
+@app.get("/query/{name}/{workspace:path}")
+async def query_symbol(name: str, workspace: str, domain: str = None):
+    """Query a class/id/function."""
+    abs_path = os.path.abspath(workspace)
+    result = cmd_query(name, abs_path, domain=domain)
+    return result
+
+@app.get("/list/{workspace:path}")
+async def list_entries(workspace: str, domain: str = "all", filter_type: str = "all"):
+    """List entries with optional filter."""
+    abs_path = os.path.abspath(workspace)
+    result = cmd_list(abs_path, domain=domain, filter_type=filter_type)
+    return result
+
+# Add more endpoints for other commands...
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8901)
+```
+
+### Running the API Server
+
+```bash
+# Install dependencies
+pip install fastapi uvicorn
+
+# Start the server
+python server.py
+
+# Or with custom host/port
+uvicorn server:app --host 0.0.0.0 --port 8901 --workers 2
+```
+
+### Usage from Any Agent
+
+```bash
+# Initialize
+curl -X POST http://localhost:8901/init/path/to/workspace
+
+# Scan
+curl -X POST "http://localhost:8901/scan/path/to/workspace?incremental=true"
+
+# Query
+curl http://localhost:8901/query/btn-primary/path/to/workspace
+
+# List dead code
+curl "http://localhost:8901/list/path/to/workspace?domain=all&filter_type=dead"
+```
+
+### Security Considerations
+
+- **Path traversal**: Validate workspace paths to prevent directory traversal attacks
+- **Rate limiting**: Add rate limiting for scan endpoints (CPU-intensive)
+- **Authentication**: Add API key authentication for production deployments
+- **Sandboxing**: Consider running in a container with read-only workspace access
