@@ -79,12 +79,21 @@ function shapeIcon(type: NodeType): string {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h4
-      className="text-[10px] font-bold uppercase tracking-[0.1em] mb-2 flex items-center gap-1.5"
-      style={{ color: 'rgba(139, 92, 246, 0.5)' }}
-    >
-      {children}
-    </h4>
+    <div className="mb-2">
+      <h4
+        className="text-[10px] font-bold uppercase tracking-[0.1em] flex items-center gap-1.5"
+        style={{ color: 'rgba(139, 92, 246, 0.5)' }}
+      >
+        {children}
+      </h4>
+      {/* Gradient underline */}
+      <div
+        className="h-px mt-1"
+        style={{
+          background: 'linear-gradient(90deg, rgba(139, 92, 246, 0.2), rgba(139, 92, 246, 0.05), transparent)',
+        }}
+      />
+    </div>
   )
 }
 
@@ -556,11 +565,15 @@ export function SlideInPanel({
         transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
         opacity: isOpen ? 1 : 0,
         width: 400,
+        // Spring physics with slight overshoot
+        transition: isOpen
+          ? 'transform 400ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 350ms cubic-bezier(0.05, 0.7, 0.1, 1)'
+          : 'transform 300ms cubic-bezier(0.16, 1, 0.3, 1), opacity 250ms cubic-bezier(0.16, 1, 0.3, 1)',
       }}
     >
-      {/* Panel body */}
+      {/* Panel body with frosted glass + noise */}
       <div
-        className="flex flex-col h-full w-full overflow-hidden"
+        className="flex flex-col h-full w-full overflow-hidden relative"
         style={{
           backgroundColor: bgColor,
           color: textColor,
@@ -572,6 +585,15 @@ export function SlideInPanel({
             : '-8px 0 32px rgba(0,0,0,0.08), inset 1px 0 0 rgba(0,0,0,0.03)',
         }}
       >
+        {/* Subtle noise texture overlay */}
+        <div
+          className="absolute inset-0 pointer-events-none opacity-[0.015]"
+          style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
+            backgroundRepeat: 'repeat',
+            backgroundSize: '128px 128px',
+          }}
+        />
         {/* Header with glow accent */}
         {node && (
           <div
@@ -622,7 +644,7 @@ export function SlideInPanel({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 shrink-0 smooth-colors hover:bg-white/5"
+                className="h-7 w-7 shrink-0 smooth-colors hover:bg-white/5 close-btn-rotate"
                 onClick={onClose}
               >
                 <X className="h-4 w-4" style={{ color: mutedText }} />
@@ -736,7 +758,7 @@ export function SlideInPanel({
                                 ? 'outline'
                                 : 'default'
                           }
-                          className={`h-7 text-xs gap-1.5 action-glow ${
+                          className={`h-7 text-xs gap-1.5 audit-btn ${
                             action.variant === 'warning'
                               ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/5 hover:border-amber-500/50'
                               : action.variant === 'default'

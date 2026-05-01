@@ -42,6 +42,7 @@ export function QualityTab({ theme }: QualityTabProps) {
     backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
     borderRadius: '8px',
     padding: '10px',
+    transition: 'transform 0.2s ease-out, box-shadow 0.2s ease-out',
   }
 
   return (
@@ -49,7 +50,7 @@ export function QualityTab({ theme }: QualityTabProps) {
       <div className="p-3 space-y-4">
         {/* Quality Gate */}
         <Button
-          className="w-full h-9 text-xs gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+          className="w-full h-9 text-xs gap-2 bg-emerald-600 hover:bg-emerald-700 text-white audit-btn"
           onClick={runQualityGate}
           disabled={isRunning('smell') || isRunning('complexity')}
         >
@@ -76,7 +77,7 @@ export function QualityTab({ theme }: QualityTabProps) {
           ))}
         </div>
 
-        <Separator style={{ backgroundColor: theme === 'dark' ? '#2d3748' : '#e2e8f0' }} />
+        <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
 
         {/* Health Score */}
         <div className="space-y-2">

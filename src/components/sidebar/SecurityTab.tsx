@@ -1,7 +1,7 @@
 'use client'
 
 import React from 'react'
-import { Shield, AlertTriangle, Key, Bug, Globe, Droplets, Loader2 } from 'lucide-react'
+import { Shield, AlertTriangle, Key, Bug, Globe, Droplets, Loader2, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -14,7 +14,7 @@ interface SecurityTabProps {
 
 export function SecurityTab({ theme }: SecurityTabProps) {
   const { securityResults, runCommand, workspace, runningCommands } = useAnalysisStore()
-  const { secrets, vulnerabilities, dataflow, envCheck } = securityResults
+  const { secrets, vulnerabilities, dataflow, envCheck, regexAudit } = securityResults
 
   const isRunning = (cmd: string) => runningCommands.includes(cmd)
 
@@ -24,6 +24,7 @@ export function SecurityTab({ theme }: SecurityTabProps) {
       { command: 'dataflow', args: [workspace] },
       { command: 'env-check', args: [workspace] },
       { command: 'vuln-scan', args: [workspace] },
+      { command: 'regex-audit', args: [workspace] },
     ])
   }
 
@@ -37,19 +38,21 @@ export function SecurityTab({ theme }: SecurityTabProps) {
     backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
     borderRadius: '8px',
     padding: '10px',
+    transition: 'transform 0.2s ease-out, box-shadow 0.2s ease-out',
   })
 
   const secretCount = secrets?.findings?.length ?? 0
   const vulnCount = vulnerabilities?.vulnerabilities?.length ?? 0
   const flowCount = dataflow?.flows?.length ?? 0
   const missingEnv = envCheck?.missing?.length ?? 0
+  const regexCount = regexAudit?.findings?.length ?? 0
 
   return (
     <ScrollArea className="h-full">
       <div className="p-3 space-y-4">
         {/* Full Audit Button */}
         <Button
-          className="w-full h-9 text-xs gap-2 bg-red-600 hover:bg-red-700 text-white"
+          className="w-full h-9 text-xs gap-2 bg-red-600 hover:bg-red-700 text-white audit-btn"
           onClick={runFullAudit}
           disabled={isRunning('secrets') || isRunning('vuln-scan')}
         >
@@ -75,9 +78,12 @@ export function SecurityTab({ theme }: SecurityTabProps) {
           <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1" style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }} onClick={() => runCommand('env-check', [workspace])} disabled={isRunning('env-check')}>
             <Globe className="h-3 w-3" /> Env Check
           </Button>
+          <Button size="sm" variant="outline" className="h-7 text-[10px] gap-1 col-span-2" style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }} onClick={() => runCommand('regex-audit', [workspace])} disabled={isRunning('regex-audit')}>
+            <Lock className="h-3 w-3" /> Regex Audit
+          </Button>
         </div>
 
-        <Separator style={{ backgroundColor: theme === 'dark' ? '#2d3748' : '#e2e8f0' }} />
+        <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
 
         {/* Secrets */}
         <div className="space-y-2">
@@ -165,6 +171,40 @@ export function SecurityTab({ theme }: SecurityTabProps) {
             </div>
           ))}
         </div>
+
+        {/* Regex Audit */}
+        {regexAudit && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Lock className="h-3.5 w-3.5" style={{ color: '#f687b3' }} />
+              <span className="text-xs font-semibold">Regex Audit</span>
+              <Badge className="text-[10px] h-5 ml-auto" style={{ backgroundColor: regexCount > 0 ? 'rgba(246,135,179,0.15)' : 'rgba(72,187,120,0.15)', color: regexCount > 0 ? '#f687b3' : '#48bb78' }}>
+                {regexCount}
+              </Badge>
+            </div>
+            {regexAudit.findings?.map((f, i) => (
+              <div key={i} style={card('')}>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Badge className="text-[9px] h-4" style={{
+                    backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : f.severity === 'medium' ? 'rgba(236,201,75,0.2)' : 'rgba(99,179,237,0.15)',
+                    color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : f.severity === 'medium' ? '#ecc94b' : '#63b3ed',
+                  }}>
+                    {f.type}
+                  </Badge>
+                  <Badge className="text-[9px] h-4" style={{
+                    backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : 'rgba(236,201,75,0.2)',
+                    color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : '#ecc94b',
+                  }}>
+                    {f.severity}
+                  </Badge>
+                </div>
+                <div className="text-[10px] font-mono opacity-60 mt-1 break-all">{f.pattern}</div>
+                <div className="text-[10px] opacity-50 mt-0.5">{f.message}</div>
+                <div className="text-[10px] font-mono opacity-40 mt-0.5">{f.file}:{f.line}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </ScrollArea>
   )

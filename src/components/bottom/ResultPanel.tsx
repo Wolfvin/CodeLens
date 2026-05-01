@@ -72,9 +72,9 @@ export function ResultPanel({ theme }: ResultPanelProps) {
               : '0 -4px 16px rgba(0,0,0,0.06), inset 0 1px 0 rgba(0,0,0,0.02)',
           }}
         >
-          {/* Tab bar */}
+          {/* Tab bar with smooth underline indicator */}
           <div
-            className="flex items-center h-9 shrink-0"
+            className="flex items-center h-9 shrink-0 relative"
             style={{ borderBottom: `1px solid ${borderColor}` }}
           >
             <div className="flex-1 flex items-center overflow-x-auto min-w-0 px-1.5 panel-scroll">
@@ -83,7 +83,7 @@ export function ResultPanel({ theme }: ResultPanelProps) {
                 return (
                   <button
                     key={tab.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded-lg transition-all duration-200 shrink-0 mx-0.5"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] rounded-lg transition-all duration-200 shrink-0 mx-0.5 relative underline-indicator"
                     style={{
                       color: isActive ? '#b794f4' : mutedText,
                       backgroundColor: isActive ? 'rgba(183,148,244,0.08)' : '',
@@ -94,11 +94,22 @@ export function ResultPanel({ theme }: ResultPanelProps) {
                     <Terminal className="h-3 w-3" />
                     <span className="truncate max-w-[100px] font-medium">{tab.command}</span>
                     <button
-                      className="h-4 w-4 flex items-center justify-center rounded-md transition-colors hover:bg-white/10 ml-0.5"
+                      className="h-4 w-4 flex items-center justify-center rounded-md transition-colors hover:bg-white/10 ml-0.5 close-btn-rotate"
                       onClick={e => { e.stopPropagation(); removeResultTab(tab.id) }}
                     >
                       <X className="h-2.5 w-2.5" />
                     </button>
+                    {/* Smooth underline indicator */}
+                    {isActive && (
+                      <motion.div
+                        layoutId="result-tab-indicator"
+                        className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                        style={{
+                          background: 'linear-gradient(90deg, transparent, #b794f4, transparent)',
+                        }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+                      />
+                    )}
                   </button>
                 )
               })}
@@ -110,7 +121,7 @@ export function ResultPanel({ theme }: ResultPanelProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 smooth-colors hover:bg-white/5"
+                  className="h-6 w-6 smooth-colors hover:bg-white/5 btn-bounce"
                   title="Copy to clipboard"
                   onClick={() => copyToClipboard(activeTab.content)}
                 >
@@ -121,7 +132,7 @@ export function ResultPanel({ theme }: ResultPanelProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 smooth-colors hover:bg-white/5"
+                  className="h-6 w-6 smooth-colors hover:bg-white/5 btn-bounce"
                   title="Clear all results"
                   onClick={clearResultTabs}
                 >
@@ -131,7 +142,7 @@ export function ResultPanel({ theme }: ResultPanelProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-6 w-6 smooth-colors hover:bg-white/5"
+                className="h-6 w-6 smooth-colors hover:bg-white/5 close-btn-rotate"
                 title="Close panel"
                 onClick={toggleBottomPanel}
               >
@@ -140,20 +151,30 @@ export function ResultPanel({ theme }: ResultPanelProps) {
             </div>
           </div>
 
-          {/* Content with syntax highlighting */}
+          {/* Content with fade transition */}
           <div ref={scrollRef} className="flex-1 overflow-auto panel-scroll">
-            {activeTab ? (
-              <pre
-                className="p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words"
-                style={{ color: textColor }}
-              >
-                {formatContent(activeTab.content)}
-              </pre>
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs opacity-30">
-                Run a command to see results here
-              </div>
-            )}
+            <AnimatePresence mode="wait">
+              {activeTab ? (
+                <motion.div
+                  key={activeTab.id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <pre
+                    className="p-4 text-xs font-mono leading-relaxed whitespace-pre-wrap break-words"
+                    style={{ color: textColor }}
+                  >
+                    {formatContent(activeTab.content)}
+                  </pre>
+                </motion.div>
+              ) : (
+                <div className="flex items-center justify-center h-full text-xs opacity-30">
+                  Run a command to see results here
+                </div>
+              )}
+            </AnimatePresence>
           </div>
         </motion.div>
       )}

@@ -31,6 +31,14 @@ export const DEMO_SECURITY = {
     exposed: ['.env.local'],
     risk: 'medium',
   },
+  regexAudit: {
+    findings: [
+      { pattern: '/(a+)+$/', file: 'src/utils/validate.ts', line: 12, severity: 'critical', type: 'redos', message: 'Catastrophic backtracking in regex (ReDoS)' },
+      { pattern: '/.*@.*\\..*/', file: 'src/auth/validation.ts', line: 5, severity: 'medium', type: 'inefficient', message: 'Inefficient email regex with greedy wildcards' },
+      { pattern: '/^(https?:\\/\\/)?([\\w-]+\\.)+[\\w-]+/', file: 'src/utils/url.ts', line: 8, severity: 'low', type: 'overmatch', message: 'Overly permissive URL pattern' },
+    ],
+    risk: 'high',
+  },
 }
 
 export const DEMO_QUALITY = {
@@ -105,6 +113,206 @@ export const DEMO_CSS = {
   },
 }
 
+// ---- P1 Demo Data: Search & Trace ----
+export const DEMO_P1 = {
+  search: {
+    results: [
+      { file: 'src/api/payment.ts', line: 10, match: 'processPayment', context: 'export async function processPayment(req: Request)' },
+      { file: 'src/api/payment.ts', line: 45, match: 'processPayment', context: 'await processPayment(req)' },
+      { file: 'src/tests/payment.test.ts', line: 8, match: 'processPayment', context: 'describe("processPayment", () => {' },
+    ],
+    stats: { total_matches: 3, files_searched: 24 },
+  },
+  symbols: {
+    results: [
+      { name: 'processPayment', type: 'function', file: 'src/api/payment.ts', line: 10, domain: 'backend' },
+      { name: 'PaymentGateway', type: 'class', file: 'src/services/payment.ts', line: 1, domain: 'backend' },
+      { name: 'PaymentStatus', type: 'variable', file: 'src/types/payment.ts', line: 3, domain: 'backend' },
+    ],
+    stats: { total: 3 },
+  },
+  trace: {
+    chain: [
+      { fn: 'processPayment', file: 'src/api/payment.ts', line: 10, type: 'entry' },
+      { fn: 'validatePayment', file: 'src/services/payment.ts', line: 5, type: 'call' },
+      { fn: 'chargeCard', file: 'src/services/stripe.ts', line: 12, type: 'call' },
+      { fn: 'updateOrder', file: 'src/db/orders.ts', line: 28, type: 'call' },
+      { fn: 'sendReceipt', file: 'src/services/email.ts', line: 3, type: 'call' },
+    ],
+    depth: 4,
+    risk: 'low',
+  },
+  impact: {
+    symbol: 'processPayment',
+    direct_dependents: 5,
+    indirect_dependents: 12,
+    affected_files: ['src/api/payment.ts', 'src/services/payment.ts', 'src/tests/payment.test.ts', 'src/pages/Checkout.tsx', 'src/hooks/usePayment.ts'],
+    risk: 'high',
+  },
+  dependents: {
+    file: 'src/services/payment.ts',
+    dependents: [
+      { file: 'src/api/payment.ts', imports: ['PaymentGateway', 'processPayment'] },
+      { file: 'src/pages/Checkout.tsx', imports: ['PaymentGateway'] },
+      { file: 'src/hooks/usePayment.ts', imports: ['processPayment'] },
+    ],
+    total: 3,
+  },
+  stackTrace: {
+    symbol: 'processPayment',
+    propagation: [
+      { fn: 'processPayment', file: 'src/api/payment.ts', line: 10, error_type: 'PaymentError' },
+      { fn: 'handleAPIError', file: 'src/middleware/error.ts', line: 5, error_type: 'APIError' },
+      { fn: 'globalErrorHandler', file: 'src/app/error.tsx', line: 1, error_type: 'AppError' },
+    ],
+    risk: 'medium',
+  },
+  query: {
+    symbol: 'processPayment',
+    type: 'function',
+    file: 'src/api/payment.ts',
+    line: 10,
+    complexity: 8,
+    purity: 0.3,
+    callers: 5,
+    callees: 3,
+  },
+  list: {
+    entries: [
+      { name: 'processPayment', type: 'function', file: 'src/api/payment.ts' },
+      { name: 'handleLogin', type: 'function', file: 'src/auth/handler.ts' },
+      { name: 'PaymentGateway', type: 'class', file: 'src/services/payment.ts' },
+      { name: 'useAuth', type: 'function', file: 'src/hooks/useAuth.ts' },
+      { name: 'UserStore', type: 'store', file: 'src/stores/user.ts' },
+      { name: 'LoginRoute', type: 'route', file: 'src/app/api/auth/login/route.ts' },
+    ],
+    total: 6,
+  },
+}
+
+// ---- P2/P3 Demo Data: Outline & Analysis ----
+export const DEMO_P2P3 = {
+  outline: {
+    files: [
+      { path: 'src/api/payment.ts', symbols: ['processPayment', 'PaymentGateway', 'validatePayment'], type_count: { function: 2, class: 1 } },
+      { path: 'src/auth/handler.ts', symbols: ['handleLogin', 'verifyToken', 'refreshSession'], type_count: { function: 3 } },
+      { path: 'src/pages/Dashboard.tsx', symbols: ['Dashboard', 'useDashboardData'], type_count: { component: 1, function: 1 } },
+    ],
+    total_files: 3,
+    total_symbols: 8,
+  },
+  diff: {
+    changes: [
+      { type: 'added', symbol: 'processRefund', file: 'src/api/payment.ts', line: 55 },
+      { type: 'removed', symbol: 'legacyPayment', file: 'src/api/payment.ts', line: 0 },
+      { type: 'modified', symbol: 'handleLogin', file: 'src/auth/handler.ts', line: 8 },
+    ],
+    summary: { added: 1, removed: 1, modified: 1, total_changes: 3 },
+  },
+  context: {
+    symbol: 'processPayment',
+    type: 'function',
+    file: 'src/api/payment.ts',
+    line: 10,
+    callers: [
+      { fn: 'CheckoutPage', file: 'src/pages/Checkout.tsx', line: 20 },
+      { fn: 'usePayment', file: 'src/hooks/usePayment.ts', line: 5 },
+    ],
+    callees: [
+      { fn: 'validatePayment', file: 'src/services/payment.ts', line: 5 },
+      { fn: 'chargeCard', file: 'src/services/stripe.ts', line: 12 },
+    ],
+    defined_in: [{ file: 'src/api/payment.ts', line: 10 }],
+    tests: [{ file: 'src/tests/payment.test.ts', line: 8 }],
+  },
+  testMap: {
+    coverage: [
+      { symbol: 'processPayment', file: 'src/api/payment.ts', tested: true, test_files: ['src/tests/payment.test.ts'] },
+      { symbol: 'handleLogin', file: 'src/auth/handler.ts', tested: true, test_files: ['src/tests/auth.test.ts'] },
+      { symbol: 'chargeCard', file: 'src/services/stripe.ts', tested: false, test_files: [] },
+      { symbol: 'validateInput', file: 'src/auth/validation.ts', tested: false, test_files: [] },
+    ],
+    stats: { total: 4, tested: 2, untested: 2, coverage_percent: 50 },
+  },
+  configDrift: {
+    drifts: [
+      { package: 'express', installed: '4.17.1', latest: '4.19.2', severity: 'high', type: 'major_behind' },
+      { package: 'lodash', installed: '4.17.20', latest: '4.17.21', severity: 'low', type: 'patch_behind' },
+      { package: 'prisma', installed: '5.10.0', latest: '5.16.0', severity: 'medium', type: 'minor_behind' },
+    ],
+    stats: { total_drift: 3, high: 1, medium: 1, low: 1 },
+  },
+  typeInfer: {
+    results: [
+      { symbol: 'processPayment', inferred_type: '(req: Request) => Promise<Response>', confidence: 0.95, file: 'src/api/payment.ts', line: 10 },
+      { symbol: 'userCache', inferred_type: 'Map<string, User>', confidence: 0.88, file: 'src/stores/user.ts', line: 5 },
+      { symbol: 'config', inferred_type: 'Record<string, unknown>', confidence: 0.72, file: 'src/config/index.ts', line: 1 },
+    ],
+  },
+  ownership: {
+    results: [
+      { file: 'src/api/payment.ts', owner: 'alice', commits: 24, last_updated: '2024-12-01' },
+      { file: 'src/auth/handler.ts', owner: 'bob', commits: 18, last_updated: '2024-11-28' },
+      { file: 'src/pages/Dashboard.tsx', owner: 'charlie', commits: 31, last_updated: '2024-12-05' },
+    ],
+  },
+  entrypoints: {
+    entries: [
+      { type: 'api_route', path: '/api/auth/login', handler: 'handleLogin', file: 'src/app/api/auth/login/route.ts' },
+      { type: 'api_route', path: '/api/payment', handler: 'processPayment', file: 'src/app/api/payment/route.ts' },
+      { type: 'page', path: '/', handler: 'Home', file: 'src/app/page.tsx' },
+      { type: 'page', path: '/dashboard', handler: 'Dashboard', file: 'src/app/dashboard/page.tsx' },
+      { type: 'middleware', path: '__middleware', handler: 'authMiddleware', file: 'src/middleware.ts' },
+    ],
+    total: 5,
+  },
+  apiMap: {
+    routes: [
+      { method: 'POST', path: '/api/auth/login', handler: 'handleLogin', file: 'src/app/api/auth/login/route.ts', middleware: ['authMiddleware'] },
+      { method: 'POST', path: '/api/payment', handler: 'processPayment', file: 'src/app/api/payment/route.ts', middleware: ['authMiddleware', 'rateLimit'] },
+      { method: 'GET', path: '/api/user/:id', handler: 'getUser', file: 'src/app/api/user/[id]/route.ts', middleware: ['authMiddleware'] },
+    ],
+    total: 3,
+  },
+  stateMap: {
+    stores: [
+      { name: 'useAuthStore', file: 'src/stores/auth.ts', type: 'zustand', reads: 4, writes: 2 },
+      { name: 'useCartStore', file: 'src/stores/cart.ts', type: 'zustand', reads: 6, writes: 3 },
+      { name: 'useUIStore', file: 'src/stores/ui.ts', type: 'zustand', reads: 8, writes: 4 },
+    ],
+    global_state_count: 3,
+  },
+}
+
+// ---- Refactoring Demo Data ----
+export const DEMO_REFACTORING = {
+  refactorSafe: {
+    symbol: 'processPayment',
+    safety_score: 78,
+    is_safe: false,
+    blockers: [
+      { type: 'dynamic_import', description: 'Symbol is dynamically imported in src/plugins/loader.ts:5', severity: 'high' },
+      { type: 'string_reference', description: 'Symbol name used in string literal at src/config/routes.ts:12', severity: 'medium' },
+    ],
+    warnings: [
+      { type: 'external_consumer', description: '3 external packages depend on this symbol' },
+    ],
+    dependents_count: 5,
+    risk: 'medium',
+  },
+  sideEffect: {
+    symbol: 'processPayment',
+    purity: 0.3,
+    is_pure: false,
+    side_effects: [
+      { type: 'network', description: 'Makes HTTP request to Stripe API', file: 'src/services/stripe.ts', line: 12, severity: 'high' },
+      { type: 'database', description: 'Writes to orders table', file: 'src/db/orders.ts', line: 28, severity: 'medium' },
+      { type: 'external', description: 'Sends email receipt', file: 'src/services/email.ts', line: 3, severity: 'medium' },
+    ],
+    risk: 'high',
+  },
+}
+
 // ---- Store Interface ----
 interface AnalysisState {
   // Workspace
@@ -125,6 +333,7 @@ interface AnalysisState {
     vulnerabilities: typeof DEMO_SECURITY.vulnerabilities | null
     dataflow: typeof DEMO_SECURITY.dataflow | null
     envCheck: typeof DEMO_SECURITY.envCheck | null
+    regexAudit: typeof DEMO_SECURITY.regexAudit | null
   }
   qualityResults: {
     smells: typeof DEMO_QUALITY.smells | null
@@ -141,6 +350,35 @@ interface AnalysisState {
     cssDeep: typeof DEMO_CSS.cssDeep | null
     missingRefs: typeof DEMO_CSS.missingRefs | null
   }
+  p1Results: {
+    search: typeof DEMO_P1.search | null
+    symbols: typeof DEMO_P1.symbols | null
+    trace: typeof DEMO_P1.trace | null
+    impact: typeof DEMO_P1.impact | null
+    dependents: typeof DEMO_P1.dependents | null
+    stackTrace: typeof DEMO_P1.stackTrace | null
+    query: typeof DEMO_P1.query | null
+    list: typeof DEMO_P1.list | null
+  }
+  p2p3Results: {
+    outline: typeof DEMO_P2P3.outline | null
+    diff: typeof DEMO_P2P3.diff | null
+    context: typeof DEMO_P2P3.context | null
+    testMap: typeof DEMO_P2P3.testMap | null
+    configDrift: typeof DEMO_P2P3.configDrift | null
+    typeInfer: typeof DEMO_P2P3.typeInfer | null
+    ownership: typeof DEMO_P2P3.ownership | null
+    entrypoints: typeof DEMO_P2P3.entrypoints | null
+    apiMap: typeof DEMO_P2P3.apiMap | null
+    stateMap: typeof DEMO_P2P3.stateMap | null
+  }
+  refactoringResults: {
+    refactorSafe: typeof DEMO_REFACTORING.refactorSafe | null
+    sideEffect: typeof DEMO_REFACTORING.sideEffect | null
+  }
+
+  // Watch mode
+  isWatchMode: boolean
 
   // Result panel
   resultTabs: ResultTab[]
@@ -171,6 +409,7 @@ interface AnalysisState {
   removeResultTab: (id: string) => void
   setActiveResultTab: (id: string | null) => void
   clearResultTabs: () => void
+  setWatchMode: (val: boolean) => void
   loadDemoData: () => void
 }
 
@@ -188,10 +427,16 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   recentCommands: [],
 
   // Analysis results
-  securityResults: { secrets: null, vulnerabilities: null, dataflow: null, envCheck: null },
+  securityResults: { secrets: null, vulnerabilities: null, dataflow: null, envCheck: null, regexAudit: null },
   qualityResults: { smells: null, complexity: null, debugLeaks: null, deadCode: null, a11y: null },
   performanceResults: { perfHints: null, circular: null },
   cssResults: { cssDeep: null, missingRefs: null },
+  p1Results: { search: null, symbols: null, trace: null, impact: null, dependents: null, stackTrace: null, query: null, list: null },
+  p2p3Results: { outline: null, diff: null, context: null, testMap: null, configDrift: null, typeInfer: null, ownership: null, entrypoints: null, apiMap: null, stateMap: null },
+  refactoringResults: { refactorSafe: null, sideEffect: null },
+
+  // Watch mode
+  isWatchMode: false,
 
   // Result panel
   resultTabs: [],
@@ -240,6 +485,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const updates: Partial<AnalysisState> = {}
 
       switch (command) {
+        // Security
         case 'secrets':
           updates.securityResults = { ...get().securityResults, secrets: data.raw ?? data }
           break
@@ -252,6 +498,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         case 'env-check':
           updates.securityResults = { ...get().securityResults, envCheck: data.raw ?? data }
           break
+        case 'regex-audit':
+          updates.securityResults = { ...get().securityResults, regexAudit: data.raw ?? data }
+          break
+        // Quality
         case 'smell':
           updates.qualityResults = { ...get().qualityResults, smells: data.raw ?? data }
           break
@@ -267,24 +517,94 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         case 'a11y':
           updates.qualityResults = { ...get().qualityResults, a11y: data.raw ?? data }
           break
+        // Performance
         case 'perf-hint':
           updates.performanceResults = { ...get().performanceResults, perfHints: data.raw ?? data }
           break
         case 'circular':
           updates.performanceResults = { ...get().performanceResults, circular: data.raw ?? data }
           break
+        // CSS
         case 'css-deep':
           updates.cssResults = { ...get().cssResults, cssDeep: data.raw ?? data }
           break
         case 'missing-refs':
           updates.cssResults = { ...get().cssResults, missingRefs: data.raw ?? data }
           break
+        // P1: Search & Trace
+        case 'search':
+          updates.p1Results = { ...get().p1Results, search: data.raw ?? data }
+          break
+        case 'symbols':
+          updates.p1Results = { ...get().p1Results, symbols: data.raw ?? data }
+          break
+        case 'trace':
+          updates.p1Results = { ...get().p1Results, trace: data.raw ?? data }
+          break
+        case 'impact':
+          updates.p1Results = { ...get().p1Results, impact: data.raw ?? data }
+          break
+        case 'dependents':
+          updates.p1Results = { ...get().p1Results, dependents: data.raw ?? data }
+          break
+        case 'stack-trace':
+          updates.p1Results = { ...get().p1Results, stackTrace: data.raw ?? data }
+          break
+        case 'query':
+          updates.p1Results = { ...get().p1Results, query: data.raw ?? data }
+          break
+        case 'list':
+          updates.p1Results = { ...get().p1Results, list: data.raw ?? data }
+          break
+        // P2/P3: Outline & Analysis
+        case 'outline':
+          updates.p2p3Results = { ...get().p2p3Results, outline: data.raw ?? data }
+          break
+        case 'diff':
+          updates.p2p3Results = { ...get().p2p3Results, diff: data.raw ?? data }
+          break
+        case 'context':
+          updates.p2p3Results = { ...get().p2p3Results, context: data.raw ?? data }
+          break
+        case 'test-map':
+          updates.p2p3Results = { ...get().p2p3Results, testMap: data.raw ?? data }
+          break
+        case 'config-drift':
+          updates.p2p3Results = { ...get().p2p3Results, configDrift: data.raw ?? data }
+          break
+        case 'type-infer':
+          updates.p2p3Results = { ...get().p2p3Results, typeInfer: data.raw ?? data }
+          break
+        case 'ownership':
+          updates.p2p3Results = { ...get().p2p3Results, ownership: data.raw ?? data }
+          break
+        case 'entrypoints':
+          updates.p2p3Results = { ...get().p2p3Results, entrypoints: data.raw ?? data }
+          break
+        case 'api-map':
+          updates.p2p3Results = { ...get().p2p3Results, apiMap: data.raw ?? data }
+          break
+        case 'state-map':
+          updates.p2p3Results = { ...get().p2p3Results, stateMap: data.raw ?? data }
+          break
+        // Refactoring
+        case 'refactor-safe':
+          updates.refactoringResults = { ...get().refactoringResults, refactorSafe: data.raw ?? data }
+          break
+        case 'side-effect':
+          updates.refactoringResults = { ...get().refactoringResults, sideEffect: data.raw ?? data }
+          break
+        // Core
         case 'scan':
           updates.lastScanTime = Date.now()
           updates.isScanning = false
           break
         case 'detect':
           if (data?.frameworks) updates.frameworks = data.frameworks
+          break
+        // Watch
+        case 'watch':
+          updates.isWatchMode = !get().isWatchMode
           break
       }
 
@@ -329,6 +649,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setLastScanTime: (time) => set({ lastScanTime: time }),
   setFrameworks: (fw) => set({ frameworks: fw }),
   setRegistryStats: (stats) => set({ registryStats: stats }),
+  setWatchMode: (val) => set({ isWatchMode: val }),
 
   addResultTab: (tab) => set(state => ({
     resultTabs: [...state.resultTabs, tab],
@@ -353,6 +674,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       vulnerabilities: DEMO_SECURITY.vulnerabilities,
       dataflow: DEMO_SECURITY.dataflow,
       envCheck: DEMO_SECURITY.envCheck,
+      regexAudit: DEMO_SECURITY.regexAudit,
     },
     qualityResults: {
       smells: DEMO_QUALITY.smells,
@@ -368,6 +690,32 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     cssResults: {
       cssDeep: DEMO_CSS.cssDeep,
       missingRefs: DEMO_CSS.missingRefs,
+    },
+    p1Results: {
+      search: DEMO_P1.search,
+      symbols: DEMO_P1.symbols,
+      trace: DEMO_P1.trace,
+      impact: DEMO_P1.impact,
+      dependents: DEMO_P1.dependents,
+      stackTrace: DEMO_P1.stackTrace,
+      query: DEMO_P1.query,
+      list: DEMO_P1.list,
+    },
+    p2p3Results: {
+      outline: DEMO_P2P3.outline,
+      diff: DEMO_P2P3.diff,
+      context: DEMO_P2P3.context,
+      testMap: DEMO_P2P3.testMap,
+      configDrift: DEMO_P2P3.configDrift,
+      typeInfer: DEMO_P2P3.typeInfer,
+      ownership: DEMO_P2P3.ownership,
+      entrypoints: DEMO_P2P3.entrypoints,
+      apiMap: DEMO_P2P3.apiMap,
+      stateMap: DEMO_P2P3.stateMap,
+    },
+    refactoringResults: {
+      refactorSafe: DEMO_REFACTORING.refactorSafe,
+      sideEffect: DEMO_REFACTORING.sideEffect,
     },
     lastScanTime: Date.now() - 120000,
     frameworks: ['Next.js', 'React', 'Tailwind CSS', 'Prisma'],

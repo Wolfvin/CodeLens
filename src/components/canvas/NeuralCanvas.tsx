@@ -59,6 +59,7 @@ interface AmbientParticle {
   radius: number
   opacity: number
   phase: number
+  speed: number // varying speed for depth illusion
 }
 
 interface AnimationState {
@@ -109,14 +110,17 @@ function edgeTargetId(e: GraphEdge): string {
 function createAmbientParticles(width: number, height: number): AmbientParticle[] {
   const particles: AmbientParticle[] = []
   for (let i = 0; i < AMBIENT_PARTICLE_COUNT; i++) {
+    // Varying speed for depth: some slow (background), some fast (foreground)
+    const speed = 0.05 + Math.random() * 0.35
     particles.push({
       x: Math.random() * width,
       y: Math.random() * height,
-      vx: (Math.random() - 0.5) * 0.2,
-      vy: (Math.random() - 0.5) * 0.2,
+      vx: (Math.random() - 0.5) * speed,
+      vy: (Math.random() - 0.5) * speed,
       radius: Math.random() * 1.8 + 0.3,
       opacity: Math.random() * 0.25 + 0.05,
       phase: Math.random() * Math.PI * 2,
+      speed,
     })
   }
   return particles
@@ -402,7 +406,7 @@ function drawEdge(
   ctx.quadraticCurveTo(cx, cy, tx, ty)
   ctx.stroke()
 
-  // Flow particles along edge
+  // Flow particles along edge with trailing glow
   if (isActive && flowProgress >= 0) {
     const numParticles = 3
     for (let i = 0; i < numParticles; i++) {
@@ -411,7 +415,21 @@ function drawEdge(
       const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx
       const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty
 
-      ctx.globalAlpha = 0.8 * (1 - Math.abs(t - 0.5) * 2)
+      const particleAlpha = 0.8 * (1 - Math.abs(t - 0.5) * 2)
+
+      // Trailing glow/blur effect
+      ctx.globalAlpha = particleAlpha * 0.25
+      const trailGlow = ctx.createRadialGradient(px, py, 0, px, py, 8)
+      trailGlow.addColorStop(0, sourceColor)
+      trailGlow.addColorStop(0.5, sourceColor + '40')
+      trailGlow.addColorStop(1, 'transparent')
+      ctx.fillStyle = trailGlow
+      ctx.beginPath()
+      ctx.arc(px, py, 8, 0, Math.PI * 2)
+      ctx.fill()
+
+      // Core particle
+      ctx.globalAlpha = particleAlpha
       ctx.fillStyle = sourceColor
       ctx.beginPath()
       ctx.arc(px, py, 3, 0, Math.PI * 2)
@@ -627,38 +645,56 @@ function drawNode(
   const nodeOpacity = opacityMultiplier * (isDormant ? 0.4 : 1.0)
 
   // Draw glow for active/hovered/selected nodes
+  // Add subtle breathe animation on hover
+  let breatheScale = 1.0
+  if (isHovered && !isSelected) {
+    breatheScale = 1.0 + 0.05 * Math.sin(time * 0.002) // subtle 1.0 → 1.05 → 1.0 pulse
+  }
+  const finalRadius = nodeRadius * breatheScale
+
   if (isActive || isHovered || isSelected || (isAnimTarget && animState?.type !== 'death')) {
     const glowIntensity = isSelected ? 0.8 : isHovered ? 0.6 : 0.3
-    drawGlow(ctx, node.x, node.y, nodeRadius, nodeColor, glowIntensity)
+    drawGlow(ctx, node.x, node.y, finalRadius, nodeColor, glowIntensity)
   }
 
   // Draw node shape
   ctx.globalAlpha = nodeOpacity
   ctx.fillStyle = nodeColor
-  drawShape(ctx, shape, node.x, node.y, nodeRadius)
+  drawShape(ctx, shape, node.x, node.y, finalRadius)
 
   // Draw shape outline for better visibility
   ctx.strokeStyle = nodeColor
   ctx.lineWidth = 1.5
   ctx.globalAlpha = nodeOpacity * 0.5
-  drawShapeOutline(ctx, shape, node.x, node.y, nodeRadius)
+  drawShapeOutline(ctx, shape, node.x, node.y, finalRadius)
 
-  // Selected ring
+  // Selected ring with spring-like smoother behavior
   if (isSelected) {
+    // Outer glow ring
+    ctx.globalAlpha = 0.15
+    const selectGlow = ctx.createRadialGradient(node.x, node.y, finalRadius + 3, node.x, node.y, finalRadius + 14)
+    selectGlow.addColorStop(0, nodeColor)
+    selectGlow.addColorStop(1, 'transparent')
+    ctx.fillStyle = selectGlow
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, finalRadius + 14, 0, Math.PI * 2)
+    ctx.fill()
+
+    // Main selection ring
     ctx.globalAlpha = 0.9
     ctx.strokeStyle = '#ffffff'
     ctx.lineWidth = 2.5
     ctx.beginPath()
-    ctx.arc(node.x, node.y, nodeRadius + 5, 0, Math.PI * 2)
+    ctx.arc(node.x, node.y, finalRadius + 5, 0, Math.PI * 2)
     ctx.stroke()
 
-    // Animated dashed ring
+    // Animated dashed ring with spring behavior
     ctx.setLineDash([4, 4])
     ctx.lineDashOffset = -time * 0.02
     ctx.strokeStyle = nodeColor
     ctx.lineWidth = 1.5
     ctx.beginPath()
-    ctx.arc(node.x, node.y, nodeRadius + 9, 0, Math.PI * 2)
+    ctx.arc(node.x, node.y, finalRadius + 9, 0, Math.PI * 2)
     ctx.stroke()
     ctx.setLineDash([])
   }
@@ -666,10 +702,10 @@ function drawNode(
   // Label
   ctx.globalAlpha = isDormant ? 0.3 : 0.9
   ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#2d3748'
-  ctx.font = `${Math.max(9, Math.min(12, nodeRadius * 0.7))}px system-ui, -apple-system, sans-serif`
+  ctx.font = `${Math.max(9, Math.min(12, finalRadius * 0.7))}px system-ui, -apple-system, sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  ctx.fillText(node.label, node.x, node.y + nodeRadius + 4)
+  ctx.fillText(node.label, node.x, node.y + finalRadius + 4)
 
   // Status indicator dot
   if (node.status === 'critical' || node.status === 'vulnerable' || node.status === 'warning') {
@@ -1018,8 +1054,9 @@ export default function NeuralCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Transform state (pan + zoom)
+  // Transform state (pan + zoom) with smooth zoom interpolation
   const transformRef = useRef({ x: 0, y: 0, zoom: 1 })
+  const targetZoomRef = useRef(1)
 
   // Interaction state
   const hoveredNodeIdRef = useRef<string | null>(null)
@@ -1242,6 +1279,15 @@ export default function NeuralCanvas({
       const transform = transformRef.current
       const lod = getLODLevel(transform.zoom)
 
+      // 0.5 Smooth zoom interpolation
+      const currentZoom = transformRef.current.zoom
+      const targetZoom = targetZoomRef.current
+      if (Math.abs(currentZoom - targetZoom) > 0.001) {
+        transformRef.current.zoom += (targetZoom - currentZoom) * 0.12
+      } else {
+        transformRef.current.zoom = targetZoom
+      }
+
       // 1. Background
       drawBackground(ctx, width, height, theme)
 
@@ -1353,6 +1399,18 @@ export default function NeuralCanvas({
       if (animState?.type === 'alarm') {
         drawAlarmVignette(ctx, width, height, animState.intensity, time)
       }
+
+      // 9.5 Subtle vignette effect (darker at edges for depth)
+      ctx.save()
+      const vignetteGrad = ctx.createRadialGradient(
+        width / 2, height / 2, Math.min(width, height) * 0.35,
+        width / 2, height / 2, Math.max(width, height) * 0.75
+      )
+      vignetteGrad.addColorStop(0, 'rgba(0,0,0,0)')
+      vignetteGrad.addColorStop(1, theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.04)')
+      ctx.fillStyle = vignetteGrad
+      ctx.fillRect(0, 0, width, height)
+      ctx.restore()
 
       // 10. Premium HUD info
       ctx.save()
@@ -1546,14 +1604,14 @@ export default function NeuralCanvas({
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
 
-      // Zoom toward mouse position
+      // Zoom toward mouse position (smooth: set target, interpolation happens in render loop)
       const delta = -e.deltaY * ZOOM_SENSITIVITY
-      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * (1 + delta)))
-      const zoomRatio = newZoom / t.zoom
+      const newTargetZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, targetZoomRef.current * (1 + delta)))
+      const zoomRatio = newTargetZoom / t.zoom
 
       t.x = sx - (sx - t.x) * zoomRatio
       t.y = sy - (sy - t.y) * zoomRatio
-      t.zoom = newZoom
+      targetZoomRef.current = newTargetZoom
     },
     []
   )

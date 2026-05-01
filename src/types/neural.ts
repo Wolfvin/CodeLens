@@ -283,7 +283,7 @@ export interface CommandDef {
   args: Array<{ name: string; required: boolean; description: string }>
 }
 
-export type SidebarTab = 'commands' | 'workspace' | 'security' | 'quality' | 'performance' | 'css'
+export type SidebarTab = 'commands' | 'workspace' | 'security' | 'quality' | 'performance' | 'css' | 'p1' | 'p2p3' | 'refactoring' | 'watch'
 
 export interface CommandHistoryEntry {
   command: string

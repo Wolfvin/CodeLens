@@ -50,7 +50,7 @@ export function CommandsTab({ theme }: CommandsTabProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b" style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0' }}>
+      <div className="p-3" style={{ borderBottom: '1px solid ' + (theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)') }}>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 opacity-50" />
           <Input
@@ -58,7 +58,7 @@ export function CommandsTab({ theme }: CommandsTabProps) {
             placeholder="Search commands..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            className="h-8 pl-8 pr-3 text-xs"
+            className="h-8 pl-8 pr-3 text-xs input-focus-anim"
             style={{
               backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
               color: theme === 'dark' ? '#e2e8f0' : '#1a202c',
@@ -96,7 +96,7 @@ export function CommandsTab({ theme }: CommandsTabProps) {
                   {cmds.map(cmd => (
                     <button
                       key={cmd.name}
-                      className="w-full flex items-center gap-2 px-2 py-2 rounded-md text-left transition-colors group"
+                      className="w-full flex items-center gap-2 px-2 py-2 rounded-md text-left card-lift group"
                       style={{ color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
                       onClick={() => handleRun(cmd)}
                       onMouseEnter={e => {

@@ -14,6 +14,7 @@ import {
   Command,
   Activity,
   Sparkles,
+  Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -83,7 +84,7 @@ function HealthRing({ score, size = 28 }: { score: number; size?: number }) {
           strokeWidth={2}
           className="opacity-10"
         />
-        {/* Progress ring */}
+        {/* Progress ring with smoother CSS transition */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -95,8 +96,8 @@ function HealthRing({ score, size = 28 }: { score: number; size?: number }) {
           strokeDasharray={circumference}
           strokeDashoffset={circumference - progress}
           style={{
-            transition: 'stroke-dashoffset 1s cubic-bezier(0.16, 1, 0.3, 1), stroke 0.5s ease',
-            filter: `drop-shadow(0 0 3px ${color}40)`,
+            transition: 'stroke-dashoffset 1.2s cubic-bezier(0.16, 1, 0.3, 1), stroke 0.5s ease',
+            filter: `drop-shadow(0 0 4px ${color}50)`,
           }}
         />
       </svg>
@@ -129,9 +130,10 @@ export function TopBar({
   const dark = theme === 'dark'
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
+  const [searchFocused, setSearchFocused] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults } = useAnalysisStore()
+  const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults, isWatchMode, runCommand, workspace } = useAnalysisStore()
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -187,22 +189,34 @@ export function TopBar({
           : '0 1px 16px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.04)',
       }}
     >
+      {/* Subtle gradient line under topbar */}
+      <div
+        className="absolute bottom-0 left-0 right-0 h-px pointer-events-none"
+        style={{
+          background: 'linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.2), transparent)',
+          opacity: 0.6,
+        }}
+      />
+
       {/* Left: Sidebar toggle + Logo */}
       <div className="flex items-center gap-2.5 shrink-0">
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 smooth-colors hover:bg-white/5"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce"
           onClick={toggleSidebar}
           title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
         >
           <PanelLeft className="h-4 w-4" style={{ color: styles.mutedText }} />
         </Button>
 
-        {/* Logo with glow */}
+        {/* Logo with idle animation */}
         <div className="flex items-center gap-2">
           <div className="relative">
-            <Brain className="h-5 w-5" style={{ color: '#b794f4', filter: 'drop-shadow(0 0 6px rgba(183, 148, 244, 0.4))' }} />
+            <Brain
+              className="h-5 w-5 breathe"
+              style={{ color: '#b794f4', filter: 'drop-shadow(0 0 6px rgba(183, 148, 244, 0.4))' }}
+            />
           </div>
           <span
             className="font-bold text-sm tracking-tight hidden sm:inline"
@@ -223,7 +237,7 @@ export function TopBar({
 
         <Badge
           variant="outline"
-          className="text-[10px] h-5 ml-1 hidden lg:flex border-0"
+          className="text-[10px] h-5 ml-1 hidden lg:flex border-0 smooth-colors"
           style={{
             backgroundColor: styles.inputBg,
             color: styles.mutedText,
@@ -239,7 +253,7 @@ export function TopBar({
         <div className="relative group">
           <Search
             className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 transition-colors duration-200"
-            style={{ color: styles.mutedText }}
+            style={{ color: searchFocused ? '#b794f4' : styles.mutedText }}
           />
           <Input
             ref={inputRef}
@@ -248,19 +262,28 @@ export function TopBar({
             value={query}
             onChange={e => handleInputChange(e.target.value)}
             onFocus={() => {
+              setSearchFocused(true)
               if (query.length > 0 || searchResults.length > 0) setShowDropdown(true)
             }}
-            className="h-8 pl-8 pr-3 text-xs rounded-lg border-0 focus-visible:ring-1 focus-visible:ring-purple-500/40 transition-all duration-200"
+            onBlur={() => setSearchFocused(false)}
+            className="h-8 pl-8 pr-3 text-xs rounded-lg border-0 input-focus-anim transition-all duration-200"
             style={{
               backgroundColor: styles.inputBg,
               color: styles.text,
+              boxShadow: searchFocused
+                ? '0 0 0 1px rgba(139, 92, 246, 0.2), 0 0 16px -4px rgba(139, 92, 246, 0.25)'
+                : '',
             }}
           />
-          {/* Subtle glow on focus */}
+          {/* Animated purple pulse glow on focus */}
           <div
-            className="absolute inset-0 rounded-lg pointer-events-none opacity-0 group-focus-within:opacity-100 transition-opacity duration-300"
+            className="absolute inset-0 rounded-lg pointer-events-none"
             style={{
-              boxShadow: '0 0 0 1px rgba(139, 92, 246, 0.15), 0 0 12px -4px rgba(139, 92, 246, 0.2)',
+              boxShadow: searchFocused
+                ? '0 0 0 1px rgba(139, 92, 246, 0.15), 0 0 12px -4px rgba(139, 92, 246, 0.2)'
+                : 'none',
+              opacity: searchFocused ? 1 : 0,
+              transition: 'opacity 0.3s ease, box-shadow 0.3s ease',
             }}
           />
         </div>
@@ -279,7 +302,7 @@ export function TopBar({
               {searchResults.map((node, i) => (
                 <button
                   key={node.id}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg transition-all duration-150"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-left rounded-lg transition-all duration-150 btn-bounce"
                   style={{ color: styles.text }}
                   onMouseEnter={e => {
                     const el = e.currentTarget as HTMLElement
@@ -329,7 +352,7 @@ export function TopBar({
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 gap-1.5 text-xs hidden sm:flex smooth-colors hover:bg-white/5"
+          className="h-8 gap-1.5 text-xs hidden sm:flex smooth-colors hover:bg-white/5 btn-bounce"
           onClick={toggleCommandPalette}
           title="Command Palette (⌘K)"
           style={{ color: styles.mutedText }}
@@ -350,7 +373,7 @@ export function TopBar({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 smooth-colors hover:bg-white/5"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce"
           onClick={onThemeToggle}
           title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
         >
@@ -359,10 +382,33 @@ export function TopBar({
           </div>
         </Button>
 
+        {/* Watch Mode Toggle */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 relative btn-bounce"
+          onClick={() => runCommand('watch', [workspace])}
+          title={isWatchMode ? 'Watch mode active — click to stop' : 'Start watch mode'}
+        >
+          <Eye
+            className="h-4 w-4 smooth-colors"
+            style={{ color: isWatchMode ? '#b794f4' : styles.mutedText }}
+          />
+          {isWatchMode && (
+            <span
+              className="absolute top-1 right-1 w-2 h-2 rounded-full animate-pulse"
+              style={{
+                backgroundColor: '#b794f4',
+                boxShadow: '0 0 6px rgba(183,148,244,0.6)',
+              }}
+            />
+          )}
+        </Button>
+
         {/* Export dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8 smooth-colors hover:bg-white/5" title="Export graph">
+            <Button variant="ghost" size="icon" className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce" title="Export graph">
               <Camera className="h-4 w-4" style={{ color: styles.mutedText }} />
             </Button>
           </DropdownMenuTrigger>
@@ -398,7 +444,7 @@ export function TopBar({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 smooth-colors hover:bg-white/5"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce"
           onClick={onRescan}
           disabled={isScanning}
           title="Rescan codebase"
@@ -413,11 +459,11 @@ export function TopBar({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 smooth-colors hover:bg-white/5"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce"
           onClick={toggleBottomPanel}
           title={bottomPanelOpen ? 'Close results panel' : 'Open results panel'}
         >
-          <Activity className="h-4 w-4" style={{ color: bottomPanelOpen ? '#b794f4' : styles.mutedText }} />
+          <Activity className="h-4 w-4 smooth-colors" style={{ color: bottomPanelOpen ? '#b794f4' : styles.mutedText }} />
         </Button>
       </div>
     </header>

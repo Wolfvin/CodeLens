@@ -1,9 +1,10 @@
 'use client'
 
-import React from 'react'
-import { FolderOpen, RefreshCw, Loader2, Zap, Shield, CheckCircle2 } from 'lucide-react'
+import React, { useState } from 'react'
+import { FolderOpen, RefreshCw, Loader2, Zap, Shield, CheckCircle2, Search, List } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { useAnalysisStore } from '@/lib/analysisStore'
@@ -15,8 +16,10 @@ interface WorkspaceTabProps {
 export function WorkspaceTab({ theme }: WorkspaceTabProps) {
   const {
     workspace, isScanning, lastScanTime, frameworks, registryStats,
-    runCommand, setIsScanning,
+    runCommand, setIsScanning, p1Results,
   } = useAnalysisStore()
+
+  const [queryInput, setQueryInput] = useState('')
 
   const handleScan = async (incremental: boolean = false) => {
     setIsScanning(true)
@@ -104,6 +107,53 @@ export function WorkspaceTab({ theme }: WorkspaceTabProps) {
           </Button>
         </div>
 
+        {/* Query Symbol */}
+        <div className="space-y-2">
+          <div className="text-[10px] font-bold uppercase tracking-widest opacity-50">Query Symbol</div>
+          <div className="flex gap-1.5">
+            <Input
+              type="text"
+              placeholder="Symbol name..."
+              value={queryInput}
+              onChange={e => setQueryInput(e.target.value)}
+              className="h-8 text-xs font-mono"
+              style={{
+                backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                color: theme === 'dark' ? '#e2e8f0' : '#1a202c',
+                borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0',
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && queryInput.trim()) {
+                  runCommand('query', [workspace, '--name', queryInput])
+                }
+              }}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 px-3 gap-1.5 shrink-0"
+              style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
+              onClick={() => queryInput.trim() && runCommand('query', [workspace, '--name', queryInput])}
+              disabled={!queryInput.trim()}
+            >
+              <Search className="h-3 w-3" />
+              Query
+            </Button>
+          </div>
+        </div>
+
+        {/* List All Button */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full h-8 text-xs gap-1.5"
+          style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
+          onClick={() => runCommand('list', [workspace])}
+        >
+          <List className="h-3 w-3" />
+          List All Entries
+        </Button>
+
         {/* Scan Progress */}
         {isScanning && (
           <div className="space-y-1.5">
@@ -121,7 +171,7 @@ export function WorkspaceTab({ theme }: WorkspaceTabProps) {
           </div>
         )}
 
-        <Separator style={{ backgroundColor: theme === 'dark' ? '#2d3748' : '#e2e8f0' }} />
+        <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
 
         {/* Frameworks */}
         {frameworks.length > 0 && (
