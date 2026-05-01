@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition)
+CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition)
 
 Usage:
     python3 codelens.py scan <workspace>              # Scan workspace and build registry
@@ -29,6 +29,15 @@ Usage:
     python3 codelens.py config-drift <workspace>       # Dependency drift detection
     python3 codelens.py type-infer <workspace>         # Lightweight type inference
     python3 codelens.py ownership <workspace>          # Git blame code ownership
+    python3 codelens.py secrets <workspace>            # Detect hardcoded secrets/API keys
+    python3 codelens.py entrypoints <workspace>        # Map execution entry points
+    python3 codelens.py api-map <workspace>            # Map REST/GraphQL routes to handlers
+    python3 codelens.py state-map <workspace>          # Track global state management
+    python3 codelens.py env-check <workspace>          # Audit environment variables
+    python3 codelens.py debug-leak <workspace>         # Detect leftover debug code
+    python3 codelens.py complexity <workspace>         # Compute cyclomatic/cognitive complexity
+    python3 codelens.py regex-audit <workspace>        # Audit regex for ReDoS and issues
+    python3 codelens.py a11y <workspace>               # Detect accessibility issues
 """
 
 import sys
@@ -73,6 +82,15 @@ from testmap_engine import map_test_coverage
 from configdrift_engine import detect_config_drift
 from typeinfer_engine import infer_types
 from ownership_engine import analyze_ownership
+from secrets_engine import detect_secrets
+from entrypoints_engine import map_entrypoints
+from apimap_engine import map_api_routes
+from statemap_engine import map_state
+from envcheck_engine import check_env_vars
+from debugleak_engine import detect_debug_leaks
+from complexity_engine import compute_complexity
+from regexaudit_engine import audit_regex_patterns
+from a11y_engine import audit_accessibility
 
 
 # ─── File Discovery ───────────────────────────────────────────
@@ -114,6 +132,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "js_backend": [],
         "tsx": [],
         "rust": [],
+        "python": [],
         "vue": [],
         "svelte": []
     }
@@ -160,6 +179,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                     files["js_backend"].append(file_path)
             elif ext == '.rs':
                 files["rust"].append(file_path)
+            elif ext == '.py':
+                files["python"].append(file_path)
             elif ext == '.vue':
                 files["vue"].append(file_path)
             elif ext == '.svelte':
@@ -499,6 +520,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "js_backend": len(files["js_backend"]),
             "tsx": len(files["tsx"]),
             "rust": len(files["rust"]),
+            "python": len(files["python"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"])
         },
@@ -784,7 +806,7 @@ def cmd_watch(workspace: str) -> None:
                 return
             ext = os.path.splitext(event.src_path)[1].lower()
             if ext in ('.html', '.htm', '.css', '.scss', '.less', '.sass',
-                       '.js', '.jsx', '.ts', '.tsx', '.rs', '.vue', '.svelte'):
+                       '.js', '.jsx', '.ts', '.tsx', '.rs', '.py', '.vue', '.svelte'):
                 print(f"[CodeLens] File changed: {event.src_path}")
                 print("[CodeLens] Re-scanning workspace (incremental)...")
                 result = cmd_scan(self.workspace, incremental=True)
@@ -841,7 +863,7 @@ def _watch_polling(workspace: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description="CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -928,8 +950,8 @@ def main():
 
     # outline command
     outline_parser = subparsers.add_parser("outline", help="Get file structure outline")
-    outline_parser.add_argument("file", help="File path to outline")
-    outline_parser.add_argument("workspace", nargs="?", default=None, help="Workspace root (optional)")
+    outline_parser.add_argument("workspace", help="Path to workspace root")
+    outline_parser.add_argument("--file", default=None, help="Specific file to outline")
     outline_parser.add_argument("--detail", choices=["minimal", "normal", "full"], default="normal",
                                  help="Detail level")
     outline_parser.add_argument("--all", action="store_true", dest="all_files",
@@ -1000,8 +1022,8 @@ def main():
 
     # side-effect command
     sideeffect_parser = subparsers.add_parser("side-effect", help="Analyze function side effects (pure vs impure)")
-    sideeffect_parser.add_argument("name", nargs="?", default=None, help="Function name (optional, omit for full workspace)")
     sideeffect_parser.add_argument("workspace", help="Path to workspace root")
+    sideeffect_parser.add_argument("--name", default=None, help="Specific function to analyze (optional)")
     sideeffect_parser.add_argument("--file", default=None, help="Filter by file path")
 
     # refactor-safe command
@@ -1054,225 +1076,339 @@ def main():
     ownership_parser.add_argument("--function", dest="function_name", default=None,
                                   help="Specific function to check ownership")
 
+    # ─── v4 P0: Secrets, Entrypoints ────────────────────
+
+    # secrets command
+    secrets_parser = subparsers.add_parser("secrets", help="Detect hardcoded secrets and API keys")
+    secrets_parser.add_argument("workspace", help="Path to workspace root")
+    secrets_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                                 help="Filter by severity")
+
+    # entrypoints command
+    entrypoints_parser = subparsers.add_parser("entrypoints", help="Map execution entry points")
+    entrypoints_parser.add_argument("workspace", help="Path to workspace root")
+    entrypoints_parser.add_argument("--type", dest="entry_type", default=None,
+                                     choices=["main", "http_handler", "event_handler", "cli_command",
+                                              "cron_job", "worker", "module_export", "test_entry"],
+                                     help="Filter by entry point type")
+
+    # ─── v4 P1: API Map, State Map, Env Check ───────────
+
+    # api-map command
+    apimap_parser = subparsers.add_parser("api-map", help="Map REST/GraphQL/gRPC routes to handlers")
+    apimap_parser.add_argument("workspace", help="Path to workspace root")
+    apimap_parser.add_argument("--method", choices=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+                                default=None, help="Filter by HTTP method")
+    apimap_parser.add_argument("--path", dest="path_filter", default=None,
+                                help="Filter by route path substring")
+
+    # state-map command
+    statemap_parser = subparsers.add_parser("state-map", help="Track global state management")
+    statemap_parser.add_argument("workspace", help="Path to workspace root")
+    statemap_parser.add_argument("--store", dest="store_name", default=None,
+                                  help="Filter by store name")
+
+    # env-check command
+    envcheck_parser = subparsers.add_parser("env-check", help="Audit environment variables")
+    envcheck_parser.add_argument("workspace", help="Path to workspace root")
+    envcheck_parser.add_argument("--var", dest="var_name", default=None,
+                                  help="Filter by variable name")
+
+    # ─── v4 P2: Debug Leak, Complexity ──────────────────
+
+    # debug-leak command
+    debugleak_parser = subparsers.add_parser("debug-leak", help="Detect leftover debug code")
+    debugleak_parser.add_argument("workspace", help="Path to workspace root")
+    debugleak_parser.add_argument("--category", choices=["console_log", "print_statement", "debugger",
+                                    "todo_fixme", "commented_code", "test_skip", "mock_data", "dev_only"],
+                                   default=None, help="Filter by leak category")
+
+    # complexity command
+    complexity_parser = subparsers.add_parser("complexity", help="Compute cyclomatic/cognitive complexity")
+    complexity_parser.add_argument("workspace", help="Path to workspace root")
+    complexity_parser.add_argument("--name", default=None, help="Specific function to analyze")
+    complexity_parser.add_argument("--file", default=None, help="Filter by file path")
+    complexity_parser.add_argument("--threshold", type=int, default=None,
+                                    help="Minimum complexity threshold to report")
+
+    # ─── v4 P3: Regex Audit, A11y ───────────────────────
+
+    # regex-audit command
+    regexaudit_parser = subparsers.add_parser("regex-audit", help="Audit regex for ReDoS and issues")
+    regexaudit_parser.add_argument("workspace", help="Path to workspace root")
+    regexaudit_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                                    help="Filter by severity")
+
+    # a11y command
+    a11y_parser = subparsers.add_parser("a11y", help="Detect accessibility issues")
+    a11y_parser.add_argument("workspace", help="Path to workspace root")
+    a11y_parser.add_argument("--category", choices=["missing_alt", "missing_label", "aria_issues",
+                              "keyboard_nav", "semantic_html", "color_contrast", "heading_order",
+                              "link_text", "focus_management"], default=None,
+                              help="Filter by a11y category")
+    a11y_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                              help="Filter by severity")
+
     # ─── Parse and dispatch ─────────────────────────────
 
     args = parser.parse_args()
 
-    if args.command == "scan":
-        result = cmd_scan(args.workspace, args.incremental)
-        # Auto-save snapshot after scan
-        try:
-            frontend = load_frontend_registry(args.workspace)
-            backend = load_backend_registry(args.workspace)
-            save_snapshot(args.workspace, frontend, backend)
-        except Exception:
-            pass
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "query":
-        result = cmd_query(args.name, args.workspace, args.domain, args.file)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "list":
-        result = cmd_list(args.workspace, args.domain, args.filter_type)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "watch":
-        cmd_watch(args.workspace)
-
-    elif args.command == "init":
-        result = cmd_init(args.workspace)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "detect":
-        result = cmd_detect(args.workspace)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── P1 Commands ────────────────────────────────────
-
-    elif args.command == "search":
-        config = load_config(os.path.abspath(args.workspace))
-        result = search_workspace(
-            args.workspace, args.pattern,
-            file_type=args.file_type,
-            file_filter=args.file,
-            max_results=args.max_results,
-            context_lines=args.context,
-            case_sensitive=not args.ignore_case,
-            whole_word=args.whole_word,
-            config=config
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "symbols":
-        result = search_symbols(
-            args.workspace, args.name,
-            domain=args.domain,
-            fuzzy=args.fuzzy
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "trace":
-        result = trace_symbol(
-            args.name, args.workspace,
-            direction=args.direction,
-            max_depth=args.depth,
-            domain=args.domain
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "impact":
-        result = analyze_impact(
-            args.name, args.workspace,
-            action=args.action,
-            domain=args.domain,
-            depth=args.depth
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── P2 Commands ────────────────────────────────────
-
-    elif args.command == "outline":
-        if args.all_files:
-            ws = args.workspace or os.getcwd()
-            result = get_workspace_outline(ws)
-        else:
-            result = get_file_outline(
-                args.file,
-                workspace=args.workspace,
-                detail_level=args.detail
-            )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "missing-refs":
-        result = detect_missing_refs(args.workspace)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "diff":
-        if args.list_snapshots:
-            snaps = list_snapshots(args.workspace)
-            print(json.dumps({"snapshots": snaps}, indent=2, ensure_ascii=False))
-        elif args.snapshot1 or args.snapshot2:
-            result = diff_snapshots(args.workspace, args.snapshot1, args.snapshot2)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-        else:
-            result = diff_current_vs_last(args.workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "circular":
-        result = detect_circular(args.workspace, domain=args.domain)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── P3 Commands ────────────────────────────────────
-
-    elif args.command == "context":
-        result = get_symbol_context(
-            args.name, args.workspace,
-            domain=args.domain,
-            context_lines=args.context_lines,
-            include_code=not args.no_code
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "dependents":
-        if args.direction == "graph":
-            result = get_dependency_graph(args.workspace)
-        elif args.direction == "dependencies":
-            result = get_dependencies(args.file, args.workspace, depth=args.depth)
-        else:
-            result = get_dependents(args.file, args.workspace, depth=args.depth)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "validate":
-        result = validate_registry(args.workspace)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── v3 P0 Commands ─────────────────────────────────
-
-    elif args.command == "dataflow":
-        result = trace_dataflow(
-            args.workspace,
-            source=args.source,
-            sink=args.sink,
-            max_depth=args.depth
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "smell":
-        result = detect_smells(
-            args.workspace,
-            categories=args.categories,
-            severity_filter=args.severity
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── v3 P1 Commands ─────────────────────────────────
-
-    elif args.command == "side-effect":
-        result = analyze_side_effects(
-            args.workspace,
-            function_name=args.name,
-            file_filter=args.file
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "refactor-safe":
-        result = check_refactor_safety(
-            args.name, args.workspace,
-            action=args.action,
-            new_name=args.new_name
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "dead-code":
-        result = detect_dead_code(
-            args.workspace,
-            categories=args.categories
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── v3 P2 Commands ─────────────────────────────────
-
-    elif args.command == "stack-trace":
-        result = trace_error_propagation(
-            args.name, args.workspace,
-            error_type=args.error_type,
-            max_depth=args.depth
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "test-map":
-        result = map_test_coverage(
-            args.workspace,
-            function_name=args.function_name,
-            file_filter=args.file
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "config-drift":
-        result = detect_config_drift(args.workspace)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    # ─── v3 P3 Commands ─────────────────────────────────
-
-    elif args.command == "type-infer":
-        result = infer_types(
-            args.workspace,
-            file_path=args.file,
-            function_name=args.function_name
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    elif args.command == "ownership":
-        result = analyze_ownership(
-            args.workspace,
-            file_path=args.file,
-            function_name=args.function_name
-        )
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-
-    else:
+    # ─── Dispatch ────────────────────────────────────────
+    if not args.command:
         parser.print_help()
+        sys.exit(1)
+
+    try:
+        if args.command == "scan":
+            result = cmd_scan(args.workspace, args.incremental)
+            # Auto-save snapshot after scan
+            try:
+                frontend = load_frontend_registry(args.workspace)
+                backend = load_backend_registry(args.workspace)
+                save_snapshot(args.workspace, frontend, backend)
+            except Exception:
+                pass
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "query":
+            result = cmd_query(args.name, args.workspace, args.domain, args.file)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "list":
+            result = cmd_list(args.workspace, args.domain, args.filter_type)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "watch":
+            cmd_watch(args.workspace)
+
+        elif args.command == "init":
+            result = cmd_init(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "detect":
+            result = cmd_detect(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── P1 Commands ────────────────────────────────────
+
+        elif args.command == "search":
+            config = load_config(os.path.abspath(args.workspace))
+            result = search_workspace(
+                args.workspace, args.pattern,
+                file_type=args.file_type,
+                file_filter=args.file,
+                max_results=args.max_results,
+                context_lines=args.context,
+                case_sensitive=not args.ignore_case,
+                whole_word=args.whole_word,
+                config=config
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "symbols":
+            result = search_symbols(
+                args.workspace, args.name,
+                domain=args.domain,
+                fuzzy=args.fuzzy
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "trace":
+            result = trace_symbol(
+                args.name, args.workspace,
+                direction=args.direction,
+                max_depth=args.depth,
+                domain=args.domain
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "impact":
+            result = analyze_impact(
+                args.name, args.workspace,
+                action=args.action,
+                domain=args.domain,
+                depth=args.depth
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── P2 Commands ────────────────────────────────────
+
+        elif args.command == "outline":
+            if args.all_files:
+                result = get_workspace_outline(args.workspace, detail=args.detail)
+            elif args.file:
+                result = get_file_outline(args.file, args.workspace, detail=args.detail)
+            else:
+                result = get_workspace_outline(args.workspace, detail=args.detail)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "missing-refs":
+            result = detect_missing_refs(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "diff":
+            if args.list_snapshots:
+                snaps = list_snapshots(args.workspace)
+                print(json.dumps({"snapshots": snaps}, indent=2, ensure_ascii=False))
+            elif args.snapshot1 or args.snapshot2:
+                result = diff_snapshots(args.workspace, args.snapshot1, args.snapshot2)
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                result = diff_current_vs_last(args.workspace)
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "circular":
+            result = detect_circular(args.workspace, domain=args.domain)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── P3 Commands ────────────────────────────────────
+
+        elif args.command == "context":
+            result = get_symbol_context(
+                args.name, args.workspace,
+                domain=args.domain,
+                context_lines=args.context_lines,
+                include_code=not args.no_code
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "dependents":
+            if args.direction == "graph":
+                result = get_dependency_graph(args.workspace)
+            elif args.direction == "dependencies":
+                result = get_dependencies(args.file, args.workspace, depth=args.depth)
+            else:
+                result = get_dependents(args.file, args.workspace, depth=args.depth)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "validate":
+            result = validate_registry(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── v3 P0 Commands ─────────────────────────────────
+
+        elif args.command == "dataflow":
+            result = trace_dataflow(
+                args.workspace,
+                source=args.source,
+                sink=args.sink,
+                max_depth=args.depth
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "smell":
+            result = detect_smells(
+                args.workspace,
+                categories=args.categories,
+                severity_filter=args.severity
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── v3 P1 Commands ─────────────────────────────────
+
+        elif args.command == "side-effect":
+            result = analyze_side_effects(
+                args.workspace,
+                function_name=args.name,
+                file_filter=args.file
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "refactor-safe":
+            result = check_refactor_safety(
+                args.name, args.workspace,
+                action=args.action,
+                new_name=args.new_name
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "dead-code":
+            result = detect_dead_code(
+                args.workspace,
+                categories=args.categories
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── v3 P2 Commands ─────────────────────────────────
+
+        elif args.command == "stack-trace":
+            result = trace_error_propagation(
+                args.name, args.workspace,
+                error_type=args.error_type,
+                max_depth=args.depth
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "test-map":
+            result = map_test_coverage(
+                args.workspace,
+                function_name=args.function_name,
+                file_filter=args.file
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "config-drift":
+            result = detect_config_drift(args.workspace)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        # ─── v3 P3 Commands ─────────────────────────────────
+
+        elif args.command == "type-infer":
+            result = infer_types(
+                args.workspace,
+                file_path=args.file,
+                function_name=args.function_name
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "ownership":
+            result = analyze_ownership(
+                args.workspace,
+                file_path=args.file,
+                function_name=args.function_name
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "secrets":
+            result = detect_secrets(args.workspace, severity=args.severity)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "entrypoints":
+            result = map_entrypoints(args.workspace, entry_type=args.entry_type)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "api-map":
+            result = map_api_routes(args.workspace, method=args.method, path_filter=args.path_filter)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "state-map":
+            result = map_state(args.workspace, store_name=args.store_name)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "env-check":
+            result = check_env_vars(args.workspace, var_name=args.var_name)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "debug-leak":
+            result = detect_debug_leaks(args.workspace, category=args.category)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "complexity":
+            result = compute_complexity(args.workspace, function_name=args.name,
+                                         file_filter=args.file, threshold=args.threshold)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "regex-audit":
+            result = audit_regex_patterns(args.workspace, severity=args.severity)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        elif args.command == "a11y":
+            result = audit_accessibility(args.workspace, category=args.category, severity=args.severity)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        else:
+            parser.print_help()
+            sys.exit(1)
+    except Exception as e:
+        error_result = {
+            "status": "error",
+            "command": args.command,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }
+        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
         sys.exit(1)
 
 

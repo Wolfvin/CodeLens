@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v3 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   WAJIB aktifkan skill ini SETIAP KALI akan membuat, mengedit, atau menghapus HTML class/id,
   CSS selector, JSX className, atau function di Rust/JS/TS. Gunakan sebelum menulis kode baru
   yang melibatkan id, class, className, atau function name — untuk mencegah collision,
@@ -11,11 +11,14 @@ description: >
   v3 adds: data flow analysis, code smell detection, side-effect analysis, refactoring safety,
   enhanced dead code, error propagation, test coverage mapping, config drift detection,
   lightweight type inference, and code ownership analysis.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  v4 adds: hardcoded secret detection, execution entry point mapping, API route→handler mapping,
+  global state management tracking, environment variable auditing, debug code leak detection,
+  cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v3
+# CodeLens v4
 
 Sebelum AI menulis class/id/function baru, CodeLens harus dicek. Ini bukan opsional.
 
@@ -222,10 +225,10 @@ Lihat struktur file tanpa baca full content. Semua function, class, import, expo
 
 ```bash
 # Outline satu file
-python3 "$CODELENS_DIR/scripts/codelens.py" outline src/auth.ts /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --file src/auth.ts
 
 # Outline dengan detail level
-python3 "$CODELENS_DIR/scripts/codelens.py" outline src/auth.ts /path/to/workspace --detail full
+python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --file src/auth.ts --detail full
 
 # Outline semua file di workspace
 python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --all
@@ -387,7 +390,10 @@ Tag function sebagai pure vs impure. Deteksi 7 kategori side-effect: DOM, State,
 python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace
 
 # Function spesifik
-python3 "$CODELENS_DIR/scripts/codelens.py" side-effect processOrder /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace --name processOrder
+
+# Filter by file
+python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace --file src/orders.ts
 ```
 
 ### 21. `codelens_refactor-safe` — Refactoring Safety Check
@@ -496,6 +502,170 @@ python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace --file 
 # Function spesifik
 python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace --function verify_token
 ```
+
+---
+
+## v4 P0: Secrets, Entrypoints
+
+### 28. `codelens_secrets` — Hardcoded Secret Detection
+
+Deteksi API keys, passwords, tokens, connection strings, private keys, dan secret keys yang hardcoded di source code. Termasuk Shannon entropy detection untuk flag high-entropy strings yang mungkin secret. Scan .env files dan cek .gitignore.
+
+**AI Use Case:** "Ada API key yang tercecer di codebase?"
+
+```bash
+# Full workspace scan
+python3 "$CODELENS_DIR/scripts/codelens.py" secrets /path/to/workspace
+
+# Filter severity
+python3 "$CODELENS_DIR/scripts/codelens.py" secrets /path/to/workspace --severity critical
+```
+
+**Categories:** api_key, password, token, connection_string, private_key, secret_key, oauth, webhook
+
+### 29. `codelens_entrypoints` — Execution Entry Point Mapping
+
+Map semua execution entry points: main(), HTTP handlers, event listeners, CLI commands, cron jobs, workers, module exports, test entries. "Di mana aplikasi ini dimulai?"
+
+**AI Use Case:** "Bagaimana cara menjalankan kode ini? Endpoint mana yang bisa dipanggil?"
+
+```bash
+# Semua entry points
+python3 "$CODELENS_DIR/scripts/codelens.py" entrypoints /path/to/workspace
+
+# Hanya HTTP handlers
+python3 "$CODELENS_DIR/scripts/codelens.py" entrypoints /path/to/workspace --type http_handler
+
+# Hanya main entry
+python3 "$CODELENS_DIR/scripts/codelens.py" entrypoints /path/to/workspace --type main
+```
+
+**Types:** main, http_handler, event_handler, cli_command, cron_job, worker, module_export, test_entry
+
+---
+
+## v4 P1: API Map, State Map, Env Check
+
+### 30. `codelens_api-map` — REST/GraphQL/gRPC Route Mapping
+
+Map semua route ke handler: Express, Fastify, Koa, Hono, Next.js, Nuxt, Django, Flask, FastAPI, GraphQL, gRPC, tRPC. Extract method, path, handler name, middleware chain. Flag auth-protected vs public routes.
+
+**AI Use Case:** "Endpoint apa saja yang ada? Apa yang handle POST /users?"
+
+```bash
+# Semua routes
+python3 "$CODELENS_DIR/scripts/codelens.py" api-map /path/to/workspace
+
+# Filter method
+python3 "$CODELENS_DIR/scripts/codelens.py" api-map /path/to/workspace --method POST
+
+# Filter path
+python3 "$CODELENS_DIR/scripts/codelens.py" api-map /path/to/workspace --path "/api/users"
+```
+
+### 31. `codelens_state-map` — Global State Tracking
+
+Track state management: Redux, React Context, Zustand, MobX, Pinia, Vuex, Recoil, Jotai, XState, module-level state. Map reads/writes per state slice.
+
+**AI Use Case:** "Komponen mana yang baca/tulis state ini?"
+
+```bash
+# Semua state
+python3 "$CODELENS_DIR/scripts/codelens.py" state-map /path/to/workspace
+
+# Store spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" state-map /path/to/workspace --store userSlice
+```
+
+### 32. `codelens_env-check` — Environment Variable Audit
+
+Audit env vars: mana yang referenced, required (no fallback), undocumented, missing dari .env.example. Cek naming inconsistencies dan secrets di .env files.
+
+**AI Use Case:** "Env var apa yang harus diset sebelum deploy? Apa yang lupa di .env.example?"
+
+```bash
+# Full audit
+python3 "$CODELENS_DIR/scripts/codelens.py" env-check /path/to/workspace
+
+# Cek var spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" env-check /path/to/workspace --var DATABASE_URL
+```
+
+---
+
+## v4 P2: Debug Leak, Complexity
+
+### 33. `codelens_debug-leak` — Debug Code Leak Detection
+
+Deteksi kode debug yang tertinggal: console.log, print(), debugger, TODO/FIXME/HACK, commented-out code blocks, test skips, mock data, dev-only guards. Context-aware (skip console.error di catch blocks, downgrade findings di test files).
+
+**AI Use Case:** "Apa yang harus dibersihkan sebelum production?"
+
+```bash
+# Semua kategori
+python3 "$CODELENS_DIR/scripts/codelens.py" debug-leak /path/to/workspace
+
+# Kategori spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" debug-leak /path/to/workspace --category console_log
+```
+
+**Categories:** console_log, print_statement, debugger, todo_fixme, commented_code, test_skip, mock_data, dev_only
+
+### 34. `codelens_complexity` — Complexity Scoring
+
+Compute cyclomatic + cognitive complexity per function dengan angka presisi. Berbeda dari `smell` yang deteksi pattern secara kualitatif — tool ini memberi score numerik. Cyclomatic: 1-5 simple, 6-10 moderate, 11-20 complex, 21-50 very complex, 50+ untamable. Cognitive: SonarSource spec dengan nesting increment.
+
+**AI Use Case:** "Function mana yang paling kompleks dan perlu di-refactor?"
+
+```bash
+# Full workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" complexity /path/to/workspace
+
+# Function spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" complexity /path/to/workspace --name processOrder
+
+# Threshold filter
+python3 "$CODELENS_DIR/scripts/codelens.py" complexity /path/to/workspace --threshold 20
+```
+
+---
+
+## v4 P3: Regex Audit, A11y
+
+### 35. `codelens_regex-audit` — Regex Pattern Auditing
+
+Audit regex patterns: ReDoS-vulnerable patterns (nested quantifiers, overlapping alternatives), overly broad patterns, incorrect escaping, unsafe RegExp constructor (dynamic input), performance issues.
+
+**AI Use Case:** "Ada regex yang bisa causing DoS? Pattern yang salah?"
+
+```bash
+# Full audit
+python3 "$CODELENS_DIR/scripts/codelens.py" regex-audit /path/to/workspace
+
+# Filter severity
+python3 "$CODELENS_DIR/scripts/codelens.py" regex-audit /path/to/workspace --severity critical
+```
+
+**Categories:** redos_vulnerable, overly_broad, incorrect_escaping, unsafe_constructor, performance
+
+### 36. `codelens_a11y` — Accessibility Auditing
+
+Deteksi a11y issues: missing alt text, form labels, ARIA issues, keyboard navigation, semantic HTML, color contrast, heading order, vague link text, focus management. Mapped ke WCAG 2.1 criteria.
+
+**AI Use Case:** "Apakah komponen ini accessible? Apa yang perlu diperbaiki?"
+
+```bash
+# Full audit
+python3 "$CODELENS_DIR/scripts/codelens.py" a11y /path/to/workspace
+
+# Kategori spesifik
+python3 "$CODELENS_DIR/scripts/codelens.py" a11y /path/to/workspace --category missing_alt
+
+# Filter severity
+python3 "$CODELENS_DIR/scripts/codelens.py" a11y /path/to/workspace --severity critical
+```
+
+**Categories:** missing_alt, missing_label, aria_issues, keyboard_nav, semantic_html, color_contrast, heading_order, link_text, focus_management
 
 ---
 
@@ -627,6 +797,98 @@ User: "Rename verify_token to validate_token"
           │
           ▼
 4. Rename + codelens scan workspace --incremental
+```
+
+### Security Audit Flow (v4 — Enhanced)
+
+```
+User: "Is this codebase secure for production?"
+          │
+          ▼
+1. codelens secrets workspace
+   → Find hardcoded API keys, passwords, tokens
+          │
+          ▼
+2. codelens dataflow workspace --source user_input --sink db_query
+   → Check unsanitized data flow to SQL
+          │
+          ▼
+3. codelens dataflow workspace --source user_input --sink html_output
+   → Check XSS risk
+          │
+          ▼
+4. codelens env-check workspace
+   → Find required env vars without fallbacks
+          │
+          ▼
+5. codelens regex-audit workspace --severity critical
+   → Find ReDoS-vulnerable regex
+          │
+          ▼
+6. codelens debug-leak workspace
+   → Find leftover debug code for cleanup
+          │
+          ▼
+7. Report: "Security findings..."
+```
+
+### Web App Understanding Flow (v4)
+
+```
+User: "I need to understand this web app"
+          │
+          ▼
+1. codelens entrypoints workspace
+   → "Where does this app start? What are the entry points?"
+          │
+          ▼
+2. codelens api-map workspace
+   → "What endpoints exist? Which handlers serve them?"
+          │
+          ▼
+3. codelens state-map workspace
+   → "What global state exists? Who reads/writes it?"
+          │
+          ▼
+4. codelens outline workspace --all
+   → "What's the file structure?"
+          │
+          ▼
+5. codelens dependents <key-file> workspace --direction graph
+   → "How do modules relate?"
+```
+
+### Quality Gate Flow (v4)
+
+```
+User: "Is this code ready for production?"
+          │
+          ▼
+1. codelens smell workspace
+   → Health score and smell categories
+          │
+          ▼
+2. codelens complexity workspace --threshold 20
+   → Find overly complex functions
+          │
+          ▼
+3. codelens debug-leak workspace
+   → Leftover debug code?
+          │
+          ▼
+4. codelens dead-code workspace
+   → Unused code to remove?
+          │
+          ▼
+5. codelens a11y workspace
+   → Accessibility issues?
+          │
+          ▼
+6. codelens secrets workspace
+   → Leaked credentials?
+          │
+          ▼
+7. Report: "Quality gate pass/fail..."
 ```
 
 ---

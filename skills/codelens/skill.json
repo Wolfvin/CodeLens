@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "3.0.0",
-  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references, data flow, code smells, side effects, refactoring safety, dead code, error propagation, test coverage, type inference, ownership analysis",
+  "version": "4.0.0",
+  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references, data flow, code smells, side effects, refactoring safety, dead code, error propagation, test coverage, type inference, ownership analysis, secret detection, entry point mapping, API route mapping, state management tracking, env var auditing, debug leak detection, complexity scoring, regex auditing, accessibility auditing",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -12,6 +12,9 @@
     "call-trace", "dependency-graph", "registry-diff", "file-outline",
     "data-flow", "taint-analysis", "code-smell", "side-effects", "refactoring",
     "error-propagation", "test-coverage", "type-inference", "ownership",
-    "security-analysis", "pure-functions", "config-drift"
+    "security-analysis", "pure-functions", "config-drift",
+    "secret-detection", "entry-points", "api-mapping", "state-management",
+    "env-audit", "debug-detection", "complexity-analysis", "regex-audit",
+    "accessibility", "a11y", "wcag", "redos"
   ]
 }

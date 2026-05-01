@@ -1,0 +1,1435 @@
+"""
+API Map Engine for CodeLens — v3
+Maps REST/GraphQL/gRPC route → handler → middleware for web applications.
+Answers: "What endpoints exist? What handles POST /users?"
+
+Framework Detection & Route Extraction:
+ 1. Express   — app.get/post/put/delete/patch, Router, Route
+ 2. Fastify   — fastify.get/post, plugin routes
+ 3. Koa       — router.get/post, koa-router
+ 4. Hono      — hono.get/post
+ 5. Next.js   — pages/api/* or app/api/*/route.ts
+ 6. Nuxt      — server/api/* handlers
+ 7. Django    — urlpatterns, path(), re_path(), @api_view
+ 8. Flask     — @app.route, @blueprint.route
+ 9. FastAPI   — @app.get/post, @router.get/post
+10. GraphQL   — type Query, type Mutation, resolvers
+11. gRPC      — service definitions in .proto files
+12. tRPC      — router definitions, procedure chains
+
+Per-route extraction: method, path, handler_name, file, line,
+                      middleware_chain, request_type, response_type
+
+Additional detection: middleware stacks, route groups/prefixes,
+                      auth-protected vs public, deprecated routes.
+"""
+
+import os
+import re
+from typing import Dict, List, Any, Optional, Set
+from collections import defaultdict
+
+
+# ─── Configuration ─────────────────────────────────────────────
+
+DEFAULT_IGNORE_DIRS = {
+    "node_modules", ".git", "dist", "build", "target",
+    "__pycache__", ".codelens", ".next", ".nuxt",
+    "coverage", ".cache", "vendor", "bin", "obj",
+    ".terraform", ".venv", "venv", "env",
+}
+
+SOURCE_EXTENSIONS = {
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".rs", ".vue", ".svelte", ".proto",
+    ".graphql", ".gql",
+}
+
+HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+# Known middleware identifiers
+AUTH_MIDDLEWARE_PATTERNS = {
+    "authenticate", "auth", "jwt", "passport", "requireAuth",
+    "isAuthenticated", "verifyToken", "checkAuth", "ensureAuthenticated",
+    "login_required", "permission_required", "auth_required",
+}
+
+CORS_MIDDLEWARE_PATTERNS = {
+    "cors", "CORS", "corsMiddleware", "handleCORS",
+}
+
+RATE_LIMIT_PATTERNS = {
+    "rateLimit", "rateLimiter", "rate-limit", "throttle",
+    "RateLimiter", "apiLimiter",
+}
+
+VALIDATION_PATTERNS = {
+    "validate", "validation", "validator", "schema", "joi",
+    "zod", "yup", "celebrate", "checkSchema",
+}
+
+
+def map_api_routes(
+    workspace: str,
+    method: Optional[str] = None,
+    path_filter: Optional[str] = None,
+    config: Optional[Dict] = None
+) -> Dict[str, Any]:
+    """
+    Map all API routes in the workspace, detecting framework and extracting
+    route → handler → middleware chains.
+
+    Args:
+        workspace: Absolute path to workspace
+        method: Optional HTTP method filter (GET, POST, etc.)
+        path_filter: Optional path prefix filter (e.g., '/api/users')
+        config: CodeLens config dict
+
+    Returns:
+        Dict with frameworks_detected, stats, routes, route_groups,
+        middleware_map, recommendations
+    """
+    workspace = os.path.abspath(workspace)
+
+    routes: List[Dict[str, Any]] = []
+    frameworks_detected: Set[str] = set()
+    middleware_map: Dict[str, List[Dict]] = defaultdict(list)
+    route_groups: List[Dict[str, Any]] = []
+    files_scanned = 0
+
+    # Global middleware collectors
+    global_middleware: List[Dict] = []
+    auth_protected_routes: Set[str] = set()
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in SOURCE_EXTENSIONS:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            files_scanned += 1
+
+            # ─── Express / Koa / Hono / Fastify ──────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                js_routes = _extract_js_routes(content, rel_path, frameworks_detected)
+                routes.extend(js_routes)
+
+                # Detect global middleware
+                mw = _extract_js_middleware(content, rel_path)
+                global_middleware.extend(mw)
+
+            # ─── Next.js API Routes ───────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                next_routes = _extract_nextjs_routes(content, rel_path, root, workspace)
+                if next_routes:
+                    frameworks_detected.add("nextjs")
+                    routes.extend(next_routes)
+
+            # ─── Nuxt Server Routes ───────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                nuxt_routes = _extract_nuxt_routes(content, rel_path, root, workspace)
+                if nuxt_routes:
+                    frameworks_detected.add("nuxt")
+                    routes.extend(nuxt_routes)
+
+            # ─── Python: Flask / FastAPI / Django ─────────────
+            elif ext == ".py":
+                py_routes = _extract_python_routes(content, rel_path, frameworks_detected)
+                routes.extend(py_routes)
+
+                py_mw = _extract_python_middleware(content, rel_path)
+                global_middleware.extend(py_mw)
+
+            # ─── GraphQL ──────────────────────────────────────
+            elif ext in {".graphql", ".gql"}:
+                gql_routes = _extract_graphql_schema(content, rel_path)
+                if gql_routes:
+                    frameworks_detected.add("graphql")
+                    routes.extend(gql_routes)
+
+            # Also detect GraphQL in JS/TS files
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                gql_code_routes = _extract_graphql_code(content, rel_path)
+                if gql_code_routes:
+                    frameworks_detected.add("graphql")
+                    routes.extend(gql_code_routes)
+
+            # Also detect GraphQL in Python files
+            if ext == ".py":
+                gql_py_routes = _extract_graphql_python(content, rel_path)
+                if gql_py_routes:
+                    frameworks_detected.add("graphql")
+                    routes.extend(gql_py_routes)
+
+            # ─── gRPC (.proto) ────────────────────────────────
+            elif ext == ".proto":
+                grpc_routes = _extract_grpc_services(content, rel_path)
+                if grpc_routes:
+                    frameworks_detected.add("grpc")
+                    routes.extend(grpc_routes)
+
+            # ─── tRPC ─────────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                trpc_routes = _extract_trpc_routes(content, rel_path)
+                if trpc_routes:
+                    frameworks_detected.add("trpc")
+                    routes.extend(trpc_routes)
+
+    # ─── Post-processing ──────────────────────────────────────
+
+    # Attach middleware to routes
+    for mw in global_middleware:
+        scope = mw.get("scope", "global")
+        if scope == "global":
+            for route in routes:
+                route.setdefault("middleware_chain", []).append({
+                    "name": mw["name"],
+                    "type": mw.get("type", "unknown"),
+                    "file": mw["file"],
+                    "line": mw["line"],
+                })
+
+    # Build middleware map
+    for route in routes:
+        for mw in route.get("middleware_chain", []):
+            middleware_map[mw["name"]].append({
+                "route": f"{route['method']} {route['path']}",
+                "type": mw.get("type", "unknown"),
+            })
+
+    # Detect auth-protected vs public
+    for route in routes:
+        has_auth = any(
+            mw.get("type") == "auth"
+            for mw in route.get("middleware_chain", [])
+        )
+        route["auth_protected"] = has_auth
+        if has_auth:
+            auth_protected_routes.add(f"{route['method']} {route['path']}")
+
+    # Build route groups by path prefix
+    route_groups = _build_route_groups(routes)
+
+    # Mark deprecated routes
+    for route in routes:
+        route["deprecated"] = _is_deprecated_route(route)
+
+    # Apply filters
+    if method:
+        method_upper = method.upper()
+        routes = [r for r in routes if r["method"].upper() == method_upper]
+
+    if path_filter:
+        routes = [r for r in routes if r["path"].startswith(path_filter)]
+
+    # Stats
+    by_method: Dict[str, int] = defaultdict(int)
+    for r in routes:
+        by_method[r["method"].upper()] += 1
+
+    auth_count = sum(1 for r in routes if r.get("auth_protected"))
+    public_count = len(routes) - auth_count
+
+    # Recommendations
+    recommendations = _generate_recommendations(
+        routes, frameworks_detected, auth_protected_routes
+    )
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "frameworks_detected": sorted(frameworks_detected),
+        "stats": {
+            "total_routes": len(routes),
+            "by_method": dict(by_method),
+            "auth_protected": auth_count,
+            "public": public_count,
+            "files_scanned": files_scanned,
+        },
+        "routes": routes,
+        "route_groups": route_groups,
+        "middleware_map": dict(middleware_map),
+        "recommendations": recommendations,
+    }
+
+
+# ─── JS Route Extraction ───────────────────────────────────────
+
+def _extract_js_routes(
+    content: str, rel_path: str, frameworks: Set[str]
+) -> List[Dict[str, Any]]:
+    """Extract routes from Express / Fastify / Koa / Hono JS/TS files."""
+    routes = []
+    lines = content.split('\n')
+
+    # Detect which framework by import/require patterns
+    is_express = bool(re.search(r'(?:require|import).*[\'\"]express[\'\"]', content))
+    is_fastify = bool(re.search(r'(?:require|import).*[\'\"]fastify[\'\"]', content))
+    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|ko[\'\"]koa[\'\"]', content))
+    is_hono = bool(re.search(r'(?:require|import).*[\'\"]hono[\'\"]', content))
+
+    if is_express:
+        frameworks.add("express")
+    if is_fastify:
+        frameworks.add("fastify")
+    if is_koa:
+        frameworks.add("koa")
+    if is_hono:
+        frameworks.add("hono")
+
+    # Track current router variable names and prefixes
+    router_vars: Dict[str, str] = {}  # var_name → prefix
+
+    # Detect Router() assignments: const router = Router({ prefix: '/api' })
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?(?:Router|router)\s*\(([^)]*)\)',
+        content
+    ):
+        var_name = m.group(1)
+        args = m.group(2)
+        prefix_match = re.search(r'prefix\s*:\s*[\'"]([^\'"]+)[\'"]', args)
+        prefix = prefix_match.group(1) if prefix_match else ""
+        router_vars[var_name] = prefix
+
+    # Detect app.route('/path') chains
+    for m in re.finditer(
+        r'(?:app|router|server|fastify|hono)\s*\.\s*route\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+        content
+    ):
+        base_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        # Look for chained methods after this
+        chain_start = m.end()
+        chain_text = content[chain_start:chain_start + 500]
+        for cm in re.finditer(r'\.(get|post|put|delete|patch)\s*\(', chain_text):
+            method = cm.group(1).upper()
+            routes.append({
+                "method": method,
+                "path": base_path,
+                "handler_name": _infer_handler_name(chain_text, cm.start()),
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+            })
+
+    # Direct method calls: app.get('/path', ...), router.post('/path', ...)
+    for m in re.finditer(
+        r'(\w+)\s*\.\s*(get|post|put|delete|patch|head|options)\s*\(\s*[\'"`]([^\'"`]*)[\'"`]',
+        content
+    ):
+        obj_name = m.group(1)
+        http_method = m.group(2).upper()
+        route_path = m.group(3)
+
+        # Skip non-route method calls
+        if obj_name in {"console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math"}:
+            continue
+        if http_method.lower() not in HTTP_METHODS:
+            continue
+
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Apply router prefix if available
+        prefix = router_vars.get(obj_name, "")
+        full_path = _normalize_path(prefix + route_path)
+
+        # Extract middleware from arguments
+        mw_chain = _extract_inline_middleware(content, m.end(), rel_path, line_num)
+
+        # Extract handler name
+        handler_name = _infer_handler_name_from_args(content, m.end())
+
+        # Detect request/response types from nearby code
+        req_type, resp_type = _detect_request_response_types(content, m.start())
+
+        routes.append({
+            "method": http_method,
+            "path": full_path,
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": mw_chain,
+            "request_type": req_type,
+            "response_type": resp_type,
+            "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+        })
+
+    return routes
+
+
+def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
+    """Return the detected JS framework name."""
+    if is_fastify:
+        return "fastify"
+    if is_hono:
+        return "hono"
+    if is_koa:
+        return "koa"
+    if is_express:
+        return "express"
+    return "unknown"
+
+
+def _extract_inline_middleware(
+    content: str, start_pos: int, rel_path: str, line_num: int
+) -> List[Dict[str, Any]]:
+    """Extract middleware from route handler arguments between path and final handler."""
+    middleware = []
+
+    # Find the arguments section
+    paren_start = content.find('(', start_pos - 1)
+    if paren_start < 0:
+        return middleware
+
+    # Find matching closing paren
+    depth = 1
+    pos = paren_start + 1
+    while pos < len(content) and depth > 0:
+        if content[pos] == '(':
+            depth += 1
+        elif content[pos] == ')':
+            depth -= 1
+        pos += 1
+
+    args_section = content[paren_start + 1:pos - 1]
+
+    # Split by comma at depth 0
+    args = _split_args(args_section)
+
+    # All args except the path (first) and the handler (last) are middleware
+    if len(args) > 2:
+        for arg in args[1:-1]:
+            arg = arg.strip()
+            if not arg:
+                continue
+            mw_name = arg.strip()
+            # Remove wrapping like cors(), auth()
+            bare_name = re.sub(r'\(.*\)', '', mw_name).strip()
+
+            mw_type = _classify_middleware(bare_name)
+            middleware.append({
+                "name": bare_name or mw_name,
+                "type": mw_type,
+                "file": rel_path,
+                "line": line_num,
+            })
+
+    return middleware
+
+
+def _split_args(args_str: str) -> List[str]:
+    """Split function arguments at depth 0 commas."""
+    args = []
+    depth = 0
+    current = []
+    for ch in args_str:
+        if ch in '([{':
+            depth += 1
+            current.append(ch)
+        elif ch in ')]}':
+            depth -= 1
+            current.append(ch)
+        elif ch == ',' and depth == 0:
+            args.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        args.append(''.join(current))
+    return args
+
+
+def _classify_middleware(name: str) -> str:
+    """Classify middleware by its name patterns."""
+    lower = name.lower()
+    for pattern in AUTH_MIDDLEWARE_PATTERNS:
+        if pattern.lower() in lower:
+            return "auth"
+    for pattern in CORS_MIDDLEWARE_PATTERNS:
+        if pattern.lower() in lower:
+            return "cors"
+    for pattern in RATE_LIMIT_PATTERNS:
+        if pattern.lower() in lower:
+            return "rate_limit"
+    for pattern in VALIDATION_PATTERNS:
+        if pattern.lower() in lower:
+            return "validation"
+    return "custom"
+
+
+def _infer_handler_name(content: str, offset: int) -> str:
+    """Try to infer the handler function name from code near offset."""
+    snippet = content[offset:offset + 300]
+    # Look for named function passed as handler
+    m = re.search(r'(?:,\s*(\w+)\s*(?:,\s*|\))|,\s*(?:async\s+)?function\s+(\w+))', snippet)
+    if m:
+        return m.group(1) or m.group(2) or "anonymous"
+    return "anonymous"
+
+
+def _infer_handler_name_from_args(content: str, start_pos: int) -> str:
+    """Infer handler name from the last argument of a route call."""
+    paren_start = content.find('(', start_pos - 1)
+    if paren_start < 0:
+        return "anonymous"
+
+    depth = 1
+    pos = paren_start + 1
+    while pos < len(content) and depth > 0:
+        if content[pos] == '(':
+            depth += 1
+        elif content[pos] == ')':
+            depth -= 1
+        pos += 1
+
+    args_section = content[paren_start + 1:pos - 1]
+    args = _split_args(args_section)
+
+    if args:
+        last_arg = args[-1].strip()
+        # Extract name from arrow function or named function
+        m = re.search(r'(?:async\s+)?(\w+)\s*=>', last_arg)
+        if m:
+            return m.group(1) + "_handler"
+        m = re.search(r'function\s+(\w+)', last_arg)
+        if m:
+            return m.group(1)
+        # Just a variable reference
+        if re.match(r'^\w+$', last_arg):
+            return last_arg
+
+    return "anonymous"
+
+
+def _detect_request_response_types(
+    content: str, offset: int
+) -> tuple:
+    """Heuristically detect request/response type annotations near a route."""
+    req_type = None
+    resp_type = None
+
+    # Look for TypeScript generic type params like app.get<ReqType, ResType>
+    nearby = content[max(0, offset - 20):offset + 200]
+    m = re.search(r'<(\w+),\s*(\w+)>', nearby)
+    if m:
+        req_type = m.group(1)
+        resp_type = m.group(2)
+
+    # Look for FastAPI-style response_model or similar
+    m = re.search(r'response_model\s*=\s*(\w+)', nearby)
+    if m:
+        resp_type = m.group(1)
+
+    # Look for : Response annotations
+    m = re.search(r'response\s*:\s*(\w+)', nearby, re.IGNORECASE)
+    if m and not resp_type:
+        resp_type = m.group(1)
+
+    return req_type, resp_type
+
+
+# ─── JS Middleware Extraction ──────────────────────────────────
+
+def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
+    """Extract global/app-level middleware from JS files."""
+    middleware = []
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # app.use(middleware) patterns
+        m = re.match(
+            r'(?:app|server|fastify|hono)\s*\.\s*use\s*\(\s*(\w+)',
+            stripped
+        )
+        if m:
+            mw_name = m.group(1)
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": "global",
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+        # app.use('/path', middleware) — route-scoped middleware
+        m = re.match(
+            r'(?:app|server|fastify|hono)\s*\.\s*use\s*\(\s*[\'"`]([^\'"`]+)[\'"`]\s*,\s*(\w+)',
+            stripped
+        )
+        if m:
+            mw_name = m.group(2)
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": f"path:{m.group(1)}",
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+    return middleware
+
+
+# ─── Next.js Routes ────────────────────────────────────────────
+
+def _extract_nextjs_routes(
+    content: str, rel_path: str, root: str, workspace: str
+) -> List[Dict[str, Any]]:
+    """Extract Next.js API routes from pages/api/* or app/api/*/route.ts."""
+    routes = []
+
+    # pages/api/* pattern
+    if 'pages/api/' in rel_path or 'pages\\api\\' in rel_path:
+        # Convert file path to API route
+        api_path = re.sub(r'^pages[/\\]api', '/api', rel_path)
+        api_path = re.sub(r'\.(js|ts|mjs|cjs)$', '', api_path)
+        api_path = api_path.replace('\\', '/')
+        # Handle [param] → :param
+        api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
+        # Handle [...param] → :param*
+        api_path = re.sub(r':\.\.\.(\w+)', r':\1*', api_path)
+        # /index → /
+        api_path = re.sub(r'/index$', '', api_path)
+
+        # Default export = handler for all methods
+        if re.search(r'export\s+default\s+', content):
+            # Detect specific method handlers
+            for method_match in re.finditer(
+                r'(?:req\.method\s*===?\s*[\'"](\w+)[\'"]|case\s+[\'"](\w+)[\'"])',
+                content
+            ):
+                http_method = (method_match.group(1) or method_match.group(2)).upper()
+                line_num = content[:method_match.start()].count('\n') + 1
+                routes.append({
+                    "method": http_method,
+                    "path": _normalize_path(api_path),
+                    "handler_name": "default_handler",
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "nextjs",
+                })
+
+            if not routes:
+                routes.append({
+                    "method": "ALL",
+                    "path": _normalize_path(api_path),
+                    "handler_name": "default_handler",
+                    "file": rel_path,
+                    "line": 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "nextjs",
+                })
+
+    # app/api/*/route.ts pattern — exported GET, POST, etc.
+    if re.search(r'app[/\\]api[/\\].*[/\\]route\.(ts|js|mjs|cjs)$', rel_path):
+        api_path = re.sub(r'^.*?app[/\\]api', '/api', rel_path)
+        api_path = re.sub(r'/route\.(ts|js|mjs|cjs)$', '', api_path)
+        api_path = api_path.replace('\\', '/')
+        api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
+        api_path = re.sub(r':\.\.\.(\w+)', r':\1*', api_path)
+
+        for m in re.finditer(
+            r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)',
+            content
+        ):
+            http_method = m.group(1).upper()
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(api_path),
+                "handler_name": m.group(1),
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nextjs",
+            })
+
+    return routes
+
+
+# ─── Nuxt Routes ───────────────────────────────────────────────
+
+def _extract_nuxt_routes(
+    content: str, rel_path: str, root: str, workspace: str
+) -> List[Dict[str, Any]]:
+    """Extract Nuxt server/api/* handler routes."""
+    routes = []
+
+    if 'server/api/' in rel_path or 'server\\api\\' in rel_path:
+        api_path = re.sub(r'^server[/\\]api', '/api', rel_path)
+        api_path = re.sub(r'\.(js|ts|mjs|cjs)$', '', api_path)
+        api_path = api_path.replace('\\', '/')
+        api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
+
+        # Nuxt uses defineEventHandler or export default
+        handler_name = "eventHandler"
+        m = re.search(r'(?:export\s+default\s+)?defineEventHandler\s*(?:<[^>]+>)?\s*\(', content)
+        if m:
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": "ALL",
+                "path": _normalize_path(api_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nuxt",
+            })
+
+        # Nuxt method-specific files: .get.ts, .post.ts, etc.
+        method_match = re.search(r'\.(get|post|put|delete|patch)\.(ts|js)$', rel_path)
+        if method_match:
+            http_method = method_match.group(1).upper()
+            api_path = re.sub(r'\.(get|post|put|delete|patch)\.(ts|js)$', '', api_path)
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(api_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": 1,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nuxt",
+            })
+
+    return routes
+
+
+# ─── Python Routes (Flask / FastAPI / Django) ─────────────────
+
+def _extract_python_routes(
+    content: str, rel_path: str, frameworks: Set[str]
+) -> List[Dict[str, Any]]:
+    """Extract routes from Flask, FastAPI, and Django Python files."""
+    routes = []
+
+    is_flask = bool(re.search(r'(?:from\s+flask\s+import|import\s+flask)', content))
+    is_fastapi = bool(re.search(r'(?:from\s+fastapi\s+import|import\s+fastapi)', content))
+    is_django = bool(re.search(r'(?:from\s+django|import\s+django)', content))
+
+    if is_flask:
+        frameworks.add("flask")
+    if is_fastapi:
+        frameworks.add("fastapi")
+    if is_django:
+        frameworks.add("django")
+
+    # Flask / FastAPI decorator routes
+    if is_flask or is_fastapi:
+        fw_name = "fastapi" if is_fastapi else "flask"
+
+        # @app.route('/path', methods=['GET', 'POST'])
+        for m in re.finditer(
+            r'@(\w+)\s*\.\s*route\s*\(\s*[\'"]([^\'"]+)[\'"]\s*(?:,\s*methods\s*=\s*\[([^\]]*)\])?',
+            content
+        ):
+            obj_name = m.group(1)
+            route_path = m.group(2)
+            methods_str = m.group(3) or "'GET'"
+            line_num = content[:m.start()].count('\n') + 1
+
+            methods = re.findall(r'[\'"](\w+)[\'"]', methods_str)
+            if not methods:
+                methods = ["GET"]
+
+            # Find handler function name
+            handler_name = _find_next_python_function(content, m.end())
+
+            # Extract middleware from decorators before the handler
+            mw_chain = _extract_python_decorator_middleware(content, m.start(), rel_path, line_num)
+
+            for method in methods:
+                routes.append({
+                    "method": method.upper(),
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": mw_chain,
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                })
+
+        # FastAPI method decorators: @app.get('/path'), @router.post('/path')
+        if is_fastapi:
+            for m in re.finditer(
+                r'@(\w+)\s*\.\s*(get|post|put|delete|patch)\s*\(\s*[\'"]([^\'"]*)[\'"]',
+                content
+            ):
+                obj_name = m.group(1)
+                http_method = m.group(2).upper()
+                route_path = m.group(3)
+                line_num = content[:m.start()].count('\n') + 1
+
+                handler_name = _find_next_python_function(content, m.end())
+                mw_chain = _extract_python_decorator_middleware(content, m.start(), rel_path, line_num)
+
+                # Detect response_model
+                resp_type = None
+                nearby = content[m.start():m.start() + 300]
+                rm = re.search(r'response_model\s*=\s*(\w+)', nearby)
+                if rm:
+                    resp_type = rm.group(1)
+
+                routes.append({
+                    "method": http_method,
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": mw_chain,
+                    "request_type": None,
+                    "response_type": resp_type,
+                    "framework": "fastapi",
+                })
+
+    # Django URL patterns
+    if is_django:
+        # path('url/', view, name='...')
+        for m in re.finditer(
+            r"path\s*\(\s*[r]?[\'\"]([^\'\"]+)[\'\"]\s*,\s*(\w+)",
+            content
+        ):
+            route_path = m.group(1)
+            handler_name = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+
+            routes.append({
+                "method": "ALL",
+                "path": _normalize_path('/' + route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "django",
+            })
+
+        # re_path(r'^url/', view)
+        for m in re.finditer(
+            r"re_path\s*\(\s*[r]?[\'\"]([^\'\"]+)[\'\"]\s*,\s*(\w+)",
+            content
+        ):
+            route_path = m.group(1)
+            handler_name = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+
+            routes.append({
+                "method": "ALL",
+                "path": _normalize_path('/' + route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "django",
+            })
+
+        # @api_view(['GET', 'POST'])
+        for m in re.finditer(
+            r"@api_view\s*\(\s*\[([^\]]*)\]",
+            content
+        ):
+            methods_str = m.group(1)
+            methods = re.findall(r'[\'"](\w+)[\'"]', methods_str)
+            handler_name = _find_next_python_function(content, m.end())
+            line_num = content[:m.start()].count('\n') + 1
+
+            for method in methods:
+                routes.append({
+                    "method": method.upper(),
+                    "path": f"/{handler_name}",
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "django",
+                })
+
+    return routes
+
+
+def _find_next_python_function(content: str, offset: int) -> str:
+    """Find the next Python function definition after offset."""
+    remaining = content[offset:offset + 500]
+    m = re.search(r'def\s+(\w+)', remaining)
+    if m:
+        return m.group(1)
+    return "anonymous"
+
+
+def _extract_python_decorator_middleware(
+    content: str, offset: int, rel_path: str, line_num: int
+) -> List[Dict[str, Any]]:
+    """Extract middleware from Python decorators above a route handler."""
+    middleware = []
+    lines = content.split('\n')
+    target_line = line_num - 1  # 0-indexed
+
+    # Look at lines above the route decorator for other decorators
+    for i in range(max(0, target_line - 5), target_line):
+        if i >= len(lines):
+            break
+        stripped = lines[i].strip()
+        if not stripped.startswith('@'):
+            continue
+        # Skip the route decorator itself
+        if re.match(r'@\w+\.(get|post|put|delete|patch|route)\b', stripped):
+            continue
+
+        m = re.match(r'@(\w+)', stripped)
+        if m:
+            dec_name = m.group(1)
+            mw_type = _classify_middleware(dec_name)
+            if mw_type != "custom" or dec_name.lower() in {
+                "login_required", "permission_required", "auth_required",
+                "cache", "csrf", "cors", "throttle",
+            }:
+                middleware.append({
+                    "name": dec_name,
+                    "type": mw_type,
+                    "file": rel_path,
+                    "line": i + 1,
+                })
+
+    return middleware
+
+
+def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
+    """Extract middleware declarations from Python files (Flask/Django/FastAPI)."""
+    middleware = []
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Flask: app.before_request, app.after_request
+        m = re.match(r'(?:app|server)\s*\.\s*(before_request|after_request)\s*\(\s*(\w+)', stripped)
+        if m:
+            mw_type = "auth" if any(p in m.group(2).lower() for p in AUTH_MIDDLEWARE_PATTERNS) else "custom"
+            middleware.append({
+                "name": m.group(2),
+                "type": mw_type,
+                "scope": m.group(1),
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+        # Django MIDDLEWARE list entries
+        m = re.match(r"[\'\"](\w[\w.]+)[\'\"]\s*,", stripped)
+        if m and 'MIDDLEWARE' in content[:content.find(stripped) + len(stripped)]:
+            mw_name = m.group(1).split('.')[-1]
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": "global",
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+        # FastAPI: app.add_middleware(...)
+        m = re.match(r'app\s*\.\s*add_middleware\s*\(\s*(\w+)', stripped)
+        if m:
+            mw_name = m.group(1)
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": "global",
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+    return middleware
+
+
+# ─── GraphQL ───────────────────────────────────────────────────
+
+def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract routes from GraphQL schema files (.graphql/.gql)."""
+    routes = []
+
+    # type Query { fieldName(args): ReturnType }
+    for m in re.finditer(r'type\s+Query\s*\{([^}]+)\}', content, re.DOTALL):
+        body = m.group(1)
+        for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
+            field_name = field_m.group(1)
+            return_type = field_m.group(2)
+            line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
+            routes.append({
+                "method": "QUERY",
+                "path": f"Query.{field_name}",
+                "handler_name": f"{field_name}Resolver",
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": return_type,
+                "framework": "graphql",
+            })
+
+    # type Mutation { fieldName(args): ReturnType }
+    for m in re.finditer(r'type\s+Mutation\s*\{([^}]+)\}', content, re.DOTALL):
+        body = m.group(1)
+        for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
+            field_name = field_m.group(1)
+            return_type = field_m.group(2)
+            line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
+            routes.append({
+                "method": "MUTATION",
+                "path": f"Mutation.{field_name}",
+                "handler_name": f"{field_name}Resolver",
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": return_type,
+                "framework": "graphql",
+            })
+
+    # type Subscription { fieldName(args): ReturnType }
+    for m in re.finditer(r'type\s+Subscription\s*\{([^}]+)\}', content, re.DOTALL):
+        body = m.group(1)
+        for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
+            field_name = field_m.group(1)
+            return_type = field_m.group(2)
+            line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
+            routes.append({
+                "method": "SUBSCRIPTION",
+                "path": f"Subscription.{field_name}",
+                "handler_name": f"{field_name}Resolver",
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": return_type,
+                "framework": "graphql",
+            })
+
+    return routes
+
+
+def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract GraphQL resolvers from JS/TS code."""
+    routes = []
+
+    # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
+    for m in re.finditer(
+        r'(Query|Mutation|Subscription)\s*:\s*\{',
+        content
+    ):
+        parent_type = m.group(1)
+        resolver_block = content[m.end():m.end() + 2000]
+        # Find matching close brace
+        depth = 1
+        pos = 0
+        while pos < len(resolver_block) and depth > 0:
+            if resolver_block[pos] == '{':
+                depth += 1
+            elif resolver_block[pos] == '}':
+                depth -= 1
+            pos += 1
+        resolver_block = resolver_block[:pos - 1]
+
+        for field_m in re.finditer(r'(\w+)\s*[:=]\s*(?:async\s+)?\(', resolver_block):
+            field_name = field_m.group(1)
+            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            routes.append({
+                "method": parent_type.upper(),
+                "path": f"{parent_type}.{field_name}",
+                "handler_name": field_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "graphql",
+            })
+
+    # @Query / @Mutation decorators (TypeGraphQL)
+    for m in re.finditer(
+        r'@(Query|Mutation)\s*\(\s*(?:returns\s*=>\s*(\w+))?',
+        content
+    ):
+        parent_type = m.group(1)
+        return_type = m.group(2)
+        handler_name = _find_next_js_function(content, m.end())
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": parent_type.upper(),
+            "path": f"{parent_type}.{handler_name}",
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": return_type,
+            "framework": "graphql",
+        })
+
+    return routes
+
+
+def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract GraphQL resolvers from Python code (Graphene, Strawberry, Ariadne)."""
+    routes = []
+
+    # Graphene: class Query(graphene.ObjectType): field = graphene.Field(...)
+    for m in re.finditer(
+        r'class\s+(\w+)\(.*graphene\.ObjectType.*\)\s*:',
+        content
+    ):
+        class_name = m.group(1)
+        class_body = content[m.end():m.end() + 3000]
+        # Find fields
+        for field_m in re.finditer(r'(\w+)\s*=\s*graphene\.(?:Field|String|Int|Float|Boolean|List)\b', class_body):
+            field_name = field_m.group(1)
+            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            method_type = "QUERY" if class_name == "Query" else "MUTATION" if class_name == "Mutation" else class_name.upper()
+            routes.append({
+                "method": method_type,
+                "path": f"{class_name}.{field_name}",
+                "handler_name": f"resolve_{field_name}",
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "graphql",
+            })
+
+    # Strawberry: @query / @mutation decorators
+    for m in re.finditer(r'@(query|mutation)\s*', content):
+        op_type = m.group(1).upper()
+        handler_name = _find_next_python_function(content, m.end())
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": op_type,
+            "path": f"{op_type}.{handler_name}",
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "graphql",
+        })
+
+    return routes
+
+
+def _find_next_js_function(content: str, offset: int) -> str:
+    """Find the next JS/TS function name after offset."""
+    remaining = content[offset:offset + 300]
+    # Named function
+    m = re.search(r'(?:async\s+)?function\s+(\w+)', remaining)
+    if m:
+        return m.group(1)
+    # Arrow or const
+    m = re.search(r'(?:const|let|var)\s+(\w+)\s*=', remaining)
+    if m:
+        return m.group(1)
+    # Class method
+    m = re.search(r'(?:async\s+)?(\w+)\s*\(', remaining)
+    if m:
+        return m.group(1)
+    return "anonymous"
+
+
+# ─── gRPC ──────────────────────────────────────────────────────
+
+def _extract_grpc_services(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract gRPC service definitions from .proto files."""
+    routes = []
+
+    # service ServiceName { rpc MethodName(RequestType) returns (ResponseType); }
+    for m in re.finditer(r'service\s+(\w+)\s*\{([^}]+)\}', content, re.DOTALL):
+        service_name = m.group(1)
+        service_body = m.group(2)
+
+        for rpc_m in re.finditer(
+            r'rpc\s+(\w+)\s*\(\s*(?:stream\s+)?(\w+)\s*\)\s*returns\s*\(\s*(?:stream\s+)?(\w+)\s*\)',
+            service_body
+        ):
+            method_name = rpc_m.group(1)
+            request_type = rpc_m.group(2)
+            response_type = rpc_m.group(3)
+            line_num = content[:rpc_m.start() + m.start(2)].count('\n') + 1
+
+            routes.append({
+                "method": "GRPC",
+                "path": f"/{service_name}/{method_name}",
+                "handler_name": method_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": request_type,
+                "response_type": response_type,
+                "framework": "grpc",
+            })
+
+    return routes
+
+
+# ─── tRPC ──────────────────────────────────────────────────────
+
+def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract tRPC router definitions and procedure chains."""
+    routes = []
+
+    # Detect tRPC import
+    if not re.search(r'(?:from\s+[\'"]@trpc|import\s+.*@trpc)', content):
+        return routes
+
+    # tRPC procedure chains: publicProcedure.query('name', ...) or .mutation('name', ...)
+    # Also: router({ name: procedure })
+    for m in re.finditer(
+        r'\.(query|mutation)\s*\(\s*[\'"](\w+)[\'"]',
+        content
+    ):
+        proc_type = m.group(1).upper()
+        proc_name = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": proc_type,
+            "path": proc_name,
+            "handler_name": proc_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "trpc",
+        })
+
+    # Router definitions: const appRouter = router({ ... })
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+Router)\s*=\s*\w*router\s*\(',
+        content
+    ):
+        router_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "ROUTER",
+            "path": router_name,
+            "handler_name": router_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "trpc",
+        })
+
+    # .query() and .mutation() without string name (inline)
+    for m in re.finditer(
+        r'\.(query|mutation)\s*\(\s*(?:\{|async)',
+        content
+    ):
+        proc_type = m.group(1).upper()
+        line_num = content[:m.start()].count('\n') + 1
+        # Try to find name from variable assignment
+        before = content[max(0, m.start() - 200):m.start()]
+        name_match = re.search(r'(\w+)\s*:\s*\w*Procedure$', before)
+        handler_name = name_match.group(1) if name_match else f"anonymous_{proc_type.lower()}"
+
+        routes.append({
+            "method": proc_type,
+            "path": handler_name,
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "trpc",
+        })
+
+    return routes
+
+
+# ─── Helpers ───────────────────────────────────────────────────
+
+def _normalize_path(path: str) -> str:
+    """Normalize a route path (ensure leading /, remove trailing /)."""
+    if not path:
+        return "/"
+    # Remove duplicate slashes
+    path = re.sub(r'/+', '/', path)
+    if not path.startswith('/'):
+        path = '/' + path
+    if len(path) > 1 and path.endswith('/'):
+        path = path.rstrip('/')
+    return path
+
+
+def _is_deprecated_route(route: Dict[str, Any]) -> bool:
+    """Check if a route is marked as deprecated."""
+    handler = route.get("handler_name", "")
+    # Common deprecation patterns
+    if "deprecated" in handler.lower():
+        return True
+    # Check if the route path suggests deprecation
+    path = route.get("path", "")
+    if "/deprecated/" in path or "/v1/" in path:
+        return True
+    # This is a heuristic — in practice we'd check the file content for
+    # @deprecated or deprecated: true comments near the route
+    return False
+
+
+def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Group routes by path prefix (e.g., /api/users, /api/posts)."""
+    groups: Dict[str, List[Dict]] = defaultdict(list)
+
+    for route in routes:
+        path = route.get("path", "/")
+        parts = path.split('/')
+        # Use first 2-3 path segments as the group key
+        if len(parts) >= 3:
+            group_key = '/'.join(parts[:3])
+        elif len(parts) >= 2:
+            group_key = '/'.join(parts[:2])
+        else:
+            group_key = "/"
+        groups[group_key].append(route)
+
+    result = []
+    for prefix, group_routes in sorted(groups.items()):
+        methods = set(r["method"] for r in group_routes)
+        has_auth = any(r.get("auth_protected") for r in group_routes)
+        result.append({
+            "prefix": prefix,
+            "route_count": len(group_routes),
+            "methods": sorted(methods),
+            "auth_protected": has_auth,
+            "routes": [
+                {"method": r["method"], "path": r["path"], "handler": r["handler_name"]}
+                for r in group_routes
+            ],
+        })
+
+    return result
+
+
+def _generate_recommendations(
+    routes: List[Dict[str, Any]],
+    frameworks: Set[str],
+    auth_protected: Set[str],
+) -> List[Dict[str, Any]]:
+    """Generate recommendations based on the API route analysis."""
+    recommendations = []
+
+    # No auth on mutation routes
+    mutation_no_auth = [
+        r for r in routes
+        if r["method"] in {"POST", "PUT", "DELETE", "PATCH", "MUTATION"}
+        and not r.get("auth_protected")
+    ]
+    if mutation_no_auth:
+        recommendations.append({
+            "type": "security",
+            "severity": "critical",
+            "message": f"{len(mutation_no_auth)} mutation routes have no auth middleware",
+            "affected": [f"{r['method']} {r['path']}" for r in mutation_no_auth[:10]],
+            "suggestion": "Add authentication middleware to all mutation endpoints.",
+        })
+
+    # No CORS middleware detected
+    has_cors = any(
+        any(mw.get("type") == "cors" for mw in r.get("middleware_chain", []))
+        for r in routes
+    )
+    if not has_cors and any(f in frameworks for f in {"express", "fastify", "koa", "hono", "flask", "fastapi"}):
+        recommendations.append({
+            "type": "security",
+            "severity": "warning",
+            "message": "No CORS middleware detected on any route",
+            "suggestion": "Add CORS configuration to control cross-origin access.",
+        })
+
+    # Deprecated routes
+    deprecated = [r for r in routes if r.get("deprecated")]
+    if deprecated:
+        recommendations.append({
+            "type": "maintenance",
+            "severity": "info",
+            "message": f"{len(deprecated)} deprecated routes found",
+            "affected": [f"{r['method']} {r['path']}" for r in deprecated],
+            "suggestion": "Plan migration away from deprecated endpoints and set sunset dates.",
+        })
+
+    # Too many routes in a single file
+    file_route_count: Dict[str, int] = defaultdict(int)
+    for r in routes:
+        file_route_count[r["file"]] += 1
+
+    large_files = {f: c for f, c in file_route_count.items() if c > 20}
+    if large_files:
+        recommendations.append({
+            "type": "architecture",
+            "severity": "warning",
+            "message": f"{len(large_files)} file(s) contain more than 20 routes",
+            "affected": list(large_files.keys()),
+            "suggestion": "Split large route files into domain-specific modules.",
+        })
+
+    # REST best practices
+    get_routes = [r for r in routes if r["method"] == "GET"]
+    non_restful = [r for r in get_routes if "/get" in r["path"].lower() or "/list" in r["path"].lower()]
+    if non_restful:
+        recommendations.append({
+            "type": "convention",
+            "severity": "info",
+            "message": f"{len(non_restful)} GET routes use non-RESTful path naming",
+            "affected": [r["path"] for r in non_restful[:5]],
+            "suggestion": "Use resource-based paths (e.g., /users instead of /getUsers).",
+        })
+
+    # Mixed frameworks warning
+    if len(frameworks) > 2:
+        recommendations.append({
+            "type": "architecture",
+            "severity": "warning",
+            "message": f"Multiple web frameworks detected: {', '.join(sorted(frameworks))}",
+            "suggestion": "Consider standardizing on one framework to reduce complexity.",
+        })
+
+    return recommendations
