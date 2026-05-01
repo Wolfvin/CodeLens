@@ -182,10 +182,10 @@ class Normalizer {
       if (!sourceId || !targetId) continue
 
       edges.push({
-        id: this.makeEdgeId(sourceId, targetId, 'calls'),
+        id: this.makeEdgeId(sourceId, targetId, 'defines'),
         source: sourceId,
         target: targetId,
-        type: 'calls',
+        type: 'defines',
         weight: 1,
         status: 'active',
       })
@@ -680,10 +680,10 @@ class Normalizer {
       targetIds.push(sinkId)
 
       edges.push({
-        id: this.makeEdgeId(sourceId, sinkId, 'calls'),
+        id: this.makeEdgeId(sourceId, sinkId, 'taints'),
         source: sourceId,
         target: sinkId,
-        type: 'calls',
+        type: 'taints',
         weight: 2,
         status: flow.sink?.dangerous ? 'danger' : 'active',
       })
@@ -921,7 +921,7 @@ class Normalizer {
     )
   }
 
-  /** test-map: Returns test coverage data as overlay */
+  /** test-map: Returns test coverage data with test nodes and tests edges */
   private normalizeTestMap(output: any): GraphEvent {
     const nodes: GraphNode[] = []
     const edges: GraphEdge[] = []
@@ -929,31 +929,50 @@ class Normalizer {
     const coverage: any[] = output?.coverage ?? output?.mappings ?? []
 
     for (const entry of coverage) {
-      const fn: string = entry.fn ?? entry.function ?? 'unknown'
-      const nodeId = this.makeNodeId('function', fn, entry.file, entry.line)
-      const covered: boolean = entry.covered ?? entry.has_test ?? false
+      const fn: string = entry.fn ?? entry.function ?? entry.symbol ?? 'unknown'
+      const symbolId = this.makeNodeId('function', fn, entry.file, entry.line)
+      const covered: boolean = entry.covered ?? entry.has_test ?? entry.tested ?? false
 
+      // Create the function/symbol node
       nodes.push({
-        id: nodeId,
+        id: symbolId,
         label: fn,
         type: 'function',
         domain: 'backend',
-        status: covered ? 'safe' : 'orphan',
+        status: covered ? 'safe' : 'untested',
         file: entry.file,
         line: entry.line,
         radius: 9,
-        color: covered ? NEURAL_COLORS.safe : NEURAL_COLORS.orphan,
-        data: { covered, testFile: entry.test_file ?? '', testLine: entry.test_line },
+        color: covered ? NEURAL_COLORS.safe : NEURAL_COLORS.untested,
+        data: { covered, testFiles: entry.test_files ?? (entry.test_file ? [entry.test_file] : []) },
       })
-      targetIds.push(nodeId)
+      targetIds.push(symbolId)
 
-      if (covered && entry.test_file) {
-        const testId = this.makeNodeId('file', entry.test_file)
+      // Create test nodes and tests edges for covered symbols
+      const testFiles: string[] = entry.test_files ?? (entry.test_file ? [entry.test_file] : [])
+      for (const testFile of testFiles) {
+        const testId = this.makeNodeId('test', testFile)
+        if (!nodes.find(n => n.id === testId)) {
+          nodes.push({
+            id: testId,
+            label: testFile.split('/').pop() ?? testFile,
+            type: 'test',
+            domain: 'backend',
+            status: 'active',
+            file: testFile,
+            radius: 8,
+            color: NEURAL_COLORS.test,
+            data: { testedSymbol: fn },
+          })
+        }
+        targetIds.push(testId)
+
+        // tests edge: test node → tested symbol
         edges.push({
-          id: this.makeEdgeId(testId, nodeId, 'contains'),
+          id: this.makeEdgeId(testId, symbolId, 'tests'),
           source: testId,
-          target: nodeId,
-          type: 'contains',
+          target: symbolId,
+          type: 'tests',
           weight: 1,
           status: 'active',
         })
@@ -1071,7 +1090,7 @@ class Normalizer {
     )
   }
 
-  /** secrets: Creates env_var nodes with critical status, alarm animation */
+  /** secrets: Creates secret nodes for hardcoded secrets, env_var for env vars, alarm animation */
   private normalizeSecrets(output: any): GraphEvent {
     const nodes: GraphNode[] = []
     const edges: GraphEdge[] = []
@@ -1080,19 +1099,22 @@ class Normalizer {
 
     for (const finding of findings) {
       const name: string = finding.env_key ?? finding.category ?? finding.match ?? 'secret'
-      const nodeId = this.makeNodeId('env_var', name, finding.file, finding.line)
+      // Use 'secret' type for hardcoded secrets (not env var references)
+      const isHardcodedSecret = finding.category === 'api_key' || finding.category === 'aws_key' || finding.category === 'secret' || finding.type === 'hardcoded'
+      const nodeType: NodeType = isHardcodedSecret ? 'secret' : 'env_var'
+      const nodeId = this.makeNodeId(nodeType, name, finding.file, finding.line)
       const status: NodeStatus = finding.severity === 'critical' ? 'critical' : 'warning'
 
       nodes.push({
         id: nodeId,
         label: name,
-        type: 'env_var',
+        type: nodeType,
         domain: 'backend',
         status,
         file: finding.file,
         line: finding.line,
         radius: 12,
-        color: status === 'critical' ? NEURAL_COLORS.critical : NEURAL_COLORS.warning,
+        color: nodeType === 'secret' ? NEURAL_COLORS.secret : (status === 'critical' ? NEURAL_COLORS.critical : NEURAL_COLORS.warning),
         data: {
           category: finding.category ?? '',
           severity: finding.severity ?? 'high',
@@ -1447,50 +1469,51 @@ class Normalizer {
     )
   }
 
-  /** vuln-scan: Creates package nodes for vulnerable packages with alarm animation */
+  /** vuln-scan: Creates vulnerability nodes for CVE entries with alarm animation */
   private normalizeVulnScan(output: any): GraphEvent {
     const nodes: GraphNode[] = []
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const findings: any[] = output?.findings ?? []
+    const vulnerabilities: any[] = output?.vulnerabilities ?? findings
 
-    for (const finding of findings) {
-      const name: string = finding.package ?? 'unknown'
-      const nodeId = this.makeNodeId('package', name)
-      const status: NodeStatus = finding.severity === 'critical' ? 'vulnerable' : 'warning'
+    for (const vuln of vulnerabilities) {
+      const pkgName: string = vuln.package ?? 'unknown'
+      const cve: string = vuln.cve ?? ''
+      const name = cve || pkgName
+      const nodeId = this.makeNodeId('vulnerability', name, vuln.file, vuln.line)
+      const severity: string = vuln.severity ?? 'medium'
+      const status: NodeStatus = severity === 'critical' ? 'critical' : severity === 'high' ? 'vulnerable' : severity === 'medium' ? 'warning' : 'safe'
 
       nodes.push({
         id: nodeId,
-        label: name,
-        type: 'package',
+        label: cve || pkgName,
+        type: 'vulnerability',
         domain: 'backend',
         status,
         radius: 12,
-        color: status === 'vulnerable' ? NEURAL_COLORS.vulnerable : NEURAL_COLORS.warning,
+        color: status === 'critical' ? NEURAL_COLORS.critical : status === 'vulnerable' ? NEURAL_COLORS.vulnerable : NEURAL_COLORS.warning,
         data: {
-          ecosystem: finding.ecosystem ?? '',
-          installedVersion: finding.installed_version ?? '',
-          vulnerableRange: finding.vulnerable_range ?? '',
-          severity: finding.severity ?? 'medium',
-          cve: finding.cve ?? '',
-          title: finding.title ?? '',
-          fixVersion: finding.fix_version ?? '',
+          package: pkgName,
+          version: vuln.version ?? vuln.installed_version ?? '',
+          cve,
+          severity,
+          description: vuln.description ?? vuln.title ?? '',
+          fixVersion: vuln.fix_version ?? '',
         },
       })
       targetIds.push(nodeId)
 
-      // Edge from file that depends on this package
-      if (finding.file) {
-        const fileNodeId = this.makeNodeId('file', finding.file)
-        edges.push({
-          id: this.makeEdgeId(fileNodeId, nodeId, 'depends_on'),
-          source: fileNodeId,
-          target: nodeId,
-          type: 'depends_on',
-          weight: 2,
-          status: 'danger',
-        })
-      }
+      // Edge from vulnerable package to vulnerability
+      const pkgNodeId = this.makeNodeId('package', pkgName)
+      edges.push({
+        id: this.makeEdgeId(pkgNodeId, nodeId, 'depends_on'),
+        source: pkgNodeId,
+        target: nodeId,
+        type: 'depends_on',
+        weight: 2,
+        status: 'danger',
+      })
     }
 
     const risk: RiskLevel = this.mapRiskLevel(output?.risk)
@@ -1741,10 +1764,10 @@ class Normalizer {
       }
       targetIds.push(depId)
       edges.push({
-        id: this.makeEdgeId(depId, sourceId, 'imports'),
+        id: this.makeEdgeId(depId, sourceId, 'imports_from'),
         source: depId,
         target: sourceId,
-        type: 'imports',
+        type: 'imports_from',
         weight: 1,
         status: 'active',
       })
@@ -1768,10 +1791,10 @@ class Normalizer {
       }
       targetIds.push(depId)
       edges.push({
-        id: this.makeEdgeId(sourceId, depId, 'imports'),
+        id: this.makeEdgeId(sourceId, depId, 'imports_from'),
         source: sourceId,
         target: depId,
-        type: 'imports',
+        type: 'imports_from',
         weight: 1,
         status: 'active',
       })
@@ -2048,6 +2071,9 @@ class Normalizer {
     if (type === 'id') return `id:${name}`
     if (type === 'package') return `pkg:${name}`
     if (type === 'env_var') return `env:${name}`
+    if (type === 'secret') return `secret:${name}`
+    if (type === 'vulnerability') return `vuln:${name}`
+    if (type === 'test') return `test:${name}`
     if (type === 'store') return `store:${name}`
     if (type === 'route') return `route:${name}`
     return `${type}:${name}`
@@ -2092,7 +2118,8 @@ class Normalizer {
       class_usage: 'class',
       id_usage: 'id',
       css_definition: 'class',
-      api_key: 'env_var',
+      api_key: 'secret',
+      secret: 'secret',
       method: 'function',
       arrow: 'function',
       def: 'function',

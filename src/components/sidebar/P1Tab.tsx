@@ -310,6 +310,41 @@ export function P1Tab({ theme }: P1TabProps) {
           </div>
         )}
 
+        {/* Symbols Results */}
+        {symbols?.results && symbols.results.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Crosshair className="h-3.5 w-3.5" style={{ color: '#b794f4' }} />
+              <span className="text-xs font-semibold">Symbols</span>
+              <Badge className="text-[10px] h-5 ml-auto" style={{ backgroundColor: 'rgba(183,148,244,0.15)', color: '#b794f4' }}>
+                {symbols.stats?.total ?? symbols.results.length}
+              </Badge>
+            </div>
+            {symbols.results.map((s, i) => (
+              <div key={i} style={card}>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="font-medium" style={{ color: '#b794f4' }}>{s.name}</span>
+                  <Badge className="text-[9px] h-4" style={{
+                    backgroundColor: s.type === 'function' ? 'rgba(99,179,237,0.15)' : s.type === 'class' ? 'rgba(236,201,75,0.2)' : s.type === 'variable' ? 'rgba(72,187,120,0.15)' : s.type === 'component' ? 'rgba(246,135,179,0.15)' : 'rgba(183,148,244,0.15)',
+                    color: s.type === 'function' ? '#63b3ed' : s.type === 'class' ? '#ecc94b' : s.type === 'variable' ? '#48bb78' : s.type === 'component' ? '#f687b3' : '#b794f4',
+                  }}>
+                    {s.type}
+                  </Badge>
+                  {s.domain && (
+                    <Badge className="text-[9px] h-4" style={{
+                      backgroundColor: s.domain === 'backend' ? 'rgba(79,209,197,0.15)' : s.domain === 'frontend' ? 'rgba(99,179,237,0.15)' : 'rgba(183,148,244,0.15)',
+                      color: s.domain === 'backend' ? '#4fd1c5' : s.domain === 'frontend' ? '#63b3ed' : '#b794f4',
+                    }}>
+                      {s.domain}
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[10px] font-mono opacity-50 mt-0.5">{s.file}:{s.line}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Stack Trace Results */}
         {stackTrace?.propagation && stackTrace.propagation.length > 0 && (
           <div className="space-y-2">

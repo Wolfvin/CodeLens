@@ -16,10 +16,11 @@ interface WorkspaceTabProps {
 export function WorkspaceTab({ theme }: WorkspaceTabProps) {
   const {
     workspace, isScanning, lastScanTime, frameworks, registryStats,
-    runCommand, setIsScanning, p1Results,
+    runCommand, setIsScanning, p1Results, setWorkspace,
   } = useAnalysisStore()
 
   const [queryInput, setQueryInput] = useState('')
+  const [workspaceInput, setWorkspaceInput] = useState(workspace)
 
   const handleScan = async (incremental: boolean = false) => {
     setIsScanning(true)
@@ -39,14 +40,41 @@ export function WorkspaceTab({ theme }: WorkspaceTabProps) {
         <div className="space-y-1.5">
           <div className="text-[10px] font-bold uppercase tracking-widest opacity-50">Workspace</div>
           <div
-            className="flex items-center gap-2 px-3 py-2 rounded-md text-xs font-mono"
-            style={{
-              backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-              color: theme === 'dark' ? '#a0aec0' : '#718096',
-            }}
+            className="flex items-center gap-1.5"
           >
-            <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">{workspace}</span>
+            <div
+              className="flex items-center gap-2 flex-1 px-3 py-2 rounded-md text-xs font-mono"
+              style={{
+                backgroundColor: theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                color: theme === 'dark' ? '#e2e8f0' : '#1a202c',
+                borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0',
+                border: '1px solid',
+              }}
+            >
+              <FolderOpen className="h-3.5 w-3.5 shrink-0" style={{ color: theme === 'dark' ? '#a0aec0' : '#718096' }} />
+              <input
+                type="text"
+                value={workspaceInput}
+                onChange={e => setWorkspaceInput(e.target.value)}
+                className="bg-transparent outline-none w-full text-xs font-mono"
+                style={{ color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && workspaceInput.trim()) {
+                    setWorkspace(workspaceInput.trim())
+                  }
+                }}
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 px-2 shrink-0"
+              style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
+              onClick={() => setWorkspace(workspaceInput.trim())}
+              disabled={!workspaceInput.trim()}
+            >
+              Set
+            </Button>
           </div>
         </div>
 

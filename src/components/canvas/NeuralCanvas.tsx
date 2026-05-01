@@ -1054,9 +1054,8 @@ export default function NeuralCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Transform state (pan + zoom) with smooth zoom interpolation
+  // Transform state (pan + zoom) — instant zoom, no interpolation
   const transformRef = useRef({ x: 0, y: 0, zoom: 1 })
-  const targetZoomRef = useRef(1)
 
   // Interaction state
   const hoveredNodeIdRef = useRef<string | null>(null)
@@ -1279,14 +1278,7 @@ export default function NeuralCanvas({
       const transform = transformRef.current
       const lod = getLODLevel(transform.zoom)
 
-      // 0.5 Smooth zoom interpolation
-      const currentZoom = transformRef.current.zoom
-      const targetZoom = targetZoomRef.current
-      if (Math.abs(currentZoom - targetZoom) > 0.001) {
-        transformRef.current.zoom += (targetZoom - currentZoom) * 0.12
-      } else {
-        transformRef.current.zoom = targetZoom
-      }
+      // Zoom is applied instantly (no smooth interpolation to avoid lag)
 
       // 1. Background
       drawBackground(ctx, width, height, theme)
@@ -1604,14 +1596,14 @@ export default function NeuralCanvas({
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
 
-      // Zoom toward mouse position (smooth: set target, interpolation happens in render loop)
+      // Zoom toward mouse position (instant, no interpolation)
       const delta = -e.deltaY * ZOOM_SENSITIVITY
-      const newTargetZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, targetZoomRef.current * (1 + delta)))
-      const zoomRatio = newTargetZoom / t.zoom
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * (1 + delta)))
+      const zoomRatio = newZoom / t.zoom
 
       t.x = sx - (sx - t.x) * zoomRatio
       t.y = sy - (sy - t.y) * zoomRatio
-      targetZoomRef.current = newTargetZoom
+      t.zoom = newZoom
     },
     []
   )

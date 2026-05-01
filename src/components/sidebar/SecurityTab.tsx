@@ -173,38 +173,36 @@ export function SecurityTab({ theme }: SecurityTabProps) {
         </div>
 
         {/* Regex Audit */}
-        {regexAudit && (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Lock className="h-3.5 w-3.5" style={{ color: '#f687b3' }} />
-              <span className="text-xs font-semibold">Regex Audit</span>
-              <Badge className="text-[10px] h-5 ml-auto" style={{ backgroundColor: regexCount > 0 ? 'rgba(246,135,179,0.15)' : 'rgba(72,187,120,0.15)', color: regexCount > 0 ? '#f687b3' : '#48bb78' }}>
-                {regexCount}
-              </Badge>
-            </div>
-            {regexAudit.findings?.map((f, i) => (
-              <div key={i} style={card('')}>
-                <div className="flex items-center gap-1.5 text-xs">
-                  <Badge className="text-[9px] h-4" style={{
-                    backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : f.severity === 'medium' ? 'rgba(236,201,75,0.2)' : 'rgba(99,179,237,0.15)',
-                    color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : f.severity === 'medium' ? '#ecc94b' : '#63b3ed',
-                  }}>
-                    {f.type}
-                  </Badge>
-                  <Badge className="text-[9px] h-4" style={{
-                    backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : 'rgba(236,201,75,0.2)',
-                    color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : '#ecc94b',
-                  }}>
-                    {f.severity}
-                  </Badge>
-                </div>
-                <div className="text-[10px] font-mono opacity-60 mt-1 break-all">{f.pattern}</div>
-                <div className="text-[10px] opacity-50 mt-0.5">{f.message}</div>
-                <div className="text-[10px] font-mono opacity-40 mt-0.5">{f.file}:{f.line}</div>
-              </div>
-            ))}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Lock className="h-3.5 w-3.5" style={{ color: '#f687b3' }} />
+            <span className="text-xs font-semibold">Regex Audit</span>
+            <Badge className="text-[10px] h-5 ml-auto" style={{ backgroundColor: regexCount > 0 ? 'rgba(246,135,179,0.15)' : 'rgba(72,187,120,0.15)', color: regexCount > 0 ? '#f687b3' : '#48bb78' }}>
+              {regexCount > 0 ? regexCount : '0 findings'}
+            </Badge>
           </div>
-        )}
+          {regexAudit?.findings?.map((f, i) => (
+            <div key={i} style={card('')}>
+              <div className="flex items-center gap-1.5 text-xs">
+                <Badge className="text-[9px] h-4" style={{
+                  backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : f.severity === 'medium' ? 'rgba(236,201,75,0.2)' : 'rgba(99,179,237,0.15)',
+                  color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : f.severity === 'medium' ? '#ecc94b' : '#63b3ed',
+                }}>
+                  {f.type}
+                </Badge>
+                <Badge className="text-[9px] h-4" style={{
+                  backgroundColor: f.severity === 'critical' ? 'rgba(229,62,62,0.2)' : f.severity === 'high' ? 'rgba(237,137,54,0.2)' : 'rgba(236,201,75,0.2)',
+                  color: f.severity === 'critical' ? '#e53e3e' : f.severity === 'high' ? '#ed8936' : '#ecc94b',
+                }}>
+                  {f.severity}
+                </Badge>
+              </div>
+              <div className="text-[10px] font-mono opacity-60 mt-1 break-all">{f.pattern}</div>
+              <div className="text-[10px] opacity-50 mt-0.5">{f.message}</div>
+              <div className="text-[10px] font-mono opacity-40 mt-0.5">{f.file}:{f.line}</div>
+            </div>
+          ))}
+        </div>
       </div>
     </ScrollArea>
   )

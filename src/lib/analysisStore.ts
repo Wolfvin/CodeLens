@@ -599,6 +599,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           updates.lastScanTime = Date.now()
           updates.isScanning = false
           break
+        case 'init':
+          updates.lastScanTime = Date.now()
+          if (data?.config) updates.frameworks = data.config.frameworks ?? get().frameworks
+          break
+        case 'validate':
+          // Validation results go to result panel
+          break
         case 'detect':
           if (data?.frameworks) updates.frameworks = data.frameworks
           break
