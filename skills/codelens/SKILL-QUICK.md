@@ -101,6 +101,22 @@ description: >
 | "clean up" / "bersihkan" | `debug-leak` → `dead-code` → `smell` |
 | "is this safe?" / "aman ga" | `secrets` → `vuln-scan` → `debug-leak` → `env-check` |
 
+## Workspace Auto-Detect (v5.1)
+
+The `workspace` argument is now **optional** for ALL 39 commands.
+If omitted, CodeLens auto-detects via:
+1. Current directory (if has project markers: package.json, pyproject.toml, etc.)
+2. Parent directories (walk up to find project root)
+3. Source files in current directory
+4. Last used workspace (cached at `~/.codelens/.codelens_last_workspace`)
+5. Fallback: current working directory
+
+```bash
+$CLI scan              # Auto-detect → works!
+$CLI query "myFunc"    # Auto-detect → works!
+$CLI smell             # Auto-detect → works!
+```
+
 ## All 39 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
@@ -151,20 +167,27 @@ description: >
 CODELENS_DIR="{project_path}/skills/codelens"
 CLI="python3 $CODELENS_DIR/scripts/codelens.py"
 
+# Workspace is AUTO-DETECTED if omitted (NEW in v5.1)
+# Fallback: cwd → parent dirs → last workspace → cwd
+
 # Setup
+$CLI init
+$CLI scan
+
+# Pre-write check (MOST IMPORTANT)
+$CLI query "newName"
+
+# With explicit workspace
 $CLI init /workspace
 $CLI scan /workspace
 
-# Pre-write check (MOST IMPORTANT)
-$CLI query "newName" /workspace
-
 # Post-write update
-$CLI scan /workspace --incremental
+$CLI scan --incremental
 
 # Analysis
-$CLI smell /workspace
-$CLI secrets /workspace
-$CLI vuln-scan /workspace
-$CLI perf-hint /workspace
-$CLI css-deep /workspace
+$CLI smell
+$CLI secrets
+$CLI vuln-scan
+$CLI perf-hint
+$CLI css-deep
 ```

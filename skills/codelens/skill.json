@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.0.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. Auto-triggers: check exists, who calls, find secrets, security audit, API routes, endpoints, global state, env vars, debug code, complexity, regex audit, a11y, production ready, refactor, deploy check, performance, dead code, CVE scan. 39 commands, tree-sitter, 10 langs.",
+  "version": "5.1.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. Auto-triggers: check exists, who calls, find secrets, security audit, API routes, endpoints, global state, env vars, debug code, complexity, regex audit, a11y, production ready, refactor, deploy check, performance, dead code, CVE scan. 39 commands, tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -16,7 +16,7 @@
     "secret-detection", "entry-points", "api-mapping", "state-management",
     "env-audit", "debug-detection", "complexity-analysis", "regex-audit",
     "accessibility", "a11y", "wcag", "redos",
-    "collision-detection", "pre-write-check", "id-exists", "class-exists",
+    "python", "python-parser", "workspace-auto-detect",
     "function-exists", "who-calls", "call-chain", "rename-safe",
     "api-key-detection", "hardcoded-secrets", "production-readiness",
     "code-quality", "cyclomatic-complexity", "cognitive-complexity",

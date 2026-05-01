@@ -65,6 +65,30 @@ bash "$CODELENS_DIR/setup.sh"
 
 ---
 
+## Workspace Auto-Detect
+
+**NEW in v5.1**: The `workspace` argument is now **optional** for ALL commands. If omitted, CodeLens auto-detects the workspace using this fallback chain:
+
+1. **Current directory** — if it contains project markers (package.json, pyproject.toml, Cargo.toml, etc.)
+2. **Parent directories** — walks up to find a project root
+3. **Source files** — if current directory has any source files (.py, .js, .ts, etc.)
+4. **Last workspace** — cached from previous command (`~/.codelens/.codelens_last_workspace`)
+5. **Fallback** — current working directory
+
+This means you can now run commands like:
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" scan              # Auto-detect workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" query "btn-primary" # Auto-detect workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" smell              # Auto-detect workspace
+```
+
+You can still explicitly specify a workspace:
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
+```
+
+---
+
 ## Available Tools
 
 ### 1. `codelens_init` — Initialize Workspace
@@ -72,19 +96,22 @@ bash "$CODELENS_DIR/setup.sh"
 Run once at the start. Auto-detect frameworks and create config.
 
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" init /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" init [/path/to/workspace]
 ```
 
 ### 2. `codelens_scan` — Scan Workspace
 
-Scan entire workspace and build registry. Use `--incremental` to only re-parse changed files.
+Scan entire workspace and build registry. Use `--incremental` to only re-parse changed files. Now supports **Python** parsing with tree-sitter.
 
 ```bash
-# Full scan
+# Full scan (workspace auto-detected)
+python3 "$CODELENS_DIR/scripts/codelens.py" scan
+
+# Full scan with explicit workspace
 python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
 
 # Incremental scan (only changed files)
-python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace --incremental
+python3 "$CODELENS_DIR/scripts/codelens.py" scan --incremental
 ```
 
 ### 3. `codelens_query` — Pre-write Check (MOST IMPORTANT)
@@ -93,13 +120,16 @@ Call this **BEFORE** creating a new class, id, className, or function.
 
 ```bash
 # Query in a specific domain
-python3 "$CODELENS_DIR/scripts/codelens.py" query "modal-btn" /path/to/workspace --domain frontend
+python3 "$CODELENS_DIR/scripts/codelens.py" query "modal-btn" --domain frontend
 
 # Auto-detect domain
-python3 "$CODELENS_DIR/scripts/codelens.py" query "verify_token" /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" query "verify_token"
 
 # Filter by file
-python3 "$CODELENS_DIR/scripts/codelens.py" query "hash_password" /path/to/workspace --domain backend --file "src/utils/"
+python3 "$CODELENS_DIR/scripts/codelens.py" query "hash_password" --domain backend --file "src/utils/"
+
+# With explicit workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" query "verify_token" /path/to/workspace
 ```
 
 **Rules for AI:**
@@ -113,28 +143,28 @@ python3 "$CODELENS_DIR/scripts/codelens.py" query "hash_password" /path/to/works
 
 ```bash
 # All dead code
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain all --filter dead
+python3 "$CODELENS_DIR/scripts/codelens.py" list --domain all --filter dead
 
 # ID collision (HTML bug)
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter collision
+python3 "$CODELENS_DIR/scripts/codelens.py" list --domain frontend --filter collision
 
 # Duplicate CSS
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain frontend --filter duplicate_define
+python3 "$CODELENS_DIR/scripts/codelens.py" list --domain frontend --filter duplicate_define
 
 # Backend dead functions
-python3 "$CODELENS_DIR/scripts/codelens.py" list /path/to/workspace --domain backend --filter dead
+python3 "$CODELENS_DIR/scripts/codelens.py" list --domain backend --filter dead
 ```
 
 ### 5. `codelens_detect` — Detect Frameworks
 
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" detect /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" detect [/path/to/workspace]
 ```
 
 ### 6. `codelens_watch` — File Watcher
 
 ```bash
-python3 "$CODELENS_DIR/scripts/codelens.py" watch /path/to/workspace
+python3 "$CODELENS_DIR/scripts/codelens.py" watch [/path/to/workspace]
 ```
 
 ---
