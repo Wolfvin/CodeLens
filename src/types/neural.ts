@@ -14,6 +14,12 @@ export type NodeType =
   | 'route'       // API route
   | 'env_var'     // Environment variable
   | 'variable'    // CSS variable / JS variable
+  | 'secret'      // Hardcoded secret / API key
+  | 'vulnerability' // CVE / security vulnerability
+  | 'test'        // Test file / test function
+  | 'import'      // Import statement
+  | 'css_var'     // CSS custom property
+  | 'keyframe'    // CSS keyframe animation
 
 export type NodeStatus =
   | 'active'
@@ -25,6 +31,9 @@ export type NodeStatus =
   | 'warning'
   | 'duplicate_define'
   | 'collision'
+  | 'impure'
+  | 'untested'
+  | 'unused'
 
 export type Domain = 'frontend' | 'backend'
 
@@ -64,6 +73,10 @@ export type EdgeType =
   | 'contains'       // file contains symbol
   | 'extends'        // class extends class
   | 'implements'     // implements interface/trait
+  | 'taints'         // tainted data flow
+  | 'sanitizes'      // sanitizes tainted data
+  | 'tests'          // test covers symbol
+  | 'imports_from'   // module imports from module
 
 export type EdgeStatus = 'active' | 'dead' | 'warning' | 'danger'
 
@@ -161,6 +174,12 @@ export const NEURAL_COLORS = {
   route: '#63b3ed',
   env_var: '#fbd38d',
   variable: '#68d391',
+  secret: '#e53e3e',
+  vulnerability: '#fc8181',
+  test: '#68d391',
+  import: '#63b3ed',
+  css_var: '#f687b3',
+  keyframe: '#b794f4',
   // Status colors
   active: '#48bb78',
   dead: '#718096',
@@ -169,6 +188,9 @@ export const NEURAL_COLORS = {
   warning: '#ed8936',
   safe: '#48bb78',
   orphan: '#a0aec0',
+  impure: '#ed8936',
+  untested: '#ecc94b',
+  unused: '#718096',
   // Edge colors
   edgeActive: '#4a5568',
   edgeDead: '#2d3748',
@@ -242,6 +264,90 @@ export function getNodeShape(type: NodeType): 'circle' | 'hexagon' | 'diamond' |
     case 'route': return 'hexagon'
     case 'env_var': return 'diamond'
     case 'variable': return 'circle'
+    case 'secret': return 'diamond'
+    case 'vulnerability': return 'hexagon'
+    case 'test': return 'circle'
+    case 'import': return 'square'
+    case 'css_var': return 'diamond'
+    case 'keyframe': return 'triangle'
     default: return 'circle'
   }
 }
+
+// ---- Analysis Result Types ----
+export interface CommandDef {
+  name: string
+  description: string
+  category: string
+  icon: string
+  args: Array<{ name: string; required: boolean; description: string }>
+}
+
+export type SidebarTab = 'commands' | 'workspace' | 'security' | 'quality' | 'performance' | 'css'
+
+export interface CommandHistoryEntry {
+  command: string
+  args: string[]
+  timestamp: number
+  status: 'running' | 'success' | 'error'
+  result?: unknown
+}
+
+export interface ResultTab {
+  id: string
+  command: string
+  timestamp: number
+  content: unknown
+}
+
+// ---- CodeLens Command Definitions ----
+export const CODELENS_COMMANDS: CommandDef[] = [
+  // Core
+  { name: 'init', description: 'Initialize .codelens config', category: 'Core', icon: '🏗️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'scan', description: 'Scan workspace and build registry', category: 'Core', icon: '🔍', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'query', description: 'Query a specific symbol by name', category: 'Core', icon: '🔎', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'list', description: 'List entries with optional filter', category: 'Core', icon: '📋', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // P1: Search & Trace
+  { name: 'search', description: 'Search code pattern across workspace', category: 'P1', icon: '🔎', args: [{ name: 'pattern', required: true, description: 'Search pattern' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'symbols', description: 'Search symbols in registry by name', category: 'P1', icon: '🔣', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'trace', description: 'Trace a symbol\'s call chain', category: 'P1', icon: '🔗', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'impact', description: 'Analyze change impact for a symbol', category: 'P1', icon: '💥', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'dependents', description: 'Module-level import tracking', category: 'P1', icon: '📦', args: [{ name: 'file', required: true, description: 'File path' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  // P2: Outline & Diff
+  { name: 'outline', description: 'Get file structure outline', category: 'P2', icon: '📑', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'missing-refs', description: 'Detect CSS/HTML mismatches', category: 'P2', icon: '🔗', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'diff', description: 'Compare registry snapshots', category: 'P2', icon: '📊', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'circular', description: 'Detect circular dependencies', category: 'P2', icon: '🔄', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // P3: Context
+  { name: 'context', description: 'Get rich symbol context', category: 'P3', icon: '📝', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'validate', description: 'Validate registry vs file system', category: 'P3', icon: '✅', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'detect', description: 'Detect frameworks in workspace', category: 'Core', icon: '🏗️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Security
+  { name: 'secrets', description: 'Detect hardcoded secrets/API keys', category: 'Security', icon: '🔑', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'vuln-scan', description: 'Scan dependencies for known CVEs', category: 'Security', icon: '🛡️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'dataflow', description: 'Trace data flow source→sink', category: 'Security', icon: '🌊', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'env-check', description: 'Audit environment variables', category: 'Security', icon: '🌍', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Quality
+  { name: 'smell', description: 'Detect code smells', category: 'Quality', icon: '👃', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'complexity', description: 'Compute cyclomatic/cognitive complexity', category: 'Quality', icon: '🧮', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'debug-leak', description: 'Detect leftover debug code', category: 'Quality', icon: '🐛', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'dead-code', description: 'Enhanced dead code detection', category: 'Quality', icon: '💀', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'a11y', description: 'Detect accessibility issues', category: 'Quality', icon: '♿', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Performance
+  { name: 'perf-hint', description: 'Detect performance anti-patterns', category: 'Performance', icon: '⚡', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // CSS
+  { name: 'css-deep', description: 'Deep CSS analysis', category: 'CSS', icon: '🎨', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Refactoring
+  { name: 'refactor-safe', description: 'Pre-flight rename/move check', category: 'Refactoring', icon: '🔨', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'side-effect', description: 'Analyze function side effects', category: 'Refactoring', icon: '💥', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Extra
+  { name: 'stack-trace', description: 'Error propagation simulation', category: 'P1', icon: '📚', args: [{ name: 'name', required: true, description: 'Symbol name' }, { name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'test-map', description: 'Test coverage mapping', category: 'P3', icon: '🗺️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'config-drift', description: 'Dependency drift detection', category: 'P3', icon: '📈', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'type-infer', description: 'Lightweight type inference', category: 'P3', icon: '🔮', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'ownership', description: 'Git blame code ownership', category: 'P3', icon: '👤', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'entrypoints', description: 'Map execution entry points', category: 'P3', icon: '🚪', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'api-map', description: 'Map REST/GraphQL routes to handlers', category: 'P3', icon: '🗺️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'state-map', description: 'Track global state management', category: 'P3', icon: '💾', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'regex-audit', description: 'Audit regex for ReDoS and issues', category: 'Security', icon: '🔐', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+]

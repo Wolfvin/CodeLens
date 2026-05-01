@@ -6,8 +6,12 @@ import { ThemeProvider, useTheme } from '@/components/shared/ThemeProvider'
 import { TopBar } from '@/components/topbar/TopBar'
 import NeuralCanvas from '@/components/canvas/NeuralCanvas'
 import { SlideInPanel } from '@/components/panel/SlideInPanel'
+import { LeftSidebar } from '@/components/sidebar/LeftSidebar'
+import { CommandPalette } from '@/components/sidebar/CommandPalette'
+import { ResultPanel } from '@/components/bottom/ResultPanel'
 import { graphStore } from '@/lib/graphStore'
 import { clusterEngine } from '@/lib/clusterEngine'
+import { useAnalysisStore } from '@/lib/analysisStore'
 import type {
   GraphNode,
   GraphEdge,
@@ -208,6 +212,7 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
 
 function NeuralWorkspaceApp() {
   const { theme, toggleTheme } = useTheme()
+  const analysisStore = useAnalysisStore()
 
   // ---- State ----
   const [nodes, setNodes] = useState<GraphNode[]>([])
@@ -257,10 +262,29 @@ function NeuralWorkspaceApp() {
     // Load into graphStore for search/detail
     graphStore.loadGraph(demo.nodes, demo.edges)
 
+    // Load demo analysis data
+    analysisStore.loadDemoData()
+
+    // Update registry stats from graph store
+    const storeStats = graphStore.getStats()
+    analysisStore.setRegistryStats({ byType: storeStats.byType, byStatus: storeStats.byStatus })
+
     // Try to connect WebSocket and fetch real data
     tryConnectWebSocket()
     tryFetchRealData()
   }, [])
+
+  // ---- Keyboard shortcut for command palette ----
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        analysisStore.toggleCommandPalette()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [analysisStore])
 
   // ---- WebSocket connection ----
   const tryConnectWebSocket = useCallback(() => {
@@ -539,28 +563,43 @@ function NeuralWorkspaceApp() {
         isScanning={isScanning}
       />
 
-      {/* Canvas area */}
-      <div className="flex-1 relative" style={{ marginTop: 56 }}>
-        <NeuralCanvas
-          theme={theme}
-          nodes={nodes}
-          edges={edges}
-          clusters={clusters}
-          onNodeSelect={handleNodeSelect}
-          selectedNodeId={selectedNodeId}
-          activeAnimation={activeAnimation}
-        />
+      {/* Main area: Sidebar + Canvas + Panel */}
+      <div className="flex-1 flex overflow-hidden" style={{ marginTop: 56 }}>
+        {/* Left Sidebar */}
+        <LeftSidebar theme={theme} />
 
-        {/* Slide-in panel */}
-        <SlideInPanel
-          theme={theme}
-          node={selectedNode}
-          detail={nodeDetail}
-          quickActions={quickActions}
-          onAction={handleQuickAction}
-          onClose={handlePanelClose}
-        />
+        {/* Center: Canvas + Bottom Panel */}
+        <div className="flex-1 flex flex-col overflow-hidden relative">
+          {/* Neural Canvas */}
+          <div className="flex-1 relative">
+            <NeuralCanvas
+              theme={theme}
+              nodes={nodes}
+              edges={edges}
+              clusters={clusters}
+              onNodeSelect={handleNodeSelect}
+              selectedNodeId={selectedNodeId}
+              activeAnimation={activeAnimation}
+            />
+
+            {/* Slide-in panel */}
+            <SlideInPanel
+              theme={theme}
+              node={selectedNode}
+              detail={nodeDetail}
+              quickActions={quickActions}
+              onAction={handleQuickAction}
+              onClose={handlePanelClose}
+            />
+          </div>
+
+          {/* Bottom Result Panel */}
+          <ResultPanel theme={theme} />
+        </div>
       </div>
+
+      {/* Command Palette Overlay */}
+      <CommandPalette theme={theme} />
     </div>
   )
 }

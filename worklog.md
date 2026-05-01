@@ -66,3 +66,38 @@ Stage Summary:
 - Workspace auto-detect: all 39 commands work without specifying workspace path
 - All 3 fallback parsers (JS Backend, Rust, Python) now produce actual data instead of empty results
 - All 7 identified bugs fixed
+
+---
+Task ID: 3
+Agent: main + full-stack-developer
+Task: Expand Neural Workspace UI to cover all 85% gaps from CodeLens CLI
+
+Work Log:
+- Analyzed full gap between CodeLens 39 commands and existing Neural UI (only ~15% coverage)
+- Identified 10 major gap categories: Command Execution, 15 Analysis Dimensions, Node Types, Workspace Management, Diff/Temporal, Risk Encoding, Search/Filter, Refactoring, Multi-View, Auto-Trigger Chains
+- Designed expanded layout: TopBar + Left Sidebar (6 tabs) + Canvas + SlideInPanel + Bottom Result Panel + Command Palette overlay
+- Created `/src/lib/analysisStore.ts` — Zustand store with workspace, command execution, analysis results (security/quality/performance/css), UI state, demo data for all categories
+- Created `/src/components/sidebar/LeftSidebar.tsx` — Collapsible sidebar (280px) with icon rail + 6 tab content panels
+- Created `/src/components/sidebar/CommandsTab.tsx` — Searchable command palette grouped by category (Core/P1/P2/P3/Security/Quality/Performance/CSS/Refactoring)
+- Created `/src/components/sidebar/WorkspaceTab.tsx` — Init/Scan/Detect/Validate buttons, framework badges, registry stats
+- Created `/src/components/sidebar/SecurityTab.tsx` — Full Security Audit chain, secrets/CVEs/dataflow/env results with severity breakdown
+- Created `/src/components/sidebar/QualityTab.tsx` — Quality Gate chain, health score gauge, smells/complexity/dead code/debug leaks/a11y
+- Created `/src/components/sidebar/PerformanceTab.tsx` — Performance Audit chain, hints breakdown by category, circular deps
+- Created `/src/components/sidebar/CssTab.tsx` — CSS Deep Audit, unused vars, orphan keyframes, specificity wars, z-index abuse, missing refs
+- Created `/src/components/sidebar/CommandPalette.tsx` — VS Code-style Ctrl+K overlay with fuzzy search, recent commands, arg input
+- Created `/src/components/bottom/ResultPanel.tsx` — Tabbed result viewer with copy/clear, resizable height
+- Modified `/src/types/neural.ts` — Added 6 new node types (secret, vulnerability, test, import, css_var, keyframe), 4 edge types, 3 statuses, command definitions, sidebar/result types
+- Modified `/src/components/topbar/TopBar.tsx` — Added sidebar toggle, Command Palette button (⌘K), health score indicator, bottom panel toggle
+- Modified `/src/app/page.tsx` — Integrated all new components, keyboard shortcuts (Ctrl+K), demo analysis data loading, sidebar+canvas+panel layout
+- Lint passes clean, app returns 200 OK
+
+Stage Summary:
+- Neural Workspace UI expanded from ~15% to ~85% CodeLens CLI coverage
+- 8 new files created, 3 existing files modified
+- Left Sidebar with 6 analysis tabs: Commands, Workspace, Security, Quality, Performance, CSS
+- Command Palette (⌘K) for quick access to all 39 commands
+- Bottom Result Panel for command output display
+- Demo data preloaded for all analysis categories
+- All new components support dark/light themes
+- Health score indicator in TopBar
+- Framework detection and workspace management UI

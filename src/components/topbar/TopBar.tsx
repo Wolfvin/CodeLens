@@ -10,6 +10,9 @@ import {
   ChevronRight,
   Download,
   Brain,
+  PanelLeft,
+  Command,
+  Activity,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,6 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { GraphNode, NodeType } from '@/types/neural'
 import { NEURAL_COLORS } from '@/types/neural'
+import { useAnalysisStore } from '@/lib/analysisStore'
 
 // ─── Props ───────────────────────────────────────────────────
 interface TopBarProps {
@@ -34,6 +38,7 @@ interface TopBarProps {
   onRescan: () => void
   stats: { totalNodes: number; totalEdges: number }
   isScanning: boolean
+  healthScore?: number
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -49,6 +54,12 @@ const TYPE_ICON_MAP: Record<NodeType, string> = {
   route: '⬡',
   env_var: '◆',
   variable: '●',
+  secret: '◆',
+  vulnerability: '⬡',
+  test: '●',
+  import: '■',
+  css_var: '◆',
+  keyframe: '▲',
 }
 
 // ─── Component ───────────────────────────────────────────────
@@ -63,12 +74,14 @@ export function TopBar({
   onRescan,
   stats,
   isScanning,
+  healthScore,
 }: TopBarProps) {
   const dark = theme === 'dark'
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults } = useAnalysisStore()
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -99,6 +112,9 @@ export function TopBar({
     [onSearchResultSelect],
   )
 
+  const computedHealthScore = healthScore ?? qualityResults.smells?.stats?.health_score ?? 100
+  const healthColor = computedHealthScore >= 80 ? '#48bb78' : computedHealthScore >= 60 ? '#ecc94b' : computedHealthScore >= 40 ? '#ed8936' : '#e53e3e'
+
   const variantStyles = useMemo(() => {
     const bg = dark ? 'rgba(13,13,20,0.9)' : 'rgba(255,255,255,0.9)'
     const text = dark ? '#e2e8f0' : '#1a202c'
@@ -110,7 +126,7 @@ export function TopBar({
 
   return (
     <header
-      className="fixed top-0 left-0 right-0 z-40 h-14 flex items-center gap-3 px-4 border-b"
+      className="fixed top-0 left-0 right-0 z-40 h-14 flex items-center gap-2 px-3 border-b"
       style={{
         backgroundColor: variantStyles.bg,
         borderColor: variantStyles.border,
@@ -119,15 +135,40 @@ export function TopBar({
         WebkitBackdropFilter: 'blur(12px)',
       }}
     >
-      {/* Left: Logo + Stats */}
+      {/* Left: Sidebar toggle + Logo */}
       <div className="flex items-center gap-2 shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={toggleSidebar}
+          title={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+        >
+          <PanelLeft className="h-4 w-4" />
+        </Button>
         <Brain className="h-5 w-5" style={{ color: '#b794f4' }} />
         <span className="font-bold text-sm tracking-tight hidden sm:inline">
           CodeLens Neural
         </span>
+
+        {/* Health Score Mini Indicator */}
+        <div className="hidden md:flex items-center gap-1.5 ml-1">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: healthColor }}
+            title={`Health: ${computedHealthScore}`}
+          />
+          <span
+            className="text-[10px] font-mono"
+            style={{ color: healthColor }}
+          >
+            {computedHealthScore}
+          </span>
+        </div>
+
         <Badge
           variant="outline"
-          className="text-[10px] h-5 ml-1 hidden md:flex"
+          className="text-[10px] h-5 ml-1 hidden lg:flex"
           style={{
             borderColor: variantStyles.border,
             color: variantStyles.mutedText,
@@ -186,7 +227,7 @@ export function TopBar({
                   }}
                   onClick={() => handleSelectResult(node.id)}
                 >
-                  <span style={{ color: node.color }}>{TYPE_ICON_MAP[node.type]}</span>
+                  <span style={{ color: node.color }}>{TYPE_ICON_MAP[node.type] ?? '●'}</span>
                   <span className="font-medium truncate">{node.label}</span>
                   {node.file && (
                     <span
@@ -220,6 +261,27 @@ export function TopBar({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-1 shrink-0">
+        {/* Command Palette Trigger */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 gap-1.5 text-xs hidden sm:flex"
+          onClick={toggleCommandPalette}
+          title="Command Palette (⌘K)"
+          style={{ color: variantStyles.mutedText }}
+        >
+          <Command className="h-3.5 w-3.5" />
+          <kbd
+            className="text-[9px] px-1 py-0.5 rounded border font-mono"
+            style={{
+              borderColor: variantStyles.border,
+              backgroundColor: variantStyles.inputBg,
+            }}
+          >
+            ⌘K
+          </kbd>
+        </Button>
+
         {/* Theme toggle */}
         <Button
           variant="ghost"
@@ -270,6 +332,17 @@ export function TopBar({
           <RefreshCw
             className={`h-4 w-4 ${isScanning ? 'animate-spin' : ''}`}
           />
+        </Button>
+
+        {/* Bottom panel toggle */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={toggleBottomPanel}
+          title={bottomPanelOpen ? 'Close results panel' : 'Open results panel'}
+        >
+          <Activity className="h-4 w-4" />
         </Button>
       </div>
     </header>
