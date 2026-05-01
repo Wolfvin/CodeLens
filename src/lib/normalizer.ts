@@ -2092,7 +2092,6 @@ class Normalizer {
       class_usage: 'class',
       id_usage: 'id',
       css_definition: 'class',
-      function: 'function',
       api_key: 'env_var',
       method: 'function',
       arrow: 'function',

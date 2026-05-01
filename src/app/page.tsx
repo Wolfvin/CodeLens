@@ -38,6 +38,12 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
     route: '#63b3ed',
     env_var: '#fbd38d',
     variable: '#68d391',
+    secret: '#e53e3e',
+    vulnerability: '#fc8181',
+    test: '#68d391',
+    import: '#63b3ed',
+    css_var: '#f687b3',
+    keyframe: '#b794f4',
   }
 
   // Spread positions across canvas
@@ -126,23 +132,14 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
     nodes.push({ ...n, x: pos.x, y: pos.y, color: NC[n.type], data: {} })
   })
 
-  // --- Config region ---
-  const configNodes = [
-    { id: 'fn-processPayment-config', label: 'processPayment', type: 'function' as const, domain: 'backend' as const, status: 'active' as const, file: 'src/api/payment.ts', line: 10, radius: 12 },
-  ]
-  // Skip duplicate - use only unique nodes
-
   // Build edges
   const edges: GraphEdge[] = [
-    // Auth edges
     { id: 'e1', source: 'route-login', target: 'fn-handleLogin', type: 'routes_to', weight: 2, status: 'active' },
     { id: 'e2', source: 'fn-handleLogin', target: 'fn-verify_token', type: 'calls', weight: 2, status: 'active' },
     { id: 'e3', source: 'fn-handleLogin', target: 'fn-validateInput', type: 'calls', weight: 1, status: 'active' },
     { id: 'e4', source: 'file-auth', target: 'fn-verify_token', type: 'contains', weight: 1, status: 'active' },
     { id: 'e5', source: 'file-auth', target: 'fn-handleLogin', type: 'contains', weight: 1, status: 'active' },
     { id: 'e6', source: 'fn-verify_token', target: 'env-DATABASE_URL', type: 'reads', weight: 1, status: 'active' },
-
-    // UI edges
     { id: 'e7', source: 'cmp-Button', target: 'cls-btn-primary', type: 'references', weight: 1, status: 'active' },
     { id: 'e8', source: 'cmp-Modal', target: 'cls-modal-overlay', type: 'references', weight: 1, status: 'warning' },
     { id: 'e9', source: 'cmp-Navbar', target: 'cls-nav-item', type: 'references', weight: 1, status: 'active' },
@@ -154,8 +151,6 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
     { id: 'e15', source: 'id-login-form', target: 'cls-btn-primary', type: 'references', weight: 1, status: 'active' },
     { id: 'e16', source: 'id-user-profile', target: 'cmp-Modal', type: 'references', weight: 1, status: 'danger' },
     { id: 'e17', source: 'cmp-Dashboard', target: 'cls-card-shadow', type: 'references', weight: 1, status: 'active' },
-
-    // API edges
     { id: 'e18', source: 'route-users', target: 'fn-getData', type: 'routes_to', weight: 2, status: 'active' },
     { id: 'e19', source: 'fn-getData', target: 'fn-formatCurrency', type: 'calls', weight: 1, status: 'active' },
     { id: 'e20', source: 'fn-processPayment', target: 'fn-calculateTotal', type: 'calls', weight: 2, status: 'danger' },
@@ -165,12 +160,8 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
     { id: 'e24', source: 'fn-getData', target: 'pkg-express', type: 'depends_on', weight: 1, status: 'warning' },
     { id: 'e25', source: 'fn-processPayment', target: 'pkg-express', type: 'depends_on', weight: 1, status: 'warning' },
     { id: 'e26', source: 'fn-calculateTotal', target: 'pkg-lodash', type: 'depends_on', weight: 1, status: 'dead' },
-
-    // Cross-region: Auth → API
     { id: 'e27', source: 'fn-verify_token', target: 'fn-getData', type: 'calls', weight: 1, status: 'active' },
     { id: 'e28', source: 'fn-handleLogin', target: 'store-userStore', type: 'writes', weight: 1, status: 'active' },
-
-    // State edges
     { id: 'e29', source: 'store-userStore', target: 'cmp-Navbar', type: 'reads', weight: 1, status: 'active' },
     { id: 'e30', source: 'store-userStore', target: 'fn-renderDashboard', type: 'reads', weight: 1, status: 'active' },
     { id: 'e31', source: 'store-cartStore', target: 'fn-calculateTotal', type: 'reads', weight: 1, status: 'active' },
@@ -178,12 +169,8 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
     { id: 'e33', source: 'fn-renderDashboard', target: 'cmp-Dashboard', type: 'references', weight: 2, status: 'active' },
     { id: 'e34', source: 'store-userStore', target: 'id-user-profile', type: 'reads', weight: 1, status: 'active' },
     { id: 'e35', source: 'cmp-Dashboard', target: 'store-cartStore', type: 'references', weight: 1, status: 'active' },
-
-    // Cross-region: UI → Auth
     { id: 'e36', source: 'id-login-form', target: 'fn-handleLogin', type: 'calls', weight: 2, status: 'active' },
     { id: 'e37', source: 'cmp-Button', target: 'id-login-form', type: 'references', weight: 1, status: 'active' },
-
-    // File → styles
     { id: 'e38', source: 'file-styles', target: 'cls-modal-overlay', type: 'defines', weight: 1, status: 'active' },
     { id: 'e39', source: 'file-styles', target: 'cls-card-shadow', type: 'defines', weight: 1, status: 'active' },
     { id: 'e40', source: 'file-styles', target: 'cls-btn-primary', type: 'defines', weight: 1, status: 'active' },
@@ -207,7 +194,7 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
 }
 
 // ============================================================
-// Inner App Component (uses useTheme hook inside ThemeProvider)
+// Inner App Component
 // ============================================================
 
 function NeuralWorkspaceApp() {
@@ -259,22 +246,17 @@ function NeuralWorkspaceApp() {
     setEdges(demo.edges)
     setClusters(demo.clusters)
 
-    // Load into graphStore for search/detail
     graphStore.loadGraph(demo.nodes, demo.edges)
-
-    // Load demo analysis data
     analysisStore.loadDemoData()
 
-    // Update registry stats from graph store
     const storeStats = graphStore.getStats()
     analysisStore.setRegistryStats({ byType: storeStats.byType, byStatus: storeStats.byStatus })
 
-    // Try to connect WebSocket and fetch real data
     tryConnectWebSocket()
     tryFetchRealData()
   }, [])
 
-  // ---- Keyboard shortcut for command palette ----
+  // ---- Keyboard shortcut ----
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -286,7 +268,7 @@ function NeuralWorkspaceApp() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [analysisStore])
 
-  // ---- WebSocket connection ----
+  // ---- WebSocket ----
   const tryConnectWebSocket = useCallback(() => {
     try {
       const socket = io('/?XTransformPort=3030', {
@@ -318,17 +300,13 @@ function NeuralWorkspaceApp() {
       socket.on('graph_event', (eventData: { event: GraphEvent }) => {
         const event = eventData.event
         graphStore.applyEvent(event)
-
-        // Update state with merged data
         setNodes(Array.from(graphStore.nodes.values()))
         setEdges(Array.from(graphStore.edges.values()))
-
         const computedClusters = clusterEngine.computeClusters(
           Array.from(graphStore.nodes.values()),
           Array.from(graphStore.edges.values())
         )
         setClusters(computedClusters)
-
         setActiveAnimation(event.animation)
       })
 
@@ -356,7 +334,7 @@ function NeuralWorkspaceApp() {
     }
   }, [selectedNodeId])
 
-  // ---- Try fetching real workspace data ----
+  // ---- Fetch real data ----
   const tryFetchRealData = useCallback(async () => {
     try {
       const res = await fetch('/api/graph?workspace=/home/z/my-project')
@@ -370,7 +348,7 @@ function NeuralWorkspaceApp() {
         }
       }
     } catch {
-      // Silently fail — demo data is already loaded
+      // Demo data already loaded
     }
   }, [])
 
@@ -382,15 +360,12 @@ function NeuralWorkspaceApp() {
       setSearchResults([])
 
       if (nodeId) {
-        // Compute detail from graphStore
         try {
           const detail = graphStore.getNodeDetail(nodeId)
           setNodeDetail(detail)
         } catch {
           setNodeDetail(null)
         }
-
-        // Emit select_node via WebSocket
         socketRef.current?.emit('select_node', { node_id: nodeId })
       } else {
         setNodeDetail(null)
@@ -409,7 +384,6 @@ function NeuralWorkspaceApp() {
           args: action.args,
         })
       } else {
-        // Demo: simulate animation for the action
         const targetIds = [selectedNodeId ?? '']
         setActiveAnimation({
           type: action.variant === 'danger' ? 'alarm' : action.variant === 'warning' ? 'pulse' : 'flow',
@@ -417,8 +391,6 @@ function NeuralWorkspaceApp() {
           intensity: action.variant === 'danger' ? 'high' : 'medium',
           direction: 'both',
         })
-
-        // Auto-clear animation after 2.5s
         setTimeout(() => setActiveAnimation(null), 2500)
       }
     },
@@ -433,7 +405,6 @@ function NeuralWorkspaceApp() {
         setSearchResults([])
         return
       }
-
       try {
         const results = graphStore.searchNodes(query)
         setSearchResults(results.slice(0, 15))
@@ -449,14 +420,12 @@ function NeuralWorkspaceApp() {
       setSelectedNodeId(nodeId)
       setSearchQuery('')
       setSearchResults([])
-
       try {
         const detail = graphStore.getNodeDetail(nodeId)
         setNodeDetail(detail)
       } catch {
         setNodeDetail(null)
       }
-
       socketRef.current?.emit('select_node', { node_id: nodeId })
     },
     []
@@ -465,7 +434,6 @@ function NeuralWorkspaceApp() {
   // ---- Export ----
   const handleExport = useCallback(
     (format: 'png2x' | 'png4x' | 'svg' | 'current') => {
-      // Find the canvas element rendered by NeuralCanvas
       const canvas = document.querySelector('canvas') as HTMLCanvasElement | null
       if (!canvas) return
 
@@ -496,14 +464,11 @@ function NeuralWorkspaceApp() {
           dataUrl = exportCanvas.toDataURL('image/png')
           break
         }
-        case 'svg':
-        case 'current':
         default:
           dataUrl = canvas.toDataURL('image/png')
           break
       }
 
-      // Download
       const link = document.createElement('a')
       link.download = `codelens-neural-${format}-${Date.now()}.png`
       link.href = dataUrl
@@ -515,7 +480,6 @@ function NeuralWorkspaceApp() {
   // ---- Rescan ----
   const handleRescan = useCallback(async () => {
     setIsScanning(true)
-
     try {
       const res = await fetch('/api/graph?workspace=/home/z/my-project')
       if (res.ok) {
@@ -526,7 +490,6 @@ function NeuralWorkspaceApp() {
           setEdges(data.edges)
           if (data.clusters) setClusters(data.clusters)
 
-          // Ripple animation on all nodes
           setActiveAnimation({
             type: 'ripple',
             targetNodeIds: data.nodes.map((n: GraphNode) => n.id).slice(0, 20),
@@ -548,8 +511,18 @@ function NeuralWorkspaceApp() {
     setNodeDetail(null)
   }, [])
 
+  const dark = theme === 'dark'
+
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden" style={{ backgroundColor: theme === 'dark' ? '#0a0a0f' : '#f7fafc' }}>
+    <div
+      className="h-screen w-screen flex flex-col overflow-hidden transition-colors duration-500"
+      style={{
+        backgroundColor: dark ? '#0a0a0f' : '#f7fafc',
+        backgroundImage: dark
+          ? 'radial-gradient(ellipse 80% 60% at 20% 30%, rgba(139,92,246,0.04), transparent), radial-gradient(ellipse 60% 50% at 80% 70%, rgba(99,179,237,0.03), transparent)'
+          : 'radial-gradient(ellipse 80% 60% at 20% 30%, rgba(139,92,246,0.03), transparent), radial-gradient(ellipse 60% 50% at 80% 70%, rgba(99,179,237,0.02), transparent)',
+      }}
+    >
       {/* TopBar */}
       <TopBar
         theme={theme}
@@ -605,7 +578,7 @@ function NeuralWorkspaceApp() {
 }
 
 // ============================================================
-// Main Page (wraps everything in ThemeProvider)
+// Main Page
 // ============================================================
 
 export default function Home() {

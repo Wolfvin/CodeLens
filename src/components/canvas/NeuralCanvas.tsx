@@ -72,7 +72,7 @@ interface AnimationState {
 // Constants
 // ============================================================
 
-const AMBIENT_PARTICLE_COUNT = 50
+const AMBIENT_PARTICLE_COUNT = 80
 const HEX_GRID_SIZE = 40
 const TOOLTIP_PADDING = 12
 const TOOLTIP_LINE_HEIGHT = 18
@@ -112,10 +112,10 @@ function createAmbientParticles(width: number, height: number): AmbientParticle[
     particles.push({
       x: Math.random() * width,
       y: Math.random() * height,
-      vx: (Math.random() - 0.5) * 0.3,
-      vy: (Math.random() - 0.5) * 0.3,
-      radius: Math.random() * 1.5 + 0.5,
-      opacity: Math.random() * 0.3 + 0.1,
+      vx: (Math.random() - 0.5) * 0.2,
+      vy: (Math.random() - 0.5) * 0.2,
+      radius: Math.random() * 1.8 + 0.3,
+      opacity: Math.random() * 0.25 + 0.05,
       phase: Math.random() * Math.PI * 2,
     })
   }
@@ -132,17 +132,56 @@ function drawBackground(
   height: number,
   theme: 'dark' | 'light'
 ) {
-  const bgColor = theme === 'dark' ? NEURAL_COLORS.darkBg : NEURAL_COLORS.lightBg
+  // Premium gradient background with ambient glow
+  if (theme === 'dark') {
+    // Rich dark gradient base
+    const bgGrad = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.8)
+    bgGrad.addColorStop(0, '#0d0d18')
+    bgGrad.addColorStop(0.5, '#0a0a12')
+    bgGrad.addColorStop(1, '#060609')
+    ctx.fillStyle = bgGrad
+    ctx.fillRect(0, 0, width, height)
+
+    // Subtle purple ambient glow
+    ctx.globalAlpha = 0.04
+    const purpleGlow = ctx.createRadialGradient(width * 0.2, height * 0.25, 0, width * 0.2, height * 0.25, width * 0.5)
+    purpleGlow.addColorStop(0, '#8b5cf6')
+    purpleGlow.addColorStop(1, 'transparent')
+    ctx.fillStyle = purpleGlow
+    ctx.fillRect(0, 0, width, height)
+
+    // Subtle blue ambient glow
+    const blueGlow = ctx.createRadialGradient(width * 0.8, height * 0.7, 0, width * 0.8, height * 0.7, width * 0.4)
+    blueGlow.addColorStop(0, '#3b82f6')
+    blueGlow.addColorStop(1, 'transparent')
+    ctx.fillStyle = blueGlow
+    ctx.fillRect(0, 0, width, height)
+
+    ctx.globalAlpha = 1.0
+  } else {
+    // Light mode gradient
+    const bgGrad = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.8)
+    bgGrad.addColorStop(0, '#ffffff')
+    bgGrad.addColorStop(0.5, '#f8fafc')
+    bgGrad.addColorStop(1, '#f1f5f9')
+    ctx.fillStyle = bgGrad
+    ctx.fillRect(0, 0, width, height)
+
+    // Subtle warm glow
+    ctx.globalAlpha = 0.03
+    const warmGlow = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.5)
+    warmGlow.addColorStop(0, '#8b5cf6')
+    warmGlow.addColorStop(1, 'transparent')
+    ctx.fillStyle = warmGlow
+    ctx.fillRect(0, 0, width, height)
+    ctx.globalAlpha = 1.0
+  }
+
+  // Draw hex grid pattern (subtle)
   const gridColor = theme === 'dark' ? NEURAL_COLORS.darkGrid : NEURAL_COLORS.lightGrid
-
-  // Fill background
-  ctx.fillStyle = bgColor
-  ctx.fillRect(0, 0, width, height)
-
-  // Draw hex grid pattern
   ctx.strokeStyle = gridColor
-  ctx.lineWidth = 0.5
-  ctx.globalAlpha = 0.3
+  ctx.lineWidth = 0.4
+  ctx.globalAlpha = theme === 'dark' ? 0.15 : 0.2
 
   const hexW = HEX_GRID_SIZE * Math.sqrt(3)
   const hexH = HEX_GRID_SIZE * 2
@@ -174,14 +213,32 @@ function drawAmbientParticles(
   theme: 'dark' | 'light',
   time: number
 ) {
-  const baseColor = theme === 'dark' ? '180, 200, 255' : '100, 120, 160'
+  // Premium particle colors with purple/blue tints
+  const colors = theme === 'dark'
+    ? ['160, 140, 250', '130, 180, 250', '180, 160, 230', '140, 200, 240']
+    : ['120, 100, 200', '100, 140, 220', '140, 120, 180', '110, 160, 200']
 
-  for (const p of particles) {
-    const flickerOpacity = p.opacity * (0.7 + 0.3 * Math.sin(time * 0.001 + p.phase))
-    ctx.fillStyle = `rgba(${baseColor}, ${flickerOpacity})`
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i]
+    const colorIdx = i % colors.length
+    const flickerOpacity = p.opacity * (0.6 + 0.4 * Math.sin(time * 0.0008 + p.phase))
+    
+    // Soft glow around particle
+    if (theme === 'dark' && p.radius > 1) {
+      ctx.globalAlpha = flickerOpacity * 0.3
+      ctx.fillStyle = `rgba(${colors[colorIdx]}, ${flickerOpacity * 0.2})`
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, p.radius * 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    
+    // Core particle
+    ctx.globalAlpha = flickerOpacity
+    ctx.fillStyle = `rgba(${colors[colorIdx]}, ${flickerOpacity})`
     ctx.beginPath()
     ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2)
     ctx.fill()
+    ctx.globalAlpha = 1.0
   }
 }
 
@@ -374,13 +431,38 @@ function drawGlow(
   intensity: number
 ) {
   ctx.save()
-  ctx.globalAlpha = intensity * 0.6
+  
+  // Layer 1: Wide soft glow
+  ctx.globalAlpha = intensity * 0.15
+  const wideGlow = ctx.createRadialGradient(x, y, 0, x, y, radius * 4)
+  wideGlow.addColorStop(0, color)
+  wideGlow.addColorStop(0.5, color + '40')
+  wideGlow.addColorStop(1, 'transparent')
+  ctx.fillStyle = wideGlow
+  ctx.beginPath()
+  ctx.arc(x, y, radius * 4, 0, Math.PI * 2)
+  ctx.fill()
+  
+  // Layer 2: Medium glow
+  ctx.globalAlpha = intensity * 0.35
+  const medGlow = ctx.createRadialGradient(x, y, 0, x, y, radius * 2)
+  medGlow.addColorStop(0, color)
+  medGlow.addColorStop(0.6, color + '60')
+  medGlow.addColorStop(1, 'transparent')
+  ctx.fillStyle = medGlow
+  ctx.beginPath()
+  ctx.arc(x, y, radius * 2, 0, Math.PI * 2)
+  ctx.fill()
+  
+  // Layer 3: Tight core glow
+  ctx.globalAlpha = intensity * 0.5
   ctx.shadowColor = color
-  ctx.shadowBlur = radius * 2.5
+  ctx.shadowBlur = radius * 2
   ctx.fillStyle = color
   ctx.beginPath()
   ctx.arc(x, y, radius * 0.5, 0, Math.PI * 2)
   ctx.fill()
+  
   ctx.restore()
 }
 
@@ -712,7 +794,7 @@ function drawTooltip(
 
   ctx.save()
 
-  const fontSize = 12
+  const fontSize = 11
   ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`
 
   // Measure text
@@ -722,7 +804,7 @@ function drawTooltip(
     if (m.width > maxWidth) maxWidth = m.width
   }
 
-  const boxW = maxWidth + TOOLTIP_PADDING * 2
+  const boxW = maxWidth + TOOLTIP_PADDING * 2 + 8
   const boxH = lines.length * TOOLTIP_LINE_HEIGHT + TOOLTIP_PADDING * 2
 
   // Position tooltip offset from cursor
@@ -735,19 +817,37 @@ function drawTooltip(
   if (tx + boxW > canvasW) tx = mouseX - boxW - 16
   if (ty < 0) ty = mouseY + 16
 
-  // Background
-  const bgColor = theme === 'dark' ? '#1a1a2e' : '#ffffff'
-  const borderColor = theme === 'dark' ? '#2d3748' : '#e2e8f0'
-  const textColor = theme === 'dark' ? '#e2e8f0' : '#2d3748'
+  // Premium glassmorphic tooltip
+  const bgColor = theme === 'dark' ? 'rgba(10, 10, 20, 0.92)' : 'rgba(255, 255, 255, 0.95)'
+  const borderColor = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'
+  const textColor = theme === 'dark' ? '#c9d1d9' : '#2d3748'
 
-  ctx.globalAlpha = 0.95
+  // Shadow
+  ctx.globalAlpha = 1
+  ctx.shadowColor = theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.12)'
+  ctx.shadowBlur = 20
+  ctx.shadowOffsetY = 4
   ctx.fillStyle = bgColor
+  ctx.beginPath()
+  ctx.roundRect(tx, ty, boxW, boxH, 10)
+  ctx.fill()
+  ctx.shadowBlur = 0
+  ctx.shadowOffsetY = 0
+
+  // Border
+  ctx.globalAlpha = 1
   ctx.strokeStyle = borderColor
   ctx.lineWidth = 1
   ctx.beginPath()
-  ctx.roundRect(tx, ty, boxW, boxH, 8)
-  ctx.fill()
+  ctx.roundRect(tx, ty, boxW, boxH, 10)
   ctx.stroke()
+
+  // Top accent line with node color
+  ctx.globalAlpha = 0.6
+  ctx.fillStyle = node.color
+  ctx.beginPath()
+  ctx.roundRect(tx + 1, ty + 1, boxW - 2, 2, [10, 10, 0, 0])
+  ctx.fill()
 
   // Title line with node color
   ctx.globalAlpha = 1
@@ -755,13 +855,14 @@ function drawTooltip(
   ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`
   ctx.textAlign = 'left'
   ctx.textBaseline = 'top'
-  ctx.fillText(lines[0], tx + TOOLTIP_PADDING, ty + TOOLTIP_PADDING)
+  ctx.fillText(lines[0], tx + TOOLTIP_PADDING + 4, ty + TOOLTIP_PADDING + 4)
 
   // Other lines
   ctx.fillStyle = textColor
   ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`
   for (let i = 1; i < lines.length; i++) {
-    ctx.fillText(lines[i], tx + TOOLTIP_PADDING, ty + TOOLTIP_PADDING + i * TOOLTIP_LINE_HEIGHT)
+    ctx.globalAlpha = i === 1 ? 0.8 : 0.6
+    ctx.fillText(lines[i], tx + TOOLTIP_PADDING + 4, ty + TOOLTIP_PADDING + 4 + i * TOOLTIP_LINE_HEIGHT)
   }
 
   ctx.restore()
@@ -842,7 +943,17 @@ function drawClusterBubble(
 
   ctx.save()
 
-  // Glow
+  // Wide soft glow
+  ctx.globalAlpha = 0.08
+  const outerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 2.5)
+  outerGlow.addColorStop(0, cluster.tint)
+  outerGlow.addColorStop(1, 'transparent')
+  ctx.fillStyle = outerGlow
+  ctx.beginPath()
+  ctx.arc(cx, cy, radius * 2.5, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Inner glow
   ctx.globalAlpha = 0.15
   ctx.fillStyle = cluster.tint
   ctx.shadowColor = cluster.tint
@@ -852,32 +963,38 @@ function drawClusterBubble(
   ctx.fill()
   ctx.shadowBlur = 0
 
-  // Fill
+  // Fill with gradient
   ctx.globalAlpha = 0.2
-  ctx.fillStyle = cluster.tint
+  const fillGrad = ctx.createRadialGradient(cx - radius * 0.3, cy - radius * 0.3, 0, cx, cy, radius)
+  fillGrad.addColorStop(0, cluster.tint + '40')
+  fillGrad.addColorStop(1, cluster.tint)
+  ctx.fillStyle = fillGrad
   ctx.beginPath()
   ctx.arc(cx, cy, radius, 0, Math.PI * 2)
   ctx.fill()
 
-  // Border
+  // Border with glow
   ctx.globalAlpha = 0.6
   ctx.strokeStyle = cluster.tint
-  ctx.lineWidth = 2
+  ctx.lineWidth = 1.5
+  ctx.shadowColor = cluster.tint
+  ctx.shadowBlur = 8
   ctx.beginPath()
   ctx.arc(cx, cy, radius, 0, Math.PI * 2)
   ctx.stroke()
+  ctx.shadowBlur = 0
 
   // Icon + label
   ctx.globalAlpha = 0.9
   ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#2d3748'
-  ctx.font = 'bold 14px system-ui, -apple-system, sans-serif'
+  ctx.font = 'bold 13px system-ui, -apple-system, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(`${cluster.icon} ${cluster.label}`, cx, cy - 8)
 
-  // Count
-  ctx.font = '11px system-ui, -apple-system, sans-serif'
-  ctx.globalAlpha = 0.6
+  // Count with tinted color
+  ctx.font = '10px system-ui, -apple-system, sans-serif'
+  ctx.globalAlpha = 0.5
   ctx.fillStyle = cluster.tint
   ctx.fillText(`${count} nodes`, cx, cy + 10)
 
@@ -1237,14 +1354,35 @@ export default function NeuralCanvas({
         drawAlarmVignette(ctx, width, height, animState.intensity, time)
       }
 
-      // 10. HUD info
+      // 10. Premium HUD info
       ctx.save()
-      ctx.globalAlpha = 0.5
-      ctx.fillStyle = theme === 'dark' ? '#a0aec0' : '#718096'
-      ctx.font = '11px system-ui, -apple-system, sans-serif'
+      const hudY = height - 12
+      const hudX = 12
+      const hudText = `Zoom ${transform.zoom.toFixed(2)}x  ·  LOD ${lod}  ·  ${simNodes.length} nodes  ·  ${simLinks.length} edges`
+      
+      // HUD background pill
+      ctx.font = '10px system-ui, -apple-system, sans-serif'
+      const hudWidth = ctx.measureText(hudText).width + 16
+      ctx.globalAlpha = theme === 'dark' ? 0.5 : 0.6
+      ctx.fillStyle = theme === 'dark' ? 'rgba(10,10,20,0.6)' : 'rgba(255,255,255,0.7)'
+      ctx.beginPath()
+      ctx.roundRect(hudX, hudY - 14, hudWidth, 20, 6)
+      ctx.fill()
+      
+      // HUD border
+      ctx.strokeStyle = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+      ctx.lineWidth = 0.5
+      ctx.globalAlpha = 0.4
+      ctx.beginPath()
+      ctx.roundRect(hudX, hudY - 14, hudWidth, 20, 6)
+      ctx.stroke()
+      
+      // HUD text
+      ctx.globalAlpha = theme === 'dark' ? 0.5 : 0.55
+      ctx.fillStyle = theme === 'dark' ? '#a0aec0' : '#64748b'
       ctx.textAlign = 'left'
-      ctx.textBaseline = 'bottom'
-      ctx.fillText(`Zoom: ${transform.zoom.toFixed(2)}x  |  LOD: ${lod}  |  Nodes: ${simNodes.length}  |  Edges: ${simLinks.length}`, 12, height - 8)
+      ctx.textBaseline = 'middle'
+      ctx.fillText(hudText, hudX + 8, hudY - 4)
       ctx.restore()
 
       rafRef.current = requestAnimationFrame(render)

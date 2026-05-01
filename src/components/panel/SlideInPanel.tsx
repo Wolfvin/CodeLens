@@ -47,6 +47,12 @@ const TYPE_LABELS: Record<NodeType, string> = {
   route: 'Route',
   env_var: 'Env Variable',
   variable: 'Variable',
+  secret: 'Secret',
+  vulnerability: 'Vulnerability',
+  test: 'Test',
+  import: 'Import',
+  css_var: 'CSS Variable',
+  keyframe: 'Keyframe',
 }
 
 const STATUS_COLORS: Record<NodeStatus, string> = {
@@ -59,6 +65,9 @@ const STATUS_COLORS: Record<NodeStatus, string> = {
   warning: NEURAL_COLORS.warning,
   duplicate_define: NEURAL_COLORS.warning,
   collision: NEURAL_COLORS.vulnerable,
+  impure: NEURAL_COLORS.warning,
+  untested: NEURAL_COLORS.untested,
+  unused: NEURAL_COLORS.unused,
 }
 
 function shapeIcon(type: NodeType): string {
@@ -70,7 +79,10 @@ function shapeIcon(type: NodeType): string {
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h4 className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-2">
+    <h4
+      className="text-[10px] font-bold uppercase tracking-[0.1em] mb-2 flex items-center gap-1.5"
+      style={{ color: 'rgba(139, 92, 246, 0.5)' }}
+    >
       {children}
     </h4>
   )
@@ -79,15 +91,19 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function ProgressBar({ value, color, label }: { value: number; color: string; label: string }) {
   const pct = Math.min(100, Math.max(0, value * 100))
   return (
-    <div className="space-y-1">
+    <div className="space-y-1.5">
       <div className="flex justify-between text-xs">
-        <span className="opacity-70">{label}</span>
-        <span className="opacity-70">{Math.round(pct)}%</span>
+        <span className="opacity-60">{label}</span>
+        <span className="font-mono text-[10px] opacity-50">{Math.round(pct)}%</span>
       </div>
-      <div className="h-1.5 rounded-full overflow-hidden bg-white/10">
+      <div className="h-1 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(139, 92, 246, 0.08)' }}>
         <div
-          className="h-full rounded-full transition-all duration-500"
-          style={{ width: `${pct}%`, backgroundColor: color }}
+          className="h-full rounded-full transition-all duration-700 ease-out"
+          style={{
+            width: `${pct}%`,
+            backgroundColor: color,
+            boxShadow: `0 0 8px ${color}40`,
+          }}
         />
       </div>
     </div>
@@ -106,18 +122,12 @@ function RefList({
       {items.map((item, i) => (
         <li
           key={`${item.file}:${item.line}:${i}`}
-          className="flex items-center gap-1.5 text-xs"
+          className="flex items-center gap-1.5 text-xs py-0.5 px-1.5 rounded-md transition-colors duration-150 hover:bg-white/[0.03]"
         >
-          <ChevronRight
-            className="h-3 w-3 shrink-0 opacity-40"
-          />
-          <span className="font-medium truncate">
-            {item.fn ?? item.source ?? 'ref'}
-          </span>
+          <ChevronRight className="h-3 w-3 shrink-0 opacity-30" />
+          <span className="font-medium truncate">{item.fn ?? item.source ?? 'ref'}</span>
           <span
-            className={`ml-auto shrink-0 font-mono text-[10px] ${
-              dark ? 'text-slate-400' : 'text-slate-500'
-            }`}
+            className={`ml-auto shrink-0 font-mono text-[10px] ${dark ? 'text-slate-500' : 'text-slate-400'}`}
           >
             {item.file}:{item.line}
           </span>
@@ -132,49 +142,47 @@ function RefList({
 function FunctionSection({ detail, dark }: { detail: NodeDetail; dark: boolean }) {
   return (
     <>
-      {/* Topology */}
       {(detail.callers && detail.callers.length > 0) && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Callers</SectionTitle>
           <RefList items={detail.callers!.map(c => ({ fn: c.fn, file: c.file, line: c.line }))} dark={dark} />
         </div>
       )}
       {(detail.callees && detail.callees.length > 0) && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Callees</SectionTitle>
           <RefList items={detail.callees!.map(c => ({ fn: c.fn, file: c.file, line: c.line }))} dark={dark} />
         </div>
       )}
 
-      <Separator className="opacity-20" />
+      <div className="divider-glow" />
 
-      {/* Analysis */}
-      <div>
+      <div className="fade-in">
         <SectionTitle>Analysis</SectionTitle>
-        <div className="space-y-2">
+        <div className="space-y-3">
           {detail.purity !== undefined && (
             <ProgressBar
               value={detail.purity}
-              color={detail.purity > 0.7 ? '#48bb78' : detail.purity > 0.4 ? '#ecc94b' : '#e53e3e'}
+              color={detail.purity > 0.7 ? '#10b981' : detail.purity > 0.4 ? '#f59e0b' : '#ef4444'}
               label="Purity"
             />
           )}
           {detail.complexity !== undefined && (
             <ProgressBar
-              value={1 - Math.min(detail.complexity / 20, 1)} // invert: lower complexity = higher bar
-              color={detail.complexity > 15 ? '#e53e3e' : detail.complexity > 8 ? '#ecc94b' : '#48bb78'}
+              value={1 - Math.min(detail.complexity / 20, 1)}
+              color={detail.complexity > 15 ? '#ef4444' : detail.complexity > 8 ? '#f59e0b' : '#10b981'}
               label={`Complexity (${detail.complexity})`}
             />
           )}
           {detail.coverage !== undefined && (
             <div className="flex items-center gap-2 text-xs">
-              <span className="opacity-70">Test coverage:</span>
+              <span className="opacity-60">Test coverage:</span>
               {detail.coverage ? (
-                <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">
+                <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">
                   Covered
                 </Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] h-5 border-red-400 text-red-400">
+                <Badge variant="outline" className="text-[10px] h-5 border-red-400/40 text-red-400 bg-red-500/5">
                   Uncovered
                 </Badge>
               )}
@@ -190,38 +198,36 @@ function CssClassSection({ detail, dark }: { detail: NodeDetail; dark: boolean }
   return (
     <>
       {detail.definedIn && detail.definedIn.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Defined In</SectionTitle>
           <RefList items={detail.definedIn!.map(d => ({ file: d.file, line: d.line, source: 'CSS' }))} dark={dark} />
         </div>
       )}
-
       {detail.references && detail.references.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Used By</SectionTitle>
           <RefList items={detail.references!.map(r => ({ file: r.file, line: r.line, source: r.source }))} dark={dark} />
         </div>
       )}
-
       {detail.issues && detail.issues.length > 0 && (
         <>
-          <Separator className="opacity-20" />
-          <div className="space-y-1">
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
             <SectionTitle>Issues</SectionTitle>
             {detail.issues!.map((issue, i) => (
               <div
                 key={`issue-${i}`}
-                className={`text-xs px-2 py-1.5 rounded ${
+                className={`text-xs px-2.5 py-2 rounded-lg border transition-colors ${
                   issue.severity === 'error'
-                    ? 'bg-red-500/10 text-red-400'
+                    ? 'bg-red-500/5 border-red-500/10 text-red-400'
                     : issue.severity === 'warning'
-                      ? 'bg-amber-500/10 text-amber-400'
-                      : 'bg-slate-500/10 text-slate-400'
+                      ? 'bg-amber-500/5 border-amber-500/10 text-amber-400'
+                      : 'bg-slate-500/5 border-slate-500/10 text-slate-400'
                 }`}
               >
                 <span className="font-medium">{issue.category}</span>
-                <span className="mx-1 opacity-50">·</span>
-                <span className="opacity-80">{issue.message}</span>
+                <span className="mx-1 opacity-30">·</span>
+                <span className="opacity-70">{issue.message}</span>
               </div>
             ))}
           </div>
@@ -236,29 +242,26 @@ function IdSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode
   return (
     <>
       {detail.definedIn && detail.definedIn.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>HTML Definition</SectionTitle>
           <RefList items={detail.definedIn!.map(d => ({ file: d.file, line: d.line, source: 'HTML' }))} dark={dark} />
         </div>
       )}
-
       {detail.references && detail.references.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Accessed By</SectionTitle>
           <RefList items={detail.references!.map(r => ({ file: r.file, line: r.line, source: r.source }))} dark={dark} />
         </div>
       )}
-
-      <Separator className="opacity-20" />
-
-      <div className="space-y-1">
+      <div className="divider-glow" />
+      <div className="space-y-1 fade-in">
         <SectionTitle>Collision</SectionTitle>
         {hasCollision ? (
-          <Badge variant="outline" className="text-[10px] h-5 border-red-400 text-red-400">
+          <Badge variant="outline" className="text-[10px] h-5 border-red-400/40 text-red-400 bg-red-500/5">
             ⚠ Collision detected
           </Badge>
         ) : (
-          <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">
+          <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">
             ✓ No collision
           </Badge>
         )}
@@ -276,38 +279,36 @@ function ComponentSection({ detail, node, dark }: { detail: NodeDetail; node: Gr
   return (
     <>
       {props && props.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 fade-in">
           <SectionTitle>Props</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {props.map(p => (
-              <Badge key={p} variant="secondary" className="text-[10px] h-5">
+              <Badge key={p} variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
                 {p}
               </Badge>
             ))}
           </div>
         </div>
       )}
-
       {renderTree && renderTree.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Render Tree</SectionTitle>
           <ul className="space-y-0.5">
             {renderTree.map((child, i) => (
-              <li key={`rt-${i}`} className="flex items-center gap-1.5 text-xs">
-                <ChevronRight className="h-3 w-3 opacity-40" />
+              <li key={`rt-${i}`} className="flex items-center gap-1.5 text-xs py-0.5">
+                <ChevronRight className="h-3 w-3 opacity-30" />
                 <span>{child}</span>
               </li>
             ))}
           </ul>
         </div>
       )}
-
       {connectedStores && connectedStores.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 fade-in">
           <SectionTitle>Connected Stores</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {connectedStores.map(s => (
-              <Badge key={s} variant="outline" className="text-[10px] h-5 border-amber-400 text-amber-400">
+              <Badge key={s} variant="outline" className="text-[10px] h-5 border-amber-400/30 text-amber-400 bg-amber-500/5">
                 {s}
               </Badge>
             ))}
@@ -327,40 +328,38 @@ function StoreSection({ detail, node, dark }: { detail: NodeDetail; node: GraphN
   return (
     <>
       {reads && reads.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 fade-in">
           <SectionTitle>Reads</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {reads.map(r => (
-              <Badge key={r} variant="secondary" className="text-[10px] h-5">
+              <Badge key={r} variant="secondary" className="text-[10px] h-5 bg-blue-500/5 text-blue-300 border-blue-500/10">
                 {r}
               </Badge>
             ))}
           </div>
         </div>
       )}
-
       {writes && writes.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 fade-in">
           <SectionTitle>Writes</SectionTitle>
           <div className="flex flex-wrap gap-1">
             {writes.map(w => (
-              <Badge key={w} variant="outline" className="text-[10px] h-5 border-amber-400 text-amber-400">
+              <Badge key={w} variant="outline" className="text-[10px] h-5 border-amber-400/30 text-amber-400 bg-amber-500/5">
                 {w}
               </Badge>
             ))}
           </div>
         </div>
       )}
-
       {flow && flow.length > 0 && (
         <>
-          <Separator className="opacity-20" />
-          <div className="space-y-1">
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
             <SectionTitle>State Change Flow</SectionTitle>
             <ul className="space-y-0.5">
               {flow.map((step, i) => (
-                <li key={`flow-${i}`} className="flex items-center gap-1.5 text-xs">
-                  <span className="opacity-40 text-[10px] font-mono w-4">{i + 1}.</span>
+                <li key={`flow-${i}`} className="flex items-center gap-1.5 text-xs py-0.5">
+                  <span className="opacity-30 text-[10px] font-mono w-4 text-right">{i + 1}.</span>
                   <span>{step}</span>
                 </li>
               ))}
@@ -381,51 +380,50 @@ function PackageSection({ detail, node, dark }: { detail: NodeDetail; node: Grap
   return (
     <>
       {version && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Version</SectionTitle>
-          <span className="text-sm font-mono">{version}</span>
+          <span className="text-sm font-mono px-2 py-0.5 rounded-md" style={{ backgroundColor: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+            {version}
+          </span>
         </div>
       )}
-
       {vulnerabilities && vulnerabilities.length > 0 && (
-        <div className="space-y-1">
+        <div className="space-y-1.5 fade-in">
           <SectionTitle>Vulnerabilities</SectionTitle>
           {vulnerabilities.map((v, i) => (
             <div
               key={`vuln-${i}`}
-              className={`text-xs px-2 py-1.5 rounded ${
+              className={`text-xs px-2.5 py-2 rounded-lg border ${
                 v.severity === 'critical'
-                  ? 'bg-red-500/10 text-red-400'
+                  ? 'bg-red-500/5 border-red-500/10 text-red-400'
                   : v.severity === 'high'
-                    ? 'bg-orange-500/10 text-orange-400'
-                    : 'bg-amber-500/10 text-amber-400'
+                    ? 'bg-orange-500/5 border-orange-500/10 text-orange-400'
+                    : 'bg-amber-500/5 border-amber-500/10 text-amber-400'
               }`}
             >
               <span className="font-mono font-medium">{v.cve}</span>
-              <span className="mx-1 opacity-50">·</span>
-              <span className="opacity-80">{v.severity}</span>
+              <span className="mx-1 opacity-30">·</span>
+              <span className="opacity-70">{v.severity}</span>
             </div>
           ))}
         </div>
       )}
-
       {(!vulnerabilities || vulnerabilities.length === 0) && (
-        <div className="space-y-1">
+        <div className="space-y-1 fade-in">
           <SectionTitle>Vulnerabilities</SectionTitle>
-          <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">
+          <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">
             ✓ No known CVEs
           </Badge>
         </div>
       )}
-
       {dependents && dependents.length > 0 && (
         <>
-          <Separator className="opacity-20" />
-          <div className="space-y-1">
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
             <SectionTitle>Dependents</SectionTitle>
             <div className="flex flex-wrap gap-1">
               {dependents.map(d => (
-                <Badge key={d} variant="secondary" className="text-[10px] h-5">
+                <Badge key={d} variant="secondary" className="text-[10px] h-5 bg-slate-500/5">
                   {d}
                 </Badge>
               ))}
@@ -446,52 +444,51 @@ function EnvVarSection({ detail, node, dark }: { detail: NodeDetail; node: Graph
 
   return (
     <>
-      <div className="space-y-2">
+      <div className="space-y-2 fade-in">
         <SectionTitle>Properties</SectionTitle>
         <div className="grid grid-cols-3 gap-2 text-xs">
-          <div className="space-y-0.5">
-            <span className="opacity-50">Required</span>
+          <div className="space-y-1 text-center">
+            <span className="opacity-50 text-[10px]">Required</span>
             <div>
               {required ? (
-                <Badge variant="outline" className="text-[10px] h-5 border-red-400 text-red-400">Yes</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-red-400/40 text-red-400 bg-red-500/5">Yes</Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">No</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">No</Badge>
               )}
             </div>
           </div>
-          <div className="space-y-0.5">
-            <span className="opacity-50">Fallback</span>
+          <div className="space-y-1 text-center">
+            <span className="opacity-50 text-[10px]">Fallback</span>
             <div>
               {hasFallback ? (
-                <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">Yes</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">Yes</Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] h-5 border-amber-400 text-amber-400">None</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-amber-400/40 text-amber-400 bg-amber-500/5">None</Badge>
               )}
             </div>
           </div>
-          <div className="space-y-0.5">
-            <span className="opacity-50">Documented</span>
+          <div className="space-y-1 text-center">
+            <span className="opacity-50 text-[10px]">Documented</span>
             <div>
               {documented ? (
-                <Badge variant="outline" className="text-[10px] h-5 border-green-500 text-green-500">Yes</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">Yes</Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] h-5 border-slate-400 text-slate-400">No</Badge>
+                <Badge variant="outline" className="text-[10px] h-5 border-slate-400/40 text-slate-400 bg-slate-500/5">No</Badge>
               )}
             </div>
           </div>
         </div>
       </div>
-
       {files && files.length > 0 && (
         <>
-          <Separator className="opacity-20" />
-          <div className="space-y-1">
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
             <SectionTitle>Files</SectionTitle>
             <ul className="space-y-0.5">
               {files.map((f, i) => (
-                <li key={`file-${i}`} className="flex items-center gap-1.5 text-xs font-mono">
-                  <ChevronRight className="h-3 w-3 opacity-40" />
-                  <span>{f}</span>
+                <li key={`file-${i}`} className="flex items-center gap-1.5 text-xs font-mono py-0.5">
+                  <ChevronRight className="h-3 w-3 opacity-30" />
+                  <span className="opacity-80">{f}</span>
                 </li>
               ))}
             </ul>
@@ -547,76 +544,102 @@ export function SlideInPanel({
     )
   }, [detail])
 
-  const variantStyles = useMemo(() => {
-    const bg = dark ? 'rgba(26,26,46,0.95)' : 'rgba(255,255,255,0.95)'
-    const text = dark ? '#e2e8f0' : '#1a202c'
-    const border = dark ? '#2d3748' : '#e2e8f0'
-    const mutedText = dark ? '#a0aec0' : '#718096'
-    return { bg, text, border, mutedText }
-  }, [dark])
+  const borderColor = dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.06)'
+  const bgColor = dark ? 'rgba(8, 8, 16, 0.8)' : 'rgba(255, 255, 255, 0.88)'
+  const textColor = dark ? '#e2e8f0' : '#1a202c'
+  const mutedText = dark ? '#718096' : '#94a3b8'
 
   return (
     <div
-      className="fixed top-0 right-0 h-full z-50 flex"
+      className="fixed top-0 right-0 h-full z-50 flex slide-in-panel"
       style={{
         transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
-        transition: 'transform 300ms ease-out',
-        width: 380,
+        opacity: isOpen ? 1 : 0,
+        width: 400,
       }}
     >
       {/* Panel body */}
       <div
-        className="flex flex-col h-full w-full border-l"
+        className="flex flex-col h-full w-full overflow-hidden"
         style={{
-          backgroundColor: variantStyles.bg,
-          color: variantStyles.text,
-          borderColor: variantStyles.border,
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
+          backgroundColor: bgColor,
+          color: textColor,
+          borderLeft: `1px solid ${borderColor}`,
+          backdropFilter: 'blur(24px) saturate(1.3)',
+          WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
+          boxShadow: dark
+            ? '-8px 0 32px rgba(0,0,0,0.4), inset 1px 0 0 rgba(255,255,255,0.03)'
+            : '-8px 0 32px rgba(0,0,0,0.08), inset 1px 0 0 rgba(0,0,0,0.03)',
         }}
       >
-        {/* Header */}
-        <div
-          className="flex items-center gap-2 px-4 py-3 border-b shrink-0"
-          style={{ borderColor: variantStyles.border }}
-        >
-          <span
-            className="text-lg leading-none"
-            style={{ color: node?.color ?? '#fff' }}
+        {/* Header with glow accent */}
+        {node && (
+          <div
+            className="px-5 py-4 shrink-0 relative overflow-hidden"
+            style={{ borderBottom: `1px solid ${borderColor}` }}
           >
-            {node ? shapeIcon(node.type) : ''}
-          </span>
-          <span className="font-semibold text-sm truncate flex-1">
-            {node?.label ?? ''}
-          </span>
-          <span
-            className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
-            style={{
-              backgroundColor: node ? `${node.color}20` : 'transparent',
-              color: node?.color ?? 'transparent',
-            }}
-          >
-            {node ? TYPE_LABELS[node.type] : ''}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+            {/* Subtle top glow */}
+            <div
+              className="absolute top-0 left-0 right-0 h-1 opacity-60"
+              style={{
+                background: `linear-gradient(90deg, transparent, ${node.color}40, transparent)`,
+              }}
+            />
+            <div className="flex items-center gap-3 relative">
+              {/* Node icon with glow */}
+              <div
+                className="w-8 h-8 flex items-center justify-center rounded-lg"
+                style={{
+                  backgroundColor: `${node.color}10`,
+                  boxShadow: `0 0 12px ${node.color}15`,
+                }}
+              >
+                <span
+                  className="text-base leading-none"
+                  style={{ color: node.color, filter: `drop-shadow(0 0 4px ${node.color}40)` }}
+                >
+                  {shapeIcon(node.type)}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm truncate">{node.label}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span
+                    className="text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: `${node.color}10`,
+                      color: node.color,
+                    }}
+                  >
+                    {TYPE_LABELS[node.type]}
+                  </span>
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ backgroundColor: STATUS_COLORS[node.status] }}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 smooth-colors hover:bg-white/5"
+                onClick={onClose}
+              >
+                <X className="h-4 w-4" style={{ color: mutedText }} />
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* Scrollable content */}
         {node && (
-          <ScrollArea className="flex-1">
-            <div className="p-4 space-y-4">
+          <ScrollArea className="flex-1 panel-scroll">
+            <div className="p-5 space-y-4 stagger-children">
               {/* Location */}
               {node.file && (
-                <div className="flex items-center gap-2 text-xs">
-                  <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: variantStyles.mutedText }} />
-                  <span className="font-mono truncate" style={{ color: variantStyles.mutedText }}>
+                <div className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg" style={{ backgroundColor: dark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' }}>
+                  <MapPin className="h-3.5 w-3.5 shrink-0" style={{ color: mutedText }} />
+                  <span className="font-mono truncate opacity-60" style={{ color: mutedText }}>
                     {node.file}{node.line ? `:${node.line}` : ''}
                   </span>
                 </div>
@@ -624,15 +647,15 @@ export function SlideInPanel({
 
               {/* Badges */}
               <div className="flex items-center gap-2 flex-wrap">
-                <Badge variant="outline" className="text-[10px] h-5 gap-1">
-                  <Tag className="h-2.5 w-2.5" />
+                <Badge variant="outline" className="text-[10px] h-5 gap-1 border-0" style={{ backgroundColor: dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)' }}>
+                  <Tag className="h-2.5 w-2.5 opacity-50" />
                   {node.type}
                 </Badge>
                 <Badge
                   variant="outline"
-                  className="text-[10px] h-5"
+                  className="text-[10px] h-5 border-0"
                   style={{
-                    borderColor: node.domain === 'frontend' ? '#b794f4' : '#63b3ed',
+                    backgroundColor: node.domain === 'frontend' ? 'rgba(183,148,244,0.06)' : 'rgba(99,179,237,0.06)',
                     color: node.domain === 'frontend' ? '#b794f4' : '#63b3ed',
                   }}
                 >
@@ -640,21 +663,24 @@ export function SlideInPanel({
                 </Badge>
               </div>
 
-              <Separator className="opacity-20" />
+              <div className="divider-glow" />
 
               {/* Status */}
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 <SectionTitle>Status</SectionTitle>
                 <div className="flex items-center gap-2 text-xs">
                   <span
                     className="inline-block h-2 w-2 rounded-full shrink-0"
-                    style={{ backgroundColor: STATUS_COLORS[node.status] }}
+                    style={{
+                      backgroundColor: STATUS_COLORS[node.status],
+                      boxShadow: `0 0 6px ${STATUS_COLORS[node.status]}40`,
+                    }}
                   />
                   <span className="capitalize">{node.status.replace('_', ' ')}</span>
                   {refCount > 0 && (
                     <>
-                      <span className="opacity-30">·</span>
-                      <span style={{ color: variantStyles.mutedText }}>
+                      <span className="opacity-20">·</span>
+                      <span style={{ color: mutedText }}>
                         {refCount} ref{refCount !== 1 ? 's' : ''}
                       </span>
                     </>
@@ -662,7 +688,7 @@ export function SlideInPanel({
                 </div>
               </div>
 
-              <Separator className="opacity-20" />
+              <div className="divider-glow" />
 
               {/* Type-specific section */}
               {detail && (
@@ -672,14 +698,15 @@ export function SlideInPanel({
               {/* Code snippet */}
               {detail?.code && (
                 <>
-                  <Separator className="opacity-20" />
+                  <div className="divider-glow" />
                   <div className="space-y-2">
                     <SectionTitle>Code Snippet</SectionTitle>
                     <div
-                      className="rounded-md p-3 overflow-x-auto text-xs font-mono leading-relaxed"
+                      className="rounded-xl p-4 overflow-x-auto text-xs font-mono leading-relaxed border"
                       style={{
-                        backgroundColor: dark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.04)',
-                        color: variantStyles.text,
+                        backgroundColor: dark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)',
+                        borderColor: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.06)',
+                        color: textColor,
                       }}
                     >
                       <pre className="whitespace-pre-wrap break-words">{detail.code}</pre>
@@ -691,7 +718,7 @@ export function SlideInPanel({
               {/* Quick Actions */}
               {quickActions.length > 0 && (
                 <>
-                  <Separator className="opacity-20" />
+                  <div className="divider-glow" />
                   <div className="space-y-2">
                     <SectionTitle>
                       <Zap className="h-3 w-3 inline mr-1" />
@@ -709,11 +736,11 @@ export function SlideInPanel({
                                 ? 'outline'
                                 : 'default'
                           }
-                          className={`h-7 text-xs gap-1.5 ${
+                          className={`h-7 text-xs gap-1.5 action-glow ${
                             action.variant === 'warning'
-                              ? 'border-amber-500 text-amber-500 hover:bg-amber-500/10'
+                              ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/5 hover:border-amber-500/50'
                               : action.variant === 'default'
-                                ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                                ? 'bg-purple-600 hover:bg-purple-700 text-white border-0'
                                 : ''
                           }`}
                           onClick={() => onAction(action)}

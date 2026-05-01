@@ -18,8 +18,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>('dark')
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-    document.documentElement.classList.toggle('light', theme === 'light')
+    const root = document.documentElement
+    // Smooth class transition
+    root.style.transition = 'color-scheme 0.4s ease'
+    root.classList.toggle('dark', theme === 'dark')
+    root.classList.toggle('light', theme === 'light')
+
+    // Update body background with smooth transition
+    document.body.style.transition = 'background-color 0.5s cubic-bezier(0.16, 1, 0.3, 1), color 0.5s cubic-bezier(0.16, 1, 0.3, 1)'
   }, [theme])
 
   const toggleTheme = useCallback(() => {
