@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition)
+CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)
 
 Usage:
     python3 codelens.py scan <workspace>              # Scan workspace and build registry
@@ -38,6 +38,9 @@ Usage:
     python3 codelens.py complexity <workspace>         # Compute cyclomatic/cognitive complexity
     python3 codelens.py regex-audit <workspace>        # Audit regex for ReDoS and issues
     python3 codelens.py a11y <workspace>               # Detect accessibility issues
+    python3 codelens.py vuln-scan <workspace>          # Scan dependencies for known CVEs
+    python3 codelens.py perf-hint <workspace>          # Detect performance anti-patterns
+    python3 codelens.py css-deep <workspace>           # Deep CSS analysis (vars, keyframes, specificity)
 """
 
 import sys
@@ -91,6 +94,9 @@ from debugleak_engine import detect_debug_leaks
 from complexity_engine import compute_complexity
 from regexaudit_engine import audit_regex_patterns
 from a11y_engine import audit_accessibility
+from vulnscan_engine import scan_vulnerabilities
+from perfhint_engine import detect_perf_hints
+from cssdeep_engine import analyze_css_deep
 
 
 # ─── File Discovery ───────────────────────────────────────────
@@ -863,7 +869,7 @@ def _watch_polling(workspace: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description="CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -1141,6 +1147,30 @@ def main():
 
     # a11y command
     a11y_parser = subparsers.add_parser("a11y", help="Detect accessibility issues")
+
+    # ─── v5 P1: Vuln-scan, Perf-hint, CSS-deep ─────────
+
+    # vuln-scan command
+    vulnscan_parser = subparsers.add_parser("vuln-scan", help="Scan dependencies for known CVEs")
+    vulnscan_parser.add_argument("workspace", help="Path to workspace root")
+    vulnscan_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                                    help="Filter by severity (includes higher)")
+
+    # perf-hint command
+    perfhint_parser = subparsers.add_parser("perf-hint", help="Detect performance anti-patterns")
+    perfhint_parser.add_argument("workspace", help="Path to workspace root")
+    perfhint_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                                  help="Filter by severity")
+    perfhint_parser.add_argument("--category", default=None,
+                                  help="Filter by category (n_plus_one, sync_blocking, memory_leak, expensive_renders, large_bundle, inefficient_iteration, unoptimized_images, cache_miss)")
+
+    # css-deep command
+    cssdeep_parser = subparsers.add_parser("css-deep", help="Deep CSS analysis (vars, keyframes, specificity)")
+    cssdeep_parser.add_argument("workspace", help="Path to workspace root")
+    cssdeep_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+                                 help="Filter by severity")
+    cssdeep_parser.add_argument("--category", default=None,
+                                 help="Filter by category (unused_vars, orphan_keyframes, specificity_wars, duplicate_props, unused_media, z_index_abuse)")
     a11y_parser.add_argument("workspace", help="Path to workspace root")
     a11y_parser.add_argument("--category", choices=["missing_alt", "missing_label", "aria_issues",
                               "keyboard_nav", "semantic_html", "color_contrast", "heading_order",
@@ -1396,6 +1426,18 @@ def main():
             print(json.dumps(result, indent=2, ensure_ascii=False))
         elif args.command == "a11y":
             result = audit_accessibility(args.workspace, category=args.category, severity=args.severity)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "vuln-scan":
+            result = scan_vulnerabilities(args.workspace, severity=args.severity)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "perf-hint":
+            result = detect_perf_hints(args.workspace, severity=args.severity, category=args.category)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+
+        elif args.command == "css-deep":
+            result = analyze_css_deep(args.workspace, severity=args.severity, category=args.category)
             print(json.dumps(result, indent=2, ensure_ascii=False))
 
         else:

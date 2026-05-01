@@ -1,4 +1,4 @@
-# Agent Integration Guide — CodeLens v4
+# Agent Integration Guide — CodeLens v5
 
 Panduan lengkap untuk mengintegrasikan CodeLens ke dalam AI agent workflows.
 Covers: CLI integration, programmatic Python API, JSON output schemas,
