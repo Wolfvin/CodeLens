@@ -537,14 +537,14 @@ function NeuralWorkspaceApp() {
       />
 
       {/* Main area: Sidebar + Canvas + Panel */}
-      <div className="flex-1 flex overflow-hidden" style={{ marginTop: 56 }}>
+      <div className="flex-1 flex overflow-hidden min-h-0" style={{ marginTop: 56 }}>
         {/* Left Sidebar */}
         <LeftSidebar theme={theme} />
 
         {/* Center: Canvas + Bottom Panel */}
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
           {/* Neural Canvas */}
-          <div className="flex-1 relative">
+          <div className="flex-1 relative min-h-0">
             <NeuralCanvas
               theme={theme}
               nodes={nodes}

@@ -73,13 +73,13 @@ interface AnimationState {
 // Constants
 // ============================================================
 
-const AMBIENT_PARTICLE_COUNT = 80
-const HEX_GRID_SIZE = 40
+const AMBIENT_PARTICLE_COUNT = 30
+const HEX_GRID_SIZE = 60
 const TOOLTIP_PADDING = 12
 const TOOLTIP_LINE_HEIGHT = 18
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3.0
-const ZOOM_SENSITIVITY = 0.001
+const ZOOM_SENSITIVITY = 0.003
 
 // ============================================================
 // Helper: get LOD level from zoom
@@ -138,73 +138,32 @@ function drawBackground(
 ) {
   // Premium gradient background with ambient glow
   if (theme === 'dark') {
-    // Rich dark gradient base
-    const bgGrad = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.8)
+    // Simple dark gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, width, height)
     bgGrad.addColorStop(0, '#0d0d18')
-    bgGrad.addColorStop(0.5, '#0a0a12')
     bgGrad.addColorStop(1, '#060609')
     ctx.fillStyle = bgGrad
     ctx.fillRect(0, 0, width, height)
-
-    // Subtle purple ambient glow
-    ctx.globalAlpha = 0.04
-    const purpleGlow = ctx.createRadialGradient(width * 0.2, height * 0.25, 0, width * 0.2, height * 0.25, width * 0.5)
-    purpleGlow.addColorStop(0, '#8b5cf6')
-    purpleGlow.addColorStop(1, 'transparent')
-    ctx.fillStyle = purpleGlow
-    ctx.fillRect(0, 0, width, height)
-
-    // Subtle blue ambient glow
-    const blueGlow = ctx.createRadialGradient(width * 0.8, height * 0.7, 0, width * 0.8, height * 0.7, width * 0.4)
-    blueGlow.addColorStop(0, '#3b82f6')
-    blueGlow.addColorStop(1, 'transparent')
-    ctx.fillStyle = blueGlow
-    ctx.fillRect(0, 0, width, height)
-
-    ctx.globalAlpha = 1.0
   } else {
     // Light mode gradient
-    const bgGrad = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.8)
+    const bgGrad = ctx.createLinearGradient(0, 0, width, height)
     bgGrad.addColorStop(0, '#ffffff')
-    bgGrad.addColorStop(0.5, '#f8fafc')
     bgGrad.addColorStop(1, '#f1f5f9')
     ctx.fillStyle = bgGrad
     ctx.fillRect(0, 0, width, height)
-
-    // Subtle warm glow
-    ctx.globalAlpha = 0.03
-    const warmGlow = ctx.createRadialGradient(width * 0.3, height * 0.3, 0, width * 0.3, height * 0.3, width * 0.5)
-    warmGlow.addColorStop(0, '#8b5cf6')
-    warmGlow.addColorStop(1, 'transparent')
-    ctx.fillStyle = warmGlow
-    ctx.fillRect(0, 0, width, height)
-    ctx.globalAlpha = 1.0
   }
 
-  // Draw hex grid pattern (subtle)
+  // Draw subtle dot grid (lighter than hex grid for performance)
   const gridColor = theme === 'dark' ? NEURAL_COLORS.darkGrid : NEURAL_COLORS.lightGrid
-  ctx.strokeStyle = gridColor
-  ctx.lineWidth = 0.4
-  ctx.globalAlpha = theme === 'dark' ? 0.15 : 0.2
+  ctx.fillStyle = gridColor
+  ctx.globalAlpha = theme === 'dark' ? 0.2 : 0.15
 
-  const hexW = HEX_GRID_SIZE * Math.sqrt(3)
-  const hexH = HEX_GRID_SIZE * 2
-
-  for (let row = -1; row < height / (hexH * 0.75) + 1; row++) {
-    for (let col = -1; col < width / hexW + 1; col++) {
-      const cx = col * hexW + (row % 2 === 0 ? 0 : hexW / 2)
-      const cy = row * hexH * 0.75
-
+  const gridSize = 50
+  for (let x = gridSize; x < width; x += gridSize) {
+    for (let y = gridSize; y < height; y += gridSize) {
       ctx.beginPath()
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 6
-        const px = cx + HEX_GRID_SIZE * Math.cos(angle)
-        const py = cy + HEX_GRID_SIZE * Math.sin(angle)
-        if (i === 0) ctx.moveTo(px, py)
-        else ctx.lineTo(px, py)
-      }
-      ctx.closePath()
-      ctx.stroke()
+      ctx.arc(x, y, 0.8, 0, Math.PI * 2)
+      ctx.fill()
     }
   }
 
@@ -227,16 +186,7 @@ function drawAmbientParticles(
     const colorIdx = i % colors.length
     const flickerOpacity = p.opacity * (0.6 + 0.4 * Math.sin(time * 0.0008 + p.phase))
     
-    // Soft glow around particle
-    if (theme === 'dark' && p.radius > 1) {
-      ctx.globalAlpha = flickerOpacity * 0.3
-      ctx.fillStyle = `rgba(${colors[colorIdx]}, ${flickerOpacity * 0.2})`
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, p.radius * 3, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    
-    // Core particle
+    // Core particle only (removed glow for performance)
     ctx.globalAlpha = flickerOpacity
     ctx.fillStyle = `rgba(${colors[colorIdx]}, ${flickerOpacity})`
     ctx.beginPath()
@@ -406,35 +356,18 @@ function drawEdge(
   ctx.quadraticCurveTo(cx, cy, tx, ty)
   ctx.stroke()
 
-  // Flow particles along edge with trailing glow
+  // Flow particles along edge (simplified for performance)
   if (isActive && flowProgress >= 0) {
-    const numParticles = 3
-    for (let i = 0; i < numParticles; i++) {
-      const t = ((flowProgress + i / numParticles) % 1)
-      // Point on quadratic bezier
-      const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx
-      const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty
+    const t = flowProgress
+    // Single particle per edge
+    const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx
+    const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty
 
-      const particleAlpha = 0.8 * (1 - Math.abs(t - 0.5) * 2)
-
-      // Trailing glow/blur effect
-      ctx.globalAlpha = particleAlpha * 0.25
-      const trailGlow = ctx.createRadialGradient(px, py, 0, px, py, 8)
-      trailGlow.addColorStop(0, sourceColor)
-      trailGlow.addColorStop(0.5, sourceColor + '40')
-      trailGlow.addColorStop(1, 'transparent')
-      ctx.fillStyle = trailGlow
-      ctx.beginPath()
-      ctx.arc(px, py, 8, 0, Math.PI * 2)
-      ctx.fill()
-
-      // Core particle
-      ctx.globalAlpha = particleAlpha
-      ctx.fillStyle = sourceColor
-      ctx.beginPath()
-      ctx.arc(px, py, 3, 0, Math.PI * 2)
-      ctx.fill()
-    }
+    ctx.globalAlpha = 0.8
+    ctx.fillStyle = sourceColor
+    ctx.beginPath()
+    ctx.arc(px, py, 3, 0, Math.PI * 2)
+    ctx.fill()
   }
 
   ctx.restore()
@@ -450,35 +383,15 @@ function drawGlow(
 ) {
   ctx.save()
   
-  // Layer 1: Wide soft glow
-  ctx.globalAlpha = intensity * 0.15
-  const wideGlow = ctx.createRadialGradient(x, y, 0, x, y, radius * 4)
-  wideGlow.addColorStop(0, color)
-  wideGlow.addColorStop(0.5, color + '40')
-  wideGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = wideGlow
+  // Single efficient glow layer
+  ctx.globalAlpha = intensity * 0.25
+  const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 2.5)
+  glow.addColorStop(0, color)
+  glow.addColorStop(0.5, color + '30')
+  glow.addColorStop(1, 'transparent')
+  ctx.fillStyle = glow
   ctx.beginPath()
-  ctx.arc(x, y, radius * 4, 0, Math.PI * 2)
-  ctx.fill()
-  
-  // Layer 2: Medium glow
-  ctx.globalAlpha = intensity * 0.35
-  const medGlow = ctx.createRadialGradient(x, y, 0, x, y, radius * 2)
-  medGlow.addColorStop(0, color)
-  medGlow.addColorStop(0.6, color + '60')
-  medGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = medGlow
-  ctx.beginPath()
-  ctx.arc(x, y, radius * 2, 0, Math.PI * 2)
-  ctx.fill()
-  
-  // Layer 3: Tight core glow
-  ctx.globalAlpha = intensity * 0.5
-  ctx.shadowColor = color
-  ctx.shadowBlur = radius * 2
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.arc(x, y, radius * 0.5, 0, Math.PI * 2)
+  ctx.arc(x, y, radius * 2.5, 0, Math.PI * 2)
   ctx.fill()
   
   ctx.restore()
@@ -644,13 +557,8 @@ function drawNode(
   const nodeRadius = node.radius * radiusMultiplier
   const nodeOpacity = opacityMultiplier * (isDormant ? 0.4 : 1.0)
 
-  // Draw glow for active/hovered/selected nodes
-  // Add subtle breathe animation on hover
-  let breatheScale = 1.0
-  if (isHovered && !isSelected) {
-    breatheScale = 1.0 + 0.05 * Math.sin(time * 0.002) // subtle 1.0 → 1.05 → 1.0 pulse
-  }
-  const finalRadius = nodeRadius * breatheScale
+  // Draw glow for active/selected nodes only (skip hover glow for performance)
+  const finalRadius = nodeRadius
 
   if (isActive || isHovered || isSelected || (isAnimTarget && animState?.type !== 'death')) {
     const glowIntensity = isSelected ? 0.8 : isHovered ? 0.6 : 0.3
@@ -668,18 +576,8 @@ function drawNode(
   ctx.globalAlpha = nodeOpacity * 0.5
   drawShapeOutline(ctx, shape, node.x, node.y, finalRadius)
 
-  // Selected ring with spring-like smoother behavior
+  // Selected ring (simplified for performance)
   if (isSelected) {
-    // Outer glow ring
-    ctx.globalAlpha = 0.15
-    const selectGlow = ctx.createRadialGradient(node.x, node.y, finalRadius + 3, node.x, node.y, finalRadius + 14)
-    selectGlow.addColorStop(0, nodeColor)
-    selectGlow.addColorStop(1, 'transparent')
-    ctx.fillStyle = selectGlow
-    ctx.beginPath()
-    ctx.arc(node.x, node.y, finalRadius + 14, 0, Math.PI * 2)
-    ctx.fill()
-
     // Main selection ring
     ctx.globalAlpha = 0.9
     ctx.strokeStyle = '#ffffff'
@@ -687,16 +585,6 @@ function drawNode(
     ctx.beginPath()
     ctx.arc(node.x, node.y, finalRadius + 5, 0, Math.PI * 2)
     ctx.stroke()
-
-    // Animated dashed ring with spring behavior
-    ctx.setLineDash([4, 4])
-    ctx.lineDashOffset = -time * 0.02
-    ctx.strokeStyle = nodeColor
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    ctx.arc(node.x, node.y, finalRadius + 9, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.setLineDash([])
   }
 
   // Label
@@ -979,46 +867,23 @@ function drawClusterBubble(
 
   ctx.save()
 
-  // Wide soft glow
-  ctx.globalAlpha = 0.08
-  const outerGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 2.5)
-  outerGlow.addColorStop(0, cluster.tint)
-  outerGlow.addColorStop(1, 'transparent')
-  ctx.fillStyle = outerGlow
-  ctx.beginPath()
-  ctx.arc(cx, cy, radius * 2.5, 0, Math.PI * 2)
-  ctx.fill()
-
-  // Inner glow
+  // Single fill with gradient
   ctx.globalAlpha = 0.15
-  ctx.fillStyle = cluster.tint
-  ctx.shadowColor = cluster.tint
-  ctx.shadowBlur = 30
-  ctx.beginPath()
-  ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.shadowBlur = 0
-
-  // Fill with gradient
-  ctx.globalAlpha = 0.2
-  const fillGrad = ctx.createRadialGradient(cx - radius * 0.3, cy - radius * 0.3, 0, cx, cy, radius)
+  const fillGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
   fillGrad.addColorStop(0, cluster.tint + '40')
-  fillGrad.addColorStop(1, cluster.tint)
+  fillGrad.addColorStop(1, cluster.tint + '10')
   ctx.fillStyle = fillGrad
   ctx.beginPath()
   ctx.arc(cx, cy, radius, 0, Math.PI * 2)
   ctx.fill()
 
-  // Border with glow
-  ctx.globalAlpha = 0.6
+  // Border
+  ctx.globalAlpha = 0.5
   ctx.strokeStyle = cluster.tint
   ctx.lineWidth = 1.5
-  ctx.shadowColor = cluster.tint
-  ctx.shadowBlur = 8
   ctx.beginPath()
   ctx.arc(cx, cy, radius, 0, Math.PI * 2)
   ctx.stroke()
-  ctx.shadowBlur = 0
 
   // Icon + label
   ctx.globalAlpha = 0.9
@@ -1220,15 +1085,28 @@ export default function NeuralCanvas({
     const container = containerRef.current
     if (!container) return
 
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect
-        setCanvasSize({ width, height })
+    const updateSize = () => {
+      const rect = container.getBoundingClientRect()
+      const w = rect.width || container.parentElement?.clientWidth || window.innerWidth
+      const h = rect.height || container.parentElement?.clientHeight || (window.innerHeight - 56)
+      if (w > 0 && h > 0) {
+        setCanvasSize({ width: w, height: h })
       }
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateSize()
     })
 
     observer.observe(container)
-    return () => observer.disconnect()
+    // Fallback: also check after a short delay in case ResizeObserver doesn't fire
+    updateSize()
+    const fallbackTimer = setTimeout(updateSize, 200)
+
+    return () => {
+      observer.disconnect()
+      clearTimeout(fallbackTimer)
+    }
   }, [])
 
   // ============================================================
@@ -1391,18 +1269,6 @@ export default function NeuralCanvas({
       if (animState?.type === 'alarm') {
         drawAlarmVignette(ctx, width, height, animState.intensity, time)
       }
-
-      // 9.5 Subtle vignette effect (darker at edges for depth)
-      ctx.save()
-      const vignetteGrad = ctx.createRadialGradient(
-        width / 2, height / 2, Math.min(width, height) * 0.35,
-        width / 2, height / 2, Math.max(width, height) * 0.75
-      )
-      vignetteGrad.addColorStop(0, 'rgba(0,0,0,0)')
-      vignetteGrad.addColorStop(1, theme === 'dark' ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.04)')
-      ctx.fillStyle = vignetteGrad
-      ctx.fillRect(0, 0, width, height)
-      ctx.restore()
 
       // 10. Premium HUD info
       ctx.save()
@@ -1646,12 +1512,12 @@ export default function NeuralCanvas({
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full overflow-hidden"
+      className="absolute inset-0 overflow-hidden"
       style={{ background: theme === 'dark' ? NEURAL_COLORS.darkBg : NEURAL_COLORS.lightBg }}
     >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 w-full h-full"
+        className="absolute inset-0"
         style={{ cursor: 'grab' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
