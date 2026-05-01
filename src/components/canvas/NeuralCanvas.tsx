@@ -1086,11 +1086,29 @@ export default function NeuralCanvas({
     if (!container) return
 
     const updateSize = () => {
+      // Try container first, then parent, then window
       const rect = container.getBoundingClientRect()
-      const w = rect.width || container.parentElement?.clientWidth || window.innerWidth
-      const h = rect.height || container.parentElement?.clientHeight || (window.innerHeight - 56)
+      let w = rect.width
+      let h = rect.height
+
+      // If container has no dimensions, try parent
+      if (w === 0 || h === 0) {
+        const parent = container.parentElement
+        if (parent) {
+          const parentRect = parent.getBoundingClientRect()
+          w = parentRect.width
+          h = parentRect.height
+        }
+      }
+
+      // Final fallback to window
+      if (w === 0 || h === 0) {
+        w = window.innerWidth
+        h = window.innerHeight - 56 // subtract topbar
+      }
+
       if (w > 0 && h > 0) {
-        setCanvasSize({ width: w, height: h })
+        setCanvasSize({ width: Math.floor(w), height: Math.floor(h) })
       }
     }
 
@@ -1098,14 +1116,23 @@ export default function NeuralCanvas({
       updateSize()
     })
 
+    // Observe container AND its parent for robustness
     observer.observe(container)
-    // Fallback: also check after a short delay in case ResizeObserver doesn't fire
+    if (container.parentElement) {
+      observer.observe(container.parentElement)
+    }
+
+    // Multiple fallback timers to ensure we get dimensions
     updateSize()
-    const fallbackTimer = setTimeout(updateSize, 200)
+    const t1 = setTimeout(updateSize, 100)
+    const t2 = setTimeout(updateSize, 300)
+    const t3 = setTimeout(updateSize, 1000)
 
     return () => {
       observer.disconnect()
-      clearTimeout(fallbackTimer)
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
     }
   }, [])
 
@@ -1512,13 +1539,12 @@ export default function NeuralCanvas({
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 overflow-hidden"
-      style={{ background: theme === 'dark' ? NEURAL_COLORS.darkBg : NEURAL_COLORS.lightBg }}
+      className="w-full h-full"
+      style={{ background: theme === 'dark' ? NEURAL_COLORS.darkBg : NEURAL_COLORS.lightBg, position: 'relative' }}
     >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0"
-        style={{ cursor: 'grab' }}
+        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', cursor: 'grab' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

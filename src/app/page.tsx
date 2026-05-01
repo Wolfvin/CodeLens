@@ -12,6 +12,7 @@ import { ResultPanel } from '@/components/bottom/ResultPanel'
 import { graphStore } from '@/lib/graphStore'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { useAnalysisStore } from '@/lib/analysisStore'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import type {
   GraphNode,
   GraphEdge,
@@ -536,15 +537,15 @@ function NeuralWorkspaceApp() {
         isScanning={isScanning}
       />
 
-      {/* Main area: Sidebar + Canvas + Panel */}
-      <div className="flex-1 flex overflow-hidden min-h-0" style={{ marginTop: 56 }}>
+      {/* Main area: Sidebar + Canvas + Panel — pt-14 accounts for fixed TopBar */}
+      <div className="flex-1 flex overflow-hidden min-h-0 pt-14">
         {/* Left Sidebar */}
         <LeftSidebar theme={theme} />
 
         {/* Center: Canvas + Bottom Panel */}
-        <div className="flex-1 flex flex-col overflow-hidden relative min-h-0">
-          {/* Neural Canvas */}
-          <div className="flex-1 relative min-h-0">
+        <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ position: 'relative' }}>
+          {/* Neural Canvas — explicit h-full to guarantee ResizeObserver gets dimensions */}
+          <div className="flex-1 min-h-0" style={{ position: 'relative', overflow: 'hidden' }}>
             <NeuralCanvas
               theme={theme}
               nodes={nodes}
@@ -584,7 +585,9 @@ function NeuralWorkspaceApp() {
 export default function Home() {
   return (
     <ThemeProvider>
-      <NeuralWorkspaceApp />
+      <ErrorBoundary>
+        <NeuralWorkspaceApp />
+      </ErrorBoundary>
     </ThemeProvider>
   )
 }
