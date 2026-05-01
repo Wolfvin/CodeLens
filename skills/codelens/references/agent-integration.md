@@ -1,8 +1,8 @@
 # Agent Integration Guide — CodeLens v5
 
-Panduan lengkap untuk mengintegrasikan CodeLens ke dalam AI agent workflows.
+Complete guide for integrating CodeLens into AI agent workflows.
 Covers: CLI integration, programmatic Python API, JSON output schemas,
-decision trees, auto-trigger mapping, error handling, dan best practices.
+decision trees, auto-trigger mapping, error handling, and best practices.
 
 ---
 
@@ -177,9 +177,9 @@ When a user's request is vague and doesn't clearly map to a specific tool, use t
 
 ## 1. Integration Overview
 
-CodeLens dirancang untuk **passive integration** — AI agent memanggil
-CodeLens secara manual via CLI atau Python API saat dibutuhkan.
-Tidak ada auto-trigger atau hook yang perlu di-daftarkan.
+CodeLens is designed for **passive integration** — the AI agent calls
+CodeLens manually via CLI or Python API when needed.
+No auto-triggers or hooks need to be registered.
 
 ### Integration Methods
 
@@ -191,12 +191,12 @@ Tidak ada auto-trigger atau hook yang perlu di-daftarkan.
 
 ### When to Use Which
 
-- **CLI**: Saat agent berjalan di process terpisah, atau agent bukan Python-based
-  (Node.js agents bisa panggil `child_process.exec`)
-- **Python API**: Saat agent berjalan dalam Python process yang sama,
-  atau butuh fine-grained control over parsing
-- **JSON file read**: Saat agent cuma butuh baca registry tanpa trigger scan,
-  misalnya untuk dashboard atau report generation
+- **CLI**: When the agent runs in a separate process, or the agent is not Python-based
+  (Node.js agents can call `child_process.exec`)
+- **Python API**: When the agent runs in the same Python process,
+  or needs fine-grained control over parsing
+- **JSON file read**: When the agent only needs to read the registry without triggering a scan,
+  for example for dashboard or report generation
 
 ---
 
@@ -204,26 +204,26 @@ Tidak ada auto-trigger atau hook yang perlu di-daftarkan.
 
 ### 2.1 Basic Pattern
 
-Setiap AI agent yang mengintegrasikan CodeLens harus mengikuti pola ini:
+Every AI agent integrating CodeLens must follow this pattern:
 
 ```
-1. SETUP:     codelens init <workspace>          (sekali saja)
-2. SCAN:      codelens scan <workspace>           (sebelum mulai kerja)
-3. QUERY:     codelens query <name> <workspace>   (sebelum buat/edit/hapus)
-4. RE-SCAN:   codelens scan <workspace> --incremental  (setelah selesai edit)
-5. AUDIT:     codelens list <workspace> --filter dead  (opsional, untuk report)
+1. SETUP:     codelens init <workspace>          (once only)
+2. SCAN:      codelens scan <workspace>           (before starting work)
+3. QUERY:     codelens query <name> <workspace>   (before create/edit/delete)
+4. RE-SCAN:   codelens scan <workspace> --incremental  (after finishing edits)
+5. AUDIT:     codelens list <workspace> --filter dead  (optional, for reporting)
 ```
 
 ### 2.2 Environment Setup
 
-Agent harus set environment variable `CODELENS_DIR` sebelum memanggil CLI:
+The agent must set the environment variable `CODELENS_DIR` before calling the CLI:
 
 ```bash
-# Dalam agent's setup/init phase
+# In the agent's setup/init phase
 export CODELENS_DIR="/path/to/skills/codelens"
 ```
 
-Atau gunakan full path langsung:
+Or use the full path directly:
 
 ```bash
 python3 /path/to/skills/codelens/scripts/codelens.py <command> <args>
@@ -314,8 +314,8 @@ function codelensList(workspace, domain = 'all', filterType = 'all') {
 
 ## 3. Python API Integration (Direct Import)
 
-Untuk Python-based agents, import CodeLens modules langsung lebih efisien
-daripada subprocess calls.
+For Python-based agents, importing CodeLens modules directly is more efficient
+than subprocess calls.
 
 ### 3.1 Setup
 
@@ -365,7 +365,7 @@ result = cmd_list("/path/to/workspace", domain="all", filter_type="dead")
 
 ### 3.3 Low-Level Registry Access
 
-Untuk agent yang butuh akses langsung ke registry data tanpa melalui command layer:
+For agents that need direct access to registry data without going through the command layer:
 
 ```python
 from registry import load_frontend_registry, load_backend_registry
@@ -395,7 +395,7 @@ for edge in backend["edges"]:
 
 ### 3.4 Custom Parsing (Advanced)
 
-Untuk agent yang butuh parse individual files tanpa full scan:
+For agents that need to parse individual files without a full scan:
 
 ```python
 from grammar_loader import get_grammar_loader
@@ -428,8 +428,8 @@ if lang:
 
 ## 4. JSON Output Schemas
 
-Dokumentasi lengkap format output setiap command, supaya agent bisa
-parse dan mengambil keputusan secara programmatic.
+Complete output format documentation for each command, so the agent can
+parse and make decisions programmatically.
 
 ### 4.1 `scan` Output
 
@@ -640,7 +640,7 @@ parse dan mengambil keputusan secara programmatic.
 
 ### 5.1 Pre-Write Decision Tree (Most Important)
 
-Panggil **sebelum** menulis class/id/function baru:
+Call **before** writing a new class/id/function:
 
 ```
 codelens_query(name, workspace)
@@ -685,7 +685,7 @@ codelens_query(name, workspace)
 
 ### 5.2 Post-Write Decision Tree
 
-Panggil **setelah** menulis/mengedit/hapus code:
+Call **after** writing/editing/deleting code:
 
 ```
 codelens_scan(workspace, incremental=True)
@@ -706,7 +706,7 @@ codelens_scan(workspace, incremental=True)
 
 ### 5.3 Refactoring Decision Tree
 
-Untuk agent yang melakukan refactoring:
+For agents performing refactoring:
 
 ```
 1. codelens_list(workspace, "all", "dead")
@@ -962,9 +962,9 @@ class DocGeneratorWithCodeLens:
 
 ### 7.2 Graceful Degradation
 
-CodeLens dirancang untuk graceful degradation — jika tree-sitter grammar
-tidak tersedia, otomatis fallback ke regex parser. Agent tidak perlu
-handle ini secara manual.
+CodeLens is designed for graceful degradation — if a tree-sitter grammar
+is not available, it automatically falls back to the regex parser. The agent does not need
+to handle this manually.
 
 ```python
 def safe_codelens_query(name, workspace):
@@ -985,7 +985,7 @@ def safe_codelens_query(name, workspace):
 
 ### 7.3 Registry Staleness Detection
 
-Agent bisa cek apakah registry mungkin outdated:
+The agent can check whether the registry may be outdated:
 
 ```python
 import os
@@ -1021,7 +1021,7 @@ def is_registry_stale(workspace, max_age_hours=24):
 
 ### 8.3 Report Issues to User
 
-Agent harus selalu report CodeLens findings ke user, bukan silently skip:
+The agent must always report CodeLens findings to the user, rather than silently skipping them:
 
 ```python
 # ❌ BAD: silently ignore collision
@@ -1057,7 +1057,7 @@ else:
 
 ### 8.6 Don't Over-Scan
 
-Jangan trigger scan terlalu sering. Recommended cadence:
+Don't trigger scans too frequently. Recommended cadence:
 - After init: 1 full scan
 - After each edit batch: 1 incremental scan
 - Before commit/PR: 1 incremental scan + list dead code
@@ -1156,7 +1156,7 @@ Step 5: Final audit:
 
 ## 10. Programmatic Registry File Access
 
-Untuk agent yang cuma butuh baca data tanpa menjalankan scan:
+For agents that only need to read data without running a scan:
 
 ### 10.1 File Locations
 
@@ -1229,13 +1229,13 @@ def quick_lookup(workspace, name):
 
 ## 11. Multi-Agent Coordination
 
-Ketika beberapa AI agents bekerja di workspace yang sama:
+When multiple AI agents work in the same workspace:
 
 ### 11.1 Registry Locking
 
-CodeLens tidak punya built-in locking. Untuk multi-agent:
-- Pastikan hanya 1 agent yang menjalankan `scan` pada saat yang sama
-- Gunakan file lock atau coordination mechanism jika perlu
+CodeLens does not have built-in locking. For multi-agent setups:
+- Ensure only 1 agent runs `scan` at the same time
+- Use file locking or a coordination mechanism if needed
 
 ### 11.2 Shared Registry
 
@@ -1268,18 +1268,18 @@ def locked_scan(workspace, incremental=True):
 
 ## 12. Integration Checklist
 
-Sebelum mengintegrasikan CodeLens ke agent, pastikan:
+Before integrating CodeLens into an agent, ensure:
 
-- [ ] **Setup**: `setup.sh` sudah dijalankan, tree-sitter grammars terinstall
-- [ ] **Init**: `codelens init <workspace>` sudah dijalankan sekali
-- [ ] **Scan**: Full scan sudah dijalankan setidaknya sekali
-- [ ] **Query before write**: Agent selalu query sebelum membuat class/id/function baru
-- [ ] **Post-write scan**: Agent menjalankan incremental scan setelah modifikasi
-- [ ] **Collision handling**: Agent berhenti dan report saat menemukan collision
-- [ ] **Dead code reporting**: Agent report dead code ke user, bukan silently ignore
-- [ ] **Error handling**: Agent handle ImportError dan FileNotFoundError gracefully
-- [ ] **Timeout**: Agent set appropriate timeout untuk setiap command
-- [ ] **Domain awareness**: Agent menggunakan `--domain` filter saat query
+- [ ] **Setup**: `setup.sh` has been run, tree-sitter grammars are installed
+- [ ] **Init**: `codelens init <workspace>` has been run once
+- [ ] **Scan**: Full scan has been run at least once
+- [ ] **Query before write**: Agent always queries before creating a new class/id/function
+- [ ] **Post-write scan**: Agent runs an incremental scan after modifications
+- [ ] **Collision handling**: Agent stops and reports when it finds a collision
+- [ ] **Dead code reporting**: Agent reports dead code to the user, rather than silently ignoring
+- [ ] **Error handling**: Agent handles ImportError and FileNotFoundError gracefully
+- [ ] **Timeout**: Agent sets appropriate timeouts for each command
+- [ ] **Domain awareness**: Agent uses the `--domain` filter when querying
 
 ---
 

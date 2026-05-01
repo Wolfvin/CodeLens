@@ -285,3 +285,44 @@ Stage Summary:
 - skill.json: Optimized description + 8 new trigger-specific tags
 - Package: /home/z/my-project/download/codelens-5.0.0.zip (284KB)
 - CLI already has 39 commands registered (vuln-scan, perf-hint, css-deep added in prior session)
+
+---
+Task ID: 2
+Agent: general-purpose
+Task: Unify agent-integration.md to English (convert all Indonesian prose to English)
+
+Work Log:
+- Read full file (1685 lines, sections 0-17) to identify all Indonesian prose text
+- Identified 23 distinct Indonesian prose sections across sections 0-12 (sections 13-17 were already in English)
+- Preserved Section 0.3 Keyword Detection Matrix (Keywords EN/ID) and Section 0.5 Colloquial Trigger Phrases as-is (intentionally bilingual for trigger mapping)
+- Applied 23 translations covering all sections:
+
+1. Line 3: "Panduan lengkap untuk mengintegrasikan CodeLens" → "Complete guide for integrating CodeLens"
+2. Line 5: "dan best practices" → "and best practices"
+3. Lines 180-182 (§1): "CodeLens dirancang untuk passive integration — AI agent memanggil... Tidak ada auto-trigger atau hook yang perlu di-daftarkan" → "CodeLens is designed for passive integration — the AI agent calls... No auto-triggers or hooks need to be registered"
+4. Lines 194-199 (§1): "Saat agent berjalan..." / "Saat agent cuma butuh..." → "When the agent runs..." / "When the agent only needs..."
+5. Line 207 (§2.1): "Setiap AI agent yang mengintegrasikan CodeLens harus mengikuti pola ini" → "Every AI agent integrating CodeLens must follow this pattern"
+6. Lines 210-214 (§2.1): Code comments (sekali saja → once only, sebelum mulai kerja → before starting work, etc.)
+7. Line 219 (§2.2): "Agent harus set environment variable" → "The agent must set the environment variable"
+8. Line 222 (§2.2): "# Dalam agent's setup/init phase" → "# In the agent's setup/init phase"
+9. Line 226 (§2.2): "Atau gunakan full path langsung" → "Or use the full path directly"
+10. Lines 317-318 (§3): "Untuk Python-based agents, import CodeLens modules langsung lebih efisien" → "For Python-based agents, importing CodeLens modules directly is more efficient"
+11. Line 368 (§3.3): "Untuk agent yang butuh akses langsung ke registry data" → "For agents that need direct access to registry data"
+12. Line 398 (§3.4): "Untuk agent yang butuh parse individual files" → "For agents that need to parse individual files"
+13. Lines 431-432 (§4): "Dokumentasi lengkap format output setiap command, supaya agent bisa parse dan mengambil keputusan secara programmatic" → "Complete output format documentation for each command, so the agent can parse and make decisions programmatically"
+14. Line 643 (§5.1): "Panggil sebelum menulis" → "Call before writing"
+15. Line 688 (§5.2): "Panggil setelah menulis/mengedit/hapus code" → "Call after writing/editing/deleting code"
+16. Line 709 (§5.3): "Untuk agent yang melakukan refactoring" → "For agents performing refactoring"
+17. Lines 965-967 (§7.2): "CodeLens dirancang untuk graceful degradation — jika tree-sitter grammar tidak tersedia, otomatis fallback ke regex parser. Agent tidak perlu handle ini secara manual" → "CodeLens is designed for graceful degradation — if a tree-sitter grammar is not available, it automatically falls back to the regex parser. The agent does not need to handle this manually"
+18. Line 988 (§7.3): "Agent bisa cek apakah registry mungkin outdated" → "The agent can check whether the registry may be outdated"
+19. Line 1024 (§8.3): "Agent harus selalu report CodeLens findings ke user, bukan silently skip" → "The agent must always report CodeLens findings to the user, rather than silently skipping them"
+20. Line 1060 (§8.6): "Jangan trigger scan terlalu sering" → "Don't trigger scans too frequently"
+21. Line 1159 (§10): "Untuk agent yang cuma butuh baca data tanpa menjalankan scan" → "For agents that only need to read data without running a scan"
+22. Lines 1232-1238 (§11): "Ketika beberapa AI agents bekerja..." / "CodeLens tidak punya built-in locking..." → "When multiple AI agents work..." / "CodeLens does not have built-in locking..."
+23. Lines 1271-1282 (§12): Full checklist translation ("Sebelum mengintegrasikan..." → "Before integrating...", all 10 checklist items translated)
+
+Verification:
+- Scanned remaining file for Indonesian text: only found in Section 0.3 (Keyword Detection Matrix) and Section 0.5 (Colloquial Trigger Phrases) which are intentionally bilingual by design
+- All code examples, JSON schemas, and technical terms preserved unchanged
+- Document structure and section numbering preserved exactly
+- File line count unchanged (1685 lines)
