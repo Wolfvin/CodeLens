@@ -3,11 +3,27 @@ name: codelens
 description: >
   CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   WAJIB aktifkan skill ini SETIAP KALI akan membuat, mengedit, atau menghapus HTML class/id,
-  CSS selector, JSX className, atau function di Rust/JS/TS. Gunakan sebelum menulis kode baru
+  CSS selector, JSX className, atau function di Rust/JS/TS/Python. Gunakan sebelum menulis kode baru
   yang melibatkan id, class, className, atau function name — untuk mencegah collision,
-  overwrite logic lama, dan dead code. Trigger juga saat user minta "cek apakah id ini sudah ada",
-  "lihat semua yang pakai class X", "ada function apa saja yang panggil Y", "scan workspace saya",
-  "audit dead code", "cek duplicate CSS", "tampilkan semua reference ke N", atau "detect frameworks".
+  overwrite logic lama, dan dead code.
+  Trigger juga saat user minta salah satu dari:
+  — REFERENCE: "cek apakah id ini sudah ada", "lihat semua yang pakai class X",
+    "ada function apa saja yang panggil Y", "tampilkan semua reference ke N",
+    "siapa yang import file ini", "trace call chain"
+  — CODEBASE SCAN: "scan workspace saya", "audit dead code", "cek duplicate CSS",
+    "detect frameworks", "validate registry", "show file outline"
+  — SECURITY: "is this code secure", "find hardcoded secrets/API keys/passwords",
+    "ada API key yang tercecer", "audit env vars", "cek environment variables",
+    "find ReDoS regex", "is this regex safe", "check data flow security"
+  — UNDERSTANDING: "how does this app work", "where are the entry points",
+    "map API routes", "what endpoints exist", "track global state",
+    "who reads/writes this state", "what's the file structure"
+  — QUALITY: "is this code ready for production", "find code smells",
+    "measure complexity", "which function is most complex", "find debug code",
+    "cleanup console.log/print", "check accessibility", "is this component accessible",
+    "find TODO/FIXME", "check WCAG compliance"
+  — REFACTORING: "is it safe to rename/move this", "what happens if I delete this",
+    "check refactoring safety", "who owns this code", "what's the impact of this change"
   v3 adds: data flow analysis, code smell detection, side-effect analysis, refactoring safety,
   enhanced dead code, error propagation, test coverage mapping, config drift detection,
   lightweight type inference, and code ownership analysis.
@@ -669,6 +685,102 @@ python3 "$CODELENS_DIR/scripts/codelens.py" a11y /path/to/workspace --severity c
 
 ---
 
+## Auto-Trigger Map — User Intent → Tool Selection
+
+Tabel ini membantu AI memilih tool yang tepat berdasarkan kata kunci atau intent user.
+**WAJIB rujuk tabel ini setiap kali user minta sesuatu yang berhubungan dengan codebase.**
+
+### Core Triggers (SELALU aktifkan CodeLens)
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| Membuat class/id/function baru | `query` | `codelens query "name" workspace` |
+| Mengedit class/id/function yang ada | `query` + `context` | Query dulu, lalu context untuk detail |
+| Menghapus kode | `impact` + `dead-code` | Impact check dulu, baru hapus |
+| "apakah id ini sudah ada" / "does this class exist" | `query` | `codelens query "name" workspace` |
+| "siapa yang pakai" / "who uses this" | `query` atau `trace --direction up` | Query untuk overview, trace untuk chain |
+| "siapa yang panggil" / "who calls this" | `trace --direction up` | Full call chain |
+| "function ini manggil apa" / "what does this call" | `trace --direction down` | Downstream call chain |
+
+### Reference & Search Triggers
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| "cari pattern" / "search for" / "find all" | `search` | `codelens search "pattern" workspace` |
+| "cari symbol" / "find symbol" | `symbols` | `codelens symbols "name" workspace` |
+| "detail function ini" / "tell me about this" | `context` | `codelens context "name" workspace` |
+| "siapa import file ini" / "who imports this" | `dependents` | `codelens dependents path workspace` |
+| "outline" / "struktur file" / "what's in this file" | `outline` | `codelens outline workspace --file path` |
+| "cek duplicate CSS" / "cek duplicate class" | `list --filter duplicate_define` | `codelens list workspace --filter duplicate_define` |
+| "CSS tidak match HTML" / "missing CSS" / "orphan class" | `missing-refs` | `codelens missing-refs workspace` |
+| "circular dependency" / "siklus import" | `circular` | `codelens circular workspace` |
+
+### Security Triggers
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| "API key tercecer" / "hardcoded secret" / "find passwords" | `secrets` | `codelens secrets workspace` |
+| "is this secure" / "security audit" / "vulnerability check" | `secrets` + `dataflow` + `env-check` + `regex-audit` | Full security chain |
+| "user input ke SQL" / "SQL injection risk" / "taint analysis" | `dataflow` | `codelens dataflow workspace --source user_input --sink db_query` |
+| "XSS risk" / "user input ke HTML" | `dataflow` | `codelens dataflow workspace --source user_input --sink html_output` |
+| "env var" / "environment variable" / "apa yang harus di-set" | `env-check` | `codelens env-check workspace` |
+| "regex berbahaya" / "ReDoS" / "regex DoS" | `regex-audit` | `codelens regex-audit workspace` |
+| "data flow" / "taint" / "sanitization" | `dataflow` | `codelens dataflow workspace` |
+
+### Understanding & Onboarding Triggers
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| "how does this app work" / "explain this codebase" | `entrypoints` + `api-map` + `state-map` | Full understanding chain |
+| "entry point" / "di mana mulai" / "main function" | `entrypoints` | `codelens entrypoints workspace` |
+| "API route" / "endpoint" / "POST /users" | `api-map` | `codelens api-map workspace` |
+| "state management" / "Redux" / "global state" / "Context" | `state-map` | `codelens state-map workspace` |
+| "framework apa" / "what framework" / "detect stack" | `detect` | `codelens detect workspace` |
+| "scan workspace" / "analyze codebase" | `scan` | `codelens scan workspace` |
+
+### Quality & Production Readiness Triggers
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| "production ready" / "ready to deploy" / "quality check" | `smell` + `complexity` + `debug-leak` + `dead-code` + `a11y` + `secrets` | Quality Gate chain |
+| "code smell" / "refactor apa dulu" / "technical debt" | `smell` | `codelens smell workspace` |
+| "complexity" / "too complex" / "function paling rumit" | `complexity` | `codelens complexity workspace` |
+| "console.log" / "debug code" / "cleanup before deploy" | `debug-leak` | `codelens debug-leak workspace` |
+| "TODO" / "FIXME" / "HACK" | `debug-leak` | `codelens debug-leak workspace --category todo_fixme` |
+| "dead code" / "unused" / "zombie CSS" | `dead-code` + `list --filter dead` | Full dead code analysis |
+| "accessibility" / "a11y" / "WCAG" / "screen reader" | `a11y` | `codelens a11y workspace` |
+| "missing alt text" / "form label" / "ARIA" | `a11y` | `codelens a11y workspace --category missing_alt` |
+
+### Refactoring & Change Triggers
+
+| User Intent / Keywords | Tool | Command |
+|------------------------|------|---------|
+| "rename" / "safe to rename" / "ubah nama function" | `refactor-safe` + `impact` + `test-map` | Full refactoring chain |
+| "move file" / "safe to move" | `refactor-safe` + `dependents` | Check move safety |
+| "delete" / "safe to remove" / "hapus" | `impact` + `dead-code` | Impact then delete |
+| "impact" / "what if I change" / "dampak perubahan" | `impact` | `codelens impact "name" workspace` |
+| "pure function" / "side effect" / "impure" | `side-effect` | `codelens side-effect workspace` |
+| "test coverage" / "sudah ditest" / "untested" | `test-map` | `codelens test-map workspace` |
+| "error propagation" / "kalau gagal" / "crash path" | `stack-trace` | `codelens stack-trace "name" workspace` |
+| "package drift" / "missing dep" / "unused dep" | `config-drift` | `codelens config-drift workspace` |
+| "type" / "return type" / "infer tipe" | `type-infer` | `codelens type-infer workspace` |
+| "owner" / "siapa yang buat" / "git blame" | `ownership` | `codelens ownership workspace` |
+
+### Composite Scenario Triggers
+
+| User Scenario | Auto-Chain |
+|---------------|------------|
+| User writes new code with class/id/function | `init` → `scan` → `query` → write → `scan --incremental` |
+| User reports a bug | `search` → `context` → `trace` → `missing-refs` |
+| User asks "is this secure?" | `secrets` → `dataflow` → `env-check` → `regex-audit` |
+| User asks "is this production ready?" | `smell` → `complexity` → `debug-leak` → `dead-code` → `a11y` → `secrets` |
+| User onboards to new codebase | `entrypoints` → `api-map` → `state-map` → `outline --all` |
+| User wants to rename/delete | `refactor-safe` → `impact` → `test-map` → rename → `scan --incremental` |
+| User deploys / pre-deploy check | `secrets` → `debug-leak` → `env-check` → `config-drift` → `dead-code` |
+| User builds new feature | `query` → `context` → `side-effect` → write → `scan --incremental` → `missing-refs` |
+
+---
+
 ## Alur Kerja AI
 
 ### Basic Flow (Pre-write Check)
@@ -889,6 +1001,174 @@ User: "Is this code ready for production?"
           │
           ▼
 7. Report: "Quality gate pass/fail..."
+```
+
+### Pre-Deploy Flow (v4)
+
+```
+User: "I'm about to deploy — anything I should check?"
+          │
+          ▼
+1. codelens secrets workspace
+   → Hardcoded credentials that could leak?
+          │
+          ▼
+2. codelens debug-leak workspace
+   → Leftover console.log, print, debugger statements?
+          │
+          ▼
+3. codelens env-check workspace
+   → Required env vars without fallback? Missing from .env.example?
+          │
+          ▼
+4. codelens config-drift workspace
+   → Declared but unused packages? Missing declarations?
+          │
+          ▼
+5. codelens dead-code workspace
+   → Unused code that adds bundle size?
+          │
+          ▼
+6. Report: "Pre-deploy checklist results..."
+```
+
+### New Developer Onboarding Flow (v4)
+
+```
+User: "I'm new to this project — help me understand the codebase"
+          │
+          ▼
+1. codelens detect workspace
+   → What frameworks and tools are used?
+          │
+          ▼
+2. codelens entrypoints workspace
+   → Where does the app start? What are the entry points?
+          │
+          ▼
+3. codelens api-map workspace
+   → What API endpoints exist?
+          │
+          ▼
+4. codelens state-map workspace
+   → How is state managed? Where is the global state?
+          │
+          ▼
+5. codelens outline workspace --all
+   → What's the file structure and what does each file contain?
+          │
+          ▼
+6. codelens ownership workspace
+   → Who wrote what? Who to ask about specific code?
+          │
+          ▼
+7. Report: "Codebase overview for onboarding..."
+```
+
+### New Feature Development Flow (v4 — Enhanced)
+
+```
+User: "Add a new shopping cart feature"
+          │
+          ▼
+1. codelens query "cart" workspace
+   → Does anything cart-related already exist?
+          │
+          ▼
+2. codelens query "CartButton" workspace --domain frontend
+   → Check for component name collision
+          │
+          ▼
+3. codelens context "cart" workspace
+   → If found, understand existing implementation
+          │
+          ▼
+4. codelens side-effect workspace --name existingCartFn
+   → Is existing cart code pure or impure?
+          │
+          ▼
+5. Write new cart code
+          │
+          ▼
+6. codelens scan workspace --incremental
+   → Update registry with new code
+          │
+          ▼
+7. codelens missing-refs workspace
+   → Any CSS classes referenced but not defined?
+          │
+          ▼
+8. codelens a11y workspace
+   → Cart is user-facing — check accessibility
+          │
+          ▼
+9. codelens test-map workspace --function addToCart
+   → Is the new code tested?
+          │
+          ▼
+10. Report: "Feature added, findings..."
+```
+
+### Performance Investigation Flow (v4)
+
+```
+User: "This page is slow — help me find the bottleneck"
+          │
+          ▼
+1. codelens complexity workspace --threshold 15
+   → Find overly complex functions (likely slow)
+          │
+          ▼
+2. codelens side-effect workspace
+   → Find impure functions (network/IO calls)
+          │
+          ▼
+3. codelens circular workspace
+   → Circular dependencies cause re-renders/re-computation
+          │
+          ▼
+4. codelens state-map workspace
+   → State that's read/written by many components = re-render cascade
+          │
+          ▼
+5. codelens smell workspace --categories god_object large_file callback_hell
+   → Patterns that hurt performance
+          │
+          ▼
+6. Report: "Performance bottlenecks found..."
+```
+
+### Code Review Assistance Flow (v4)
+
+```
+User: "Review this PR / these changes"
+          │
+          ▼
+1. codelens scan workspace --incremental
+   → Update registry with latest code
+          │
+          ▼
+2. codelens diff workspace
+   → What changed since last snapshot?
+          │
+          ▼
+3. codelens list workspace --filter dead
+   → New dead code introduced?
+          │
+          ▼
+4. codelens list workspace --filter collision
+   → New ID collisions?
+          │
+          ▼
+5. codelens missing-refs workspace
+   → New CSS/HTML mismatches?
+          │
+          ▼
+6. codelens secrets workspace --severity critical
+   → Critical secrets leaked?
+          │
+          ▼
+7. Report: "Code review findings..."
 ```
 
 ---

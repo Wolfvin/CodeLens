@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "4.0.0",
-  "description": "Live Codebase Reference Intelligence — tree-sitter powered, tracks class/id/function references, data flow, code smells, side effects, refactoring safety, dead code, error propagation, test coverage, type inference, ownership analysis, secret detection, entry point mapping, API route mapping, state management tracking, env var auditing, debug leak detection, complexity scoring, regex auditing, accessibility auditing",
+  "version": "4.0.1",
+  "description": "CodeLens v4 — Live Codebase Reference Intelligence (Tree-sitter Edition). ACTIVATE THIS SKILL whenever you will create, edit, or delete HTML class/id, CSS selector, JSX className, or function in Rust/JS/TS/Python. Use BEFORE writing new code involving id, class, className, or function name — to prevent collision, overwrite of existing logic, and dead code. Also trigger when user asks: check if id exists, show everything using class X, what functions call Y, scan my workspace, audit dead code, check duplicate CSS, show all references to N, detect frameworks, is this code secure, find hardcoded secrets, what are the entry points, map API routes, track global state, audit env vars, find debug code, measure complexity, audit regex patterns, check accessibility. Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS. Powered by tree-sitter for accurate AST-based parsing. 36 commands across reference tracking, data flow, security, quality, and accessibility analysis.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -15,6 +15,12 @@
     "security-analysis", "pure-functions", "config-drift",
     "secret-detection", "entry-points", "api-mapping", "state-management",
     "env-audit", "debug-detection", "complexity-analysis", "regex-audit",
-    "accessibility", "a11y", "wcag", "redos"
+    "accessibility", "a11y", "wcag", "redos",
+    "collision-detection", "pre-write-check", "id-exists", "class-exists",
+    "function-exists", "who-calls", "call-chain", "rename-safe",
+    "api-key-detection", "hardcoded-secrets", "production-readiness",
+    "code-quality", "cyclomatic-complexity", "cognitive-complexity",
+    "wcag-compliance", "aria-audit", "environment-variables",
+    "debug-code-cleanup", "console-log-detection"
   ]
 }

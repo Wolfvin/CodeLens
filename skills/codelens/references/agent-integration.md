@@ -1,8 +1,115 @@
-# Agent Integration Guide — CodeLens v2
+# Agent Integration Guide — CodeLens v4
 
 Panduan lengkap untuk mengintegrasikan CodeLens ke dalam AI agent workflows.
 Covers: CLI integration, programmatic Python API, JSON output schemas,
-decision trees, error handling, dan best practices.
+decision trees, auto-trigger mapping, error handling, dan best practices.
+
+---
+
+## 0. Auto-Activation & Trigger Guide
+
+CodeLens uses **passive integration** — the AI agent decides when to invoke tools
+based on user intent. This section maps user intents to the correct CodeLens tools
+so the AI can auto-select the right command without manual lookup.
+
+### 0.1 Primary Activation Rules
+
+The AI MUST activate CodeLens in these scenarios:
+
+1. **BEFORE writing any new class/id/function** → Always run `query` first
+2. **BEFORE deleting/renaming code** → Always run `refactor-safe` or `impact`
+3. **AFTER writing/editing/deleting code** → Always run `scan --incremental`
+4. **When user asks about codebase health/quality** → Run relevant analysis tools
+5. **When user asks about security** → Run security chain
+
+### 0.2 Intent-to-Tool Quick Map
+
+This is the fastest way for an AI to pick the right tool:
+
+#### Writing Code (MANDATORY — always trigger)
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| Create new class/id/function | `query` → if not found → write → `scan --incremental` |
+| Edit existing code | `query` → `context` → edit → `scan --incremental` → `missing-refs` |
+| Delete code | `impact` → delete → `scan --incremental` → `list --filter dead` |
+
+#### Security & Compliance
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| "Is this secure?" / "security audit" | `secrets` → `dataflow` → `env-check` → `regex-audit` |
+| "Find API keys/passwords" | `secrets` |
+| "SQL injection?" / "taint analysis" | `dataflow --source user_input --sink db_query` |
+| "XSS risk?" | `dataflow --source user_input --sink html_output` |
+| "Check env vars" | `env-check` |
+| "Regex safe?" / "ReDoS" | `regex-audit` |
+
+#### Codebase Understanding
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| "How does this app work?" | `entrypoints` → `api-map` → `state-map` → `outline --all` |
+| "What endpoints exist?" | `api-map` |
+| "Where is global state?" | `state-map` |
+| "Who calls this function?" | `trace --direction up` |
+| "What does this function call?" | `trace --direction down` |
+| "Tell me about this symbol" | `context` |
+
+#### Quality & Production
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| "Production ready?" | `smell` → `complexity` → `debug-leak` → `dead-code` → `a11y` → `secrets` |
+| "What to refactor?" | `smell` → `complexity --threshold 15` |
+| "Find debug code" / "console.log" | `debug-leak` |
+| "Dead code?" / "unused code" | `dead-code` + `list --filter dead` |
+| "Accessible?" / "a11y" / "WCAG" | `a11y` |
+| "Too complex" | `complexity` |
+
+#### Refactoring
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| "Safe to rename?" | `refactor-safe` → `impact` → `test-map` |
+| "Safe to delete?" | `impact` → `dead-code` |
+| "What's the impact?" | `impact` |
+| "Pure function?" | `side-effect` |
+| "Who owns this?" | `ownership` |
+| "Is it tested?" | `test-map` |
+
+#### Pre-Deploy
+
+| User Intent | Tool Chain |
+|-------------|------------|
+| "Ready to deploy?" / "pre-deploy check" | `secrets` → `debug-leak` → `env-check` → `config-drift` → `dead-code` |
+
+### 0.3 Keyword Detection Matrix
+
+When the AI detects these keywords in user messages, it should activate the
+corresponding CodeLens tools:
+
+| Keywords (EN) | Keywords (ID) | Tool |
+|---------------|---------------|------|
+| exists, already, check if, does this | sudah ada, apakah | `query` |
+| who uses, who calls, references | siapa pakai, siapa panggil | `trace` / `query` |
+| delete, remove, hapus | hapus, buang | `impact` + `dead-code` |
+| rename, move, refactor | ubah nama, pindah | `refactor-safe` + `impact` |
+| secure, security, vulnerability | aman, keamanan, celah | `secrets` + `dataflow` |
+| API key, password, token, secret | kunci, sandi, rahasia | `secrets` |
+| entry point, main, start | mulai, awal, titik masuk | `entrypoints` |
+| endpoint, route, API | titik akhir, rute | `api-map` |
+| state, Redux, Context, Zustand | keadaan, state global | `state-map` |
+| env, environment variable, config | variabel lingkungan, konfigurasi | `env-check` |
+| console.log, print, debugger, debug | debug, cetak | `debug-leak` |
+| complex, complexity, cyclomatic | rumit, kompleks | `complexity` |
+| regex, pattern, ReDoS | pola, regex | `regex-audit` |
+| accessibility, a11y, WCAG, ARIA | aksesibilitas | `a11y` |
+| smell, debt, quality | bau kode, kualitas | `smell` |
+| test, coverage, untested | uji, cakupan, belum ditest | `test-map` |
+| dead code, unused, zombie | kode mati, tidak dipakai | `dead-code` |
+| deploy, production, release | terap, produksi, rilis | Full quality gate chain |
+| slow, performance, bottleneck | lambat, kinerja | `complexity` + `side-effect` + `circular` + `state-map` |
 
 ---
 
