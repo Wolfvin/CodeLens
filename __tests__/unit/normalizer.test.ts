@@ -290,6 +290,134 @@ describe('Normalizer', () => {
   })
 
   // ============================================================
+  // normalize('secrets', ...)
+  // ============================================================
+
+  describe('normalize secrets', () => {
+    it('creates secret nodes for hardcoded secrets (api_key, aws_key, secret)', () => {
+      const output = {
+        findings: [
+          { category: 'api_key', env_key: 'STRIPE_SECRET', file: 'src/config.ts', line: 5, severity: 'critical', match: 'sk_live_...', type: 'hardcoded' },
+          { category: 'aws_key', env_key: 'AWS_SECRET_KEY', file: 'src/env.ts', line: 10, severity: 'critical', match: 'AKIA...', type: 'hardcoded' },
+        ],
+        risk: 'critical',
+      }
+
+      const event = normalizer.normalize('secrets', output)
+      expect(isValidGraphEvent(event)).toBe(true)
+      expect(event.sourceCommand).toBe('secrets')
+      expect(event.nodes.length).toBe(2)
+
+      const secretNodes = event.nodes.filter(n => n.type === 'secret')
+      expect(secretNodes.length).toBe(2)
+      expect(secretNodes[0].domain).toBe('backend')
+      expect(secretNodes[0].status).toBe('critical')
+    })
+
+    it('creates env_var nodes for non-hardcoded secret references', () => {
+      const output = {
+        findings: [
+          { category: 'env_ref', env_key: 'DATABASE_URL', file: 'src/db.ts', line: 3, severity: 'warning', match: 'process.env.DATABASE_URL', type: 'reference' },
+        ],
+        risk: 'medium',
+      }
+
+      const event = normalizer.normalize('secrets', output)
+      const envNodes = event.nodes.filter(n => n.type === 'env_var')
+      expect(envNodes.length).toBe(1)
+      expect(envNodes[0].label).toBe('DATABASE_URL')
+      expect(envNodes[0].status).toBe('warning')
+    })
+
+    it('creates critical file nodes for exposed .env files', () => {
+      const output = {
+        findings: [],
+        env_exposed: ['.env.production', '.env.staging'],
+        risk: 'critical',
+      }
+
+      const event = normalizer.normalize('secrets', output)
+      const fileNodes = event.nodes.filter(n => n.type === 'file' && n.status === 'critical')
+      expect(fileNodes.length).toBe(2)
+      expect(fileNodes.map(n => n.data?.exposed)).toEqual([true, true])
+    })
+
+    it('uses alarm animation for secrets', () => {
+      const output = {
+        findings: [{ category: 'api_key', env_key: 'KEY', severity: 'critical' }],
+        risk: 'critical',
+      }
+
+      const event = normalizer.normalize('secrets', output)
+      expect(event.animation.type).toBe('alarm')
+    })
+
+    it('handles empty findings gracefully', () => {
+      const event = normalizer.normalize('secrets', { findings: [] })
+      expect(isValidGraphEvent(event)).toBe(true)
+      expect(event.nodes.length).toBe(0)
+    })
+  })
+
+  // ============================================================
+  // normalize('symbols', ...)
+  // ============================================================
+
+  describe('normalize symbols', () => {
+    it('creates nodes for each symbol result with flash animation', () => {
+      const output = {
+        query: 'processPayment',
+        results: [
+          { name: 'processPayment', type: 'function', domain: 'backend', defined_in: 'src/api.ts:10', ref_count: 3 },
+          { name: 'processRefund', type: 'function', domain: 'backend', defined_in: 'src/refund.ts:5', ref_count: 1 },
+        ],
+      }
+
+      const event = normalizer.normalize('symbols', output)
+      expect(isValidGraphEvent(event)).toBe(true)
+      expect(event.sourceCommand).toBe('symbols')
+      expect(event.nodes.length).toBe(2)
+      expect(event.animation.type).toBe('flash')
+
+      const fnNodes = event.nodes.filter(n => n.type === 'function')
+      expect(fnNodes.length).toBe(2)
+      expect(fnNodes[0].file).toBe('src/api.ts')
+      expect(fnNodes[0].line).toBe(10)
+    })
+
+    it('maps frontend class symbols correctly', () => {
+      const output = {
+        query: 'btn-',
+        results: [
+          { name: 'btn-primary', type: 'class', domain: 'frontend', defined_in: 'src/styles.css:10', ref_count: 5 },
+        ],
+      }
+
+      const event = normalizer.normalize('symbols', output)
+      const classNode = event.nodes.find(n => n.type === 'class')
+      expect(classNode).toBeDefined()
+      expect(classNode!.domain).toBe('frontend')
+    })
+
+    it('includes query string in summary metadata', () => {
+      const output = {
+        query: 'myFunc',
+        results: [{ name: 'myFunc', type: 'function', domain: 'backend' }],
+      }
+
+      const event = normalizer.normalize('symbols', output)
+      expect(event.metadata.summary).toContain('myFunc')
+    })
+
+    it('handles empty results gracefully', () => {
+      const event = normalizer.normalize('symbols', { query: 'nonexistent', results: [] })
+      expect(isValidGraphEvent(event)).toBe(true)
+      expect(event.nodes.length).toBe(0)
+      expect(event.animation.type).toBe('flash')
+    })
+  })
+
+  // ============================================================
   // normalize('watch', ...)
   // ============================================================
 

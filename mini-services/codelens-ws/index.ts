@@ -15,10 +15,12 @@ import { Server } from 'socket.io'
 type NodeType =
   | 'class' | 'id' | 'function' | 'component' | 'store'
   | 'file' | 'package' | 'route' | 'env_var' | 'variable'
+  | 'secret' | 'vulnerability' | 'test' | 'import' | 'css_var' | 'keyframe'
 
 type NodeStatus =
   | 'active' | 'dead' | 'vulnerable' | 'critical'
   | 'safe' | 'orphan' | 'warning' | 'duplicate_define' | 'collision'
+  | 'impure' | 'untested' | 'unused'
 
 type Domain = 'frontend' | 'backend'
 
@@ -45,6 +47,7 @@ interface GraphNode {
 type EdgeType =
   | 'references' | 'calls' | 'imports' | 'defines' | 'depends_on'
   | 'routes_to' | 'reads' | 'writes' | 'contains' | 'extends' | 'implements'
+  | 'taints' | 'sanitizes' | 'tests' | 'imports_from'
 
 type EdgeStatus = 'active' | 'dead' | 'warning' | 'danger'
 
@@ -122,6 +125,12 @@ const NEURAL_COLORS = {
   route: '#63b3ed',
   env_var: '#fbd38d',
   variable: '#68d391',
+  secret: '#e53e3e',
+  vulnerability: '#fc8181',
+  test: '#68d391',
+  import: '#63b3ed',
+  css_var: '#f687b3',
+  keyframe: '#b794f4',
   active: '#48bb78',
   dead: '#718096',
   vulnerable: '#ecc94b',
@@ -131,6 +140,9 @@ const NEURAL_COLORS = {
   orphan: '#a0aec0',
   duplicate_define: '#ed8936',
   collision: '#e53e3e',
+  impure: '#ed8936',
+  untested: '#ecc94b',
+  unused: '#718096',
 } as const
 
 // ─── Region Auto-Detect ─────────────────────────────────────
@@ -215,7 +227,7 @@ function nodeColor(type: NodeType, status: NodeStatus): string {
 
 // ─── CodeLens CLI Execution ─────────────────────────────────
 
-const CODELENS_CLI = 'python3'
+const CODELENS_CLI = process.env.CODELENS_PYTHON || '/home/z/.venv/bin/python3'
 const CODELENS_SCRIPT = '/home/z/my-project/skills/codelens/scripts/codelens.py'
 const CLI_TIMEOUT_MS = 60_000
 
@@ -687,32 +699,50 @@ function normalizeImpact(command: string, result: any): GraphEvent {
  */
 function normalizeGeneric(command: string, result: any): GraphEvent {
   const targetNodeIds: string[] = []
+  const nodes: GraphNode[] = []
+  const edges: GraphEdge[] = []
 
-  // Try to extract any node IDs from the result
-  if (result.nodes && Array.isArray(result.nodes)) {
-    for (const n of result.nodes) {
-      if (n.id) targetNodeIds.push(n.id)
-    }
-  }
-  if (result.results && Array.isArray(result.results)) {
-    for (const r of result.results) {
-      if (r.name) targetNodeIds.push(r.id || `gen_${r.name}`)
-    }
+  // Try to extract results and create nodes
+  const items = result.results ?? result.findings ?? result.issues ?? result.hints ?? []
+  for (const item of Array.isArray(items) ? items : []) {
+    const name = item.fn ?? item.name ?? item.symbol ?? item.package ?? item.file ?? 'unknown'
+    const file = item.file ?? item.path
+    const line = item.line
+    const nodeType: NodeType = item.class ? 'class' : item.variable ? 'variable' : 'function'
+    const severity = item.severity ?? 'info'
+    const status: NodeStatus = severity === 'critical' ? 'critical' : severity === 'high' ? 'warning' : 'active'
+    const nodeId = `gen_${command}_${name}_${file ?? ''}_${line ?? 0}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+    const node = makeNode({
+      id: nodeId,
+      label: name,
+      type: nodeType,
+      domain: file?.includes('.css') || file?.includes('.tsx') || file?.includes('.vue') ? 'frontend' : 'backend',
+      status,
+      file,
+      line,
+      data: { category: item.category ?? command, severity, message: item.message ?? item.description ?? '' },
+    })
+    node.color = nodeColor(nodeType, status)
+    nodes.push(node)
+    targetNodeIds.push(nodeId)
   }
 
   return {
     sourceCommand: command,
     timestamp: Date.now(),
-    nodes: [],
-    edges: [],
+    nodes,
+    edges,
     animation: {
-      type: 'flash',
+      type: targetNodeIds.length > 0 ? 'flash' : 'pulse',
       targetNodeIds,
       intensity: 'low',
     },
     metadata: {
       category: command,
-      summary: `Command "${command}" executed`,
+      summary: items.length > 0
+        ? `Command "${command}" found ${items.length} result(s)`
+        : `Command "${command}" executed`,
     },
   }
 }
@@ -890,12 +920,15 @@ const httpServer = createServer()
 const io = new Server(httpServer, {
   path: '/',
   cors: {
-    origin: '*',
+    origin: process.env.CORS_ORIGIN || '*',
     methods: ['GET', 'POST'],
   },
   pingTimeout: 60000,
   pingInterval: 25000,
 })
+
+const commandTimestamps = new Map<string, number>()
+const COMMAND_RATE_LIMIT_MS = 2000 // 2 seconds between commands
 
 io.on('connection', (socket) => {
   console.log(`[WS] Client connected: ${socket.id}`)
@@ -913,6 +946,14 @@ io.on('connection', (socket) => {
   socket.on('command', async (data: { command: string; args: string[] }) => {
     const { command, args } = data
     console.log(`[WS] command: ${command} ${args.join(' ')}`)
+
+    // Rate limiting
+    const lastCmd = commandTimestamps.get(socket.id) ?? 0
+    if (Date.now() - lastCmd < COMMAND_RATE_LIMIT_MS) {
+      socket.emit('command_result', { command, result: { success: false, error: 'Rate limited. Please wait before sending another command.' } })
+      return
+    }
+    commandTimestamps.set(socket.id, Date.now())
 
     try {
       const result = await executeCodelens(command, args)
@@ -939,13 +980,13 @@ io.on('connection', (socket) => {
         // Store workspace for future commands
         lastWorkspace = args[0] || lastWorkspace
 
-        // Emit graph_init with full graph
-        socket.emit('graph_init', {
+        // Emit graph_init with full graph (broadcast to all clients)
+        io.emit('graph_init', {
           nodes: graphNodes,
           edges: graphEdges,
         })
 
-        // Also emit a graph_event for the scan
+        // Also emit a graph_event for the scan (broadcast to all clients)
         const scanEvent: GraphEvent = {
           sourceCommand: 'scan',
           timestamp: Date.now(),
@@ -962,13 +1003,13 @@ io.on('connection', (socket) => {
             summary: `Scanned workspace: ${graphNodes.length} nodes, ${graphEdges.length} edges`,
           },
         }
-        socket.emit('graph_event', { event: scanEvent })
+        io.emit('graph_event', { event: scanEvent })
         console.log(`[WS] Scan complete: ${graphNodes.length} nodes, ${graphEdges.length} edges, ${graphClusters.length} clusters`)
       } else {
         // Normalize other commands into GraphEvent
         const event = normalizeCommand(command, result.data)
         updateGraphFromEvent(event)
-        socket.emit('graph_event', { event })
+        io.emit('graph_event', { event })
         console.log(`[WS] Event emitted for "${command}": ${event.nodes.length} nodes, ${event.edges.length} edges`)
       }
     } catch (err: any) {
@@ -997,24 +1038,7 @@ io.on('connection', (socket) => {
         else if (node_id.startsWith('fe_id_')) queryName = node_id.replace('fe_id_', '')
         else if (node_id.startsWith('be_fn_')) queryName = node_id.replace('be_fn_', '')
 
-        // Fire off async query but still respond immediately
-        socket.emit('node_detail', {
-          node_id,
-          detail: {
-            node: {
-              id: node_id,
-              label: queryName,
-              type: 'function',
-              domain: 'backend',
-              status: 'active',
-              radius: 8,
-              color: '#718096',
-              data: {},
-            },
-          } as NodeDetail,
-        })
-
-        // Also try to query for more detail
+        // Query for detail asynchronously
         executeCodelens('query', [queryName, lastWorkspace]).then(result => {
           if (result.success && result.data.found) {
             // Create or update the node from query result

@@ -8,15 +8,36 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { useAnalysisStore } from '@/lib/analysisStore'
 
+function DataStatusIndicator({ isDemo, isLoading, error }: { isDemo: boolean; isLoading: boolean; error?: string }) {
+  if (isLoading) {
+    return <span className="text-[10px] text-purple-400 animate-pulse">● Loading...</span>
+  }
+  if (error) {
+    return <span className="text-[10px] text-red-400">✕ Error</span>
+  }
+  if (isDemo) {
+    return <span className="text-[10px] text-slate-500">Demo data</span>
+  }
+  return <span className="text-[10px] text-emerald-400">● Live</span>
+}
+
 interface CssTabProps {
   theme: 'dark' | 'light'
 }
 
 export function CssTab({ theme }: CssTabProps) {
-  const { cssResults, runCommand, workspace, runningCommands } = useAnalysisStore()
+  const { cssResults, runCommand, workspace, runningCommands, commandHistory } = useAnalysisStore()
   const { cssDeep, missingRefs } = cssResults
 
   const isRunning = (cmd: string) => runningCommands.includes(cmd)
+
+  // Check if data is demo (no live data fetched yet) or has errors
+  const isDemo = cssDeep === null && missingRefs === null
+  const hasError = (cmd: string) => {
+    const entry = commandHistory.find(h => h.command === cmd && h.status === 'error')
+    return entry ? String(entry.result) : undefined
+  }
+  const isCssLoading = isRunning('css-deep') || isRunning('missing-refs')
 
   const runCssAudit = async () => {
     await runCommand('css-deep', [workspace])
@@ -68,6 +89,11 @@ export function CssTab({ theme }: CssTabProps) {
         </div>
 
         <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
+
+        {/* Data Status */}
+        <div className="flex items-center gap-2">
+          <DataStatusIndicator isDemo={isDemo} isLoading={isCssLoading} error={hasError('css-deep') || hasError('missing-refs')} />
+        </div>
 
         {/* Summary Grid */}
         <div className="grid grid-cols-2 gap-2">

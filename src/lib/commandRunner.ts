@@ -3,13 +3,14 @@
 // Executes CodeLens CLI commands and returns parsed JSON
 // ============================================================
 
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 // Path to codelens CLI — use venv python3 to ensure tree-sitter is available
-const CODELENS_PATH = process.env.CODELENS_PATH || '/home/z/.venv/bin/python3 /home/z/my-project/skills/codelens/scripts/codelens.py'
+const CODELENS_PYTHON = process.env.CODELENS_PYTHON || '/home/z/.venv/bin/python3'
+const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT || '/home/z/my-project/skills/codelens/scripts/codelens.py'
 
 /** Maximum execution time for a CLI command (ms) */
 const COMMAND_TIMEOUT = 60_000
@@ -25,11 +26,18 @@ class CommandRunner {
    * @returns Parsed JSON output from the CLI, or error object
    */
   async execute(command: string, args: string[] = []): Promise<Record<string, any>> {
-    const cmdParts = [CODELENS_PATH, command, ...args.map(escapeShellArg)]
-    const cmdString = cmdParts.join(' ')
+    // Guard: reject 'watch' command — it runs indefinitely and will hang the API
+    if (command === 'watch') {
+      return {
+        status: 'error',
+        command,
+        error: "The 'watch' command is not allowed via the API because it has a 60-second timeout and will hang the process. Use 'scan --incremental' instead.",
+        exitCode: 'rejected',
+      }
+    }
 
     try {
-      const { stdout, stderr } = await execAsync(cmdString, {
+      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...args], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })
@@ -55,7 +63,7 @@ class CommandRunner {
         }
       }
     } catch (err: any) {
-      // execAsync throws on non-zero exit codes
+      // execFileAsync throws on non-zero exit codes
       const stderr = err.stderr ?? ''
       const stdout = err.stdout ?? ''
       const exitCode = err.code ?? 'unknown'
@@ -345,21 +353,6 @@ class CommandRunner {
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
   }
-}
-
-// ─── Shell Escaping ─────────────────────────────────────────────
-
-/**
- * Escape a single shell argument to prevent injection.
- * Uses single-quote wrapping with internal single-quote escaping.
- */
-function escapeShellArg(arg: string): string {
-  // If the argument is clean (alphanumeric, dashes, underscores, dots, slashes, colons), pass through
-  if (/^[a-zA-Z0-9_\-./:=]+$/.test(arg)) {
-    return arg
-  }
-  // Otherwise wrap in single quotes and escape internal single quotes
-  return `'${arg.replace(/'/g, "'\\''")}'`
 }
 
 export const commandRunner = new CommandRunner()

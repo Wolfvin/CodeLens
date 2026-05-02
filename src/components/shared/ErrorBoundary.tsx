@@ -1,10 +1,10 @@
 'use client'
 
-import React from 'react'
+import React, { Component, ReactNode } from 'react'
 
 interface ErrorBoundaryProps {
-  children: React.ReactNode
-  fallback?: React.ReactNode
+  children: ReactNode
+  fallback?: ReactNode
 }
 
 interface ErrorBoundaryState {
@@ -12,7 +12,7 @@ interface ErrorBoundaryState {
   error: Error | null
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props)
     this.state = { hasError: false, error: null }
@@ -26,38 +26,33 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     console.error('[ErrorBoundary] Caught error:', error, errorInfo)
   }
 
+  handleRetry = () => {
+    this.setState({ hasError: false, error: null })
+  }
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) {
         return this.props.fallback
       }
+
       return (
-        <div className="flex items-center justify-center h-full w-full p-8" style={{ backgroundColor: '#0a0a0f' }}>
-          <div className="text-center space-y-4 max-w-md">
-            <div className="text-4xl">🧠</div>
-            <h2 className="text-lg font-bold" style={{ color: '#e2e8f0' }}>
-              Neural Workspace Error
-            </h2>
-            <p className="text-sm" style={{ color: '#718096' }}>
-              Something went wrong rendering the workspace. This is likely a runtime error.
-            </p>
-            <pre
-              className="text-xs text-left p-3 rounded-lg overflow-auto max-h-40"
-              style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fc8181' }}
-            >
-              {this.state.error?.message ?? 'Unknown error'}
-            </pre>
-            <button
-              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-              style={{ backgroundColor: 'rgba(139, 92, 246, 0.15)', color: '#b794f4' }}
-              onClick={() => this.setState({ hasError: false, error: null })}
-            >
-              Try Again
-            </button>
-          </div>
+        <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center">
+          <div className="text-4xl mb-4">⚠️</div>
+          <h3 className="text-lg font-semibold mb-2">Something went wrong</h3>
+          <p className="text-sm text-muted-foreground mb-4 max-w-md">
+            {this.state.error?.message ?? 'An unexpected error occurred'}
+          </p>
+          <button
+            onClick={this.handleRetry}
+            className="px-4 py-2 rounded-lg bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 transition-colors text-sm font-medium"
+          >
+            Try Again
+          </button>
         </div>
       )
     }
+
     return this.props.children
   }
 }

@@ -8,6 +8,19 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { useAnalysisStore } from '@/lib/analysisStore'
 
+function DataStatusIndicator({ isDemo, isLoading, error }: { isDemo: boolean; isLoading: boolean; error?: string }) {
+  if (isLoading) {
+    return <span className="text-[10px] text-purple-400 animate-pulse">● Loading...</span>
+  }
+  if (error) {
+    return <span className="text-[10px] text-red-400">✕ Error</span>
+  }
+  if (isDemo) {
+    return <span className="text-[10px] text-slate-500">Demo data</span>
+  }
+  return <span className="text-[10px] text-emerald-400">● Live</span>
+}
+
 interface PerformanceTabProps {
   theme: 'dark' | 'light'
 }
@@ -24,10 +37,18 @@ const PERF_CATEGORIES = [
 ]
 
 export function PerformanceTab({ theme }: PerformanceTabProps) {
-  const { performanceResults, runCommand, workspace, runningCommands } = useAnalysisStore()
+  const { performanceResults, runCommand, workspace, runningCommands, commandHistory } = useAnalysisStore()
   const { perfHints, circular } = performanceResults
 
   const isRunning = (cmd: string) => runningCommands.includes(cmd)
+
+  // Check if data is demo (no live data fetched yet) or has errors
+  const isDemo = perfHints === null && circular === null
+  const hasError = (cmd: string) => {
+    const entry = commandHistory.find(h => h.command === cmd && h.status === 'error')
+    return entry ? String(entry.result) : undefined
+  }
+  const isPerfLoading = isRunning('perf-hint') || isRunning('circular')
 
   const runPerfAudit = async () => {
     await runCommand('perf-hint', [workspace])
@@ -69,6 +90,11 @@ export function PerformanceTab({ theme }: PerformanceTabProps) {
         </div>
 
         <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
+
+        {/* Data Status */}
+        <div className="flex items-center gap-2">
+          <DataStatusIndicator isDemo={isDemo} isLoading={isPerfLoading} error={hasError('perf-hint') || hasError('circular')} />
+        </div>
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-2">

@@ -19,7 +19,7 @@ const CATEGORIES = ['Core', 'P1', 'P2', 'P3', 'Security', 'Quality', 'Performanc
 export function CommandsTab({ theme }: CommandsTabProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedCategory, setExpandedCategory] = useState<string | null>('Core')
-  const { runCommand, runningCommands, workspace } = useAnalysisStore()
+  const { runCommand, runningCommands, workspace, setCommandPaletteOpen } = useAnalysisStore()
 
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return CODELENS_COMMANDS
@@ -39,10 +39,13 @@ export function CommandsTab({ theme }: CommandsTabProps) {
   }, [filtered])
 
   const handleRun = (cmd: CommandDef) => {
-    const args = cmd.args
-      .filter(a => a.name !== 'workspace')
-      .map(a => a.name === 'name' || a.name === 'pattern' || a.name === 'file' ? '' : '')
-      .filter(Boolean)
+    // For commands that need extra args beyond workspace, open command palette
+    // which has proper arg input — workspace-only commands can run directly
+    const needsArg = cmd.args.find(a => a.required && a.name !== 'workspace')
+    if (needsArg) {
+      setCommandPaletteOpen(true)
+      return
+    }
     runCommand(cmd.name, [workspace])
   }
 

@@ -133,7 +133,7 @@ export function TopBar({
   const [searchFocused, setSearchFocused] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults, isWatchMode, runCommand, workspace } = useAnalysisStore()
+  const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults, isWatchMode, runCommand, workspace, lastScanTime } = useAnalysisStore()
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -246,6 +246,21 @@ export function TopBar({
           <Sparkles className="h-2.5 w-2.5 mr-1 opacity-50" />
           {stats.totalNodes} nodes · {stats.totalEdges} edges
         </Badge>
+
+        {/* Last scan time indicator */}
+        {lastScanTime && (
+          <Badge
+            variant="outline"
+            className="text-[10px] h-5 ml-1 hidden xl:flex border-0 smooth-colors"
+            style={{
+              backgroundColor: styles.inputBg,
+              color: styles.mutedText,
+            }}
+          >
+            <Activity className="h-2.5 w-2.5 mr-1 opacity-50" />
+            {new Date(lastScanTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </Badge>
+        )}
       </div>
 
       {/* Center: Search */}

@@ -22,6 +22,7 @@ import type {
   QuickAction,
   GraphEvent,
 } from '@/types/neural'
+import { getNodeShape } from '@/types/neural'
 
 // ============================================================
 // Demo Data Generator
@@ -181,17 +182,18 @@ function generateDemoData(): { nodes: GraphNode[]; edges: GraphEdge[]; clusters:
   graphStore.loadGraph(nodes, edges)
   const clusters = clusterEngine.computeClusters(nodes, edges)
 
-  // Assign cluster IDs back to nodes
+  // Clone nodes before assigning cluster IDs (avoid mutating original objects)
+  const clonedNodes = nodes.map(n => ({ ...n }))
   for (const cluster of clusters) {
     for (const nodeId of cluster.nodeIds) {
-      const node = nodes.find((n) => n.id === nodeId)
+      const node = clonedNodes.find((n) => n.id === nodeId)
       if (node) {
         node.clusterId = cluster.id
       }
     }
   }
 
-  return { nodes, edges, clusters }
+  return { nodes: clonedNodes, edges, clusters }
 }
 
 // ============================================================
@@ -216,6 +218,23 @@ function NeuralWorkspaceApp() {
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null)
   const initializedRef = useRef(false)
+  const selectedNodeIdRef = useRef<string | null>(null)
+
+  // ---- Centralized graph persistence ----
+  const persistGraph = useCallback(() => {
+    try {
+      localStorage.setItem('codelens-graph', graphStore.serialize())
+    } catch { /* ignore */ }
+  }, [])
+
+  // Keep selectedNodeIdRef in sync with selectedNodeId
+  useEffect(() => { selectedNodeIdRef.current = selectedNodeId }, [selectedNodeId])
+
+  // Auto-save graph changes (debounced 2s)
+  useEffect(() => {
+    const timer = setTimeout(persistGraph, 2000)
+    return () => clearTimeout(timer)
+  }, [nodes, edges, clusters, persistGraph])
 
   // ---- Computed ----
   const selectedNode = useMemo(
@@ -253,13 +272,14 @@ function NeuralWorkspaceApp() {
           const restoredEdges = Array.from(graphStore.edges.values())
           if (restoredNodes.length > 0) {
             const computedClusters = clusterEngine.computeClusters(restoredNodes, restoredEdges)
+            const clonedRestoredNodes = restoredNodes.map(n => ({ ...n }))
             for (const cluster of computedClusters) {
               for (const nodeId of cluster.nodeIds) {
-                const node = restoredNodes.find(n => n.id === nodeId)
+                const node = clonedRestoredNodes.find(n => n.id === nodeId)
                 if (node) node.clusterId = cluster.id
               }
             }
-            setNodes(restoredNodes)
+            setNodes(clonedRestoredNodes)
             setEdges(restoredEdges)
             setClusters(computedClusters)
           }
@@ -284,11 +304,7 @@ function NeuralWorkspaceApp() {
     analysisStore.setRegistryStats({ byType: storeStats.byType, byStatus: storeStats.byStatus })
 
     // Persist graph to localStorage
-    try {
-      localStorage.setItem('codelens-graph', graphStore.serialize())
-    } catch {
-      // Ignore localStorage errors
-    }
+    persistGraph()
 
     tryConnectWebSocket()
     tryFetchRealData()
@@ -324,17 +340,18 @@ function NeuralWorkspaceApp() {
       socket.on('graph_init', (data: { nodes: GraphNode[]; edges: GraphEdge[] }) => {
         graphStore.loadGraph(data.nodes, data.edges)
         const computedClusters = clusterEngine.computeClusters(data.nodes, data.edges)
+        const clonedNodes = data.nodes.map(n => ({ ...n }))
         for (const cluster of computedClusters) {
           for (const nodeId of cluster.nodeIds) {
-            const node = data.nodes.find((n) => n.id === nodeId)
+            const node = clonedNodes.find((n) => n.id === nodeId)
             if (node) node.clusterId = cluster.id
           }
         }
-        setNodes(data.nodes)
+        setNodes(clonedNodes)
         setEdges(data.edges)
         setClusters(computedClusters)
         // Persist graph to localStorage
-        try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
+        persistGraph()
       })
 
       socket.on('graph_event', (eventData: { event: GraphEvent }) => {
@@ -349,11 +366,11 @@ function NeuralWorkspaceApp() {
         setClusters(computedClusters)
         setActiveAnimation(event.animation)
         // Persist graph to localStorage
-        try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
+        persistGraph()
       })
 
       socket.on('node_detail', (data: { node_id: string; detail: NodeDetail }) => {
-        if (data.node_id === selectedNodeId) {
+        if (data.node_id === selectedNodeIdRef.current) {
           setNodeDetail(data.detail)
         }
       })
@@ -374,7 +391,7 @@ function NeuralWorkspaceApp() {
     } catch (err) {
       console.log('[WS] Failed to connect (using demo data):', err)
     }
-  }, [selectedNodeId])
+  }, [])
 
   // ---- Fetch real data ----
   const tryFetchRealData = useCallback(async () => {
@@ -389,13 +406,13 @@ function NeuralWorkspaceApp() {
           setEdges(data.edges)
           if (data.clusters) setClusters(data.clusters)
           // Persist graph to localStorage
-          try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
+          persistGraph()
         }
       }
     } catch {
       // Demo data already loaded
     }
-  }, [analysisStore.workspace])
+  }, [analysisStore.workspace, persistGraph])
 
   // ---- Node Selection ----
   const handleNodeSelect = useCallback(
@@ -484,14 +501,124 @@ function NeuralWorkspaceApp() {
 
       switch (format) {
         case 'svg': {
-          // Generate SVG from current graph state
-          const svgNodes = nodes.map(n => {
-            const x = n.x ?? 0
-            const y = n.y ?? 0
-            return `<circle cx="${x}" cy="${y}" r="${n.radius ?? 8}" fill="${n.color}" opacity="0.9"/><text x="${x}" y="${y + 3}" text-anchor="middle" fill="white" font-size="8">${n.label}</text>`
-          }).join('\n')
-          const svgContent = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvas.width} ${canvas.height}"><rect width="100%" height="100%" fill="${theme === 'dark' ? '#0d0d18' : '#ffffff'}"/>${svgNodes}</svg>`
-          const blob = new Blob([svgContent], { type: 'image/svg+xml' })
+          // Calculate bounds
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+          for (const n of nodes) {
+            const x = n.x ?? 0, y = n.y ?? 0
+            const r = n.radius ?? 8
+            minX = Math.min(minX, x - r - 20)
+            minY = Math.min(minY, y - r - 20)
+            maxX = Math.max(maxX, x + r + 20)
+            maxY = Math.max(maxY, y + r + 20)
+          }
+          const pad = 80
+          const w = maxX - minX + pad * 2
+          const h = maxY - minY + pad * 2
+
+          // SVG header
+          let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`
+          svg += `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX - pad} ${minY - pad} ${w} ${h}" width="${w}" height="${h}">\n`
+
+          // Background
+          svg += `<rect x="${minX - pad}" y="${minY - pad}" width="${w}" height="${h}" fill="${theme === 'dark' ? '#0d0d18' : '#ffffff'}"/>\n`
+
+          // Clusters as rounded rectangles
+          for (const cluster of clusters) {
+            const clusterNodes = cluster.nodeIds.map(id => nodes.find(n => n.id === id)).filter(Boolean) as GraphNode[]
+            if (clusterNodes.length === 0) continue
+            let cxMin = Infinity, cyMin = Infinity, cxMax = -Infinity, cyMax = -Infinity
+            for (const cn of clusterNodes) {
+              const cx = cn.x ?? 0, cy = cn.y ?? 0, cr = cn.radius ?? 8
+              cxMin = Math.min(cxMin, cx - cr - 10)
+              cyMin = Math.min(cyMin, cy - cr - 10)
+              cxMax = Math.max(cxMax, cx + cr + 10)
+              cyMax = Math.max(cyMax, cy + cr + 10)
+            }
+            svg += `<rect x="${cxMin}" y="${cyMin}" width="${cxMax - cxMin}" height="${cyMax - cyMin}" rx="12" ry="12" fill="${cluster.tint}08" stroke="${cluster.tint}30" stroke-width="1" stroke-dasharray="4 2"/>\n`
+            svg += `<text x="${cxMin + 8}" y="${cyMin + 14}" fill="${cluster.tint}" font-size="10" font-family="system-ui" opacity="0.7">${cluster.label}</text>\n`
+          }
+
+          // Edges with arrows
+          for (const e of edges) {
+            const src = nodes.find(n => n.id === (typeof e.source === 'string' ? e.source : e.source.id))
+            const tgt = nodes.find(n => n.id === (typeof e.target === 'string' ? e.target : e.target.id))
+            if (src?.x != null && src?.y != null && tgt?.x != null && tgt?.y != null) {
+              const edgeColor = e.status === 'danger' ? '#f56565' : e.status === 'warning' ? '#ecc94b' : e.status === 'dead' ? '#2d3748' : '#4a5568'
+              const opacity = e.status === 'dead' ? 0.15 : 0.35
+              svg += `<line x1="${src.x}" y1="${src.y}" x2="${tgt.x}" y2="${tgt.y}" stroke="${edgeColor}" stroke-width="${e.weight ?? 1}" opacity="${opacity}"/>\n`
+              // Arrow marker
+              const dx = tgt.x - src.x, dy = tgt.y - src.y
+              const len = Math.sqrt(dx * dx + dy * dy)
+              if (len > 0) {
+                const tr = tgt.radius ?? 8
+                const ax = tgt.x - (dx / len) * (tr + 3)
+                const ay = tgt.y - (dy / len) * (tr + 3)
+                const arrowSize = 4
+                const nx = -dy / len, ny = dx / len
+                svg += `<polygon points="${ax + (dx / len) * arrowSize},${ay + (dy / len) * arrowSize} ${ax + nx * arrowSize * 0.5},${ay + ny * arrowSize * 0.5} ${ax - nx * arrowSize * 0.5},${ay - ny * arrowSize * 0.5}" fill="${edgeColor}" opacity="${opacity}"/>\n`
+              }
+            }
+          }
+
+          // Nodes with shape variants
+          for (const n of nodes) {
+            const x = n.x ?? 0, y = n.y ?? 0, r = n.radius ?? 8
+            const shape = getNodeShape(n.type)
+
+            // Draw shape based on type
+            switch (shape) {
+              case 'diamond': {
+                const s = r * 1.3
+                svg += `<polygon points="${x},${y - s} ${x + s},${y} ${x},${y + s} ${x - s},${y}" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+              case 'hexagon': {
+                const s = r
+                const pts = Array.from({ length: 6 }, (_, i) => {
+                  const angle = (Math.PI / 3) * i - Math.PI / 6
+                  return `${x + s * Math.cos(angle)},${y + s * Math.sin(angle)}`
+                }).join(' ')
+                svg += `<polygon points="${pts}" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+              case 'triangle': {
+                const s = r * 1.3
+                svg += `<polygon points="${x},${y - s} ${x + s},${y + s * 0.7} ${x - s},${y + s * 0.7}" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+              case 'star': {
+                const outer = r * 1.2, inner = r * 0.5
+                const pts = Array.from({ length: 10 }, (_, i) => {
+                  const rad = i % 2 === 0 ? outer : inner
+                  const angle = (Math.PI / 5) * i - Math.PI / 2
+                  return `${x + rad * Math.cos(angle)},${y + rad * Math.sin(angle)}`
+                }).join(' ')
+                svg += `<polygon points="${pts}" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+              case 'square': {
+                const s = r * 0.9
+                svg += `<rect x="${x - s}" y="${y - s}" width="${s * 2}" height="${s * 2}" rx="2" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+              case 'ring': {
+                svg += `<circle cx="${x}" cy="${y}" r="${r}" fill="none" stroke="${n.color}" stroke-width="3" opacity="0.9"/>\n`
+                svg += `<circle cx="${x}" cy="${y}" r="${r * 0.5}" fill="${n.color}" opacity="0.6"/>\n`
+                break
+              }
+              default: { // circle
+                svg += `<circle cx="${x}" cy="${y}" r="${r}" fill="${n.color}" opacity="0.9"/>\n`
+                break
+              }
+            }
+
+            // Label below node
+            svg += `<text x="${x}" y="${y + r + 12}" text-anchor="middle" fill="${theme === 'dark' ? '#e2e8f0' : '#2d3748'}" font-size="9" font-family="system-ui">${n.label}</text>\n`
+          }
+
+          svg += `</svg>`
+
+          const blob = new Blob([svg], { type: 'image/svg+xml' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
@@ -542,7 +669,7 @@ function NeuralWorkspaceApp() {
         }
       }
     },
-    [nodes, theme]
+    [nodes, edges, clusters, theme]
   )
 
   // ---- Rescan ----
@@ -559,7 +686,7 @@ function NeuralWorkspaceApp() {
           setEdges(data.edges)
           if (data.clusters) setClusters(data.clusters)
           // Persist graph to localStorage
-          try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
+          persistGraph()
 
           setActiveAnimation({
             type: 'ripple',
@@ -574,7 +701,7 @@ function NeuralWorkspaceApp() {
     } finally {
       setIsScanning(false)
     }
-  }, [analysisStore.workspace])
+  }, [analysisStore.workspace, persistGraph])
 
   // ---- Panel close ----
   const handlePanelClose = useCallback(() => {

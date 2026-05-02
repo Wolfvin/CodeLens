@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Run the scan command first to build the registry
+    // Run the scan command to build the registry and get all data
     const scanOutput = await commandRunner.scan(workspace)
 
     // Check for CLI errors
@@ -31,101 +31,40 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Now use the list command to get actual node data from the registry
-    const allNodes: any[] = []
-    const allEdges: any[] = []
+    // Normalize the scan output directly (it already has frontend.classes, frontend.ids, backend.nodes, backend.edges)
+    const graphEvent = normalizer.normalize('scan', scanOutput)
 
-    // Fetch frontend classes
-    try {
-      const feClasses = await commandRunner.list(workspace, 'frontend', 'class')
-      if (feClasses.results && Array.isArray(feClasses.results)) {
-        for (const item of feClasses.results) {
-          allNodes.push({
-            name: item.name,
-            type: 'class',
-            status: item.status,
-            ref_count: item.ref_count ?? 0,
-            css: item.css ?? [],
-            js: item.js ?? [],
-            defined_in: item.defined_in,
-          })
-        }
-      }
-    } catch { /* continue */ }
-
-    // Fetch frontend IDs
-    try {
-      const feIds = await commandRunner.list(workspace, 'frontend', 'id')
-      if (feIds.results && Array.isArray(feIds.results)) {
-        for (const item of feIds.results) {
-          allNodes.push({
-            name: item.name,
-            type: 'id',
-            status: item.status,
-            ref_count: item.ref_count ?? 0,
-            defined_in_html: item.defined_in_html ?? [],
-            defined_in: item.defined_in,
-          })
-        }
-      }
-    } catch { /* continue */ }
-
-    // Fetch backend nodes (functions, components)
-    try {
-      const beNodes = await commandRunner.list(workspace, 'backend')
-      if (beNodes.results && Array.isArray(beNodes.results)) {
-        for (const item of beNodes.results) {
-          allNodes.push({
-            fn: item.name ?? item.fn,
-            id: item.id,
-            type: item.type,
-            status: item.status,
-            file: item.file,
-            line: item.line,
-            component: item.component,
-            impl_for: item.impl_for,
-            ref_count: item.ref_count ?? 0,
-            defined_in: item.defined_in,
-          })
-        }
-      }
-    } catch { /* continue */ }
-
-    // Limit nodes to keep the browser responsive (max 300 nodes for Canvas2D)
-    const MAX_NODES = 300
-    const classNodes = allNodes.filter(n => n.type === 'class')
-    const idNodes = allNodes.filter(n => n.type === 'id')
-    const backendNodes = allNodes.filter(n => n.type !== 'class' && n.type !== 'id')
-
-    // Prioritize: sort by ref_count descending, take top N
-    const sortByRefCount = (a: any, b: any) => (b.ref_count ?? 0) - (a.ref_count ?? 0)
-    const selectedClasses = classNodes.sort(sortByRefCount).slice(0, 50)
-    const selectedIds = idNodes.sort(sortByRefCount).slice(0, 30)
-    const remaining = MAX_NODES - selectedClasses.length - selectedIds.length
-    const selectedBackend = backendNodes.sort(sortByRefCount).slice(0, Math.max(0, remaining))
-
-    // Construct the combined output for the normalizer
-    const combinedOutput = {
-      frontend: {
-        classes: selectedClasses,
-        ids: selectedIds,
-      },
-      backend: {
-        nodes: selectedBackend,
-        edges: allEdges,
-      },
+    // Limit nodes to keep the browser responsive (max 500 nodes for Canvas2D)
+    const MAX_NODES = 500
+    let selectedNodes = graphEvent.nodes
+    if (selectedNodes.length > MAX_NODES) {
+      // Prioritize by status (critical > warning > active > dead) then by ref_count
+      const statusPriority: Record<string, number> = { critical: 4, vulnerable: 3, warning: 2, active: 1, dead: 0, orphan: 0 }
+      selectedNodes.sort((a, b) => {
+        const pa = statusPriority[a.status] ?? 0
+        const pb = statusPriority[b.status] ?? 0
+        if (pb !== pa) return pb - pa
+        return ((b.data?.refCount as number) ?? 0) - ((a.data?.refCount as number) ?? 0)
+      })
+      selectedNodes = selectedNodes.slice(0, MAX_NODES)
     }
 
-    // Normalize the combined output into a GraphEvent
-    const graphEvent = normalizer.normalize('scan', combinedOutput)
+    // Filter edges to only include those between selected nodes
+    const selectedNodeIds = new Set(selectedNodes.map(n => n.id))
+    const selectedEdges = graphEvent.edges.filter(e => {
+      const srcId = typeof e.source === 'string' ? e.source : e.source.id
+      const tgtId = typeof e.target === 'string' ? e.target : e.target.id
+      return selectedNodeIds.has(srcId) && selectedNodeIds.has(tgtId)
+    })
 
-    // Compute clusters from the nodes and edges
-    const clusters = clusterEngine.computeClusters(graphEvent.nodes, graphEvent.edges)
+    // Compute clusters
+    const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
-    // Assign clusterId to each node
+    // Assign clusterId to each node (using cloned nodes to avoid mutation)
+    const finalNodes = selectedNodes.map(n => ({ ...n }))
     for (const cluster of clusters) {
       for (const nodeId of cluster.nodeIds) {
-        const node = graphEvent.nodes.find((n) => n.id === nodeId)
+        const node = finalNodes.find((n) => n.id === nodeId)
         if (node) {
           node.clusterId = cluster.id
         }
@@ -133,8 +72,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      nodes: graphEvent.nodes,
-      edges: graphEvent.edges,
+      nodes: finalNodes,
+      edges: selectedEdges,
       clusters,
     })
   } catch (err: any) {

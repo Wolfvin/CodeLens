@@ -64,3 +64,9 @@ ModuleNotFoundError: No module named 'tree_sitter'
 [WS] Client connected: 1OkVInsGWisL_IWMAAAT
 [WS] Client disconnected: 1OkVInsGWisL_IWMAAAT
 [WS] Client disconnected: UXxoybTIc1RhVJLCAAAR
+[CodeLens WS] WebSocket server running on port 3030
+[CodeLens WS] CLI path: /home/z/.venv/bin/python3 /home/z/my-project/skills/codelens/scripts/codelens.py
+[CodeLens WS] Timeout: 60000ms
+[CodeLens WS] WebSocket server running on port 3030
+[CodeLens WS] CLI path: /home/z/.venv/bin/python3 /home/z/my-project/skills/codelens/scripts/codelens.py
+[CodeLens WS] Timeout: 60000ms

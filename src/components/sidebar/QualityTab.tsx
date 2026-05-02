@@ -9,15 +9,36 @@ import { Separator } from '@/components/ui/separator'
 import { Progress } from '@/components/ui/progress'
 import { useAnalysisStore } from '@/lib/analysisStore'
 
+function DataStatusIndicator({ isDemo, isLoading, error }: { isDemo: boolean; isLoading: boolean; error?: string }) {
+  if (isLoading) {
+    return <span className="text-[10px] text-purple-400 animate-pulse">● Loading...</span>
+  }
+  if (error) {
+    return <span className="text-[10px] text-red-400">✕ Error</span>
+  }
+  if (isDemo) {
+    return <span className="text-[10px] text-slate-500">Demo data</span>
+  }
+  return <span className="text-[10px] text-emerald-400">● Live</span>
+}
+
 interface QualityTabProps {
   theme: 'dark' | 'light'
 }
 
 export function QualityTab({ theme }: QualityTabProps) {
-  const { qualityResults, runCommand, workspace, runningCommands } = useAnalysisStore()
+  const { qualityResults, runCommand, workspace, runningCommands, commandHistory } = useAnalysisStore()
   const { smells, complexity, debugLeaks, deadCode, a11y } = qualityResults
 
   const isRunning = (cmd: string) => runningCommands.includes(cmd)
+
+  // Check if data is demo (no live data fetched yet) or has errors
+  const isDemo = smells === null && complexity === null
+  const hasError = (cmd: string) => {
+    const entry = commandHistory.find(h => h.command === cmd && h.status === 'error')
+    return entry ? String(entry.result) : undefined
+  }
+  const isQualityLoading = isRunning('smell') || isRunning('complexity') || isRunning('debug-leak') || isRunning('dead-code') || isRunning('a11y')
 
   const runQualityGate = async () => {
     await runCommand('smell', [workspace])
@@ -78,6 +99,11 @@ export function QualityTab({ theme }: QualityTabProps) {
         </div>
 
         <Separator style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15), transparent)', height: '1px' }} />
+
+        {/* Data Status */}
+        <div className="flex items-center gap-2">
+          <DataStatusIndicator isDemo={isDemo} isLoading={isQualityLoading} error={hasError('smell') || hasError('complexity')} />
+        </div>
 
         {/* Health Score */}
         <div className="space-y-2">

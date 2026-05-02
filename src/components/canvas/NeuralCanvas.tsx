@@ -1037,12 +1037,20 @@ export default function NeuralCanvas({
       .force('collide', forceCollide<SimNode>().radius(30))
       .alphaDecay(0.02)
       .on('tick', () => {
-        // Update cluster centers
+        // Update cluster centers (O(n) using Set for lookup instead of O(n²) with .includes)
         for (const cluster of currentClusters) {
-          const cNodes = simNodes.filter((n) => cluster.nodeIds.includes(n.id))
-          if (cNodes.length > 0) {
-            cluster.cx = cNodes.reduce((s, n) => s + n.x, 0) / cNodes.length
-            cluster.cy = cNodes.reduce((s, n) => s + n.y, 0) / cNodes.length
+          const nodeSet = new Set(cluster.nodeIds)
+          let sumX = 0, sumY = 0, count = 0
+          for (const n of simNodes) {
+            if (nodeSet.has(n.id)) {
+              sumX += n.x
+              sumY += n.y
+              count++
+            }
+          }
+          if (count > 0) {
+            cluster.cx = sumX / count
+            cluster.cy = sumY / count
           }
         }
       })
@@ -1264,11 +1272,20 @@ export default function NeuralCanvas({
         }
       } else {
         // Cluster boundaries (background)
-        // Build cluster node map once per frame (O(n) instead of O(n²) per cluster)
+        // Build a node-id → SimNode lookup for O(1) cluster filtering
+        const simNodeMap = new Map<string, SimNode>()
+        for (const n of simNodes) {
+          simNodeMap.set(n.id, n)
+        }
+
         const clusterNodeMap = new Map<string, SimNode[]>()
         for (const cluster of clusters) {
-          const clusterNodes = simNodes.filter((n) => cluster.nodeIds.includes(n.id))
-          clusterNodeMap.set(cluster.id, clusterNodes)
+          const nodeSet = new Set(cluster.nodeIds)
+          const cNodes: SimNode[] = []
+          for (const n of simNodes) {
+            if (nodeSet.has(n.id)) cNodes.push(n)
+          }
+          clusterNodeMap.set(cluster.id, cNodes)
         }
         for (const cluster of clusters) {
           const cNodes = clusterNodeMap.get(cluster.id) || []

@@ -236,8 +236,9 @@ describe('AnalysisStore', () => {
       // Mock fetch to avoid actual API calls
       const originalFetch = global.fetch
       global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
         json: () => Promise.resolve({ status: 'ok', data: {} }),
-      })
+      }) as any
 
       try {
         await useAnalysisStore.getState().runCommand('scan', ['/workspace'])
@@ -253,8 +254,9 @@ describe('AnalysisStore', () => {
     it('adds to recentCommands', async () => {
       const originalFetch = global.fetch
       global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
         json: () => Promise.resolve({ status: 'ok', data: {} }),
-      })
+      }) as any
 
       try {
         await useAnalysisStore.getState().runCommand('scan', ['/workspace'])
@@ -267,7 +269,7 @@ describe('AnalysisStore', () => {
 
     it('records error on fetch failure', async () => {
       const originalFetch = global.fetch
-      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'))
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network error')) as any
 
       try {
         await useAnalysisStore.getState().runCommand('scan', ['/workspace'])
@@ -381,8 +383,9 @@ describe('AnalysisStore', () => {
     it('runs commands in sequence', async () => {
       const originalFetch = global.fetch
       global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
         json: () => Promise.resolve({ status: 'ok', data: {} }),
-      })
+      }) as any
 
       try {
         await useAnalysisStore.getState().runChain([

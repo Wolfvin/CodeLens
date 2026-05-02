@@ -2,7 +2,7 @@
 // GraphStore Unit Tests
 // ============================================================
 
-import { GraphStore } from '@/lib/graphStore'
+import { graphStore } from '@/lib/graphStore'
 import type { GraphNode, GraphEdge, GraphEvent } from '@/types/neural'
 
 // ---- Helpers ----
@@ -32,10 +32,11 @@ function makeEdge(overrides: Partial<GraphEdge> & { id: string; source: string; 
 // ---- Test Suite ----
 
 describe('GraphStore', () => {
-  let store: GraphStore
+  let store: typeof graphStore
 
   beforeEach(() => {
-    store = new GraphStore()
+    graphStore.clearGraph()
+    store = graphStore
   })
 
   // ============================================================
@@ -617,16 +618,18 @@ describe('GraphStore', () => {
       store.selectNode('n1')
 
       const json = store.serialize()
-      const store2 = new GraphStore()
-      const result = store2.loadFromJSON(json)
+
+      // Clear and reload from JSON to test round-trip
+      store.clearGraph()
+      const result = store.loadFromJSON(json)
 
       expect(result).toBe(true)
-      expect(store2.getNode('n1')!.label).toBe('fn1')
-      expect(store2.getNode('n1')!.x).toBe(10)
-      expect(store2.getNode('n2')!.label).toBe('fn2')
-      expect(store2.getEdge('e1')!.type).toBe('calls')
-      expect(store2.clusters.get('c1')!.label).toBe('Auth')
-      expect(store2.selectedNodeId).toBe('n1')
+      expect(store.getNode('n1')!.label).toBe('fn1')
+      expect(store.getNode('n1')!.x).toBe(10)
+      expect(store.getNode('n2')!.label).toBe('fn2')
+      expect(store.getEdge('e1')!.type).toBe('calls')
+      expect(store.clusters.get('c1')!.label).toBe('Auth')
+      expect(store.selectedNodeId).toBe('n1')
     })
 
     it('loadFromJSON returns false for invalid JSON', () => {
