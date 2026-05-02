@@ -371,3 +371,29 @@ Stage Summary:
 - Performance significantly improved by reducing draw calls (~60-70% reduction)
 - All changes compile and build successfully
 - Dev server serves pages correctly
+---
+Task ID: 1
+Agent: main
+Task: Fix /api/graph 500 error and UI not rendering
+
+Work Log:
+- Diagnosed root cause: CodeLens CLI required `tree_sitter` Python module not installed in the venv
+- Installed `tree_sitter` via pip3
+- Fixed commandRunner.ts to use full venv Python path (`/home/z/.venv/bin/python3`) instead of bare `python3`
+- Fixed graph API route to handle CLI scan output format (returns counts not arrays) by using `list` command to get actual node data
+- Added node limit (MAX_NODES=300) to prevent browser overload with 5000+ nodes
+- Verified API returns 200 with 300 nodes
+- Confirmed smooth zoom effects already removed (instant zoom, no interpolation)
+- Verified WebSocket mini-service is running on port 3030
+- Verified all 39 CodeLens CLI commands have wrappers in commandRunner.ts
+- Verified all 16 node types defined in neural.ts with proper shape mappings
+- Verified all normalizer methods for every command
+- Verified sidebar covers all feature categories (Commands, Workspace, P1, P2/P3, Security, Quality, Performance, CSS, Refactoring)
+- Lint passes clean, page compiles and serves 200
+
+Stage Summary:
+- API graph endpoint now returns 200 (was 500)
+- CLI scan now works (tree-sitter installed, Python path fixed)
+- Demo data + real data both available for canvas rendering
+- All CodeLens framework features fully covered in UI
+- WebSocket service running on port 3030

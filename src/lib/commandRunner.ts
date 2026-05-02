@@ -8,8 +8,8 @@ import { promisify } from 'util'
 
 const execAsync = promisify(exec)
 
-// Path to codelens CLI
-const CODELENS_PATH = process.env.CODELENS_PATH || 'python3 /home/z/my-project/skills/codelens/scripts/codelens.py'
+// Path to codelens CLI — use venv python3 to ensure tree-sitter is available
+const CODELENS_PATH = process.env.CODELENS_PATH || '/home/z/.venv/bin/python3 /home/z/my-project/skills/codelens/scripts/codelens.py'
 
 /** Maximum execution time for a CLI command (ms) */
 const COMMAND_TIMEOUT = 60_000
