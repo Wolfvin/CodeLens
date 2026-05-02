@@ -46,6 +46,7 @@ CodeLens provides **pre-write collision detection**, **deep call chain tracing**
 | **CSS Deep** | 1 | css-deep |
 | **Refactoring** | 2 | refactor-safe, side-effect |
 | **Total Commands** | **39** | |
+| **Health Analysis** | 6 dimensions | Quality, Security, Coverage, Dependency, Architecture, Maintainability |
 
 ---
 
@@ -98,6 +99,12 @@ The **Neural Workspace** is an interactive brain-like visualization of your enti
 - **Command Palette**: Ctrl+K for fuzzy search across all 39 commands
 - **Real-time**: WebSocket updates when code changes
 - **LOD System**: Cluster → File → Symbol zoom levels
+- **Health Score Engine**: Composite 0-100 score across 6 dimensions (Quality 25%, Security 20%, Coverage 20%, Dependency 15%, Architecture 10%, Maintainability 10%) with letter grades A+ through F and actionable recommendations
+- **Coupling Heatmap**: Fan-In/Fan-Out analysis with instability metrics, identifying the most tightly-coupled modules in your codebase
+- **Impact Radius**: BFS-based dependency depth analysis showing how many nodes would be affected if a specific node changes, grouped by depth level
+- **Graph Diff Engine**: Track changes between scans — added/removed/modified nodes and edges, change coupling detection, and risk assessment for breaking changes
+- **Semantic Search (TF-IDF)**: Beyond simple string matching — uses term frequency-inverse document frequency scoring with camelCase/snake_case tokenization, status-aware boosting, and prefix/fuzzy matching
+- **Heatmap Visualization**: SLOC/Fan-Out-based heat scoring (inspired by Emerge) identifying the hottest, most concerning nodes in your codebase
 
 **Access:**
 ```bash
@@ -220,8 +227,9 @@ python3 codelens.py dead-code
 ```
 
 **API Route Integration:**
-The Next.js app exposes two REST endpoints:
-- `GET /api/graph?workspace=/path` — Full workspace graph (nodes + edges + clusters)
+The Next.js app exposes three REST endpoints:
+- `GET /api/graph?workspace=/path` — Full workspace graph (nodes + edges + clusters + health score + coupling + heatmap)
+- `GET /api/health?workspace=/path` — Codebase health score, coupling heatmap, and recommendations (optional `nodeId` param for impact radius)
 - `POST /api/command` — Execute any CLI command, returns normalized GraphEvent
 
 ```bash
@@ -501,7 +509,8 @@ codelens/
 ├── src/                              # Next.js Neural Workspace
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── graph/route.ts        # GET /api/graph — full graph data
+│   │   │   ├── graph/route.ts        # GET /api/graph — full graph + health + coupling + heatmap
+│   │   │   ├── health/route.ts       # GET /api/health — health score + recommendations
 │   │   │   └── command/route.ts      # POST /api/command — execute CLI
 │   │   ├── globals.css               # Premium glassmorphic design system
 │   │   ├── layout.tsx                # Root layout
@@ -515,10 +524,13 @@ codelens/
 │   │   └── ui/                       # 42 shadcn/ui components
 │   ├── lib/
 │   │   ├── analysisStore.ts          # Zustand store (730 lines)
-│   │   ├── commandRunner.ts          # CLI executor (39 wrappers)
+│   │   ├── commandRunner.ts          # CLI executor (39 wrappers + command whitelist + arg sanitization)
 │   │   ├── normalizer.ts             # CLI JSON → GraphEvent normalizer
-│   │   ├── graphStore.ts             # In-memory graph CRUD
-│   │   ├── clusterEngine.ts          # 3-layer auto-clustering
+│   │   ├── graphStore.ts             # In-memory graph CRUD + TF-IDF semantic search
+│   │   ├── clusterEngine.ts          # 3-layer auto-clustering (Union-Find)
+│   │   ├── healthScore.ts            # Codebase health score engine (6 dimensions + coupling + heatmap + impact radius)
+│   │   ├── graphDiff.ts              # Graph diff/change tracking + change coupling + risk assessment
+│   │   ├── demoData.ts               # Demo data for offline mode
 │   │   └── utils.ts                  # cn() utility
 │   └── types/
 │       └── neural.ts                 # Unified type system (354 lines)
@@ -646,6 +658,20 @@ These projects and ideas inspired CodeLens' design:
 | **AST Explorer** | [fkling/astexplorer](https://github.com/fkling/astexplorer) | Interactive AST visualization that guided our tree-sitter integration |
 | **Dependency Cruiser** | [sverweij/dependency-cruiser](https://github.com/sverweij/dependency-cruiser) | Dependency graph visualization and circular dependency detection |
 
+### Competitor Analysis & Feature Inspiration
+
+We studied these excellent tools while building CodeLens v5. Their ideas helped shape our health score engine, coupling analysis, semantic search, and graph diff features:
+
+| Project | Repository | Features That Inspired Us |
+|---------|-----------|--------------------------|
+| **Axon** | [harshkedia177/axon](https://github.com/harshkedia177/axon) | Graph-powered code intelligence with knowledge graph, health score dashboard, coupling heatmap, dead code report, Cypher query console, and MCP tools for AI agents — inspired our health score engine, coupling analysis, and impact radius features |
+| **Emerge** | [glato/emerge](https://github.com/glato/emerge) | Interactive codebase visualization with SLOC/Fan-Out heatmap, Louvain modularity clustering, TF-IDF semantic search, git-based change coupling, and D3-force graph — inspired our heatmap, TF-IDF semantic search, and change coupling detection |
+| **CodeGraph** | [ChrisRoyse/CodeGraph](https://github.com/ChrisRoyse/CodeGraph) | Neo4j-based code intelligence with multi-language AST analysis, cross-language dependency tracking, and MCP integration — inspired our graph diff engine and multi-language approach |
+| **CodeLandscapeViewer** | [glenwrhodes/CodeLandscapeViewer](https://github.com/glenwrhodes/CodeLandscapeViewer) | Interactive force-directed graph with Code Insight panel showing dependency chains, impact radius, deepest path analysis, and semantic detection of endpoints/models/services — inspired our impact radius and dependency depth computation |
+| **CodeAtlas** | [lucyb0207/CodeAtlas](https://github.com/lucyb0207/CodeAtlas) | GitHub repo → interactive dependency graph with AST parsing, focus mode, depth control, and Monaco Editor code preview — inspired our depth-limited tracing and code preview features |
+| **CodeVisualizer** | [DucPhamNgoc08/CodeVisualizer](https://github.com/DucPhamNgoc08/CodeVisualizer) | VS Code extension for interactive dependency graphs with module connection analysis — inspired our VS Code extension roadmap |
+| **codebase-health-score** | [glue-tools-ai/codebase-health-score](https://github.com/glue-tools-ai/codebase-health-score) | Composite health score calculation from complexity, docs, tests, deps, and collaboration metrics — inspired our 6-dimension health score breakdown |
+
 ---
 
 Thank you to every open-source contributor who makes tools like CodeLens possible. You rock! 🙌
@@ -658,4 +684,4 @@ MIT License — see [LICENSE](./skills/codelens/LICENSE.txt) for details.
 
 ---
 
-**CodeLens v5.1.0** — Built with tree-sitter, Canvas2D, D3-force, Next.js, and love for clean code.
+**CodeLens v5.2.0** — Built with tree-sitter, Canvas2D, D3-force, Next.js, and love for clean code.

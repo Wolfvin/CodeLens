@@ -15,6 +15,36 @@ const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT || '/home/z/my-project/skill
 /** Maximum execution time for a CLI command (ms) */
 const COMMAND_TIMEOUT = 60_000
 
+/**
+ * Whitelist of allowed CLI commands — prevents command injection.
+ * Any command not in this list is rejected.
+ */
+const ALLOWED_COMMANDS = new Set([
+  'init', 'scan', 'query', 'list', 'search', 'symbols', 'trace', 'impact',
+  'dependents', 'outline', 'missing-refs', 'diff', 'circular', 'context',
+  'validate', 'detect', 'secrets', 'vuln-scan', 'dataflow', 'env-check',
+  'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
+  'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
+  'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
+  'state-map', 'regex-audit',
+])
+
+/**
+ * Sanitize arguments — strip potentially dangerous characters.
+ * Prevents shell injection even though we use execFile (not exec).
+ */
+function sanitizeArgs(args: string[]): string[] {
+  return args.map(arg => {
+    // Strip null bytes and control characters
+    let cleaned = arg.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    // Limit argument length to prevent buffer overflow attempts
+    if (cleaned.length > 4096) {
+      cleaned = cleaned.substring(0, 4096)
+    }
+    return cleaned
+  })
+}
+
 class CommandRunner {
   // ─── Core Execution ──────────────────────────────────────────
 
@@ -36,8 +66,21 @@ class CommandRunner {
       }
     }
 
+    // Guard: whitelist validation — prevent command injection
+    if (!ALLOWED_COMMANDS.has(command)) {
+      return {
+        status: 'error',
+        command,
+        error: `Command '${command}' is not recognized. Allowed commands: ${[...ALLOWED_COMMANDS].sort().join(', ')}`,
+        exitCode: 'rejected',
+      }
+    }
+
+    // Sanitize arguments — strip dangerous characters
+    const safeArgs = sanitizeArgs(args)
+
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...args], {
+      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...safeArgs], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })

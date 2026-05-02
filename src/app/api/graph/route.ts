@@ -1,12 +1,14 @@
 // ============================================================
 // GET /api/graph?workspace=/path/to/workspace
 // Runs codelens scan on the workspace and returns normalized graph data
+// Also computes and returns health score, coupling, and heatmap
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
+import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
 
 export async function GET(request: NextRequest) {
   try {
@@ -71,10 +73,22 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Compute health score (inspired by Axon/Emerge)
+    const healthScore = computeHealthScore(finalNodes, selectedEdges, clusters)
+
+    // Compute coupling info (inspired by Axon)
+    const coupling = computeCoupling(finalNodes, selectedEdges)
+
+    // Compute heatmap (inspired by Emerge)
+    const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
+
     return NextResponse.json({
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
+      healthScore,
+      coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
+      heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
     })
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)

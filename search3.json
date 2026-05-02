@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/topics/dead-code-detection",
+    "name": "dead-code-detection · GitHub Topics",
+    "snippet": "Fast Python static analysis powered by Rust. Detects dead code, security issues (including taint analysis), and code quality metrics like complexity, Halstead, ... Missing: 2024 | Show results with: 2024",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/code-visualization?l=javascript",
+    "name": "code-visualization · GitHub Topics",
+    "snippet": "Visualize any codebase as an interactive force-directed graph. Analyze Python, JS/TS, and more -- see how files, classes, endpoints, and services connect.",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Voskan/codexsentinel",
+    "name": "CodexSentinel - Security Scanner & Static Code Analyzer for Go",
+    "snippet": "CodexSentinel is a comprehensive, enterprise-grade static code analysis platform designed specifically for Go applications. It combines advanced ...",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/dependency-analysis",
+    "name": "dependency-analysis · GitHub Topics",
+    "snippet": "OWASP dep-scan is a next-generation security and risk audit tool based on known vulnerabilities, advisories, and license limitations for project dependencies.",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/ChrisRoyse/CodeGraph",
+    "name": "ChrisRoyse/CodeGraph · GitHub",
+    "snippet": "CodeGraph Analyzer is a powerful static analysis engine that transforms your codebase into a rich, queryable Neo4j graph database. It now supports multiple ... Missing: dead 2024 2025",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/code-analysis?l=rust&o=desc&s=forks",
+    "name": "code-analysis · GitHub Topics",
+    "snippet": "An experimental, 100% AI-generated, high-performance code intelligence server providing AI assistants with a graph-based understanding of codebases. javascript ...",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://cycode.com/blog/top-10-code-analysis-tools",
+    "name": "Top 10 Code Analysis Tools in 2025 | Cycode",
+    "snippet": "Let's explore how code analysis tools work, the top features to evaluate, and the best solutions available for developers and DevOps teams. Missing: visualization dead 2024",
+    "host_name": "cycode.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/security/advanced-security/code-security",
+    "name": "GitHub Code Security",
+    "snippet": "GitHub Code Security continuously scans your code as you build, helping detect vulnerabilities early, fix them fast with Copilot Autofix, and ship securely. Missing: visualization dead 2025",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.falkordb.com/blog/code-graph",
+    "name": "CodeGraph: Build Queryable Knowledge Graphs from Code",
+    "snippet": "Code Graph is a visual representation of a codebase, leveraging Knowledge Graphs and Large Language Models (LLMs) to map the relationships between code ...",
+    "host_name": "www.falkordb.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.mdpi.com/1999-5903/18/2/99",
+    "name": "Security Integration in GitHub and Azure DevOps - MDPI",
+    "snippet": "This paper examines the integration and operationalization of GitHub Advanced Security (GHAS) across GitHub and Azure DevOps to enhance DevSecOps practices ...",
+    "host_name": "www.mdpi.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

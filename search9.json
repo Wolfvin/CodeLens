@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/glue-tools-ai/codebase-health-score",
+    "name": "glue-tools-ai/codebase-health-score: Calculate a",
+    "snippet": "Calculate a health score for any Git repository. Analyzes complexity , docs, tests, deps, and collaboration. - glue- tools -ai/ codebase - health - score .",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/paulrayner/codecohesion",
+    "name": "virtualgenius/codecohesion: Open-source 3D visualization",
+    "snippet": "7 Mar 2026 — Open-source 3D visualization tool for analyzing code cohesion and architectural evolution. Explore your codebase as an interactive solar ...\nOpen-source 3D visualization tool for analyzing code cohesion and architectural evolution. Explore your codebase as an interactive solar system ...",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/thinmanj/code-analyzer",
+    "name": "thinmanj/code-analyzer",
+    "snippet": "3 Nov 2025 — Code Analyzer is a comprehensive tool that reads source code, understands its structure, identifies critical sections, detects potential issues, ...",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/kamilstanuch/codebase-digest",
+    "name": "kamilstanuch/codebase-digest",
+    "snippet": "Codebase Digest is a command-line tool written in Python that helps you analyze and understand your codebase . It provides a structured overview of your ...",
+    "host_name": "github.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/glato/emerge",
+    "name": "glato/emerge: Emerge is a browser-based interactive",
+    "snippet": "Emerge (or emerge-viz) is an interactive code analysis tool to gather insights about source code structure, metrics , dependencies and complexity of software ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/helabenkhalfallah/code-health-meter",
+    "name": "helabenkhalfallah/code-health-meter",
+    "snippet": "code - health -meter is a comprehensive tool designed to measure and monitor the health of a codebase (JavaScript/TypeScript). It provides a quantitative ...",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/codegen-sh/codebase-analytics",
+    "name": "codegen-sh/codebase-analytics",
+    "snippet": "DevOps · Security · View all topics. EXPLORE BY TYPE ... Cyclomatic Complexity : Measures the complexity of the codebase . Higher values ...",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/stevenkozeniesky02/claude-plugins",
+    "name": "Claude Code plugins: multi-agent codebase analysis tools for",
+    "snippet": "Claude Code plugins: multi-agent codebase analysis tools for ideation discovery and roadmap generation - stevenkozeniesky02/claude-plugins.",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://count.co/integration/github/repository-health-score",
+    "name": "Track Repository Health with GitHub Data - Count.co",
+    "snippet": "Count delivers presentation-ready repository health analysis that connects GitHub data with other sources like your project management tools or deployment ...",
+    "host_name": "count.co",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/AlabamaMike/forensic-skills/blob/claude/code-forensics-skills-011CUYPHMBH3n4ZQAhAdvPUM/README.md",
+    "name": "forensic-skills/README.md at claude/code",
+    "snippet": "A comprehensive suite of Claude Code skills for performing forensic analysis of codebases , based on the principles from \"Your Code as a Crime Scene\" by Adam ...",
+    "host_name": "github.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

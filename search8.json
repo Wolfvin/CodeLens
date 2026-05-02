@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/Acas773/CodeLandscapeViewer",
+    "name": "CodeLandscapeViewer - Visualize Your Code Connections",
+    "snippet": "Visual, interactive map of code dependencies · Supports Python, JavaScript, TypeScript, and more · Click nodes to see detailed dependency chains ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/lucyb0207/CodeAtlas",
+    "name": "lucyb0207/CodeAtlas: Explore and understand codebases",
+    "snippet": "CodeAtlas is a full-stack developer tool that transforms GitHub repositories into interactive dependency graphs, enabling visual exploration of code ...",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/glenwrhodes/CodeLandscapeViewer",
+    "name": "glenwrhodes/CodeLandscapeViewer",
+    "snippet": "Visualize any codebase as an interactive force-directed graph . Analyze Python, JS/TS, and more -- see how files, classes, endpoints, and services connect.",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://marketplace.visualstudio.com/items?itemName=mrroy.codeatlas-visualizer",
+    "name": "CodeAtlas Visualizer",
+    "snippet": "Visualize your codebase in VS Code with an interactive dependency graph , file relationship map, module explorer, and project structure analyzer. Installation.",
+    "host_name": "marketplace.visualstudio.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/DucPhamNgoc08/CodeVisualizer",
+    "name": "DucPhamNgoc08/CodeVisualizer",
+    "snippet": "Nov 15, 2025 — Why CodeVisualizer? Understand complex codebases instantly with interactive dependency graphs showing how your modules connect; Debug and ...",
+    "host_name": "github.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://aaltodoc.aalto.fi/bitstreams/301983a8-6096-4c75-a31e-440723ab6351/download",
+    "name": "an Interactive Dependency Analyzer for JavaScript Projects",
+    "snippet": "2021 · Cited by 2 — This is useful for comparing what has changed between two versions of a code base . These changes are marked as such in the dependency graph visualization. The ...",
+    "host_name": "aaltodoc.aalto.fi",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://understandlegacycode.com/blog/safely-restructure-codebase-with-dependency-graphs",
+    "name": "Safely restructure your codebase with Dependency Graphs",
+    "snippet": "A Dependency Graph is a directed graph that represents the dependencies of several objects towards each other. That's pretty generic, yet super useful when it ...",
+    "host_name": "understandlegacycode.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/glato/emerge",
+    "name": "glato/emerge: Emerge is a browser-based interactive",
+    "snippet": "Emerge is a browser-based interactive codebase and dependency visualization tool for many different programming languages. It supports some basic code quality ...",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/dependency-graph",
+    "name": "dependency-graph",
+    "snippet": "Tool for helping developers keep their code bases clean and decoupled. It allows visualising a code base complexity using a 3d force-directed graph of files and ...",
+    "host_name": "github.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/NiksBhatia/Code-Dependency-Visualizer",
+    "name": "NiksBhatia/Code-Dependency-Visualizer",
+    "snippet": "Easy Navigation: Zoom in and out to focus on specific parts of your codebase . Export Options: Save your graph as an image or PDF for reports and presentations.",
+    "host_name": "github.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]

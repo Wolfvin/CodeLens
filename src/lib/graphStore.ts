@@ -105,6 +105,7 @@ class GraphStore {
     this.edges.clear()
     this.clusters.clear()
     this.selectedNodeId = null
+    this.invalidateTfidfCache()
 
     // Bulk insert
     for (const node of nodes) {
@@ -123,6 +124,7 @@ class GraphStore {
     this.clusters.clear()
     this.selectedNodeId = null
     this.eventLog = []
+    this.invalidateTfidfCache()
   }
 
   applyEvent(event: GraphEvent): void {
@@ -283,6 +285,105 @@ class GraphStore {
     // Sort by score descending
     scored.sort((a, b) => b.score - a.score)
     return scored.map((s) => s.node)
+  }
+
+  // ============================================================
+  // Semantic Search (TF-IDF inspired, from Emerge)
+  //
+  // Goes beyond string matching by considering:
+  //   - Term frequency in node labels/data
+  //   - Inverse document frequency (rare terms score higher)
+  //   - Semantic keyword extraction from REGION_PATTERNS
+  //   - Node type and status as relevance signals
+  // ============================================================
+
+  private _tfidfCache: { docCount: number; idf: Map<string, number> } | null = null
+
+  /** Invalidate the TF-IDF cache when nodes change */
+  private invalidateTfidfCache(): void {
+    this._tfidfCache = null
+  }
+
+  /** Build IDF (Inverse Document Frequency) from all node labels */
+  private buildIdf(): { docCount: number; idf: Map<string, number> } {
+    const docCount = this.nodes.size
+    const docFreq = new Map<string, number>()
+
+    for (const node of this.nodes.values()) {
+      const tokens = tokenize(node.label + ' ' + (node.file ?? '') + ' ' + (node.data?.category ?? ''))
+      const uniqueTokens = new Set(tokens)
+      for (const token of uniqueTokens) {
+        docFreq.set(token, (docFreq.get(token) ?? 0) + 1)
+      }
+    }
+
+    const idf = new Map<string, number>()
+    for (const [token, freq] of docFreq) {
+      idf.set(token, Math.log((docCount + 1) / (freq + 1)) + 1) // smoothed IDF
+    }
+
+    return { docCount, idf }
+  }
+
+  /** Semantic search using TF-IDF scoring */
+  semanticSearch(query: string, maxResults: number = 20): Array<{ node: GraphNode; score: number; matchedTerms: string[] }> {
+    if (!query.trim()) return []
+
+    // Build or use cached IDF
+    if (!this._tfidfCache) {
+      this._tfidfCache = this.buildIdf()
+    }
+    const { idf } = this._tfidfCache
+
+    const queryTerms = tokenize(query)
+    const queryLower = query.toLowerCase()
+
+    const scored: Array<{ node: GraphNode; score: number; matchedTerms: string[] }> = []
+
+    for (const node of this.nodes.values()) {
+      const docText = node.label + ' ' + (node.file ?? '') + ' ' + (node.data?.category ?? '') + ' ' + (node.data?.message ?? '')
+      const docTokens = tokenize(docText)
+      const matchedTerms: string[] = []
+      let score = 0
+
+      for (const qTerm of queryTerms) {
+        // Check for exact and partial matches in document tokens
+        for (const dToken of docTokens) {
+          if (dToken === qTerm) {
+            // Exact term match: TF-IDF score
+            const termIdf = idf.get(qTerm) ?? 1
+            score += 10 * termIdf
+            if (!matchedTerms.includes(qTerm)) matchedTerms.push(qTerm)
+          } else if (dToken.startsWith(qTerm) || qTerm.startsWith(dToken)) {
+            // Partial match (prefix)
+            const termIdf = idf.get(qTerm) ?? 1
+            score += 5 * termIdf
+            if (!matchedTerms.includes(qTerm)) matchedTerms.push(qTerm)
+          } else if (isFuzzyMatch(dToken, qTerm)) {
+            // Fuzzy match
+            score += 2
+            if (!matchedTerms.includes(qTerm)) matchedTerms.push(qTerm)
+          }
+        }
+      }
+
+      // Boost by node type relevance
+      const nodeLabel = node.label.toLowerCase()
+      if (nodeLabel === queryLower) score *= 3        // Exact label = 3x boost
+      else if (nodeLabel.startsWith(queryLower)) score *= 2  // Prefix = 2x boost
+
+      // Boost by status relevance (critical/vulnerable nodes are more "important")
+      if (node.status === 'critical' || node.status === 'vulnerable') score *= 1.2
+      if (node.status === 'dead' || node.status === 'unused') score *= 0.8  // Down-rank dead code
+
+      if (score > 0) {
+        scored.push({ node, score: Math.round(score * 100) / 100, matchedTerms })
+      }
+    }
+
+    // Sort by score descending
+    scored.sort((a, b) => b.score - a.score)
+    return scored.slice(0, maxResults)
   }
 
   getNodeDetail(nodeId: string): NodeDetail {
@@ -598,6 +699,28 @@ function isFuzzyMatch(text: string, query: string): boolean {
     ti++
   }
   return qi === query.length
+}
+
+// ============================================================
+// Tokenize helper — splits text into searchable tokens
+// Handles camelCase, snake_case, kebab-case, paths
+// ============================================================
+
+function tokenize(text: string): string[] {
+  if (!text) return []
+
+  // Split on: camelCase boundaries, underscores, hyphens, dots, slashes, whitespace
+  const parts = text
+    .replace(/([a-z])([A-Z])/g, '$1 $2')   // camelCase → camel Case
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2') // XMLParser → XML Parser
+    .replace(/[_\-./\\]/g, ' ')               // snake/kebab/dot/slash → space
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .split(' ')
+    .filter(t => t.length > 1)   // Skip single-char tokens
+
+  return parts
 }
 
 // ============================================================

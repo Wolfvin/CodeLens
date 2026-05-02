@@ -1,0 +1,92 @@
+[
+  {
+    "url": "https://github.com/ChrisRoyse/CodeGraph",
+    "name": "ChrisRoyse/CodeGraph · GitHub",
+    "snippet": "CodeGraph Analyzer is a powerful static analysis engine that transforms your codebase into a rich, queryable Neo4j graph database. It now supports multiple ...",
+    "host_name": "github.com",
+    "rank": 0,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/Bevel-Software/code-to-knowledge-graph",
+    "name": "Bevel-Software/code-to-knowledge-graph - GitHub",
+    "snippet": "Code-to-Knowledge-Graph is a Kotlin/JVM toolkit that parses source code and creates rich, queryable knowledge graphs using VS Code's Language Server Protocol ( ...",
+    "host_name": "github.com",
+    "rank": 1,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/knowledge-graph",
+    "name": "knowledge-graph · GitHub Topics",
+    "snippet": "Turn any code, or knowledge base (Karpathy LLM wiki), into an interactive knowledge graph you can explore, search, and ask questions about. Works with Claude ...",
+    "host_name": "github.com",
+    "rank": 2,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://neo4j.com/blog/developer/codebase-knowledge-graph",
+    "name": "Codebase Knowledge Graph: Code Analysis with Graphs - Neo4j",
+    "snippet": "We will discuss a base concept of graph-based code analysis and learn how to build a Codebase Knowledge Graph (or Code Knowledge Graph or simply CKG) for a . ... Missing: queryable | Show results with: queryable",
+    "host_name": "neo4j.com",
+    "rank": 3,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://www.falkordb.com/blog/code-graph",
+    "name": "CodeGraph: Build Queryable Knowledge Graphs from Code",
+    "snippet": "Learn how CodeGraph uses FalkorDB and LLMs to map codebases as queryable Knowledge Graphs. Trace calls, analyze dependencies, ...",
+    "host_name": "www.falkordb.com",
+    "rank": 4,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/getzep/graphiti",
+    "name": "getzep/graphiti: Build Real-Time Knowledge Graphs for AI Agents",
+    "snippet": "Graphiti is a framework for building and querying temporal context graphs for AI agents. Unlike static knowledge graphs, Graphiti's context graphs track how ...",
+    "host_name": "github.com",
+    "rank": 5,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/neo4j-labs/arrows.app/discussions/87",
+    "name": "Knowledge base graph editor · neo4j-labs arrows.app - GitHub",
+    "snippet": "This approach open the way to a new usage of Neo4j directed to \" Explainable Assisted Intelligence \" which could be seen as an alternative to \"blind Artificial ... Missing: queryable | Show results with: queryable",
+    "host_name": "github.com",
+    "rank": 6,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/topics/neo4j-graph?l=cypher&o=desc&s=stars",
+    "name": "neo4j-graph · GitHub Topics",
+    "snippet": "GitHub is where people build software. More than 150 million people use GitHub to discover, fork, and contribute to over 420 million projects. Missing: queryable | Show results with: queryable",
+    "host_name": "github.com",
+    "rank": 7,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/jonnoc/coderag",
+    "name": "JonnoC/CodeRAG: Advanced graph-based code analysis  - GitHub",
+    "snippet": "CodeRAG creates a comprehensive graph database representation of your codebase using Neo4J, enabling sophisticated analysis and AI-powered insights: Automated ... Missing: queryable | Show results with: queryable",
+    "host_name": "github.com",
+    "rank": 8,
+    "date": "",
+    "favicon": ""
+  },
+  {
+    "url": "https://github.com/neo4j-product-examples/knowledge-graph-agent",
+    "name": "neo4j-product-examples/knowledge-graph-agent - GitHub",
+    "snippet": "This repository contains step-by-step instructions on how to use the new Neo4j Aura Agent functionality. These examples demonstrate how to create ... Missing: queryable | Show results with: queryable",
+    "host_name": "github.com",
+    "rank": 9,
+    "date": "",
+    "favicon": ""
+  }
+]
