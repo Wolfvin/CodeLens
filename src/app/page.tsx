@@ -338,7 +338,8 @@ function NeuralWorkspaceApp() {
   // ---- Fetch real data ----
   const tryFetchRealData = useCallback(async () => {
     try {
-      const res = await fetch('/api/graph?workspace=/home/z/my-project')
+      const ws = analysisStore.workspace
+      const res = await fetch(`/api/graph?workspace=${encodeURIComponent(ws)}`)
       if (res.ok) {
         const data = await res.json()
         if (data.nodes && data.nodes.length > 0) {
@@ -351,7 +352,7 @@ function NeuralWorkspaceApp() {
     } catch {
       // Demo data already loaded
     }
-  }, [])
+  }, [analysisStore.workspace])
 
   // ---- Node Selection ----
   const handleNodeSelect = useCallback(
@@ -482,7 +483,8 @@ function NeuralWorkspaceApp() {
   const handleRescan = useCallback(async () => {
     setIsScanning(true)
     try {
-      const res = await fetch('/api/graph?workspace=/home/z/my-project')
+      const ws = analysisStore.workspace
+      const res = await fetch(`/api/graph?workspace=${encodeURIComponent(ws)}`)
       if (res.ok) {
         const data = await res.json()
         if (data.nodes && data.nodes.length > 0) {
@@ -504,7 +506,7 @@ function NeuralWorkspaceApp() {
     } finally {
       setIsScanning(false)
     }
-  }, [])
+  }, [analysisStore.workspace])
 
   // ---- Panel close ----
   const handlePanelClose = useCallback(() => {

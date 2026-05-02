@@ -287,7 +287,7 @@ def _extract_js_functions(lines: List[str], content: str, ext: str) -> List[Dict
 
         # Method definitions in classes: name() { or async name() {
         m = re.match(
-            r'(?:public|private|protected|static|async|abstract|override)\s+)*(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{',
+            r'(?:(?:public|private|protected|static|async|abstract|override)\s+)*(\w+)\s*\(([^)]*)\)\s*(?::\s*[^{]+?)?\s*\{',
             stripped
         )
         if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'class', 'constructor'}:

@@ -32,23 +32,68 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
 
-
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-local-*
+
+# AI/agent context
 .claude
 .z-ai-config
+
+# Logs
 *.log
 dev.log
 dev.out.log
-test
-prompt
-
 server.log
-# Skills directory
-/skills/
+
+# CodeLens runtime cache (auto-generated, do not commit)
+.codelens/
+
+# Upload and download directories (user-specific)
+/upload/
+/download/
+
+# Agent context (development artifacts)
+/agent-ctx/
+
+# Z-scripts (runtime)
+.zscripts/
+
+# Database (user-specific)
+db/
+
+# Other skills (not part of CodeLens)
+/skills/ASR/
+/skills/LLM/
+/skills/VLM/
+/skills/agent-browser/
+/skills/aminer-academic-search/
+/skills/aminer-daily-paper/
+/skills/charts/
+/skills/docx/
+/skills/finance/
+/skills/fullstack-dev/
+/skills/image-generation/
+/skills/pdf/
+/skills/ppt/
+/skills/skill-creator/
+/skills/skill-vetter/
+/skills/video-understand/
+/skills/web-reader/
+/skills/web-search/
+/skills/web-shader-extractor/
+/skills/xlsx/
+/skills/canvas-design/
+
+# Examples (not needed for publish)
+/examples/
+
+# Prompt files
+prompt
+test
+local-*

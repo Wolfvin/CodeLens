@@ -152,7 +152,7 @@ export function WorkspaceTab({ theme }: WorkspaceTabProps) {
               }}
               onKeyDown={e => {
                 if (e.key === 'Enter' && queryInput.trim()) {
-                  runCommand('query', [workspace, '--name', queryInput])
+                  runCommand('query', [queryInput, workspace])
                 }
               }}
             />
@@ -161,7 +161,7 @@ export function WorkspaceTab({ theme }: WorkspaceTabProps) {
               variant="outline"
               className="h-8 px-3 gap-1.5 shrink-0"
               style={{ borderColor: theme === 'dark' ? '#2d3748' : '#e2e8f0', color: theme === 'dark' ? '#e2e8f0' : '#1a202c' }}
-              onClick={() => queryInput.trim() && runCommand('query', [workspace, '--name', queryInput])}
+              onClick={() => queryInput.trim() && runCommand('query', [queryInput, workspace])}
               disabled={!queryInput.trim()}
             >
               <Search className="h-3 w-3" />
