@@ -591,6 +591,67 @@ python3 skills/codelens/scripts/codelens.py scan .
 
 ---
 
+## Credits & Acknowledgments
+
+CodeLens wouldn't exist without these incredible open-source projects. Huge thanks to all the maintainers and contributors!
+
+### Core Engine
+
+| Project | Repository | How We Use It |
+|---------|-----------|---------------|
+| **tree-sitter** | [tree-sitter/tree-sitter](https://github.com/tree-sitter/tree-sitter) | AST parsing engine — the foundation of CodeLens' accurate code analysis |
+| **tree-sitter-html** | [tree-sitter/tree-sitter-html](https://github.com/tree-sitter/tree-sitter-html) | HTML grammar for parsing HTML structure, ids, and classes |
+| **tree-sitter-css** | [tree-sitter/tree-sitter-css](https://github.com/tree-sitter/tree-sitter-css) | CSS grammar for selector, property, and @keyframes analysis |
+| **tree-sitter-javascript** | [tree-sitter/tree-sitter-javascript](https://github.com/tree-sitter/tree-sitter-javascript) | JavaScript grammar for frontend/backend JS parsing |
+| **tree-sitter-typescript** | [tree-sitter/tree-sitter-typescript](https://github.com/tree-sitter/tree-sitter-typescript) | TypeScript/TSX grammar for React component analysis |
+| **tree-sitter-rust** | [tree-sitter/tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust) | Rust grammar for function, impl, and trait parsing |
+| **tree-sitter-python** | [tree-sitter/tree-sitter-python](https://github.com/tree-sitter/tree-sitter-python) | Python grammar for def, class, and import parsing |
+
+### Neural Workspace UI
+
+| Project | Repository | How We Use It |
+|---------|-----------|---------------|
+| **Next.js** | [vercel/next.js](https://github.com/vercel/next.js) | React framework powering the Neural Workspace web application |
+| **React** | [facebook/react](https://github.com/facebook/react) | UI rendering library for all workspace components |
+| **D3-force** | [d3/d3-force](https://github.com/d3/d3-force) | Force-directed graph layout for neural node positioning |
+| **shadcn/ui** | [shadcn-ui/ui](https://github.com/shadcn-ui/ui) | Beautiful, accessible UI components used across all panels and tabs |
+| **Tailwind CSS** | [tailwindlabs/tailwindcss](https://github.com/tailwindlabs/tailwindcss) | Utility-first CSS framework for rapid styling |
+| **Zustand** | [pmndrs/zustand](https://github.com/pmndrs/zustand) | Lightweight state management for graph, analysis, and UI state |
+| **Framer Motion** | [motiondivision/motion](https://github.com/motiondivision/motion) | Smooth animations for panels, transitions, and micro-interactions |
+| **Recharts** | [recharts/recharts](https://github.com/recharts/recharts) | Chart library for quality/security/performance visualizations |
+| **react-syntax-highlighter** | [react-syntax-highlighter/react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | Code syntax highlighting in the slide-in detail panel |
+| **Lucide React** | [lucide-icons/lucide](https://github.com/lucide-icons/lucide) | Icon library for all sidebar, toolbar, and action icons |
+| **cmdk** | [pacocoursey/cmdk](https://github.com/pacocoursey/cmdk) | Command palette component (Ctrl+K) for fast command access |
+| **socket.io** | [socketio/socket.io](https://github.com/socketio/socket.io) | Real-time WebSocket communication between CLI and UI |
+
+### Tools & Infrastructure
+
+| Project | Repository | How We Use It |
+|---------|-----------|---------------|
+| **Bun** | [oven-sh/bun](https://github.com/oven-sh/bun) | Fast JavaScript runtime for the WebSocket microservice |
+| **Prisma** | [prisma/prisma](https://github.com/prisma/prisma) | ORM for potential database-backed registry persistence |
+| **ESLint** | [eslint/eslint](https://github.com/eslint/eslint) | Code quality linting for the Next.js codebase |
+| **TypeScript** | [microsoft/TypeScript](https://github.com/microsoft/TypeScript) | Type safety across the entire Neural Workspace codebase |
+
+### Inspiration
+
+These projects and ideas inspired CodeLens' design:
+
+| Project | Repository | Inspiration |
+|---------|-----------|-------------|
+| **Sourcegraph** | [sourcegraph/sourcegraph](https://github.com/sourcegraph/sourcegraph) | Code intelligence and cross-reference navigation |
+| **SonarQube** | [SonarSource/sonarqube](https://github.com/SonarSource/sonarqube) | Code quality gates and smell detection patterns |
+| **Snyk** | [snyk/snyk](https://github.com/snyk/snyk) | Vulnerability scanning and dependency audit approach |
+| **React DevTools** | [facebook/react](https://github.com/facebook/react) | Component tree visualization and state inspection |
+| **AST Explorer** | [fkling/astexplorer](https://github.com/fkling/astexplorer) | Interactive AST visualization that guided our tree-sitter integration |
+| **Dependency Cruiser** | [sverweij/dependency-cruiser](https://github.com/sverweij/dependency-cruiser) | Dependency graph visualization and circular dependency detection |
+
+---
+
+Thank you to every open-source contributor who makes tools like CodeLens possible. You rock! 🙌
+
+---
+
 ## License
 
 MIT License — see [LICENSE](./skills/codelens/LICENSE.txt) for details.
