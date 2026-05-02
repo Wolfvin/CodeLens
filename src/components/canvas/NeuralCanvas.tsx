@@ -74,12 +74,11 @@ interface AnimationState {
 // ============================================================
 
 const AMBIENT_PARTICLE_COUNT = 30
-const HEX_GRID_SIZE = 60
 const TOOLTIP_PADDING = 12
 const TOOLTIP_LINE_HEIGHT = 18
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3.0
-const ZOOM_SENSITIVITY = 0.003
+const ZOOM_SENSITIVITY = 0.001        // normalized pixel-mode sensitivity
 
 // ============================================================
 // Helper: get LOD level from zoom
@@ -472,19 +471,17 @@ function drawShape(
     }
 
     case 'ring': {
+      // Draw donut shape using arc fill rule instead of destination-out
+      // (destination-out punches holes through ALL previously drawn content)
+      const outerR = r
+      const innerR = r * 0.55
       ctx.beginPath()
-      ctx.arc(x, y, r, 0, Math.PI * 2)
-      ctx.fill()
-      // Clear inner circle
-      ctx.save()
-      ctx.globalCompositeOperation = 'destination-out'
+      ctx.arc(x, y, outerR, 0, Math.PI * 2)
+      ctx.arc(x, y, innerR, 0, Math.PI * 2, true) // counter-clockwise = hole
+      ctx.fill('evenodd')
+      // Inner ring border
       ctx.beginPath()
-      ctx.arc(x, y, r * 0.55, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.restore()
-      // Redraw inner ring border
-      ctx.beginPath()
-      ctx.arc(x, y, r * 0.55, 0, Math.PI * 2)
+      ctx.arc(x, y, innerR, 0, Math.PI * 2)
       ctx.stroke()
       break
     }
@@ -1085,13 +1082,12 @@ export default function NeuralCanvas({
     const container = containerRef.current
     if (!container) return
 
-    const updateSize = () => {
-      // Try container first, then parent, then window
+    let lastW = 0, lastH = 0
+    const updateSizeThrottled = () => {
       const rect = container.getBoundingClientRect()
       let w = rect.width
       let h = rect.height
 
-      // If container has no dimensions, try parent
       if (w === 0 || h === 0) {
         const parent = container.parentElement
         if (parent) {
@@ -1101,38 +1097,39 @@ export default function NeuralCanvas({
         }
       }
 
-      // Final fallback to window
       if (w === 0 || h === 0) {
         w = window.innerWidth
-        h = window.innerHeight - 56 // subtract topbar
+        h = window.innerHeight - 56
       }
 
-      if (w > 0 && h > 0) {
-        setCanvasSize({ width: Math.floor(w), height: Math.floor(h) })
+      const fw = Math.floor(w)
+      const fh = Math.floor(h)
+      // Only update if dimensions actually changed (prevents simulation recreation storm)
+      if (fw > 0 && fh > 0 && (fw !== lastW || fh !== lastH)) {
+        lastW = fw
+        lastH = fh
+        setCanvasSize({ width: fw, height: fh })
       }
     }
 
     const observer = new ResizeObserver(() => {
-      updateSize()
+      updateSizeThrottled()
     })
 
-    // Observe container AND its parent for robustness
     observer.observe(container)
     if (container.parentElement) {
       observer.observe(container.parentElement)
     }
 
-    // Multiple fallback timers to ensure we get dimensions
-    updateSize()
-    const t1 = setTimeout(updateSize, 100)
-    const t2 = setTimeout(updateSize, 300)
-    const t3 = setTimeout(updateSize, 1000)
+    // Reduced fallback timers (removed redundant 1000ms timer)
+    updateSizeThrottled()
+    const t1 = setTimeout(updateSizeThrottled, 100)
+    const t2 = setTimeout(updateSizeThrottled, 400)
 
     return () => {
       observer.disconnect()
       clearTimeout(t1)
       clearTimeout(t2)
-      clearTimeout(t3)
     }
   }, [])
 
@@ -1150,10 +1147,9 @@ export default function NeuralCanvas({
     canvas.style.width = `${canvasSize.width}px`
     canvas.style.height = `${canvasSize.height}px`
 
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.scale(dpr, dpr)
-    }
+    // NOTE: ctx.scale(dpr, dpr) removed — the render loop resets transform
+    // every frame with ctx.setTransform(dpr, 0, 0, dpr, 0, 0), making
+    // any initial scale redundant and causing double-scaling on first paint.
   }, [canvasSize])
 
   // ============================================================
@@ -1479,7 +1475,7 @@ export default function NeuralCanvas({
   )
 
   const handleWheel = useCallback(
-    (e: React.WheelEvent<HTMLCanvasElement>) => {
+    (e: WheelEvent) => {
       e.preventDefault()
 
       const rect = canvasRef.current?.getBoundingClientRect()
@@ -1489,9 +1485,24 @@ export default function NeuralCanvas({
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
 
-      // Zoom toward mouse position (instant, no interpolation)
-      const delta = -e.deltaY * ZOOM_SENSITIVITY
-      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * (1 + delta)))
+      // Normalize deltaY based on deltaMode for consistent zoom across devices
+      let normalizedDelta = e.deltaY
+      if (e.deltaMode === 1) {
+        // Line mode (common on trackpads) — ~40px per line
+        normalizedDelta *= 40
+      } else if (e.deltaMode === 2) {
+        // Page mode
+        normalizedDelta *= 800
+      }
+
+      // Use normalized pixel-mode sensitivity
+      const delta = -normalizedDelta * ZOOM_SENSITIVITY
+
+      // Clamp delta to prevent extreme zoom jumps
+      const clampedDelta = Math.max(-0.3, Math.min(0.3, delta))
+
+      // Zoom toward mouse position (instant, no interpolation, no lag)
+      const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * (1 + clampedDelta)))
       const zoomRatio = newZoom / t.zoom
 
       t.x = sx - (sx - t.x) * zoomRatio
@@ -1533,6 +1544,23 @@ export default function NeuralCanvas({
   )
 
   // ============================================================
+  // Native wheel event listener (passive: false for preventDefault)
+  // React's onWheel is passive by default — preventDefault() silently fails
+  // causing page to scroll while zooming. Use native addEventListener instead.
+  // ============================================================
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel)
+    }
+  }, [handleWheel])
+
+  // ============================================================
   // Render
   // ============================================================
 
@@ -1550,7 +1578,6 @@ export default function NeuralCanvas({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
-        onWheel={handleWheel}
       />
     </div>
   )

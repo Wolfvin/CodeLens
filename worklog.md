@@ -397,3 +397,32 @@ Stage Summary:
 - Demo data + real data both available for canvas rendering
 - All CodeLens framework features fully covered in UI
 - WebSocket service running on port 3030
+---
+Task ID: canvas-bugfix-2d-zoom
+Agent: Main Agent
+Task: Fix 2D canvas rendering bugs, zoom sensitivity, and end-of-canvas bugs
+
+Work Log:
+- Read Full Stack Dev skill file for proper development guidelines
+- Explored all project files — found NeuralCanvas.tsx (1571 lines) as the main canvas component
+- Identified 7 bugs in NeuralCanvas.tsx:
+  1. Ring shape `destination-out` compositing — punches holes through ALL previously drawn content (edges, other nodes)
+  2. Zoom sensitivity `ZOOM_SENSITIVITY = 0.003` too high, no `deltaMode` normalization
+  3. React `onWheel` is passive — `preventDefault()` silently fails, causing page scroll during zoom
+  4. Redundant `ctx.scale(dpr, dpr)` in setup effect, overwritten by `setTransform()` each frame
+  5. 3 fallback timers cause 4x `setCanvasSize` calls, each recreating D3 simulation
+  6. Unused `HEX_GRID_SIZE` constant
+  7. Missing native wheel listener with `{ passive: false }`
+
+Fixes Applied:
+1. **Ring shape**: Replaced `destination-out` compositing with `evenodd` fill rule (draw outer arc + counter-clockwise inner arc). This correctly renders donut shape without punching holes in other content.
+2. **Zoom sensitivity**: Changed from `0.003` to `0.001`, added `deltaMode` normalization (line mode ×40, page mode ×800), added delta clamping (`±0.3 max`) to prevent extreme jumps. Zoom is instant (no smooth interpolation per user's previous request to avoid lag).
+3. **Passive wheel listener**: Removed React `onWheel` prop, added native `addEventListener('wheel', handler, { passive: false })` in useEffect. This ensures `preventDefault()` actually prevents page scrolling.
+4. **DPI redundancy**: Removed `ctx.scale(dpr, dpr)` from setup effect since render loop resets transform each frame.
+5. **Simulation recreation storm**: Added throttling to `setCanvasSize` — only updates when dimensions actually change. Reduced from 3+1 timers to 2+1 timers.
+6. **Cleanup**: Removed unused `HEX_GRID_SIZE` constant, consolidated zoom sensitivity constants.
+
+Stage Summary:
+- All 7 bugs fixed in NeuralCanvas.tsx
+- Lint passes clean
+- Dev server compiles successfully
