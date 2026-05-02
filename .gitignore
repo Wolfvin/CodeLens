@@ -1,99 +1,61 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# Dependencies
+node_modules/
+bun.lock
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# Next.js
+.next/
+out/
 
-# testing
-/coverage
+# Production
+build/
+dist/
 
-# next.js
-/.next/
-/out/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.venv/
+venv/
+ENV/
 
-# production
-/build
+# CodeLens Registry Cache (auto-generated)
+.codelens/
 
-# misc
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-*.pem
+Thumbs.db
 
-# debug
+# Debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
+dev.log
+server.log
 
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-
-# vercel
-.vercel
-
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-# AI/agent context
-.claude
-.z-ai-config
+# Prisma
+prisma/migrations/
 
-# Logs
-*.log
-dev.log
-dev.out.log
-server.log
-
-# CodeLens runtime cache (auto-generated, do not commit)
-.codelens/
-
-# Upload and download directories (user-specific)
-/upload/
-/download/
-
-# Agent context (development artifacts)
-/agent-ctx/
-
-# Z-scripts (runtime)
-.zscripts/
-
-# Database (user-specific)
-db/
-
-# Other skills (not part of CodeLens)
-/skills/ASR/
-/skills/LLM/
-/skills/VLM/
-/skills/agent-browser/
-/skills/aminer-academic-search/
-/skills/aminer-daily-paper/
-/skills/charts/
-/skills/docx/
-/skills/finance/
-/skills/fullstack-dev/
-/skills/image-generation/
-/skills/pdf/
-/skills/ppt/
-/skills/skill-creator/
-/skills/skill-vetter/
-/skills/video-understand/
-/skills/web-reader/
-/skills/web-search/
-/skills/web-shader-extractor/
-/skills/xlsx/
-/skills/canvas-design/
-
-# Examples (not needed for publish)
-/examples/
-
-# Prompt files
-prompt
-test
-local-*
+# Misc
+*.pem
