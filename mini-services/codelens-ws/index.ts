@@ -759,6 +759,71 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
       return normalizeTrace(command, cliResult)
     case 'impact':
       return normalizeImpact(command, cliResult)
+    case 'scan':
+      // Scan is handled separately before this function is called
+      return normalizeGeneric(command, cliResult)
+    case 'secrets':
+    case 'vuln-scan':
+    case 'dataflow':
+    case 'env-check':
+    case 'regex-audit':
+      // Security commands - use alarm animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'alarm',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: cliResult.risk === 'critical' ? 'critical' : 'high',
+        },
+      }
+    case 'smell':
+    case 'complexity':
+    case 'debug-leak':
+    case 'dead-code':
+    case 'a11y':
+      // Quality commands - use pulse animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'pulse',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'medium',
+        },
+      }
+    case 'perf-hint':
+    case 'circular':
+      // Performance - use ripple animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'ripple',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'medium',
+        },
+      }
+    case 'css-deep':
+    case 'missing-refs':
+      // CSS - use flash animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'flash',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'low',
+        },
+      }
+    case 'side-effect':
+    case 'refactor-safe':
+      // Refactoring - use flow animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'flow',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'medium',
+          direction: 'both',
+        },
+      }
     default:
       return normalizeGeneric(command, cliResult)
   }
@@ -1113,7 +1178,7 @@ io.on('connection', (socket) => {
 
 // ─── Start Server ──────────────────────────────────────────
 
-const PORT = 3030
+const PORT = parseInt(process.env.CODELENS_WS_PORT || '3030', 10)
 httpServer.listen(PORT, () => {
   console.log(`[CodeLens WS] WebSocket server running on port ${PORT}`)
   console.log(`[CodeLens WS] CLI path: ${CODELENS_CLI} ${CODELENS_SCRIPT}`)

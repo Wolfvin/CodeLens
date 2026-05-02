@@ -31,6 +31,7 @@ interface NeuralCanvasProps {
   selectedNodeId: string | null
   activeAnimation: GraphAnimation | null
   onCanvasReady?: () => void
+  onContextMenu?: (info: { x: number; y: number; nodeId: string } | null) => void
 }
 
 interface SimNode extends GraphNode {
@@ -913,6 +914,104 @@ function drawClusterBubble(
 }
 
 // ============================================================
+// Minimap drawing function
+// ============================================================
+
+const MINIMAP_SIZE = 150
+const MINIMAP_PADDING = 12
+
+function drawMinimap(
+  ctx: CanvasRenderingContext2D,
+  simNodes: SimNode[],
+  simLinks: SimLink[],
+  transform: { x: number; y: number; zoom: number },
+  width: number,
+  height: number,
+  theme: 'dark' | 'light'
+) {
+  if (simNodes.length === 0) return
+
+  // Compute graph bounds
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const n of simNodes) {
+    minX = Math.min(minX, n.x)
+    minY = Math.min(minY, n.y)
+    maxX = Math.max(maxX, n.x)
+    maxY = Math.max(maxY, n.y)
+  }
+
+  const graphW = maxX - minX + 40
+  const graphH = maxY - minY + 40
+  if (graphW <= 0 || graphH <= 0) return
+
+  const mmX = width - MINIMAP_SIZE - MINIMAP_PADDING
+  const mmY = height - MINIMAP_SIZE - MINIMAP_PADDING - 24 // account for HUD
+  const scale = Math.min(MINIMAP_SIZE / graphW, MINIMAP_SIZE / graphH)
+  const offsetX = mmX + (MINIMAP_SIZE - graphW * scale) / 2
+  const offsetY = mmY + (MINIMAP_SIZE - graphH * scale) / 2
+
+  ctx.save()
+
+  // Minimap background
+  ctx.fillStyle = theme === 'dark' ? 'rgba(10,10,20,0.8)' : 'rgba(255,255,255,0.85)'
+  ctx.strokeStyle = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.roundRect(mmX - 4, mmY - 4, MINIMAP_SIZE + 8, MINIMAP_SIZE + 8, 8)
+  ctx.fill()
+  ctx.stroke()
+
+  // Draw edge lines (simplified)
+  ctx.globalAlpha = 0.15
+  ctx.strokeStyle = theme === 'dark' ? '#4a5568' : '#a0aec0'
+  ctx.lineWidth = 0.5
+  for (const link of simLinks) {
+    const src = typeof link.source === 'string' ? null : link.source
+    const tgt = typeof link.target === 'string' ? null : link.target
+    if (!src || !tgt) continue
+    const sx = offsetX + (src.x - minX - 20) * scale
+    const sy = offsetY + (src.y - minY - 20) * scale
+    const tx = offsetX + (tgt.x - minX - 20) * scale
+    const ty = offsetY + (tgt.y - minY - 20) * scale
+    ctx.beginPath()
+    ctx.moveTo(sx, sy)
+    ctx.lineTo(tx, ty)
+    ctx.stroke()
+  }
+
+  // Draw node dots
+  for (const n of simNodes) {
+    const nx = offsetX + (n.x - minX - 20) * scale
+    const ny = offsetY + (n.y - minY - 20) * scale
+    ctx.globalAlpha = 0.7
+    ctx.fillStyle = n.color
+    ctx.beginPath()
+    ctx.arc(nx, ny, Math.max(1.5, n.radius * scale * 0.5), 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Viewport rectangle
+  const viewLeft = -transform.x / transform.zoom
+  const viewTop = -transform.y / transform.zoom
+  const viewW = width / transform.zoom
+  const viewH = height / transform.zoom
+
+  const vpX = offsetX + (viewLeft - minX - 20) * scale
+  const vpY = offsetY + (viewTop - minY - 20) * scale
+  const vpW = viewW * scale
+  const vpH = viewH * scale
+
+  ctx.globalAlpha = 0.6
+  ctx.strokeStyle = '#b794f4'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([3, 2])
+  ctx.strokeRect(vpX, vpY, vpW, vpH)
+  ctx.setLineDash([])
+
+  ctx.restore()
+}
+
+// ============================================================
 // Main Component
 // ============================================================
 
@@ -925,6 +1024,7 @@ export default function NeuralCanvas({
   selectedNodeId,
   activeAnimation,
   onCanvasReady,
+  onContextMenu,
 }: NeuralCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -959,6 +1059,63 @@ export default function NeuralCanvas({
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
   const canvasSizeRef = useRef({ width: 0, height: 0 })
   const clustersRef = useRef<Cluster[]>([])
+
+  // Offscreen grid cache
+  const gridCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const gridCanvasSizeRef = useRef({ width: 0, height: 0 })
+  const gridCanvasThemeRef = useRef<string>('')
+
+  // Get or create cached offscreen grid canvas
+  function getGridCanvas(width: number, height: number, currentTheme: 'dark' | 'light'): HTMLCanvasElement {
+    // Rebuild cache if size or theme changed
+    if (
+      gridCanvasRef.current &&
+      gridCanvasSizeRef.current.width === width &&
+      gridCanvasSizeRef.current.height === height &&
+      gridCanvasThemeRef.current === currentTheme
+    ) {
+      return gridCanvasRef.current
+    }
+
+    const offscreen = document.createElement('canvas')
+    offscreen.width = width
+    offscreen.height = height
+    const octx = offscreen.getContext('2d')!
+
+    // Draw gradient background
+    if (currentTheme === 'dark') {
+      const bgGrad = octx.createLinearGradient(0, 0, width, height)
+      bgGrad.addColorStop(0, '#0d0d18')
+      bgGrad.addColorStop(1, '#060609')
+      octx.fillStyle = bgGrad
+      octx.fillRect(0, 0, width, height)
+    } else {
+      const bgGrad = octx.createLinearGradient(0, 0, width, height)
+      bgGrad.addColorStop(0, '#ffffff')
+      bgGrad.addColorStop(1, '#f1f5f9')
+      octx.fillStyle = bgGrad
+      octx.fillRect(0, 0, width, height)
+    }
+
+    // Draw grid dots
+    const gridColor = currentTheme === 'dark' ? NEURAL_COLORS.darkGrid : NEURAL_COLORS.lightGrid
+    octx.fillStyle = gridColor
+    octx.globalAlpha = currentTheme === 'dark' ? 0.2 : 0.15
+    const gridSize = 50
+    for (let x = gridSize; x < width; x += gridSize) {
+      for (let y = gridSize; y < height; y += gridSize) {
+        octx.beginPath()
+        octx.arc(x, y, 0.8, 0, Math.PI * 2)
+        octx.fill()
+      }
+    }
+    octx.globalAlpha = 1.0
+
+    gridCanvasRef.current = offscreen
+    gridCanvasSizeRef.current = { width, height }
+    gridCanvasThemeRef.current = currentTheme
+    return offscreen
+  }
 
   // Keep refs in sync with props/state
   useEffect(() => {
@@ -1019,46 +1176,55 @@ export default function NeuralCanvas({
     simNodesRef.current = simNodes
     simLinksRef.current = simLinks
 
-    // Create or update simulation
-    if (simulationRef.current) {
-      simulationRef.current.stop()
-    }
-
+    // INCREMENTAL UPDATE instead of recreation
     const currentClusters = clustersRef.current
-    const sim = forceSimulation<SimNode>(simNodes)
-      .force(
-        'link',
-        forceLink<SimNode, SimLink>(simLinks)
-          .id((d) => d.id)
-          .distance(100)
-      )
-      .force('charge', forceManyBody().strength(-300))
-      .force('center', forceCenter((cs.width || 800) / 2, (cs.height || 600) / 2))
-      .force('collide', forceCollide<SimNode>().radius(30))
-      .alphaDecay(0.02)
-      .on('tick', () => {
-        // Update cluster centers (O(n) using Set for lookup instead of O(n²) with .includes)
-        for (const cluster of currentClusters) {
-          const nodeSet = new Set(cluster.nodeIds)
-          let sumX = 0, sumY = 0, count = 0
-          for (const n of simNodes) {
-            if (nodeSet.has(n.id)) {
-              sumX += n.x
-              sumY += n.y
-              count++
-            }
-          }
-          if (count > 0) {
-            cluster.cx = sumX / count
-            cluster.cy = sumY / count
+
+    const clusterTickHandler = () => {
+      // Update cluster centers (O(n) using Set for lookup instead of O(n²) with .includes)
+      for (const cluster of currentClusters) {
+        const nodeSet = new Set(cluster.nodeIds)
+        let sumX = 0, sumY = 0, count = 0
+        for (const n of simNodes) {
+          if (nodeSet.has(n.id)) {
+            sumX += n.x
+            sumY += n.y
+            count++
           }
         }
-      })
+        if (count > 0) {
+          cluster.cx = sumX / count
+          cluster.cy = sumY / count
+        }
+      }
+    }
 
-    simulationRef.current = sim
+    if (simulationRef.current) {
+      // Incremental update: reuse existing simulation
+      const sim = simulationRef.current
+      sim.nodes(simNodes)
+      sim.force('link', forceLink<SimNode, SimLink>(simLinks).id((d) => d.id).distance(100))
+      sim.on('tick', clusterTickHandler)
+      sim.alpha(0.3).restart()
+    } else {
+      // First time: create simulation
+      const sim = forceSimulation<SimNode>(simNodes)
+        .force(
+          'link',
+          forceLink<SimNode, SimLink>(simLinks)
+            .id((d) => d.id)
+            .distance(100)
+        )
+        .force('charge', forceManyBody().strength(-300))
+        .force('center', forceCenter((cs.width || 800) / 2, (cs.height || 600) / 2))
+        .force('collide', forceCollide<SimNode>().radius(30))
+        .alphaDecay(0.02)
+        .on('tick', clusterTickHandler)
+
+      simulationRef.current = sim
+    }
 
     return () => {
-      sim.stop()
+      simulationRef.current?.stop()
     }
   }, [nodes, edges])
 
@@ -1110,6 +1276,65 @@ export default function NeuralCanvas({
       return () => clearTimeout(timer)
     }
   }, [activeAnimation])
+
+  // ============================================================
+  // Keyboard zoom shortcuts
+  // ============================================================
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if typing in input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+
+      const transform = transformRef.current
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault()
+        const newZoom = Math.min(MAX_ZOOM, transform.zoom * 1.2)
+        // Zoom toward center of viewport
+        const cx = canvasSizeRef.current.width / 2
+        const cy = canvasSizeRef.current.height / 2
+        transform.x = cx - (cx - transform.x) * (newZoom / transform.zoom)
+        transform.y = cy - (cy - transform.y) * (newZoom / transform.zoom)
+        transform.zoom = newZoom
+      } else if (e.key === '-') {
+        e.preventDefault()
+        const newZoom = Math.max(MIN_ZOOM, transform.zoom / 1.2)
+        const cx = canvasSizeRef.current.width / 2
+        const cy = canvasSizeRef.current.height / 2
+        transform.x = cx - (cx - transform.x) * (newZoom / transform.zoom)
+        transform.y = cy - (cy - transform.y) * (newZoom / transform.zoom)
+        transform.zoom = newZoom
+      } else if (e.key === '0') {
+        e.preventDefault()
+        // Fit to view: center graph and zoom to fit
+        const simNodes = simNodesRef.current
+        if (simNodes.length > 0) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+          for (const n of simNodes) {
+            minX = Math.min(minX, n.x - n.radius)
+            minY = Math.min(minY, n.y - n.radius)
+            maxX = Math.max(maxX, n.x + n.radius)
+            maxY = Math.max(maxY, n.y + n.radius)
+          }
+          const graphW = maxX - minX + 100
+          const graphH = maxY - minY + 100
+          const { width, height } = canvasSizeRef.current
+          const zoom = Math.min(width / graphW, height / graphH, 2)
+          const centerX = (minX + maxX) / 2
+          const centerY = (minY + maxY) / 2
+          transform.zoom = zoom
+          transform.x = width / 2 - centerX * zoom
+          transform.y = height / 2 - centerY * zoom
+        }
+      } else if (e.key === 'Escape') {
+        // Deselect node
+        onNodeSelect(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onNodeSelect])
 
   // ============================================================
   // Initialize ambient particles
@@ -1248,8 +1473,9 @@ export default function NeuralCanvas({
 
       // Zoom is applied instantly (no smooth interpolation to avoid lag)
 
-      // 1. Background
-      drawBackground(ctx, width, height, theme)
+      // 1. Background (cached offscreen grid)
+      const gridCanvas = getGridCanvas(width, height, theme)
+      ctx.drawImage(gridCanvas, 0, 0)
 
       // 2. Ambient particles
       updateAmbientParticles(particlesRef.current, width, height)
@@ -1405,6 +1631,9 @@ export default function NeuralCanvas({
       ctx.textBaseline = 'middle'
       ctx.fillText(hudText, hudX + 8, hudY - 4)
       ctx.restore()
+
+      // 11. Minimap
+      drawMinimap(ctx, simNodes, simLinks, transform, width, height, theme)
 
       rafRef.current = requestAnimationFrame(render)
     }
@@ -1625,6 +1854,28 @@ export default function NeuralCanvas({
     [screenToWorld, findNodeAtPos, onNodeSelect]
   )
 
+  const handleCanvasContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      e.preventDefault()
+      if (!onContextMenu) return
+
+      const rect = canvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const world = screenToWorld(sx, sy)
+
+      const hitNode = findNodeAtPos(world.x, world.y)
+      if (hitNode) {
+        onContextMenu({ x: e.clientX, y: e.clientY, nodeId: hitNode.id })
+      } else {
+        onContextMenu(null)
+      }
+    },
+    [screenToWorld, findNodeAtPos, onContextMenu]
+  )
+
   // ============================================================
   // Native wheel event listener (passive: false for preventDefault)
   // React's onWheel is passive by default — preventDefault() silently fails
@@ -1660,6 +1911,7 @@ export default function NeuralCanvas({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
+        onContextMenu={handleCanvasContextMenu}
       />
     </div>
   )

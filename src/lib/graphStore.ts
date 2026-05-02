@@ -129,6 +129,11 @@ class GraphStore {
     // Record the event
     this.eventLog.push(event)
 
+    // Cap eventLog at 1000 entries to prevent unbounded memory growth
+    if (this.eventLog.length > 1000) {
+      this.eventLog = this.eventLog.slice(-500)
+    }
+
     // Upsert nodes from event
     for (const node of event.nodes) {
       if (!node.id) continue

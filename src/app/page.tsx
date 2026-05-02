@@ -5,6 +5,8 @@ import { io, Socket } from 'socket.io-client'
 import { ThemeProvider, useTheme } from '@/components/shared/ThemeProvider'
 import { TopBar } from '@/components/topbar/TopBar'
 import NeuralCanvas from '@/components/canvas/NeuralCanvas'
+import { CanvasSkeleton } from '@/components/canvas/CanvasSkeleton'
+import { NodeContextMenu } from '@/components/canvas/NodeContextMenu'
 import { SlideInPanel } from '@/components/panel/SlideInPanel'
 import { LeftSidebar } from '@/components/sidebar/LeftSidebar'
 import { CommandPalette } from '@/components/sidebar/CommandPalette'
@@ -21,6 +23,7 @@ import type {
   NodeDetail,
   QuickAction,
   GraphEvent,
+  NodeType,
 } from '@/types/neural'
 import { getNodeShape } from '@/types/neural'
 
@@ -214,11 +217,14 @@ function NeuralWorkspaceApp() {
   const [searchResults, setSearchResults] = useState<GraphNode[]>([])
   const [isScanning, setIsScanning] = useState(false)
   const [nodeDetail, setNodeDetail] = useState<NodeDetail | null>(null)
+  const [isCanvasReady, setIsCanvasReady] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null)
 
   // ---- Refs ----
   const socketRef = useRef<Socket | null>(null)
   const initializedRef = useRef(false)
   const selectedNodeIdRef = useRef<string | null>(null)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ---- Centralized graph persistence ----
   const persistGraph = useCallback(() => {
@@ -306,8 +312,14 @@ function NeuralWorkspaceApp() {
     // Persist graph to localStorage
     persistGraph()
 
-    tryConnectWebSocket()
+    // Connect WebSocket and capture cleanup
+    const wsCleanup = tryConnectWebSocket()
     tryFetchRealData()
+
+    return () => {
+      // Cleanup WebSocket on unmount
+      if (wsCleanup) wsCleanup()
+    }
   }, [])
 
   // ---- Keyboard shortcut ----
@@ -390,6 +402,7 @@ function NeuralWorkspaceApp() {
       }
     } catch (err) {
       console.log('[WS] Failed to connect (using demo data):', err)
+      return () => {}
     }
   }, [])
 
@@ -443,7 +456,7 @@ function NeuralWorkspaceApp() {
       if (socket?.connected) {
         socket.emit('command', {
           command: action.command,
-          args: action.args,
+          args: [...action.args, analysisStore.workspace],
         })
       } else {
         const targetIds = [selectedNodeId ?? '']
@@ -456,26 +469,86 @@ function NeuralWorkspaceApp() {
         setTimeout(() => setActiveAnimation(null), 2500)
       }
     },
-    [selectedNodeId]
+    [selectedNodeId, analysisStore.workspace]
   )
 
   // ---- Search ----
   const handleSearch = useCallback(
     (query: string) => {
       setSearchQuery(query)
+
+      // Debounce actual search
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current)
+      }
+
       if (!query.trim()) {
         setSearchResults([])
         return
       }
-      try {
-        const results = graphStore.searchNodes(query)
-        setSearchResults(results.slice(0, 15))
-      } catch {
-        setSearchResults([])
-      }
+
+      searchTimerRef.current = setTimeout(() => {
+        try {
+          const results = graphStore.searchNodes(query)
+          setSearchResults(results.slice(0, 15))
+        } catch {
+          setSearchResults([])
+        }
+      }, 150) // 150ms debounce
     },
     []
   )
+
+  // ---- Fit to View ----
+  const handleFitToView = useCallback(() => {
+    // Dispatch a custom event that NeuralCanvas listens for
+    window.dispatchEvent(new CustomEvent('codelens:fit-to-view'))
+  }, [])
+
+  // ---- Node Filtering ----
+  const [nodeFilters, setNodeFilters] = useState<Set<NodeType>>(new Set())
+
+  const filteredNodes = useMemo(() => {
+    if (nodeFilters.size === 0) return nodes
+    return nodes.filter(n => !nodeFilters.has(n.type))
+  }, [nodes, nodeFilters])
+
+  const filteredEdges = useMemo(() => {
+    if (nodeFilters.size === 0) return edges
+    const nodeIds = new Set(filteredNodes.map(n => n.id))
+    return edges.filter(e => {
+      const srcId = typeof e.source === 'string' ? e.source : e.source.id
+      const tgtId = typeof e.target === 'string' ? e.target : e.target.id
+      return nodeIds.has(srcId) && nodeIds.has(tgtId)
+    })
+  }, [edges, filteredNodes])
+
+  const handleToggleNodeFilter = useCallback(
+    (type: NodeType) => {
+      setNodeFilters(prev => {
+        const next = new Set(prev)
+        if (next.has(type)) next.delete(type)
+        else next.add(type)
+        return next
+      })
+    },
+    []
+  )
+
+  // ---- Context Menu ----
+  const contextMenuNode = useMemo(() => {
+    if (!contextMenu) return null
+    return nodes.find(n => n.id === contextMenu.nodeId) ?? null
+  }, [contextMenu, nodes])
+
+  const contextMenuActions = useMemo(() => {
+    if (!contextMenu?.nodeId) return []
+    try {
+      return graphStore.getQuickActions(contextMenu.nodeId)
+    } catch {
+      return []
+    }
+  }, [contextMenu])
 
   const handleSearchResultSelect = useCallback(
     (nodeId: string) => {
@@ -495,7 +568,7 @@ function NeuralWorkspaceApp() {
 
   // ---- Export ----
   const handleExport = useCallback(
-    (format: 'png2x' | 'png4x' | 'svg' | 'current') => {
+    (format: 'png2x' | 'png4x' | 'svg' | 'current' | 'json') => {
       const canvas = document.querySelector('canvas') as HTMLCanvasElement | null
       if (!canvas) return
 
@@ -659,6 +732,31 @@ function NeuralWorkspaceApp() {
           link4x.click()
           break
         }
+        case 'json': {
+          const exportData = {
+            nodes: nodes.map(n => ({
+              id: n.id, label: n.label, type: n.type, domain: n.domain,
+              status: n.status, file: n.file, line: n.line, data: n.data,
+            })),
+            edges: edges.map(e => ({
+              id: e.id,
+              source: typeof e.source === 'string' ? e.source : e.source.id,
+              target: typeof e.target === 'string' ? e.target : e.target.id,
+              type: e.type, weight: e.weight, status: e.status,
+            })),
+            clusters,
+            exportedAt: new Date().toISOString(),
+            version: '5.0.0',
+          }
+          const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `codelens-graph-${Date.now()}.json`
+          a.click()
+          URL.revokeObjectURL(url)
+          break
+        }
         default: {
           const dataUrl = canvas.toDataURL('image/png')
           const link = document.createElement('a')
@@ -731,8 +829,11 @@ function NeuralWorkspaceApp() {
           onSearchResultSelect={handleSearchResultSelect}
           onExport={handleExport}
           onRescan={handleRescan}
+          onFitToView={handleFitToView}
           stats={stats}
           isScanning={isScanning}
+          nodeFilters={nodeFilters}
+          onToggleNodeFilter={handleToggleNodeFilter}
         />
       </ErrorBoundary>
 
@@ -747,16 +848,18 @@ function NeuralWorkspaceApp() {
         <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ position: 'relative' }}>
           {/* Neural Canvas — explicit h-full to guarantee ResizeObserver gets dimensions */}
           <div className="flex-1 min-h-0" style={{ position: 'relative', overflow: 'hidden' }}>
+            {!isCanvasReady && <CanvasSkeleton theme={theme} />}
             <ErrorBoundary fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Canvas unavailable</div>}>
               <NeuralCanvas
                 theme={theme}
-                nodes={nodes}
-                edges={edges}
+                nodes={filteredNodes}
+                edges={filteredEdges}
                 clusters={clusters}
                 onNodeSelect={handleNodeSelect}
                 selectedNodeId={selectedNodeId}
                 activeAnimation={activeAnimation}
-                onCanvasReady={() => { /* canvas ready */ }}
+                onCanvasReady={() => setIsCanvasReady(true)}
+                onContextMenu={setContextMenu}
               />
             </ErrorBoundary>
 
@@ -780,6 +883,19 @@ function NeuralWorkspaceApp() {
 
       {/* Command Palette Overlay */}
       <CommandPalette theme={theme} />
+
+      {/* Right-click Context Menu */}
+      {contextMenu && contextMenuNode && (
+        <NodeContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          node={contextMenuNode}
+          actions={contextMenuActions}
+          onAction={handleQuickAction}
+          onClose={() => setContextMenu(null)}
+          theme={theme}
+        />
+      )}
     </div>
   )
 }

@@ -15,6 +15,9 @@ import {
   Activity,
   Sparkles,
   Eye,
+  Maximize2,
+  Filter,
+  Check,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -36,11 +39,14 @@ interface TopBarProps {
   onSearch: (query: string) => void
   searchResults: GraphNode[]
   onSearchResultSelect: (nodeId: string) => void
-  onExport: (format: 'png2x' | 'png4x' | 'svg' | 'current') => void
+  onExport: (format: 'png2x' | 'png4x' | 'svg' | 'current' | 'json') => void
   onRescan: () => void
+  onFitToView: () => void
   stats: { totalNodes: number; totalEdges: number }
   isScanning: boolean
   healthScore?: number
+  nodeFilters: Set<NodeType>
+  onToggleNodeFilter: (type: NodeType) => void
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -123,16 +129,21 @@ export function TopBar({
   onSearchResultSelect,
   onExport,
   onRescan,
+  onFitToView,
   stats,
   isScanning,
   healthScore,
+  nodeFilters,
+  onToggleNodeFilter,
 }: TopBarProps) {
   const dark = theme === 'dark'
   const [query, setQuery] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const [searchFocused, setSearchFocused] = useState(false)
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const filterRef = useRef<HTMLDivElement>(null)
   const { toggleSidebar, toggleCommandPalette, sidebarOpen, bottomPanelOpen, toggleBottomPanel, qualityResults, isWatchMode, runCommand, workspace, lastScanTime } = useAnalysisStore()
 
   // Close dropdown on outside click
@@ -140,6 +151,9 @@ export function TopBar({
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setShowDropdown(false)
+      }
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setShowFilterDropdown(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -363,6 +377,76 @@ export function TopBar({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-0.5 shrink-0">
+        {/* Node Type Filter */}
+        <div ref={filterRef} className="relative">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-xs hidden sm:flex smooth-colors hover:bg-white/5 btn-bounce"
+            onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+            title="Filter node types"
+            style={{ color: nodeFilters.size > 0 ? '#b794f4' : styles.mutedText }}
+          >
+            <Filter className="h-3.5 w-3.5" />
+            {nodeFilters.size > 0 && (
+              <Badge
+                variant="outline"
+                className="text-[9px] h-4 px-1 border-0 smooth-colors"
+                style={{
+                  backgroundColor: dark ? 'rgba(183,148,244,0.15)' : 'rgba(139,92,246,0.1)',
+                  color: '#b794f4',
+                }}
+              >
+                {nodeFilters.size}
+              </Badge>
+            )}
+          </Button>
+          {showFilterDropdown && (
+            <div
+              className="absolute top-full mt-1.5 right-0 rounded-xl border overflow-hidden z-50"
+              style={{
+                backgroundColor: dark ? 'rgba(15, 15, 30, 0.95)' : 'rgba(255, 255, 255, 0.97)',
+                borderColor: styles.border,
+                backdropFilter: 'blur(20px)',
+                minWidth: 180,
+              }}
+            >
+              <div className="px-3 py-2 border-b" style={{ borderColor: styles.border }}>
+                <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: styles.mutedText }}>
+                  Filter Node Types
+                </span>
+              </div>
+              <div className="max-h-72 overflow-y-auto p-1">
+                {Object.entries(TYPE_ICON_MAP).map(([type, icon]) => {
+                  const nodeType = type as NodeType
+                  const isFiltered = nodeFilters.has(nodeType)
+                  const color = NEURAL_COLORS[nodeType as keyof typeof NEURAL_COLORS] || '#94a3b8'
+                  return (
+                    <button
+                      key={type}
+                      className="w-full flex items-center gap-2.5 px-3 py-1.5 text-xs text-left transition-colors duration-100 rounded-lg"
+                      style={{ color: styles.text }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLElement).style.backgroundColor = dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLElement).style.backgroundColor = ''
+                      }}
+                      onClick={() => onToggleNodeFilter(nodeType)}
+                    >
+                      <span style={{ color }} className="text-[11px]">{icon}</span>
+                      <span className="flex-1 capitalize">{type.replace('_', ' ')}</span>
+                      <span className="w-4 flex items-center justify-center">
+                        {isFiltered && <Check className="h-3 w-3" style={{ color: '#b794f4' }} />}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Command Palette Trigger */}
         <Button
           variant="ghost"
@@ -452,8 +536,23 @@ export function TopBar({
               <Camera className="h-3.5 w-3.5 mr-2" />
               Current View
             </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onExport('json')}>
+              <Download className="h-3.5 w-3.5 mr-2" />
+              JSON
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Fit to View */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 smooth-colors hover:bg-white/5 btn-bounce"
+          onClick={onFitToView}
+          title="Fit to view"
+        >
+          <Maximize2 className="h-4 w-4" style={{ color: styles.mutedText }} />
+        </Button>
 
         {/* Rescan with premium spinner */}
         <Button
