@@ -47,6 +47,20 @@ class GraphStore {
     this.edges.set(edge.id, edge)
   }
 
+  updateNode(id: string, updates: Partial<GraphNode>): void {
+    const existing = this.nodes.get(id)
+    if (existing) {
+      this.nodes.set(id, { ...existing, ...updates })
+    }
+  }
+
+  updateEdge(id: string, updates: Partial<GraphEdge>): void {
+    const existing = this.edges.get(id)
+    if (existing) {
+      this.edges.set(id, { ...existing, ...updates })
+    }
+  }
+
   removeNode(id: string): void {
     if (!this.nodes.has(id)) return
 
@@ -101,6 +115,14 @@ class GraphStore {
       if (!edge.id) continue
       this.edges.set(edge.id, edge)
     }
+  }
+
+  clearGraph(): void {
+    this.nodes.clear()
+    this.edges.clear()
+    this.clusters.clear()
+    this.selectedNodeId = null
+    this.eventLog = []
   }
 
   applyEvent(event: GraphEvent): void {
@@ -167,6 +189,18 @@ class GraphStore {
     }
 
     return { nodes: neighborNodes, edges: neighborEdges }
+  }
+
+  getEdgesByNode(nodeId: string): GraphEdge[] {
+    const result: GraphEdge[] = []
+    for (const edge of this.edges.values()) {
+      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
+      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
+      if (sourceId === nodeId || targetId === nodeId) {
+        result.push(edge)
+      }
+    }
+    return result
   }
 
   getNodesByType(type: NodeType): GraphNode[] {
@@ -298,6 +332,16 @@ class GraphStore {
         })
       }
 
+      // Taints edge — this node is tainted by source
+      if (targetId === nodeId && edge.type === 'taints') {
+        references.push({ file: sourceNode.file ?? '', line: sourceNode.line ?? 0, source: sourceNode.label })
+      }
+
+      // Sanitizes edge — this node sanitizes the source
+      if (targetId === nodeId && edge.type === 'sanitizes') {
+        references.push({ file: sourceNode.file ?? '', line: sourceNode.line ?? 0, source: sourceNode.label })
+      }
+
       // This node is defined in / contained in a file
       if (
         targetId === nodeId &&
@@ -361,96 +405,96 @@ class GraphStore {
     switch (node.type) {
       case 'function':
         base.push(
-          { label: 'Find Callers', command: 'trace', args: ['callers', nodeId], icon: '📞', variant: 'default' },
-          { label: 'Trace Execution', command: 'trace', args: ['execution', nodeId], icon: '🔍', variant: 'default' },
-          { label: 'Check Purity', command: 'purity', args: [nodeId], icon: '✨', variant: 'default' },
+          { label: 'Find Callers', command: 'trace', args: ['callers', node.label], icon: '📞', variant: 'default' },
+          { label: 'Trace Execution', command: 'trace', args: ['execution', node.label], icon: '🔍', variant: 'default' },
+          { label: 'Check Purity', command: 'side-effect', args: ['--name', node.label], icon: '✨', variant: 'default' },
         )
         if (node.status === 'dead') {
-          base.push({ label: 'Remove Dead Code', command: 'dead-code', args: ['remove', nodeId], icon: '🗑️', variant: 'danger' })
+          base.push({ label: 'Remove Dead Code', command: 'dead-code', args: ['remove', node.label], icon: '🗑️', variant: 'danger' })
         }
         break
 
       case 'component':
         base.push(
-          { label: 'Find Usage', command: 'trace', args: ['references', nodeId], icon: '🔎', variant: 'default' },
-          { label: 'Check Props', command: 'analyze', args: ['props', nodeId], icon: '📋', variant: 'default' },
-          { label: 'Trace Render', command: 'trace', args: ['render', nodeId], icon: '🎯', variant: 'default' },
+          { label: 'Find Usage', command: 'trace', args: ['references', node.label], icon: '🔎', variant: 'default' },
+          { label: 'Check Props', command: 'context', args: [node.label], icon: '📋', variant: 'default' },
+          { label: 'Trace Render', command: 'trace', args: ['render', node.label], icon: '🎯', variant: 'default' },
         )
         break
 
       case 'class':
       case 'id':
         base.push(
-          { label: 'Find References', command: 'trace', args: ['references', nodeId], icon: '🔗', variant: 'default' },
-          { label: 'Check Collisions', command: 'check', args: ['collisions', nodeId], icon: '💥', variant: 'warning' },
+          { label: 'Find References', command: 'trace', args: ['references', node.label], icon: '🔗', variant: 'default' },
+          { label: 'Check Collisions', command: 'query', args: [node.label], icon: '💥', variant: 'warning' },
         )
         if (node.status === 'collision' || node.status === 'duplicate_define') {
-          base.push({ label: 'Resolve Collision', command: 'fix', args: ['collision', nodeId], icon: '🛠️', variant: 'danger' })
+          base.push({ label: 'Resolve Collision', command: 'refactor-safe', args: [node.label], icon: '🛠️', variant: 'danger' })
         }
         break
 
       case 'file':
         base.push(
-          { label: 'Analyze Dependencies', command: 'deps', args: [nodeId], icon: '📊', variant: 'default' },
-          { label: 'Check Dead Code', command: 'dead-code', args: ['check', nodeId], icon: '🧹', variant: 'default' },
+          { label: 'Analyze Dependencies', command: 'dependents', args: [node.file ?? ''], icon: '📊', variant: 'default' },
+          { label: 'Check Dead Code', command: 'dead-code', args: ['check', node.label], icon: '🧹', variant: 'default' },
         )
         break
 
       case 'package':
         base.push(
-          { label: 'Check Vulnerabilities', command: 'audit', args: [nodeId], icon: '🛡️', variant: 'warning' },
-          { label: 'Check Updates', command: 'update', args: ['check', nodeId], icon: '📦', variant: 'default' },
+          { label: 'Check Vulnerabilities', command: 'vuln-scan', args: [], icon: '🛡️', variant: 'warning' },
+          { label: 'Check Updates', command: 'config-drift', args: [], icon: '📦', variant: 'default' },
         )
         if (node.status === 'vulnerable' || node.status === 'critical') {
-          base.push({ label: 'Update Package', command: 'update', args: ['apply', nodeId], icon: '⬆️', variant: 'danger' })
+          base.push({ label: 'Update Package', command: 'config-drift', args: [], icon: '⬆️', variant: 'danger' })
         }
         break
 
       case 'route':
         base.push(
-          { label: 'Trace Handler', command: 'trace', args: ['handler', nodeId], icon: '📡', variant: 'default' },
-          { label: 'Test Endpoint', command: 'test', args: ['endpoint', nodeId], icon: '🧪', variant: 'default' },
+          { label: 'Trace Handler', command: 'trace', args: ['handler', node.label], icon: '📡', variant: 'default' },
+          { label: 'Test Endpoint', command: 'test-map', args: [], icon: '🧪', variant: 'default' },
         )
         break
 
       case 'store':
         base.push(
-          { label: 'Trace Reads', command: 'trace', args: ['reads', nodeId], icon: '👁️', variant: 'default' },
-          { label: 'Trace Writes', command: 'trace', args: ['writes', nodeId], icon: '✏️', variant: 'default' },
+          { label: 'Trace Reads', command: 'trace', args: ['reads', node.label], icon: '👁️', variant: 'default' },
+          { label: 'Trace Writes', command: 'trace', args: ['writes', node.label], icon: '✏️', variant: 'default' },
         )
         break
 
       case 'env_var':
         base.push(
-          { label: 'Check Usage', command: 'trace', args: ['usage', nodeId], icon: '🔍', variant: 'default' },
-          { label: 'Validate Value', command: 'validate', args: ['env', nodeId], icon: '✅', variant: 'default' },
+          { label: 'Check Usage', command: 'trace', args: ['usage', node.label], icon: '🔍', variant: 'default' },
+          { label: 'Validate Value', command: 'validate', args: ['env', node.label], icon: '✅', variant: 'default' },
         )
         break
 
       case 'variable':
         base.push(
-          { label: 'Find References', command: 'trace', args: ['references', nodeId], icon: '🔗', variant: 'default' },
-          { label: 'Check Overrides', command: 'check', args: ['overrides', nodeId], icon: '🔄', variant: 'default' },
+          { label: 'Find References', command: 'trace', args: ['references', node.label], icon: '🔗', variant: 'default' },
+          { label: 'Check Overrides', command: 'query', args: [node.label], icon: '🔄', variant: 'default' },
         )
         break
 
       default:
         base.push(
-          { label: 'Inspect', command: 'inspect', args: [nodeId], icon: '🔎', variant: 'default' },
+          { label: 'Inspect', command: 'context', args: [node.label], icon: '🔎', variant: 'default' },
         )
     }
 
     // Add status-based actions
     if (node.status === 'orphan') {
-      base.push({ label: 'Find Related', command: 'trace', args: ['related', nodeId], icon: '🔗', variant: 'warning' })
+      base.push({ label: 'Find Related', command: 'trace', args: ['related', node.label], icon: '🔗', variant: 'warning' })
     }
     if (node.status === 'vulnerable' || node.status === 'critical') {
-      base.push({ label: 'View Issues', command: 'issues', args: [nodeId], icon: '⚠️', variant: 'danger' })
+      base.push({ label: 'View Issues', command: 'smell', args: [], icon: '⚠️', variant: 'danger' })
     }
 
     // Add neighbor-based actions
     if (neighbors.nodes.length > 5) {
-      base.push({ label: 'Show Dependency Graph', command: 'subgraph', args: [nodeId], icon: '🕸️', variant: 'default' })
+      base.push({ label: 'Show Dependency Graph', command: 'trace', args: ['--direction', 'both', '--depth', '3'], icon: '🕸️', variant: 'default' })
     }
 
     return base
@@ -470,6 +514,41 @@ class GraphStore {
   getSelectedNode(): GraphNode | null {
     if (this.selectedNodeId === null) return null
     return this.nodes.get(this.selectedNodeId) ?? null
+  }
+
+  // ============================================================
+  // Persistence
+  // ============================================================
+
+  serialize(): string {
+    return JSON.stringify({
+      nodes: Array.from(this.nodes.values()),
+      edges: Array.from(this.edges.values()),
+      clusters: Array.from(this.clusters.values()),
+      selectedNodeId: this.selectedNodeId,
+    })
+  }
+
+  loadFromJSON(json: string): boolean {
+    try {
+      const data = JSON.parse(json)
+      this.nodes.clear()
+      this.edges.clear()
+      this.clusters.clear()
+      for (const node of data.nodes ?? []) {
+        if (node.id) this.nodes.set(node.id, node)
+      }
+      for (const edge of data.edges ?? []) {
+        if (edge.id) this.edges.set(edge.id, edge)
+      }
+      for (const cluster of data.clusters ?? []) {
+        if (cluster.id) this.clusters.set(cluster.id, cluster)
+      }
+      this.selectedNodeId = data.selectedNodeId ?? null
+      return true
+    } catch {
+      return false
+    }
   }
 
   // ============================================================

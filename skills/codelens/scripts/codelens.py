@@ -1093,6 +1093,15 @@ def cmd_detect(workspace: str) -> Dict[str, Any]:
     return detect_frameworks(workspace)
 
 
+# ─── Symbols Command ────────────────────────────────────────────
+
+def cmd_symbols(args):
+    """Search registry symbols by name."""
+    workspace = resolve_workspace(args)
+    result = search_symbols(args.name, workspace, domain=args.domain, fuzzy=args.fuzzy)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 # ─── Watch Command ────────────────────────────────────────────
 
 def cmd_watch(workspace: str) -> None:
@@ -1236,6 +1245,7 @@ def main():
     symbols_parser.add_argument("--domain", choices=["frontend", "backend", "all"], default="all",
                                  help="Domain to search")
     symbols_parser.add_argument("--fuzzy", action="store_true", help="Allow partial/fuzzy matching")
+    symbols_parser.set_defaults(func=cmd_symbols)
 
     # trace command
     trace_parser = subparsers.add_parser("trace", help="Trace deep call chain from a symbol")
@@ -1546,12 +1556,8 @@ def main():
             print(json.dumps(result, indent=2, ensure_ascii=False))
 
         elif args.command == "symbols":
-            result = search_symbols(
-                workspace, args.name,
-                domain=args.domain,
-                fuzzy=args.fuzzy
-            )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            args.workspace = workspace
+            cmd_symbols(args)
 
         elif args.command == "trace":
             result = trace_symbol(

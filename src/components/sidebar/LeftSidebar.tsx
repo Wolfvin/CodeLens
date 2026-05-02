@@ -13,6 +13,7 @@ import {
   Crosshair,
   Layers,
   Hammer,
+  Eye,
 } from 'lucide-react'
 import { CommandsTab } from './CommandsTab'
 import { WorkspaceTab } from './WorkspaceTab'
@@ -23,6 +24,7 @@ import { CssTab } from './CssTab'
 import { P1Tab } from './P1Tab'
 import { P2P3Tab } from './P2P3Tab'
 import { RefactoringTab } from './RefactoringTab'
+import { WatchTab } from './WatchTab'
 import { useAnalysisStore } from '@/lib/analysisStore'
 import type { SidebarTab } from '@/types/neural'
 
@@ -40,6 +42,7 @@ const TABS: Array<{ id: SidebarTab; icon: React.ReactNode; label: string }> = [
   { id: 'performance', icon: <Zap className="h-4 w-4" />, label: 'Performance' },
   { id: 'css', icon: <Palette className="h-4 w-4" />, label: 'CSS' },
   { id: 'refactoring', icon: <Hammer className="h-4 w-4" />, label: 'Refactoring' },
+  { id: 'watch', icon: <Eye className="h-4 w-4" />, label: 'Watch' },
 ]
 
 export function LeftSidebar({ theme }: LeftSidebarProps) {
@@ -63,6 +66,7 @@ export function LeftSidebar({ theme }: LeftSidebarProps) {
       case 'performance': return <PerformanceTab theme={theme} />
       case 'css': return <CssTab theme={theme} />
       case 'refactoring': return <RefactoringTab theme={theme} />
+      case 'watch': return <WatchTab theme={theme} />
       default: return null
     }
   }

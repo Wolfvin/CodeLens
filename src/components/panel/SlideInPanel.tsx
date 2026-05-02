@@ -1,7 +1,26 @@
 'use client'
 
 import { useMemo } from 'react'
-import { X, ChevronRight, MapPin, Tag, Shield, Code2, Zap } from 'lucide-react'
+import {
+  X,
+  ChevronRight,
+  MapPin,
+  Tag,
+  Shield,
+  Code2,
+  Zap,
+  AlertTriangle,
+  Bug,
+  FlaskConical,
+  FileText,
+  Route,
+  Braces,
+  Import,
+  Palette,
+  Film,
+  ExternalLink,
+  Lock,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -508,6 +527,651 @@ function EnvVarSection({ detail, node, dark }: { detail: NodeDetail; node: Graph
   )
 }
 
+function SecretSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const severity = data?.severity as string | undefined
+  const category = data?.category as string | undefined
+  const matchPattern = data?.matchPattern as string | undefined
+
+  const severityColor =
+    severity === 'critical'
+      ? 'border-red-500/40 text-red-400 bg-red-500/5'
+      : severity === 'high'
+        ? 'border-orange-500/40 text-orange-400 bg-orange-500/5'
+        : 'border-amber-500/40 text-amber-400 bg-amber-500/5'
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Lock className="h-3 w-3 inline mr-1" />
+          Secret Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Severity:</span>
+            <Badge variant="outline" className={`text-[10px] h-5 ${severityColor}`}>
+              {severity ?? 'unknown'}
+            </Badge>
+          </div>
+          {category && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Category:</span>
+              <span className="opacity-80">{category}</span>
+            </div>
+          )}
+        </div>
+      </div>
+      {matchPattern && (
+        <div className="space-y-1 fade-in">
+          <SectionTitle>Match Pattern</SectionTitle>
+          <div
+            className="rounded-lg px-3 py-2 text-xs font-mono"
+            style={{ backgroundColor: dark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)' }}
+          >
+            {matchPattern.replace(/./g, (ch, i) => (i > 3 ? '•' : ch))}
+          </div>
+        </div>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1.5 fade-in">
+        <SectionTitle>
+          <AlertTriangle className="h-3 w-3 inline mr-1" />
+          Remediation
+        </SectionTitle>
+        <div
+          className="text-xs px-2.5 py-2 rounded-lg border bg-amber-500/5 border-amber-500/10 text-amber-400"
+        >
+          <span className="font-medium">Move to environment variable</span>
+          <span className="mx-1 opacity-30">·</span>
+          <span className="opacity-70">Store this secret as an env var and reference it via process.env</span>
+        </div>
+      </div>
+      {node.file && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Quick Context</SectionTitle>
+            <div className="flex items-center gap-1.5 text-xs">
+              <ChevronRight className="h-3 w-3 opacity-30" />
+              <span className="font-mono opacity-70">{node.file}{node.line ? `:${node.line}` : ''}</span>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+function VulnerabilitySection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const cveId = data?.cveId as string | undefined
+  const packageName = data?.packageName as string | undefined
+  const installedVersion = data?.installedVersion as string | undefined
+  const severity = data?.severity as string | undefined
+  const description = data?.description as string | undefined
+
+  const severityColor =
+    severity === 'critical'
+      ? 'border-red-500/40 text-red-400 bg-red-500/5'
+      : severity === 'high'
+        ? 'border-orange-500/40 text-orange-400 bg-orange-500/5'
+        : severity === 'medium'
+          ? 'border-amber-500/40 text-amber-400 bg-amber-500/5'
+          : 'border-slate-500/40 text-slate-400 bg-slate-500/5'
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Bug className="h-3 w-3 inline mr-1" />
+          Vulnerability Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          {cveId && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">CVE:</span>
+              <span className="font-mono font-medium">{cveId}</span>
+            </div>
+          )}
+          {packageName && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Package:</span>
+              <span className="opacity-80">{packageName}</span>
+            </div>
+          )}
+          {installedVersion && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Installed:</span>
+              <span className="font-mono px-2 py-0.5 rounded-md" style={{ backgroundColor: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}>
+                {installedVersion}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Severity:</span>
+            <Badge variant="outline" className={`text-[10px] h-5 ${severityColor}`}>
+              {severity ?? 'unknown'}
+            </Badge>
+          </div>
+        </div>
+      </div>
+      {description && (
+        <div className="space-y-1 fade-in">
+          <SectionTitle>Description</SectionTitle>
+          <p className="text-xs opacity-70 leading-relaxed">{description}</p>
+        </div>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1.5 fade-in">
+        <SectionTitle>
+          <Shield className="h-3 w-3 inline mr-1" />
+          Fix
+        </SectionTitle>
+        <div
+          className="text-xs px-2.5 py-2 rounded-lg border bg-emerald-500/5 border-emerald-500/10 text-emerald-400"
+        >
+          <span className="font-medium">Update to latest version</span>
+          <span className="mx-1 opacity-30">·</span>
+          <span className="opacity-70">Run package update to resolve this CVE</span>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function TestSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const testedSymbol = data?.testedSymbol as string | undefined
+  const framework = data?.framework as string | undefined
+  const testFile = data?.testFile as string | undefined
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <FlaskConical className="h-3 w-3 inline mr-1" />
+          Test Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          {testFile && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">File:</span>
+              <span className="font-mono opacity-80">{testFile}</span>
+            </div>
+          )}
+          {testedSymbol && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Tested symbol:</span>
+              <Badge variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
+                {testedSymbol}
+              </Badge>
+            </div>
+          )}
+          {framework && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Framework:</span>
+              <Badge variant="outline" className="text-[10px] h-5 border-slate-400/30 text-slate-400 bg-slate-500/5">
+                {framework}
+              </Badge>
+            </div>
+          )}
+        </div>
+      </div>
+      {detail.tests && detail.tests.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Test References</SectionTitle>
+            <RefList items={detail.tests!.map(t => ({ file: t.file, line: t.line, fn: testedSymbol }))} dark={dark} />
+          </div>
+        </>
+      )}
+      {testedSymbol && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
+            <SectionTitle>
+              <ExternalLink className="h-3 w-3 inline mr-1" />
+              Tested Function
+            </SectionTitle>
+            <div className="flex items-center gap-1.5 text-xs py-0.5 px-1.5 rounded-md transition-colors duration-150 hover:bg-white/[0.03]">
+              <ChevronRight className="h-3 w-3 shrink-0 opacity-30" />
+              <span className="font-medium">{testedSymbol}</span>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+function FileSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const symbolsCount = data?.symbolsCount as number | undefined
+  const importsCount = data?.importsCount as number | undefined
+  const owner = data?.owner as string | undefined
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <FileText className="h-3 w-3 inline mr-1" />
+          File Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Path:</span>
+            <span className="font-mono opacity-80 truncate">{node.file ?? node.label}</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Domain:</span>
+            <Badge
+              variant="outline"
+              className="text-[10px] h-5 border-0"
+              style={{
+                backgroundColor: node.domain === 'frontend' ? 'rgba(183,148,244,0.06)' : 'rgba(99,179,237,0.06)',
+                color: node.domain === 'frontend' ? '#b794f4' : '#63b3ed',
+              }}
+            >
+              {node.domain}
+            </Badge>
+          </div>
+        </div>
+      </div>
+      <div className="divider-glow" />
+      <div className="grid grid-cols-2 gap-3 fade-in">
+        <div className="space-y-1 text-center">
+          <span className="opacity-50 text-[10px]">Symbols</span>
+          <div className="text-sm font-mono font-semibold">{symbolsCount ?? '—'}</div>
+        </div>
+        <div className="space-y-1 text-center">
+          <span className="opacity-50 text-[10px]">Imports</span>
+          <div className="text-sm font-mono font-semibold">{importsCount ?? '—'}</div>
+        </div>
+      </div>
+      {owner && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Owner</SectionTitle>
+            <div className="flex items-center gap-2 text-xs">
+              <div
+                className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                style={{ backgroundColor: dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }}
+              >
+                {owner.charAt(0).toUpperCase()}
+              </div>
+              <span className="opacity-80">{owner}</span>
+            </div>
+          </div>
+        </>
+      )}
+      {detail.definedIn && detail.definedIn.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Definitions</SectionTitle>
+            <RefList items={detail.definedIn!.map(d => ({ file: d.file, line: d.line, source: 'symbol' }))} dark={dark} />
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+function RouteSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const method = data?.method as string | undefined
+  const path = data?.path as string | undefined
+  const handler = data?.handler as string | undefined
+  const middleware = data?.middleware as string[] | undefined
+
+  const methodColor: Record<string, string> = {
+    GET: 'border-emerald-500/40 text-emerald-400 bg-emerald-500/5',
+    POST: 'border-blue-400/40 text-blue-400 bg-blue-500/5',
+    PUT: 'border-amber-500/40 text-amber-400 bg-amber-500/5',
+    PATCH: 'border-amber-400/40 text-amber-400 bg-amber-500/5',
+    DELETE: 'border-red-400/40 text-red-400 bg-red-500/5',
+  }
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Route className="h-3 w-3 inline mr-1" />
+          Route Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Method:</span>
+            <Badge variant="outline" className={`text-[10px] h-5 font-mono font-bold ${methodColor[method ?? ''] ?? 'border-slate-400/40 text-slate-400 bg-slate-500/5'}`}>
+              {(method ?? 'GET').toUpperCase()}
+            </Badge>
+          </div>
+          {path && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Path:</span>
+              <span className="font-mono opacity-80">{path}</span>
+            </div>
+          )}
+          {handler && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Handler:</span>
+              <Badge variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
+                {handler}
+              </Badge>
+            </div>
+          )}
+        </div>
+      </div>
+      {middleware && middleware.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
+            <SectionTitle>Middleware Chain</SectionTitle>
+            <ul className="space-y-0.5">
+              {middleware.map((mw, i) => (
+                <li key={`mw-${i}`} className="flex items-center gap-1.5 text-xs py-0.5">
+                  <span className="opacity-30 text-[10px] font-mono w-4 text-right">{i + 1}.</span>
+                  <ChevronRight className="h-3 w-3 opacity-30" />
+                  <span className="opacity-80">{mw}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1.5 fade-in">
+        <SectionTitle>API Endpoint</SectionTitle>
+        <div
+          className="rounded-lg px-3 py-2 text-xs font-mono"
+          style={{ backgroundColor: dark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)' }}
+        >
+          <span className="opacity-50">{(method ?? 'GET').toUpperCase()}</span>{' '}
+          <span className="opacity-80">{path ?? node.label}</span>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function VariableSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const inferredType = data?.inferredType as string | undefined
+  const scope = data?.scope as string | undefined
+  const refsCount = data?.refsCount as number | undefined
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Braces className="h-3 w-3 inline mr-1" />
+          Variable Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Name:</span>
+            <span className="font-mono font-medium">{node.label}</span>
+          </div>
+          {inferredType && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Type:</span>
+              <Badge variant="outline" className="text-[10px] h-5 border-slate-400/30 text-slate-400 bg-slate-500/5 font-mono">
+                {inferredType}
+              </Badge>
+            </div>
+          )}
+          {scope && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Scope:</span>
+              <Badge variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
+                {scope}
+              </Badge>
+            </div>
+          )}
+        </div>
+      </div>
+      {detail.definedIn && detail.definedIn.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Definition</SectionTitle>
+            <RefList items={detail.definedIn!.map(d => ({ file: d.file, line: d.line, source: 'def' }))} dark={dark} />
+          </div>
+        </>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1 fade-in">
+        <SectionTitle>References</SectionTitle>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="opacity-50">Count:</span>
+          <span className="font-mono font-semibold">{refsCount ?? (detail.references?.length ?? 0)}</span>
+        </div>
+        {detail.references && detail.references.length > 0 && (
+          <RefList items={detail.references!.slice(0, 10).map(r => ({ file: r.file, line: r.line, source: r.source }))} dark={dark} />
+        )}
+      </div>
+    </>
+  )
+}
+
+function ImportSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const sourcePath = data?.sourcePath as string | undefined
+  const importedSymbols = data?.importedSymbols as string[] | undefined
+  const importType = data?.importType as string | undefined
+  const dependentFiles = data?.dependentFiles as string[] | undefined
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Import className="h-3 w-3 inline mr-1" />
+          Import Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          {sourcePath && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Source:</span>
+              <span className="font-mono opacity-80">{sourcePath}</span>
+            </div>
+          )}
+          {importType && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Type:</span>
+              <Badge variant="outline" className={`text-[10px] h-5 ${
+                importType === 'default'
+                  ? 'border-blue-400/40 text-blue-400 bg-blue-500/5'
+                  : importType === 'named'
+                    ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/5'
+                    : 'border-slate-400/40 text-slate-400 bg-slate-500/5'
+              }`}>
+                {importType}
+              </Badge>
+            </div>
+          )}
+        </div>
+      </div>
+      {importedSymbols && importedSymbols.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
+            <SectionTitle>Imported Symbols</SectionTitle>
+            <div className="flex flex-wrap gap-1">
+              {importedSymbols.map(s => (
+                <Badge key={s} variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
+                  {s}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      {dependentFiles && dependentFiles.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Dependent Files</SectionTitle>
+            <ul className="space-y-0.5">
+              {dependentFiles.map((f, i) => (
+                <li key={`dep-${i}`} className="flex items-center gap-1.5 text-xs font-mono py-0.5">
+                  <ChevronRight className="h-3 w-3 opacity-30" />
+                  <span className="opacity-80">{f}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+function CssVarSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const value = data?.value as string | undefined
+  const refsCount = data?.refsCount as number | undefined
+  const usageLocations = data?.usageLocations as Array<{ file: string; line: number }> | undefined
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Palette className="h-3 w-3 inline mr-1" />
+          CSS Variable Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Name:</span>
+            <span className="font-mono font-medium">{node.label.startsWith('--') ? node.label : `--${node.label}`}</span>
+          </div>
+          {value && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="opacity-50">Value:</span>
+              <div
+                className="rounded-md px-2 py-0.5 font-mono text-[11px]"
+                style={{ backgroundColor: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}
+              >
+                {value}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      {detail.definedIn && detail.definedIn.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Defined In</SectionTitle>
+            <RefList items={detail.definedIn!.map(d => ({ file: d.file, line: d.line, source: 'CSS' }))} dark={dark} />
+          </div>
+        </>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1 fade-in">
+        <SectionTitle>References</SectionTitle>
+        <div className="flex items-center gap-2 text-xs mb-1">
+          <span className="opacity-50">Count:</span>
+          <span className="font-mono font-semibold">{refsCount ?? (detail.references?.length ?? 0)}</span>
+        </div>
+      </div>
+      {usageLocations && usageLocations.length > 0 && (
+        <div className="space-y-1 fade-in">
+          <SectionTitle>Usage Locations</SectionTitle>
+          <ul className="space-y-0.5">
+            {usageLocations.map((loc, i) => (
+              <li key={`usage-${i}`} className="flex items-center gap-1.5 text-xs font-mono py-0.5">
+                <ChevronRight className="h-3 w-3 opacity-30" />
+                <span className="opacity-80">var({node.label.startsWith('--') ? node.label : `--${node.label}`})</span>
+                <span className={`ml-auto shrink-0 font-mono text-[10px] ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+                  {loc.file}:{loc.line}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {(!usageLocations || usageLocations.length === 0) && detail.references && detail.references.length > 0 && (
+        <div className="space-y-1 fade-in">
+          <SectionTitle>Usage Locations</SectionTitle>
+          <RefList items={detail.references!.map(r => ({ file: r.file, line: r.line, source: `var()` }))} dark={dark} />
+        </div>
+      )}
+    </>
+  )
+}
+
+function KeyframeSection({ detail, node, dark }: { detail: NodeDetail; node: GraphNode; dark: boolean }) {
+  const data = node.data as Record<string, unknown>
+  const steps = data?.steps as string[] | undefined
+  const referencedBy = data?.referencedBy as string[] | undefined
+  const isOrphan = node.status === 'orphan'
+
+  return (
+    <>
+      <div className="space-y-2 fade-in">
+        <SectionTitle>
+          <Film className="h-3 w-3 inline mr-1" />
+          Keyframe Details
+        </SectionTitle>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="opacity-50">Name:</span>
+            <span className="font-mono font-medium">{node.label}</span>
+          </div>
+        </div>
+      </div>
+      {steps && steps.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1 fade-in">
+            <SectionTitle>Keyframe Steps</SectionTitle>
+            <ul className="space-y-0.5">
+              {steps.map((step, i) => (
+                <li key={`step-${i}`} className="flex items-center gap-1.5 text-xs py-0.5">
+                  <span className="opacity-30 text-[10px] font-mono w-4 text-right">{i + 1}.</span>
+                  <ChevronRight className="h-3 w-3 opacity-30" />
+                  <span className="opacity-80">{step}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+      {referencedBy && referencedBy.length > 0 && (
+        <>
+          <div className="divider-glow" />
+          <div className="space-y-1.5 fade-in">
+            <SectionTitle>Referenced By</SectionTitle>
+            <div className="flex flex-wrap gap-1">
+              {referencedBy.map(ref => (
+                <Badge key={ref} variant="secondary" className="text-[10px] h-5 bg-purple-500/5 text-purple-300 border-purple-500/10">
+                  {ref}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+      <div className="divider-glow" />
+      <div className="space-y-1 fade-in">
+        <SectionTitle>Orphan Status</SectionTitle>
+        {isOrphan ? (
+          <Badge variant="outline" className="text-[10px] h-5 border-amber-400/40 text-amber-400 bg-amber-500/5">
+            ⚠ Unused keyframe — not referenced by any animation
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-[10px] h-5 border-emerald-500/40 text-emerald-400 bg-emerald-500/5">
+            ✓ In use
+          </Badge>
+        )}
+      </div>
+    </>
+  )
+}
+
 function TypeSpecificSection({ node, detail, dark }: { node: GraphNode; detail: NodeDetail; dark: boolean }) {
   switch (node.type) {
     case 'function':
@@ -524,6 +1188,24 @@ function TypeSpecificSection({ node, detail, dark }: { node: GraphNode; detail: 
       return <PackageSection detail={detail} node={node} dark={dark} />
     case 'env_var':
       return <EnvVarSection detail={detail} node={node} dark={dark} />
+    case 'secret':
+      return <SecretSection detail={detail} node={node} dark={dark} />
+    case 'vulnerability':
+      return <VulnerabilitySection detail={detail} node={node} dark={dark} />
+    case 'test':
+      return <TestSection detail={detail} node={node} dark={dark} />
+    case 'file':
+      return <FileSection detail={detail} node={node} dark={dark} />
+    case 'route':
+      return <RouteSection detail={detail} node={node} dark={dark} />
+    case 'variable':
+      return <VariableSection detail={detail} node={node} dark={dark} />
+    case 'import':
+      return <ImportSection detail={detail} node={node} dark={dark} />
+    case 'css_var':
+      return <CssVarSection detail={detail} node={node} dark={dark} />
+    case 'keyframe':
+      return <KeyframeSection detail={detail} node={node} dark={dark} />
     default:
       return null
   }

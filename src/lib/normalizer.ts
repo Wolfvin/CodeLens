@@ -70,6 +70,8 @@ class Normalizer {
       outline: this.normalizeOutline,
       'missing-refs': this.normalizeMissingRefs,
       init: this.normalizeInit,
+      detect: this.normalizeDetect,
+      watch: this.normalizeWatch,
     }
     return map[name] ?? null
   }
@@ -181,11 +183,12 @@ class Normalizer {
       const targetId: string = bEdge.to ?? ''
       if (!sourceId || !targetId) continue
 
+      const edgeType: EdgeType = this.mapEdgeType(bEdge.type ?? bEdge.edge_type ?? bEdge.relation)
       edges.push({
-        id: this.makeEdgeId(sourceId, targetId, 'defines'),
+        id: this.makeEdgeId(sourceId, targetId, edgeType),
         source: sourceId,
         target: targetId,
-        type: 'defines',
+        type: edgeType,
         weight: 1,
         status: 'active',
       })
@@ -707,19 +710,20 @@ class Normalizer {
     for (const [_category, smells] of Object.entries(byCategory)) {
       for (const smell of Array.isArray(smells) ? smells : []) {
         const name: string = smell.fn ?? smell.class ?? smell.file ?? 'unknown'
-        const nodeId = this.makeNodeId('function', name, smell.file, smell.line)
+        const nodeType: NodeType = smell.class ? 'class' : 'function'
+        const nodeId = this.makeNodeId(nodeType, name, smell.file, smell.line)
         const status: NodeStatus = smell.severity === 'critical' ? 'warning' : smell.severity === 'warning' ? 'warning' : 'active'
 
         nodes.push({
           id: nodeId,
           label: name,
-          type: 'function',
+          type: nodeType,
           domain: this.inferDomain(smell.file ?? ''),
           status,
           file: smell.file,
           line: smell.line,
           radius: 9,
-          color: status === 'warning' ? NEURAL_COLORS.warning : NEURAL_COLORS.function,
+          color: status === 'warning' ? NEURAL_COLORS.warning : (nodeType === 'class' ? NEURAL_COLORS.class : NEURAL_COLORS.function),
           data: { category: _category, severity: smell.severity, message: smell.message },
         })
         targetIds.push(nodeId)
@@ -2021,6 +2025,48 @@ class Normalizer {
     )
   }
 
+  /** detect: Returns detected frameworks with flash animation */
+  private normalizeDetect(output: any): GraphEvent {
+    const nodes: GraphNode[] = []
+    const targetIds: string[] = []
+    const frameworks: string[] = output?.frameworks ?? []
+
+    for (const fw of frameworks) {
+      const nodeId = this.makeNodeId('package', fw)
+      nodes.push({
+        id: nodeId,
+        label: fw,
+        type: 'package',
+        domain: 'backend',
+        status: 'active',
+        radius: 10,
+        color: NEURAL_COLORS.package,
+        data: {
+          hasReact: output?.has_react ?? false,
+          hasVue: output?.has_vue ?? false,
+          hasSvelte: output?.has_svelte ?? false,
+          hasTailwind: output?.has_tailwind ?? false,
+          hasNextjs: output?.has_nextjs ?? false,
+          hasAngular: output?.has_angular ?? false,
+        },
+      })
+      targetIds.push(nodeId)
+    }
+
+    return this.makeEvent(
+      'detect', nodes, [], 'flash', targetIds, 'low',
+      'detect', `Detected ${frameworks.length} framework(s): ${frameworks.join(', ')}`
+    )
+  }
+
+  /** watch: Streaming command — returns error event for REST API */
+  private normalizeWatch(output: any): GraphEvent {
+    return this.makeEvent(
+      'watch', [], [], 'pulse', [], 'low',
+      'watch', 'Watch mode: Use the WebSocket interface for real-time updates, not the REST API.'
+    )
+  }
+
   // ─── Helpers ──────────────────────────────────────────────────
 
   /** Build a GraphEvent with sensible defaults */
@@ -2134,7 +2180,22 @@ class Normalizer {
     return frontendIndicators.some(ind => filePath.includes(ind)) ? 'frontend' : 'backend'
   }
 
-  /** Map CLI risk string to RiskLevel */
+  /** Map raw edge type string to valid EdgeType */
+  private mapEdgeType(raw: string): EdgeType {
+    const valid: EdgeType[] = ['references', 'calls', 'imports', 'defines', 'depends_on', 'routes_to', 'reads', 'writes', 'contains', 'extends', 'implements', 'taints', 'sanitizes', 'tests', 'imports_from']
+    const lower = raw.toLowerCase().replace(/-/g, '_')
+    if (valid.includes(lower as EdgeType)) return lower as EdgeType
+    // Common mappings
+    if (lower === 'call' || lower === 'invokes') return 'calls'
+    if (lower === 'import' || lower === 'imports_from') return 'imports'
+    if (lower === 'depend' || lower === 'dependency') return 'depends_on'
+    if (lower === 'reference' || lower === 'ref') return 'references'
+    if (lower === 'contain' || lower === 'child') return 'contains'
+    if (lower === 'extend' || lower === 'inherit') return 'extends'
+    if (lower === 'implement') return 'implements'
+    return 'calls' // default fallback
+  }
+
   private mapRiskLevel(risk: string | undefined): RiskLevel {
     const map: Record<string, RiskLevel> = {
       safe: 'safe',

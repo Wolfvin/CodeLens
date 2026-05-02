@@ -242,16 +242,53 @@ function NeuralWorkspaceApp() {
     if (initializedRef.current) return
     initializedRef.current = true
 
-    const demo = generateDemoData()
-    setNodes(demo.nodes)
-    setEdges(demo.edges)
-    setClusters(demo.clusters)
+    // Try restoring graph from localStorage first
+    let restored = false
+    try {
+      const saved = localStorage.getItem('codelens-graph')
+      if (saved) {
+        restored = graphStore.loadFromJSON(saved)
+        if (restored) {
+          const restoredNodes = Array.from(graphStore.nodes.values())
+          const restoredEdges = Array.from(graphStore.edges.values())
+          if (restoredNodes.length > 0) {
+            const computedClusters = clusterEngine.computeClusters(restoredNodes, restoredEdges)
+            for (const cluster of computedClusters) {
+              for (const nodeId of cluster.nodeIds) {
+                const node = restoredNodes.find(n => n.id === nodeId)
+                if (node) node.clusterId = cluster.id
+              }
+            }
+            setNodes(restoredNodes)
+            setEdges(restoredEdges)
+            setClusters(computedClusters)
+          }
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
 
-    graphStore.loadGraph(demo.nodes, demo.edges)
+    if (!restored) {
+      const demo = generateDemoData()
+      setNodes(demo.nodes)
+      setEdges(demo.edges)
+      setClusters(demo.clusters)
+
+      graphStore.loadGraph(demo.nodes, demo.edges)
+    }
+
     analysisStore.loadDemoData()
 
     const storeStats = graphStore.getStats()
     analysisStore.setRegistryStats({ byType: storeStats.byType, byStatus: storeStats.byStatus })
+
+    // Persist graph to localStorage
+    try {
+      localStorage.setItem('codelens-graph', graphStore.serialize())
+    } catch {
+      // Ignore localStorage errors
+    }
 
     tryConnectWebSocket()
     tryFetchRealData()
@@ -272,7 +309,7 @@ function NeuralWorkspaceApp() {
   // ---- WebSocket ----
   const tryConnectWebSocket = useCallback(() => {
     try {
-      const socket = io('/?XTransformPort=3030', {
+      const socket = io(process.env.NEXT_PUBLIC_WS_URL || '/?XTransformPort=3030', {
         transports: ['websocket'],
         reconnection: true,
         reconnectionAttempts: 5,
@@ -296,6 +333,8 @@ function NeuralWorkspaceApp() {
         setNodes(data.nodes)
         setEdges(data.edges)
         setClusters(computedClusters)
+        // Persist graph to localStorage
+        try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
       })
 
       socket.on('graph_event', (eventData: { event: GraphEvent }) => {
@@ -309,6 +348,8 @@ function NeuralWorkspaceApp() {
         )
         setClusters(computedClusters)
         setActiveAnimation(event.animation)
+        // Persist graph to localStorage
+        try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
       })
 
       socket.on('node_detail', (data: { node_id: string; detail: NodeDetail }) => {
@@ -347,6 +388,8 @@ function NeuralWorkspaceApp() {
           setNodes(data.nodes)
           setEdges(data.edges)
           if (data.clusters) setClusters(data.clusters)
+          // Persist graph to localStorage
+          try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
         }
       }
     } catch {
@@ -439,9 +482,24 @@ function NeuralWorkspaceApp() {
       const canvas = document.querySelector('canvas') as HTMLCanvasElement | null
       if (!canvas) return
 
-      let dataUrl: string
-
       switch (format) {
+        case 'svg': {
+          // Generate SVG from current graph state
+          const svgNodes = nodes.map(n => {
+            const x = n.x ?? 0
+            const y = n.y ?? 0
+            return `<circle cx="${x}" cy="${y}" r="${n.radius ?? 8}" fill="${n.color}" opacity="0.9"/><text x="${x}" y="${y + 3}" text-anchor="middle" fill="white" font-size="8">${n.label}</text>`
+          }).join('\n')
+          const svgContent = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvas.width} ${canvas.height}"><rect width="100%" height="100%" fill="${theme === 'dark' ? '#0d0d18' : '#ffffff'}"/>${svgNodes}</svg>`
+          const blob = new Blob([svgContent], { type: 'image/svg+xml' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `codelens-graph-${Date.now()}.svg`
+          a.click()
+          URL.revokeObjectURL(url)
+          break
+        }
         case 'png2x': {
           const exportCanvas = document.createElement('canvas')
           exportCanvas.width = canvas.width * 2
@@ -451,7 +509,11 @@ function NeuralWorkspaceApp() {
             ctx.scale(2, 2)
             ctx.drawImage(canvas, 0, 0)
           }
-          dataUrl = exportCanvas.toDataURL('image/png')
+          const dataUrl2x = exportCanvas.toDataURL('image/png')
+          const link2x = document.createElement('a')
+          link2x.download = `codelens-neural-png2x-${Date.now()}.png`
+          link2x.href = dataUrl2x
+          link2x.click()
           break
         }
         case 'png4x': {
@@ -463,20 +525,24 @@ function NeuralWorkspaceApp() {
             ctx.scale(4, 4)
             ctx.drawImage(canvas, 0, 0)
           }
-          dataUrl = exportCanvas.toDataURL('image/png')
+          const dataUrl4x = exportCanvas.toDataURL('image/png')
+          const link4x = document.createElement('a')
+          link4x.download = `codelens-neural-png4x-${Date.now()}.png`
+          link4x.href = dataUrl4x
+          link4x.click()
           break
         }
-        default:
-          dataUrl = canvas.toDataURL('image/png')
+        default: {
+          const dataUrl = canvas.toDataURL('image/png')
+          const link = document.createElement('a')
+          link.download = `codelens-neural-current-${Date.now()}.png`
+          link.href = dataUrl
+          link.click()
           break
+        }
       }
-
-      const link = document.createElement('a')
-      link.download = `codelens-neural-${format}-${Date.now()}.png`
-      link.href = dataUrl
-      link.click()
     },
-    []
+    [nodes, theme]
   )
 
   // ---- Rescan ----
@@ -492,6 +558,8 @@ function NeuralWorkspaceApp() {
           setNodes(data.nodes)
           setEdges(data.edges)
           if (data.clusters) setClusters(data.clusters)
+          // Persist graph to localStorage
+          try { localStorage.setItem('codelens-graph', graphStore.serialize()) } catch { /* ignore */ }
 
           setActiveAnimation({
             type: 'ripple',
@@ -527,36 +595,43 @@ function NeuralWorkspaceApp() {
       }}
     >
       {/* TopBar */}
-      <TopBar
-        theme={theme}
-        onThemeToggle={toggleTheme}
-        onSearch={handleSearch}
-        searchResults={searchResults}
-        onSearchResultSelect={handleSearchResultSelect}
-        onExport={handleExport}
-        onRescan={handleRescan}
-        stats={stats}
-        isScanning={isScanning}
-      />
+      <ErrorBoundary fallback={<div className="h-14 bg-background border-b" />}>
+        <TopBar
+          theme={theme}
+          onThemeToggle={toggleTheme}
+          onSearch={handleSearch}
+          searchResults={searchResults}
+          onSearchResultSelect={handleSearchResultSelect}
+          onExport={handleExport}
+          onRescan={handleRescan}
+          stats={stats}
+          isScanning={isScanning}
+        />
+      </ErrorBoundary>
 
       {/* Main area: Sidebar + Canvas + Panel — pt-14 accounts for fixed TopBar */}
       <div className="flex-1 flex overflow-hidden min-h-0 pt-14">
         {/* Left Sidebar */}
-        <LeftSidebar theme={theme} />
+        <ErrorBoundary fallback={<div className="w-64 bg-background" />}>
+          <LeftSidebar theme={theme} />
+        </ErrorBoundary>
 
         {/* Center: Canvas + Bottom Panel */}
         <div className="flex-1 flex flex-col overflow-hidden min-h-0" style={{ position: 'relative' }}>
           {/* Neural Canvas — explicit h-full to guarantee ResizeObserver gets dimensions */}
           <div className="flex-1 min-h-0" style={{ position: 'relative', overflow: 'hidden' }}>
-            <NeuralCanvas
-              theme={theme}
-              nodes={nodes}
-              edges={edges}
-              clusters={clusters}
-              onNodeSelect={handleNodeSelect}
-              selectedNodeId={selectedNodeId}
-              activeAnimation={activeAnimation}
-            />
+            <ErrorBoundary fallback={<div className="flex items-center justify-center h-full text-muted-foreground">Canvas unavailable</div>}>
+              <NeuralCanvas
+                theme={theme}
+                nodes={nodes}
+                edges={edges}
+                clusters={clusters}
+                onNodeSelect={handleNodeSelect}
+                selectedNodeId={selectedNodeId}
+                activeAnimation={activeAnimation}
+                onCanvasReady={() => { /* canvas ready */ }}
+              />
+            </ErrorBoundary>
 
             {/* Slide-in panel */}
             <SlideInPanel
@@ -570,7 +645,9 @@ function NeuralWorkspaceApp() {
           </div>
 
           {/* Bottom Result Panel */}
-          <ResultPanel theme={theme} />
+          <ErrorBoundary fallback={<div className="h-8 bg-background border-t" />}>
+            <ResultPanel theme={theme} />
+          </ErrorBoundary>
         </div>
       </div>
 

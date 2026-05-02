@@ -29,6 +29,18 @@ export async function POST(request: NextRequest) {
 
     const commandArgs: string[] = Array.isArray(args) ? args : []
 
+    // Guard: watch command is not supported via REST API
+    if (command === 'watch') {
+      return NextResponse.json(
+        { 
+          error: 'Watch mode is not supported via REST API. Use the WebSocket interface at port 3030 for real-time updates.',
+          command: 'watch',
+          suggestion: 'Connect via socket.io to /?XTransformPort=3030'
+        },
+        { status: 400 }
+      )
+    }
+
     // Execute the command via CLI
     const rawOutput = await commandRunner.execute(command, [...commandArgs, workspace])
 

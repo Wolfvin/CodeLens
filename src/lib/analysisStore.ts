@@ -409,6 +409,7 @@ interface AnalysisState {
   removeResultTab: (id: string) => void
   setActiveResultTab: (id: string | null) => void
   clearResultTabs: () => void
+  clearResults: () => void
   setWatchMode: (val: boolean) => void
   loadDemoData: () => void
 }
@@ -608,9 +609,12 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           break
         case 'detect':
           if (data?.frameworks) updates.frameworks = data.frameworks
+          // Detect result is shown as a result tab (already handled above)
           break
         // Watch
         case 'watch':
+          // Watch mode is handled via WebSocket, not REST API
+          // Just toggle the local flag for UI state
           updates.isWatchMode = !get().isWatchMode
           break
       }
@@ -628,11 +632,20 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
       return data
     } catch (err) {
+      const errorTabId = `error-${command}-${Date.now()}`
       set(state => ({
         runningCommands: state.runningCommands.filter(c => c !== command),
         commandHistory: state.commandHistory.map(h =>
           h.timestamp === entry.timestamp ? { ...h, status: 'error', result: String(err) } : h
         ),
+        resultTabs: [...state.resultTabs, {
+          id: errorTabId,
+          command: `error:${command}`,
+          timestamp: Date.now(),
+          content: { error: true, command, message: String(err) },
+        }],
+        activeResultTab: errorTabId,
+        bottomPanelOpen: true,
       }))
       return { error: String(err) }
     }
@@ -674,6 +687,18 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
   setActiveResultTab: (id) => set({ activeResultTab: id }),
   clearResultTabs: () => set({ resultTabs: [], activeResultTab: null }),
+
+  clearResults: () => set({
+    securityResults: { secrets: null, vulnerabilities: null, dataflow: null, envCheck: null, regexAudit: null },
+    qualityResults: { smells: null, complexity: null, debugLeaks: null, deadCode: null, a11y: null },
+    performanceResults: { perfHints: null, circular: null },
+    cssResults: { cssDeep: null, missingRefs: null },
+    p1Results: { search: null, symbols: null, trace: null, impact: null, dependents: null, stackTrace: null, query: null, list: null },
+    p2p3Results: { outline: null, diff: null, context: null, testMap: null, configDrift: null, typeInfer: null, ownership: null, entrypoints: null, apiMap: null, stateMap: null },
+    refactoringResults: { refactorSafe: null, sideEffect: null },
+    resultTabs: [],
+    activeResultTab: null,
+  }),
 
   loadDemoData: () => set({
     securityResults: {

@@ -126,6 +126,19 @@ function createAmbientParticles(width: number, height: number): AmbientParticle[
 }
 
 // ============================================================
+// Helper: ensure color is in hex format for alpha concatenation
+// ============================================================
+
+function ensureHexColor(color: string): string {
+  if (color.startsWith('#')) return color
+  // Use canvas to resolve named colors to hex
+  const ctx = document.createElement('canvas').getContext('2d')
+  if (!ctx) return color
+  ctx.fillStyle = color
+  return ctx.fillStyle // Returns hex
+}
+
+// ============================================================
 // Drawing Functions
 // ============================================================
 
@@ -386,7 +399,7 @@ function drawGlow(
   ctx.globalAlpha = intensity * 0.25
   const glow = ctx.createRadialGradient(x, y, 0, x, y, radius * 2.5)
   glow.addColorStop(0, color)
-  glow.addColorStop(0.5, color + '30')
+  glow.addColorStop(0.5, ensureHexColor(color) + '30')
   glow.addColorStop(1, 'transparent')
   ctx.fillStyle = glow
   ctx.beginPath()
@@ -867,8 +880,8 @@ function drawClusterBubble(
   // Single fill with gradient
   ctx.globalAlpha = 0.15
   const fillGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius)
-  fillGrad.addColorStop(0, cluster.tint + '40')
-  fillGrad.addColorStop(1, cluster.tint + '10')
+  fillGrad.addColorStop(0, ensureHexColor(cluster.tint) + '40')
+  fillGrad.addColorStop(1, ensureHexColor(cluster.tint) + '10')
   ctx.fillStyle = fillGrad
   ctx.beginPath()
   ctx.arc(cx, cy, radius, 0, Math.PI * 2)
@@ -944,24 +957,35 @@ export default function NeuralCanvas({
   // Animation frame
   const rafRef = useRef<number>(0)
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
+  const canvasSizeRef = useRef({ width: 0, height: 0 })
+  const clustersRef = useRef<Cluster[]>([])
+
+  // Keep refs in sync with props/state
+  useEffect(() => {
+    canvasSizeRef.current = canvasSize
+  }, [canvasSize])
+  useEffect(() => {
+    clustersRef.current = clusters
+  }, [clusters])
 
   // ============================================================
   // Initialize simulation when nodes/edges change
   // ============================================================
 
   useEffect(() => {
-    // Convert nodes to sim nodes, preserving existing positions
+    // Convert nodes to sim nodes, preserving existing positions from previous simulation
     const prevNodeMap = new Map<string, SimNode>()
     for (const n of simNodesRef.current) {
       prevNodeMap.set(n.id, n)
     }
 
+    const cs = canvasSizeRef.current
     const simNodes: SimNode[] = nodes.map((n) => {
       const prev = prevNodeMap.get(n.id)
       return {
         ...n,
-        x: prev?.x ?? (canvasSize.width || 800) / 2 + (Math.random() - 0.5) * 200,
-        y: prev?.y ?? (canvasSize.height || 600) / 2 + (Math.random() - 0.5) * 200,
+        x: prev?.x ?? (cs.width || 800) / 2 + (Math.random() - 0.5) * 200,
+        y: prev?.y ?? (cs.height || 600) / 2 + (Math.random() - 0.5) * 200,
         vx: prev?.vx ?? 0,
         vy: prev?.vy ?? 0,
         fx: prev?.fx ?? n.fx ?? null,
@@ -1000,6 +1024,7 @@ export default function NeuralCanvas({
       simulationRef.current.stop()
     }
 
+    const currentClusters = clustersRef.current
     const sim = forceSimulation<SimNode>(simNodes)
       .force(
         'link',
@@ -1008,12 +1033,12 @@ export default function NeuralCanvas({
           .distance(100)
       )
       .force('charge', forceManyBody().strength(-300))
-      .force('center', forceCenter((canvasSize.width || 800) / 2, (canvasSize.height || 600) / 2))
+      .force('center', forceCenter((cs.width || 800) / 2, (cs.height || 600) / 2))
       .force('collide', forceCollide<SimNode>().radius(30))
       .alphaDecay(0.02)
       .on('tick', () => {
         // Update cluster centers
-        for (const cluster of clusters) {
+        for (const cluster of currentClusters) {
           const cNodes = simNodes.filter((n) => cluster.nodeIds.includes(n.id))
           if (cNodes.length > 0) {
             cluster.cx = cNodes.reduce((s, n) => s + n.x, 0) / cNodes.length
@@ -1027,7 +1052,21 @@ export default function NeuralCanvas({
     return () => {
       sim.stop()
     }
-  }, [nodes, edges, canvasSize, clusters])
+  }, [nodes, edges])
+
+  // ============================================================
+  // Update simulation center force on canvas resize (without recreating simulation)
+  // ============================================================
+
+  useEffect(() => {
+    if (simulationRef.current) {
+      simulationRef.current.force('center', forceCenter(
+        (canvasSize.width || 800) / 2,
+        (canvasSize.height || 600) / 2
+      ))
+      simulationRef.current.alpha(0.3).restart()
+    }
+  }, [canvasSize])
 
   // ============================================================
   // Handle animation prop changes
@@ -1153,6 +1192,26 @@ export default function NeuralCanvas({
   }, [canvasSize])
 
   // ============================================================
+  // Signal canvas ready
+  // ============================================================
+
+  useEffect(() => {
+    if (onCanvasReady && canvasRef.current) onCanvasReady()
+  }, [onCanvasReady])
+
+  // ============================================================
+  // Cleanup animation frame on unmount
+  // ============================================================
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current)
+      }
+    }
+  }, [])
+
+  // ============================================================
   // Main render loop
   // ============================================================
 
@@ -1205,8 +1264,14 @@ export default function NeuralCanvas({
         }
       } else {
         // Cluster boundaries (background)
+        // Build cluster node map once per frame (O(n) instead of O(n²) per cluster)
+        const clusterNodeMap = new Map<string, SimNode[]>()
         for (const cluster of clusters) {
-          const cNodes = simNodes.filter((n) => cluster.nodeIds.includes(n.id))
+          const clusterNodes = simNodes.filter((n) => cluster.nodeIds.includes(n.id))
+          clusterNodeMap.set(cluster.id, clusterNodes)
+        }
+        for (const cluster of clusters) {
+          const cNodes = clusterNodeMap.get(cluster.id) || []
           drawCluster(ctx, cluster, cNodes, theme)
         }
       }
