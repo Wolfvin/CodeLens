@@ -78,7 +78,7 @@ const TOOLTIP_PADDING = 12
 const TOOLTIP_LINE_HEIGHT = 18
 const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3.0
-const ZOOM_SENSITIVITY = 0.001        // normalized pixel-mode sensitivity
+const ZOOM_SENSITIVITY = 0.0004       // reduced for smoother, less jumpy zoom
 
 // ============================================================
 // Helper: get LOD level from zoom
@@ -1488,18 +1488,18 @@ export default function NeuralCanvas({
       // Normalize deltaY based on deltaMode for consistent zoom across devices
       let normalizedDelta = e.deltaY
       if (e.deltaMode === 1) {
-        // Line mode (common on trackpads) — ~40px per line
-        normalizedDelta *= 40
+        // Line mode (common on trackpads) — reduce multiplier to avoid oversensitivity
+        normalizedDelta *= 20
       } else if (e.deltaMode === 2) {
         // Page mode
-        normalizedDelta *= 800
+        normalizedDelta *= 400
       }
 
       // Use normalized pixel-mode sensitivity
       const delta = -normalizedDelta * ZOOM_SENSITIVITY
 
-      // Clamp delta to prevent extreme zoom jumps
-      const clampedDelta = Math.max(-0.3, Math.min(0.3, delta))
+      // Clamp delta to prevent extreme zoom jumps (tighter clamp for smoother feel)
+      const clampedDelta = Math.max(-0.15, Math.min(0.15, delta))
 
       // Zoom toward mouse position (instant, no interpolation, no lag)
       const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * (1 + clampedDelta)))

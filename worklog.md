@@ -426,3 +426,23 @@ Stage Summary:
 - All 7 bugs fixed in NeuralCanvas.tsx
 - Lint passes clean
 - Dev server compiles successfully
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix 2D canvas bugs and zoom sensitivity issues
+
+Work Log:
+- Analyzed SlideInPanel.tsx and found duplicate React key `trace` caused by multiple QuickActions using the same `command: 'trace'` value
+- Fixed by changing key from `action.command` to `${action.command}-${action.args.join('-')}-${idx}` for uniqueness
+- Analyzed NeuralCanvas.tsx zoom handler and found ZOOM_SENSITIVITY=0.001 was too high
+- Reduced ZOOM_SENSITIVITY from 0.001 to 0.0004 (60% reduction)
+- Reduced deltaMode line multiplier from 40 to 20 (trackpad sensitivity)
+- Reduced deltaMode page multiplier from 800 to 400
+- Tightened clamp from ±0.3 to ±0.15 for smoother zoom transitions
+- Build verified successfully
+
+Stage Summary:
+- Fixed duplicate key `trace` error in SlideInPanel.tsx (React warning + potential rendering bug)
+- Fixed zoom sensitivity: reduced ZOOM_SENSITIVITY by 60%, reduced trackpad normalization, tightened clamp
+- The "bug at the end" was the duplicate key error in Quick Actions section (at bottom of panel)
+- Build passes cleanly

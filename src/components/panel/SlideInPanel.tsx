@@ -747,9 +747,9 @@ export function SlideInPanel({
                       Quick Actions
                     </SectionTitle>
                     <div className="flex flex-wrap gap-2">
-                      {quickActions.map(action => (
+                      {quickActions.map((action, idx) => (
                         <Button
-                          key={action.command}
+                          key={`${action.command}-${action.args.join('-')}-${idx}`}
                           size="sm"
                           variant={
                             action.variant === 'danger'
