@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Page</title>
+</head>
+<body>
+    <div id="app" class="container main-wrapper">
+        <header id="header" class="header">
+            <h1 class="header-title">Test App</h1>
+            <nav id="nav" class="navigation">
+                <a class="nav-link active">Home</a>
+                <a class="nav-link">About</a>
+            </nav>
+        </header>
+        <main id="content" class="content">
+            <form id="search-form" class="search-form">
+                <input id="search-input" class="form-input" type="text" />
+                <button id="search-btn" class="btn btn-primary">Search</button>
+            </form>
+        </main>
+        <footer id="footer" class="footer">
+            <p class="footer-text">Copyright 2026</p>
+        </footer>
+    </div>
+    <!-- Commented out: <div id="old-id" class="old-class"></div> -->
+    <div id="{{ dynamic_id }}" class="{{ dynamic_class }}"></div>
+</body>
+</html>

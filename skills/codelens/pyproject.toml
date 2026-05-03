@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "codelens"
+version = "5.1.0"
+description = "Live Codebase Reference Intelligence — 39 commands for AI-powered code analysis, security auditing, and quality scoring"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Wolfvin"},
+]
+keywords = [
+    "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
+    "frontend", "backend", "rust", "html", "css", "javascript", "typescript",
+    "tsx", "jsx", "react", "vue", "svelte", "tailwind", "tree-sitter",
+    "ast-parsing", "call-graph", "class-tracking", "impact-analysis",
+    "circular-dependency", "missing-references", "code-search",
+    "data-flow", "taint-analysis", "code-smell", "side-effects",
+    "security-analysis", "secret-detection", "accessibility", "a11y",
+    "vulnerability-scan", "performance-hints", "css-analysis",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Utilities",
+]
+
+dependencies = [
+    "tree-sitter>=0.21.0",
+]
+
+[project.optional-dependencies]
+grammars = [
+    "tree-sitter-html",
+    "tree-sitter-css",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-rust",
+    "tree-sitter-python",
+]
+watch = [
+    "watchdog",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+all = [
+    "codelens[grammars,watch,dev]",
+]
+
+[project.scripts]
+codelens = "codelens:main"
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+include = ["*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4"]
+ignore = ["E501"]
