@@ -230,7 +230,7 @@ class TestCmdList:
         try:
             cmd_scan(ws)
             result = cmd_list(ws, domain="all", filter_type="dead")
-            # Just verify it runs without error
+            # Just verify it runs without error and has correct structure
             assert "count" in result
             assert "results" in result
         finally:

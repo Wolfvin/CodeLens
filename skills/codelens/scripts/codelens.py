@@ -61,7 +61,7 @@ from registry import (
     load_backend_registry, save_backend_registry,
     build_frontend_registry, compute_frontend_status
 )
-from grammar_loader import get_grammar_loader
+from grammar_loader import get_grammar_loader  # noqa: F401 — used by tree-sitter parsers
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import find_changed_files, update_mtimes_cache, remove_from_mtimes_cache
 from edge_resolver import resolve_edges, get_callers, get_callees
@@ -333,8 +333,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         else:
             changed_files = set(changed + new)
 
-    # Load parsers (lazy - only load what we need)
-    loader = get_grammar_loader()
+    # Parsers are loaded lazily per-category below
 
     # Parse HTML files
     html_data = []
@@ -691,7 +690,8 @@ def _fallback_css_parse(content, file_path):
     for line_num, line in enumerate(content.split('\n'), 1):
         for m in re.finditer(r'\.([a-zA-Z_][\w-]*)', line):
             classes.append({"name": m.group(1), "line": line_num, "flag": None, "path": file_path})
-        for m in re.finditer(r'#([a-zA-Z_][\w-]*)', line):
+        # Match # as CSS ID selector only at selector positions (start of line or after whitespace/comma/combinator)
+        for m in re.finditer(r'(?:^|[\s,{>+~])#([a-zA-Z_][\w-]*)', line):
             ids.append({"name": m.group(1), "line": line_num, "flag": None, "path": file_path})
     return {"classes": classes, "ids": ids}
 
@@ -871,10 +871,9 @@ def _fallback_python_parse(content, file_path):
             class_match = re.match(r'class\s+(\w+)', stripped)
             if class_match:
                 current_class = class_match.group(1)
-            continue
 
         # Detect indent level to track class scope
-        if current_class and not line.startswith(' ') and not line.startswith('\t') and stripped:
+        if current_class and not line.startswith(' ') and not line.startswith('\t') and stripped and not stripped.startswith('class '):
             current_class = None
 
         # def name(
@@ -1097,8 +1096,8 @@ def cmd_detect(workspace: str) -> Dict[str, Any]:
 
 def cmd_symbols(args):
     """Search registry symbols by name."""
-    workspace = resolve_workspace(args)
-    result = search_symbols(args.name, workspace, domain=args.domain, fuzzy=args.fuzzy)
+    workspace = resolve_workspace(args.workspace)
+    result = search_symbols(workspace, args.name, domain=args.domain, fuzzy=args.fuzzy)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

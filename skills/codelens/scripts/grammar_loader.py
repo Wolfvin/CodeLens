@@ -12,12 +12,13 @@ class GrammarLoader:
     """Lazy-loads and caches tree-sitter grammars."""
 
     _instance = None
-    _languages: Dict[str, Language] = {}
-    _parsers: Dict[str, Parser] = {}
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._languages = {}
+            cls._instance._parsers = {}
+            cls._instance._initialized = True
         return cls._instance
 
     def get_language(self, lang_name: str) -> Optional[Language]:

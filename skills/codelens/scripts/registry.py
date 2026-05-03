@@ -44,9 +44,12 @@ def load_config(workspace: str) -> Dict[str, Any]:
         "css_preprocessor": None
     }
     if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            saved = json.load(f)
-            defaults.update(saved)
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                saved = json.load(f)
+                defaults.update(saved)
+        except (json.JSONDecodeError, IOError):
+            pass  # Use defaults if config is corrupt
     return defaults
 
 
@@ -62,8 +65,11 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
     """Load frontend.json registry."""
     path = os.path.join(get_codelens_dir(workspace), 'frontend.json')
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass  # Return empty registry if corrupt
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -88,8 +94,11 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
     """Load backend.json registry."""
     path = os.path.join(get_codelens_dir(workspace), 'backend.json')
     if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass  # Return empty registry if corrupt
     return {
         "last_updated": "",
         "workspace": workspace,

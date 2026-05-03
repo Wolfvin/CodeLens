@@ -295,7 +295,7 @@ def analyze_impact(
         item.get("risk") == "high" for item in all_affected
     )
 
-    if has_critical or action == "delete" and direct_count > 5:
+    if has_critical or (action == "delete" and direct_count > 5):
         risk = "critical"
     elif has_high or direct_count > 3 or file_count > 5:
         risk = "high"
