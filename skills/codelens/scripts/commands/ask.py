@@ -59,6 +59,10 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "tech stack": 3, "frameworks": 3, "detect framework": 3,
     "how to configure": 3, "configuration": 3,
     "not used": 3,
+    "binary": 3, "exe": 3, "executable": 3, "sidecar": 3,
+    "reverse engineer": 3, "tauri command": 3, "ipc command": 3,
+    "capabilities": 3, "permissions audit": 3, "webview security": 3,
+    "csp": 3, "asset protocol": 3, "deep link": 3,
 
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
@@ -269,6 +273,13 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
           "what technologies", "stack"],
          "detect", {}, "high"),
+
+        # Binary scan / reverse engineering
+        (["binary", "exe", "executable", "sidecar", "reverse engineer", "tauri command",
+          "tauri commands", "ipc command", "capabilities", "permissions audit",
+          "webview security", "csp", "asset protocol", "updater", "deep link",
+          "build binary", "binary scan", "tauri ipc", "electron binary"],
+         "binary-scan", {}, "high"),
 
         # Env configuration
         (["how to configure", "configuration", "config check", "env setup"],
@@ -489,6 +500,13 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "type-infer":
         from typeinfer_engine import infer_types
         return infer_types(workspace)
+    elif command == "binary-scan":
+        from utils import scan_binary_artifacts, scan_tauri_artifacts
+        result = scan_binary_artifacts(workspace)
+        tauri_result = scan_tauri_artifacts(workspace)
+        if tauri_result:
+            result["tauri_analysis"] = tauri_result
+        return result
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 

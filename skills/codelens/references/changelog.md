@@ -1,5 +1,23 @@
 # CodeLens Changelog
 
+## v5.9.0 — 2026-06-12
+
+### New Features (4)
+
+- **Tauri reverse engineering analysis** (`scan_tauri_artifacts()`): Deep security auditing of Tauri desktop applications. Detects IPC commands/handlers, capabilities/permissions, sidecar binaries, updater configuration, webview security (CSP, asset protocol), deep-link schemes, and build scripts. Produces a comprehensive security audit with severity ratings (critical/high/medium/info) and risk level classification.
+- **Enhanced `binary-scan` command**: Automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full findings including security audit, IPC command map, capabilities breakdown, and risk summary.
+- **Rust monorepo detection**: Detects Cargo workspace (`[workspace]` in Cargo.toml), `crates/` directory with multiple crates, `pnpm-workspace.yaml` presence (even without `packages:` list), and npm/yarn workspaces. Returns `monorepo_tools` list identifying which mechanisms were detected.
+- **Ask command Tauri/binary routing**: 17 new keyword patterns for binary/RE queries. "what Tauri commands are available" now correctly routes to `binary-scan`.
+
+### Bug Fixes (2)
+
+- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (e.g., clash-verge-rev with `allowBuilds`) were incorrectly classified as non-monorepo. Now uses structural indicators in addition to package.json count.
+- **HIGH: Version mismatch** — `utils.py` had 5.7.1 while CHANGELOG said 5.8.0. Unified to 5.9.0.
+
+### Test Target
+
+- **clash-verge-rev/clash-verge-rev** (~125k stars): Most popular Tauri app on GitHub. VPN/proxy management with Rust+React. Found: 2 sidecars, missing CSP, wildcard asset protocol, shell:allow-execute/spawn, 2 deep-links, signed updater.
+
 ## v5.8.1 — 2026-06-12
 
 ### Bug Fixes (3)

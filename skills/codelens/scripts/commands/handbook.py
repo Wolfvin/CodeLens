@@ -256,6 +256,29 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if tool_name not in identity["monorepo_tools"]:
                 identity["monorepo_tools"].append(tool_name)
 
+    # Also check for Cargo workspace and crates/ directory (Rust monorepo)
+    root_cargo = os.path.join(workspace, "Cargo.toml")
+    if os.path.isfile(root_cargo):
+        try:
+            with open(root_cargo, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if '[workspace]' in cargo_content or 'workspace.members' in cargo_content:
+                identity["is_monorepo"] = True
+                if "cargo-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cargo-workspace")
+        except IOError:
+            pass
+    crates_dir = os.path.join(workspace, "crates")
+    if os.path.isdir(crates_dir):
+        crate_cargos = [
+            d for d in os.listdir(crates_dir)
+            if os.path.isfile(os.path.join(crates_dir, d, "Cargo.toml"))
+        ]
+        if len(crate_cargos) >= 2:
+            identity["is_monorepo"] = True
+            if "cargo-crates" not in identity["monorepo_tools"]:
+                identity["monorepo_tools"].append("cargo-crates")
+
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):

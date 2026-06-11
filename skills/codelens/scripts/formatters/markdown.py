@@ -122,11 +122,179 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_regex_audit(data, lines)
     elif command == "ask":
         _md_ask(data, lines)
+    elif command == "binary-scan":
+        _md_binary_scan(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
+
+
+def _md_binary_scan(data: Dict, lines: list) -> None:
+    """Markdown formatter for binary-scan command with Tauri RE analysis."""
+    lines.append("## Binary Scan")
+    lines.append("")
+
+    # Build system
+    build_system = data.get("build_system", {})
+    detected = build_system.get("detected", [])
+    if detected:
+        lines.append(f"**Build System:** {', '.join(detected)}")
+        lines.append("")
+
+    # Binary stats
+    stats = data.get("stats", {})
+    if stats.get("total_artifacts", 0) > 0:
+        lines.append("### Binary Artifacts")
+        lines.append("")
+        lines.append(f"| Type | Count | Size |")
+        lines.append(f"|------|-------|------|")
+        lines.append(f"| Executables | {stats.get('executables', 0)} | - |")
+        lines.append(f"| Shared Libraries | {stats.get('shared_libraries', 0)} | - |")
+        lines.append(f"| Compiled Objects | {stats.get('compiled_objects', 0)} | - |")
+        lines.append(f"| **Total** | **{stats.get('total_artifacts', 0)}** | **{stats.get('total_binary_size_human', '0 B')}** |")
+        lines.append("")
+    else:
+        lines.append("No binary artifacts found in workspace source tree.")
+        lines.append("")
+
+    # Tauri analysis
+    tauri = data.get("tauri_analysis")
+    if tauri:
+        lines.append("### Tauri Reverse Engineering Analysis")
+        lines.append("")
+
+        summary = tauri.get("summary", {})
+        risk = summary.get("risk_level", "unknown")
+        risk_emoji = {"critical": "🔴", "high": "🟠", "moderate": "🟡", "low": "🟢"}.get(risk, "⚪")
+        lines.append(f"**Risk Level:** {risk_emoji} {risk.upper()}")
+        lines.append("")
+
+        # Summary table
+        lines.append("| Category | Count |")
+        lines.append("|----------|-------|")
+        lines.append(f"| IPC Commands | {summary.get('ipc_commands_count', 0)} |")
+        lines.append(f"| Capabilities | {summary.get('capabilities_count', 0)} |")
+        lines.append(f"| Permissions | {summary.get('total_permissions', 0)} |")
+        lines.append(f"| Sidecar Binaries | {summary.get('sidecars_count', 0)} |")
+        lines.append(f"| Deep Links | {summary.get('deep_links_count', 0)} |")
+        lines.append(f"| Security Findings | {summary.get('security_findings', 0)} |")
+        lines.append("")
+
+        # Security findings by severity
+        by_sev = summary.get("security_findings_by_severity", {})
+        if by_sev:
+            lines.append("**Security Findings by Severity:**")
+            lines.append("")
+            for sev in ("critical", "high", "medium", "info"):
+                count = by_sev.get(sev, 0)
+                if count > 0:
+                    lines.append(f"- **{sev.upper()}**: {count}")
+            lines.append("")
+
+        # Sidecars
+        sidecars = tauri.get("sidecars", [])
+        if sidecars:
+            lines.append("#### Sidecar Binaries")
+            lines.append("")
+            for sc in sidecars:
+                risk_badge = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sc.get("risk", "low"), "⚪")
+                lines.append(f"- {risk_badge} `{sc.get('name')}` — {sc.get('note', '')}")
+            lines.append("")
+
+        # WebView security
+        wv = tauri.get("webview_security")
+        if wv:
+            lines.append("#### WebView Security")
+            lines.append("")
+            csp = wv.get("csp")
+            lines.append(f"- **CSP:** {'Not set (null) ⚠️' if csp is None else f'`{csp}`'}")
+            lines.append(f"- **Asset Protocol:** {'Enabled ✅' if wv.get('asset_protocol_enabled') else 'Disabled'}")
+            if wv.get('asset_protocol_enabled'):
+                scope = wv.get('asset_protocol_scope', {})
+                allow = scope.get('allow', [])
+                if '**' in str(allow):
+                    lines.append(f"  - **Scope:** `**` (wildcard — can read any file) ⚠️")
+                else:
+                    lines.append(f"  - **Scope:** `{allow}`")
+            lines.append("")
+
+        # Updater
+        updater = tauri.get("updater")
+        if updater:
+            lines.append("#### Updater Configuration")
+            lines.append("")
+            lines.append(f"- **Signed:** {'Yes ✅' if updater.get('pubkey') else 'No ⚠️'}")
+            endpoints = updater.get("endpoints", [])
+            if endpoints:
+                lines.append(f"- **Endpoints:** {len(endpoints)}")
+                for ep in endpoints:
+                    is_http = 'http://' in ep and 'https://' not in ep
+
+                    lines.append(f"  - {'⚠️ ' if is_http else ''}`{ep}`")
+            lines.append("")
+
+        # Deep links
+        deep_links = tauri.get("deep_links", [])
+        if deep_links:
+            lines.append("#### Deep-Link Schemes")
+            lines.append("")
+            for dl in deep_links:
+                lines.append(f"- `{dl.get('scheme')}://`")
+            lines.append("")
+
+        # Security audit
+        audit = tauri.get("security_audit", [])
+        if audit:
+            lines.append("#### Security Audit")
+            lines.append("")
+            # Show critical and high first
+            for sev in ("critical", "high"):
+                findings = [f for f in audit if f.get("severity") == sev]
+                if findings:
+                    lines.append(f"**{sev.upper()} Findings:**")
+                    lines.append("")
+                    for f in findings:
+                        lines.append(f"- **{f.get('category')}** — {f.get('message')}")
+                        if f.get('file'):
+                            lines.append(f"  - File: `{f.get('file')}`")
+                    lines.append("")
+            # Medium findings summary
+            medium = [f for f in audit if f.get("severity") == "medium"]
+            if medium:
+                lines.append(f"**MEDIUM Findings:** {len(medium)}")
+                lines.append("")
+                for f in medium[:5]:
+                    lines.append(f"- **{f.get('category')}** — {f.get('message')[:120]}")
+                if len(medium) > 5:
+                    lines.append(f"- ... and {len(medium) - 5} more")
+                lines.append("")
+
+        # IPC commands
+        ipc_cmds = tauri.get("ipc_commands", [])
+        if ipc_cmds:
+            lines.append("#### IPC Commands")
+            lines.append("")
+            lines.append(f"Found {len(ipc_cmds)} Tauri IPC command(s):")
+            lines.append("")
+            for cmd in ipc_cmds[:20]:
+                async_badge = " (async)" if cmd.get("is_async") else ""
+                callers = cmd.get("called_from", [])
+                caller_info = f" ← called from {len(callers)} frontend file(s)" if callers else ""
+                lines.append(f"- `{cmd.get('name')}`{async_badge} — `{cmd.get('file')}:{cmd.get('line')}`{caller_info}")
+            if len(ipc_cmds) > 20:
+                lines.append(f"- ... and {len(ipc_cmds) - 20} more")
+            lines.append("")
+
+    # Recommendations
+    recs = data.get("recommendations", [])
+    if recs:
+        lines.append("### Recommendations")
+        lines.append("")
+        for rec in recs:
+            lines.append(f"- {rec}")
+        lines.append("")
 
 
 def _md_generic(data: Dict, lines: list) -> None:
