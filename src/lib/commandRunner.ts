@@ -441,6 +441,16 @@ class CommandRunner {
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
   }
+
+  /** Generate project handbook for AI agents */
+  async handbook(workspace: string): Promise<any> {
+    return this.execute('handbook', [workspace])
+  }
+
+  /** Ask a natural language question about the codebase */
+  async ask(question: string, workspace: string): Promise<any> {
+    return this.execute('ask', [question, workspace])
+  }
 }
 
 export const commandRunner = new CommandRunner()

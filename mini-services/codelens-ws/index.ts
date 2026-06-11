@@ -841,6 +841,27 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
           direction: 'both',
         },
       }
+    case 'handbook':
+      // Handbook - use pulse animation (project orientation)
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'pulse',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'low',
+        },
+      }
+    case 'ask':
+      // Ask - use flow animation (NL routing)
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'flow',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'medium',
+          direction: 'down',
+        },
+      }
     default:
       return normalizeGeneric(command, cliResult)
   }

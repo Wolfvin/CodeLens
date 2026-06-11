@@ -1,6 +1,6 @@
 # CodeLens — Live Codebase Reference Intelligence
 
-CodeLens is a backend developer tool that scans your codebase using tree-sitter AST parsing and exposes structured JSON data via a REST API and WebSocket interface. It provides 39 analysis commands covering code search, call tracing, impact analysis, security auditing, quality scoring, and refactoring safety — all powered by a Python CLI that outputs machine-readable JSON. Connect any client (AI agent, editor plugin, custom dashboard) to consume real-time codebase intelligence.
+CodeLens is a backend developer tool that scans your codebase using tree-sitter AST parsing and exposes structured JSON data via a REST API and WebSocket interface. It provides 41 analysis commands covering code search, call tracing, impact analysis, security auditing, quality scoring, and refactoring safety — all powered by a Python CLI that outputs machine-readable JSON. Connect any client (AI agent, editor plugin, custom dashboard) to consume real-time codebase intelligence.
 
 ---
 
@@ -279,7 +279,7 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 
 ---
 
-## 39 CLI Commands
+## 41 CLI Commands
 
 ### Core
 
@@ -291,6 +291,8 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 | `list` | List registry entries with optional domain/type filter |
 | `detect` | Auto-detect frameworks used in the workspace |
 | `watch` | Watch for file changes, re-scan with debounce, generate outline.json + summary.json |
+| `handbook` | Generate project handbook for AI agents (identity, structure, health, conventions, risks) |
+| `ask` | Natural language query router — ask a question, CodeLens routes to the right command |
 
 ### Search & Trace (P1)
 
