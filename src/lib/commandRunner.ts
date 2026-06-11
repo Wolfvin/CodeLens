@@ -6,47 +6,59 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
+import {
+  ALLOWED_COMMANDS,
+  COMMAND_TIMEOUT,
+  MAX_BUFFER,
+  MAX_ARG_LENGTH,
+} from '@/lib/constants'
 
 const execFileAsync = promisify(execFile)
 
-// Path to codelens CLI — MUST be set via environment variables.
-// No hardcoded fallbacks: if these are missing, the server throws a clear error.
-const CODELENS_PYTHON = process.env.CODELENS_PYTHON
-const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
-  ? path.resolve(process.env.CODELENS_SCRIPT)
-  : undefined
+// ---- Lazy Initialization for Environment Variables ----
+// Instead of throwing on module load (which breaks tests and
+// development), we resolve paths lazily on first execution.
+// This allows the module to be imported without setting env vars,
+// and gives a clear error only when a CLI command is actually run.
 
-if (!CODELENS_PYTHON) {
-  throw new Error(
-    '[CodeLens] CODELENS_PYTHON env var is not set. ' +
-    'Set it to the path of your Python 3 interpreter (the one with tree-sitter installed). ' +
-    'Example: CODELENS_PYTHON=/home/you/.venv/bin/python3'
-  )
+let _pythonPath: string | null = null
+let _scriptPath: string | null = null
+let _initialized = false
+
+function ensureInitialized(): void {
+  if (_initialized) return
+
+  _pythonPath = process.env.CODELENS_PYTHON ?? null
+  _scriptPath = process.env.CODELENS_SCRIPT
+    ? path.resolve(process.env.CODELENS_SCRIPT)
+    : null
+
+  _initialized = true
 }
-if (!CODELENS_SCRIPT) {
-  throw new Error(
-    '[CodeLens] CODELENS_SCRIPT env var is not set. ' +
-    'Set it to the path of the CodeLens CLI script (codelens.py). ' +
-    'Example: CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py'
-  )
+
+function getPythonPath(): string {
+  ensureInitialized()
+  if (!_pythonPath) {
+    throw new Error(
+      '[CodeLens] CODELENS_PYTHON env var is not set. ' +
+      'Set it to the path of your Python 3 interpreter (the one with tree-sitter installed). ' +
+      'Example: CODELENS_PYTHON=/home/you/.venv/bin/python3'
+    )
+  }
+  return _pythonPath
 }
 
-/** Maximum execution time for a CLI command (ms) */
-const COMMAND_TIMEOUT = 60_000
-
-/**
- * Whitelist of allowed CLI commands — prevents command injection.
- * Any command not in this list is rejected.
- */
-const ALLOWED_COMMANDS = new Set([
-  'init', 'scan', 'query', 'list', 'search', 'symbols', 'trace', 'impact',
-  'dependents', 'outline', 'missing-refs', 'diff', 'circular', 'context',
-  'validate', 'detect', 'secrets', 'vuln-scan', 'dataflow', 'env-check',
-  'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
-  'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
-  'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
-  'state-map', 'regex-audit',
-])
+function getScriptPath(): string {
+  ensureInitialized()
+  if (!_scriptPath) {
+    throw new Error(
+      '[CodeLens] CODELENS_SCRIPT env var is not set. ' +
+      'Set it to the path of the CodeLens CLI script (codelens.py). ' +
+      'Example: CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py'
+    )
+  }
+  return _scriptPath
+}
 
 /**
  * Sanitize arguments — strip potentially dangerous characters.
@@ -57,8 +69,8 @@ function sanitizeArgs(args: string[]): string[] {
     // Strip null bytes and control characters
     let cleaned = arg.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     // Limit argument length to prevent buffer overflow attempts
-    if (cleaned.length > 4096) {
-      cleaned = cleaned.substring(0, 4096)
+    if (cleaned.length > MAX_ARG_LENGTH) {
+      cleaned = cleaned.substring(0, MAX_ARG_LENGTH)
     }
     return cleaned
   })
@@ -99,9 +111,12 @@ class CommandRunner {
     const safeArgs = sanitizeArgs(args)
 
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...safeArgs], {
+      const pythonPath = getPythonPath()
+      const scriptPath = getScriptPath()
+
+      const { stdout, stderr } = await execFileAsync(pythonPath, [scriptPath, command, ...safeArgs], {
         timeout: COMMAND_TIMEOUT,
-        maxBuffer: 10 * 1024 * 1024, // 10 MB
+        maxBuffer: MAX_BUFFER,
       })
 
       // CLI outputs JSON to stdout
@@ -414,6 +429,20 @@ class CommandRunner {
   /** Detect frameworks in workspace */
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
+  }
+
+  /** Project handbook for AI agents */
+  async handbook(workspace: string, format?: string): Promise<any> {
+    const args = [workspace]
+    if (format) args.push('--format', format)
+    return this.execute('handbook', args)
+  }
+
+  /** Natural language query */
+  async ask(question: string, workspace?: string): Promise<any> {
+    const args = [question]
+    if (workspace) args.push(workspace)
+    return this.execute('ask', args)
   }
 }
 

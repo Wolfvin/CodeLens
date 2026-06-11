@@ -107,7 +107,7 @@ interface AnalysisState {
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Workspace
-  workspace: '/home/z/my-project',
+  workspace: '',
   isScanning: false,
   lastScanTime: null,
   frameworks: [],
@@ -311,6 +311,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           // Watch mode is handled via WebSocket, not REST API
           // Just toggle the local flag for UI state
           updates.isWatchMode = !get().isWatchMode
+          break
+        // Handbook & Ask
+        case 'handbook':
+          // Handbook results go to result panel
+          break
+        case 'ask':
+          // Ask results go to result panel
           break
       }
 

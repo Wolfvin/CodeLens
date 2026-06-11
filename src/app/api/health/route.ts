@@ -9,6 +9,9 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
+import { scanCache } from '@/lib/scanCache'
+import { validateWorkspace } from '@/lib/constants'
+import { GraphNode, GraphEdge } from '@/types/neural'
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,19 +26,57 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Run the scan to get current graph state
-    const scanOutput = await commandRunner.scan(workspace)
-
-    if (scanOutput.status === 'error') {
+    // Validate workspace path to prevent directory traversal
+    try {
+      validateWorkspace(workspace)
+    } catch (err: any) {
       return NextResponse.json(
-        { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
-        { status: 500 }
+        { error: err.message },
+        { status: 400 }
       )
     }
 
-    const graphEvent = normalizer.normalize('scan', scanOutput)
-    const nodes = graphEvent.nodes
-    const edges = graphEvent.edges
+    // Check health cache first to avoid re-running the CLI
+    const cached = scanCache.getHealth(workspace)
+
+    if (cached && !nodeId) {
+      // Return cached health result — skip CLI execution
+      return NextResponse.json({
+        healthScore: cached.healthScore,
+        coupling: cached.coupling,
+        heatmap: cached.heatmap,
+        impactRadius: cached.impactRadius ?? null,
+        timestamp: cached.timestamp,
+      })
+    }
+
+    // If nodeId is requested, we need graph data for impact radius
+    // Check scan cache for the graph data first
+    const cachedScan = scanCache.getScan(workspace)
+
+    let nodes: GraphNode[]
+    let edges: GraphEdge[]
+
+    if (cachedScan) {
+      // Use cached scan data — skip CLI execution
+      nodes = cachedScan.nodes
+      edges = cachedScan.edges
+    } else {
+      // Run the scan to get current graph state
+      const scanOutput = await commandRunner.scan(workspace)
+
+      if (scanOutput.status === 'error') {
+        return NextResponse.json(
+          { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
+          { status: 500 }
+        )
+      }
+
+      const graphEvent = normalizer.normalize('scan', scanOutput)
+      nodes = graphEvent.nodes
+      edges = graphEvent.edges
+    }
+
     const clusters = clusterEngine.computeClusters(nodes, edges)
 
     // Compute health score
@@ -52,6 +93,9 @@ export async function GET(request: NextRequest) {
     if (nodeId) {
       impactRadius = computeImpactRadius(nodeId, nodes, edges)
     }
+
+    // Store in cache for subsequent requests (cache the base health data)
+    scanCache.setHealth(workspace, healthScore as unknown as Record<string, unknown>, coupling, heatmap, impactRadius)
 
     return NextResponse.json({
       healthScore,

@@ -73,23 +73,33 @@ export function computeCoupling(
 ): CouplingInfo[] {
   const fanIn = new Map<string, Set<string>>()
   const fanOut = new Map<string, Set<string>>()
+  const neighborCounts = new Map<string, Map<string, number>>()
 
   // Initialize for all nodes
   for (const node of nodes) {
     fanIn.set(node.id, new Set())
     fanOut.set(node.id, new Set())
+    neighborCounts.set(node.id, new Map())
   }
 
+  // Single pass through edges: build fanIn, fanOut, AND neighbor counts
   for (const edge of edges) {
-    const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-    const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-
     // source → target: source depends on target
-    const outSet = fanOut.get(sourceId)
-    if (outSet) outSet.add(targetId)
+    const outSet = fanOut.get(edge.source)
+    if (outSet) outSet.add(edge.target)
 
-    const inSet = fanIn.get(targetId)
-    if (inSet) inSet.add(sourceId)
+    const inSet = fanIn.get(edge.target)
+    if (inSet) inSet.add(edge.source)
+
+    // Build neighbor counts for coupledWith (pre-built once, O(e) total)
+    const sourceNeighbors = neighborCounts.get(edge.source)
+    if (sourceNeighbors) {
+      sourceNeighbors.set(edge.target, (sourceNeighbors.get(edge.target) ?? 0) + 1)
+    }
+    const targetNeighbors = neighborCounts.get(edge.target)
+    if (targetNeighbors) {
+      targetNeighbors.set(edge.source, (targetNeighbors.get(edge.source) ?? 0) + 1)
+    }
   }
 
   const result: CouplingInfo[] = []
@@ -99,19 +109,8 @@ export function computeCoupling(
     const total = fi + fo
     const instability = total > 0 ? fo / total : 0
 
-    // Get top 3 coupled neighbors
-    const allNeighbors = new Map<string, number>()
-    for (const edge of edges) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-      if (sourceId === node.id) {
-        allNeighbors.set(targetId, (allNeighbors.get(targetId) ?? 0) + 1)
-      } else if (targetId === node.id) {
-        allNeighbors.set(sourceId, (allNeighbors.get(sourceId) ?? 0) + 1)
-      }
-    }
-
-    const coupledWith = [...allNeighbors.entries()]
+    // Get top 3 coupled neighbors from pre-built map (O(k log k) per node, k = neighbor count)
+    const coupledWith = [...(neighborCounts.get(node.id)?.entries() ?? [])]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([id]) => id)
@@ -153,10 +152,8 @@ export function computeImpactRadius(
   // If A depends_on B, changing B impacts A
   const reverseDeps = new Map<string, string[]>()  // target → sources that depend on it
   for (const edge of edges) {
-    const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-    const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-    if (!reverseDeps.has(targetId)) reverseDeps.set(targetId, [])
-    reverseDeps.get(targetId)!.push(sourceId)
+    if (!reverseDeps.has(edge.target)) reverseDeps.set(edge.target, [])
+    reverseDeps.get(edge.target)!.push(edge.source)
   }
 
   const visited = new Set<string>([nodeId])
@@ -207,10 +204,8 @@ export function computeDependencyDepth(
 ): number {
   const forwardDeps = new Map<string, string[]>()  // source → targets
   for (const edge of edges) {
-    const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-    const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-    if (!forwardDeps.has(sourceId)) forwardDeps.set(sourceId, [])
-    forwardDeps.get(sourceId)!.push(targetId)
+    if (!forwardDeps.has(edge.source)) forwardDeps.set(edge.source, [])
+    forwardDeps.get(edge.source)!.push(edge.target)
   }
 
   const visited = new Set<string>()
@@ -536,10 +531,8 @@ function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
 
   for (const edge of edges) {
     if (edge.type === 'imports' || edge.type === 'depends_on') {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-      const list = adjList.get(sourceId)
-      if (list) list.push(targetId)
+      const list = adjList.get(edge.source)
+      if (list) list.push(edge.target)
     }
   }
 

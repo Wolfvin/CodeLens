@@ -124,11 +124,8 @@ class ClusterEngine {
     for (const edge of edges) {
       if (edge.type !== 'imports') continue
 
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-
-      const sourceGroup = nodeToGroup.get(sourceId)
-      const targetGroup = nodeToGroup.get(targetId)
+      const sourceGroup = nodeToGroup.get(edge.source)
+      const targetGroup = nodeToGroup.get(edge.target)
 
       if (!sourceGroup || !targetGroup || sourceGroup === targetGroup) continue
 
@@ -330,11 +327,8 @@ class ClusterEngine {
     let externalCount = 0
 
     for (const edge of edges) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-
-      const sourceInGroup = nodeSet.has(sourceId)
-      const targetInGroup = nodeSet.has(targetId)
+      const sourceInGroup = nodeSet.has(edge.source)
+      const targetInGroup = nodeSet.has(edge.target)
 
       if (sourceInGroup && targetInGroup) {
         internalCount++

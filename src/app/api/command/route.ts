@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
+import { validateWorkspace } from '@/lib/constants'
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,12 +28,22 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Validate workspace path to prevent directory traversal
+    try {
+      validateWorkspace(workspace)
+    } catch (err: any) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: 400 }
+      )
+    }
+
     const commandArgs: string[] = Array.isArray(args) ? args : []
 
     // Guard: watch command is not supported via REST API
     if (command === 'watch') {
       return NextResponse.json(
-        { 
+        {
           error: 'Watch mode is not supported via REST API. Use the WebSocket interface at port 3030 for real-time updates.',
           command: 'watch',
           suggestion: 'Connect via socket.io to /?XTransformPort=3030'

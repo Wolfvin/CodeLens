@@ -9,6 +9,9 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
+import { scanCache } from '@/lib/scanCache'
+import { validateWorkspace, MAX_GRAPH_NODES, STATUS_PRIORITY } from '@/lib/constants'
+import { GraphNode, GraphEdge, Cluster } from '@/types/neural'
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,55 +25,84 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(workspace)
-
-    // Check for CLI errors
-    if (scanOutput.status === 'error') {
+    // Validate workspace path to prevent directory traversal
+    try {
+      validateWorkspace(workspace)
+    } catch (err: any) {
       return NextResponse.json(
-        { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
-        { status: 500 }
+        { error: err.message },
+        { status: 400 }
       )
     }
 
-    // Normalize the scan output directly (it already has frontend.classes, frontend.ids, backend.nodes, backend.edges)
-    const graphEvent = normalizer.normalize('scan', scanOutput)
+    // Check scan cache first to avoid re-running the CLI
+    const cached = scanCache.getScan(workspace)
 
-    // Limit nodes to keep the browser responsive (max 500 nodes for Canvas2D)
-    const MAX_NODES = 500
-    let selectedNodes = graphEvent.nodes
-    if (selectedNodes.length > MAX_NODES) {
-      // Prioritize by status (critical > warning > active > dead) then by ref_count
-      const statusPriority: Record<string, number> = { critical: 4, vulnerable: 3, warning: 2, active: 1, dead: 0, orphan: 0 }
-      selectedNodes.sort((a, b) => {
-        const pa = statusPriority[a.status] ?? 0
-        const pb = statusPriority[b.status] ?? 0
-        if (pb !== pa) return pb - pa
-        return ((b.data?.refCount as number) ?? 0) - ((a.data?.refCount as number) ?? 0)
+    let finalNodes: GraphNode[]
+    let selectedEdges: GraphEdge[]
+    let clusters: Cluster[]
+
+    if (cached) {
+      // Use cached scan result — skip CLI execution
+      finalNodes = cached.nodes.map(n => ({ ...n }))
+      selectedEdges = cached.edges
+      clusters = cached.clusters
+    } else {
+      // Run the scan command to build the registry and get all data
+      const scanOutput = await commandRunner.scan(workspace)
+
+      // Check for CLI errors
+      if (scanOutput.status === 'error') {
+        return NextResponse.json(
+          { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
+          { status: 500 }
+        )
+      }
+
+      // Normalize the scan output directly (it already has frontend.classes, frontend.ids, backend.nodes, backend.edges)
+      const graphEvent = normalizer.normalize('scan', scanOutput)
+
+      // Limit nodes to keep the browser responsive
+      let selectedNodes = graphEvent.nodes
+      if (selectedNodes.length > MAX_GRAPH_NODES) {
+        // Prioritize by status then by ref_count
+        selectedNodes.sort((a, b) => {
+          const pa = STATUS_PRIORITY[a.status] ?? 0
+          const pb = STATUS_PRIORITY[b.status] ?? 0
+          if (pb !== pa) return pb - pa
+          return ((b.data?.refCount as number) ?? 0) - ((a.data?.refCount as number) ?? 0)
+        })
+        selectedNodes = selectedNodes.slice(0, MAX_GRAPH_NODES)
+      }
+
+      // Filter edges to only include those between selected nodes
+      const selectedNodeIds = new Set(selectedNodes.map(n => n.id))
+      selectedEdges = graphEvent.edges.filter(e => {
+        const srcId = typeof e.source === 'string' ? e.source : e.source.id
+        const tgtId = typeof e.target === 'string' ? e.target : e.target.id
+        return selectedNodeIds.has(srcId) && selectedNodeIds.has(tgtId)
       })
-      selectedNodes = selectedNodes.slice(0, MAX_NODES)
-    }
 
-    // Filter edges to only include those between selected nodes
-    const selectedNodeIds = new Set(selectedNodes.map(n => n.id))
-    const selectedEdges = graphEvent.edges.filter(e => {
-      const srcId = typeof e.source === 'string' ? e.source : e.source.id
-      const tgtId = typeof e.target === 'string' ? e.target : e.target.id
-      return selectedNodeIds.has(srcId) && selectedNodeIds.has(tgtId)
-    })
+      // Compute clusters
+      clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
-    // Compute clusters
-    const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
-
-    // Assign clusterId to each node (using cloned nodes to avoid mutation)
-    const finalNodes = selectedNodes.map(n => ({ ...n }))
-    for (const cluster of clusters) {
-      for (const nodeId of cluster.nodeIds) {
-        const node = finalNodes.find((n) => n.id === nodeId)
-        if (node) {
-          node.clusterId = cluster.id
+      // Assign clusterId to each node using efficient Map lookup (O(n) instead of O(n²))
+      finalNodes = selectedNodes.map(n => ({ ...n }))
+      const clusterMap = new Map<string, string>()
+      for (const cluster of clusters) {
+        for (const nodeId of cluster.nodeIds) {
+          clusterMap.set(nodeId, cluster.id)
         }
       }
+      for (const node of finalNodes) {
+        const clusterId = clusterMap.get(node.id)
+        if (clusterId) {
+          node.clusterId = clusterId
+        }
+      }
+
+      // Store in cache for subsequent requests
+      scanCache.setScan(workspace, finalNodes, selectedEdges, clusters)
     }
 
     // Compute health score (inspired by Axon/Emerge)
