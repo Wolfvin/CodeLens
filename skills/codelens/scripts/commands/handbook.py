@@ -183,7 +183,7 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
     if not quick:
         try:
             dead_result = detect_dead_code(workspace)
-            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+            dead_count = dead_result.get("stats", {}).get("total_dead_code", 0)
             if dead_count > 0:
                 risks.append({"type": "dead_code", "count": dead_count})
         except Exception:

@@ -662,7 +662,7 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     stats = data.get("stats", {})
     lines.append("## Dead Code Analysis")
     lines.append("")
-    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
+    lines.append(f"- Total dead: {stats.get('total_dead_code', 0)}")
     by_cat = stats.get("by_category", {})
     parts = []
     if by_cat.get("unreachable", 0):
@@ -714,6 +714,23 @@ def _md_circular(data: Dict, lines: list) -> None:
     lines.append("")
     lines.append(f"**Found:** {total} circular chain(s)")
     lines.append("")
+
+    # Severity breakdown summary
+    sev = data.get("severity_breakdown", {})
+    if sev:
+        genuine = sev.get("genuine_warning", 0)
+        false_pos = sev.get("likely_false_positive_info", 0)
+        critical = sev.get("critical", 0)
+        parts = []
+        if critical:
+            parts.append(f"{critical} critical cycle(s)")
+        if genuine:
+            parts.append(f"{genuine} genuine cycle(s) (warning)")
+        if false_pos:
+            parts.append(f"{false_pos} likely false positive(s) from trait impls (info)")
+        if parts:
+            lines.append("**Summary:** " + " | ".join(parts))
+            lines.append("")
 
     # Summary per category
     summary = data.get("summary", {})

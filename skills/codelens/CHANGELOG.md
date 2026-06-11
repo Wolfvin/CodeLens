@@ -5,6 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.1] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: 6 broken commands restored** — `scan`, `ask`, `handbook`, `env-check`, `refactor-safe`, and `watch` commands failed to import due to missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `resolve_tauri_ipc_from_apimap`, `scan_binary_artifacts`, `scan_tauri_artifacts`). All missing symbols have been implemented in their respective modules (`utils.py`, `edge_resolver.py`).
+- **CRITICAL: Dead-code total count always showed 0** — Three consumers (markdown formatter, dead_code command, handbook) used `stats.get('total_dead', 0)` while the engine returns `total_dead_code`. Fixed key name in all three locations.
+- **HIGH: Rust build.rs false positive in debug-leak** — `println!()` in `build.rs` is the canonical way to emit cargo directives and should not be flagged as a debug leak. Added exclusion for `println!()` in files ending with `build.rs` (but still flags `eprintln!()` which is typically actual debug output).
+- **pyproject.toml duplicate version keys** — Four `version =` lines in `[project]` section collapsed to single `version = "5.9.1"`.
+
+### Added
+
+- **Rust workspace detection** (`scripts/framework_detect.py`): New fields in `detect_frameworks()` output: `has_cargo_workspace` (bool), `rust_edition` (str or None), `cargo_crate_count` (int). Detects `[workspace]` section in Cargo.toml and counts workspace members.
+- **Circular dependency trait-impl filtering** (`scripts/circular_engine.py`): Rust conversion trait implementations (`from_*`, `into_*`, `try_from_*`, `try_into_*`, `to_*`, `as_*`) create apparent circular chains that are intentional bidirectional conversions. These are now classified as `info` severity instead of `warning`. Long chains (>8 nodes) are also downgraded to `info` as they are likely name-matching artifacts.
+- **Shared constants in utils.py**: `MAX_FILE_SIZE` (500KB), `MAX_FILES_DEFAULT` (3000), `time_budget_expired()` function, `is_generated_file()` function — provides centralized definitions that engines can import instead of redefining locally.
+- **Binary artifact scanning** (`utils.py`): `scan_binary_artifacts()` and `scan_tauri_artifacts()` functions for the `binary-scan` and `ask` commands.
+- **Tauri IPC edge resolution** (`edge_resolver.py`): `resolve_tauri_ipc_from_apimap()` function for cross-language edge resolution between TypeScript `invoke()` calls and Rust `#[tauri::command]` handlers.
+
+### Test Target Documentation
+
+- **surrealdb/surrealdb** (GitHub): Used as test target for v5.9.1 — a multi-model document-graph database written in Rust with 1635 .rs files, 20 .py files, 16671 backend nodes, and 104464 edges. Large Rust workspace with 21 crates. Testing revealed: 6 broken commands (all fixed), debug-leak false positives on build.rs (fixed), dead-code total count bug (fixed), 1732 circular dependencies mostly from trait impls (filtered). Health score: 70/100 with 610 critical smells (mostly god objects in Rust impl blocks).
+
 ## [5.9.0] — 2026-06-12
 
 ### Added

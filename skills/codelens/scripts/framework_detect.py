@@ -217,6 +217,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_rust_backend": False,
+        "has_cargo_workspace": False,
+        "rust_edition": None,
+        "cargo_crate_count": 0,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -395,21 +398,77 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 cargo_content = f.read()
             # Parse [dependencies] section — extract crate names
             in_deps = False
+            in_workspace = False
+            in_package = False
+            workspace_members = []
             for line in cargo_content.split('\n'):
                 stripped = line.strip()
                 if stripped == '[dependencies]':
                     in_deps = True
+                    in_workspace = False
+                    in_package = False
                     continue
-                if stripped.startswith('[') and in_deps:
-                    break  # End of [dependencies] section
+                if stripped == '[workspace]':
+                    in_workspace = True
+                    in_deps = False
+                    in_package = False
+                    detected["has_cargo_workspace"] = True
+                    continue
+                if stripped == '[package]':
+                    in_package = True
+                    in_deps = False
+                    in_workspace = False
+                    continue
+                if stripped.startswith('[') and not stripped.startswith('[package'):
+                    if stripped == '[dependencies]':
+                        in_deps = True
+                    else:
+                        in_deps = False
+                    in_workspace = stripped == '[workspace]'
+                    in_package = stripped.startswith('[package')
+                    if in_workspace:
+                        detected["has_cargo_workspace"] = True
+                    continue
+                # Extract crate names from [dependencies]
                 if in_deps and '=' in stripped:
                     crate_name = stripped.split('=')[0].strip().lower()
                     if crate_name:
                         cargo_deps.add(crate_name)
+                # Extract edition from [package]
+                if in_package and stripped.startswith('edition'):
+                    m = re.match(r'edition\s*=\s*["\']([^"\']+)["\']', stripped)
+                    if m and not detected["rust_edition"]:
+                        detected["rust_edition"] = m.group(1)
+                # Extract workspace members
+                if in_workspace and stripped.startswith('members'):
+                    m = re.match(r'members\s*=\s*\[([^\]]+)\]', stripped)
+                    if m:
+                        for member in m.group(1).split(','):
+                            member = member.strip().strip('"').strip("'").strip()
+                            if member:
+                                workspace_members.append(member)
         except IOError:
             logger.debug("Failed to parse Cargo.toml", exc_info=True)
 
-    if cargo_deps:
+        # Count crates: workspace members or sub-directory Cargo.toml files
+        if detected["has_cargo_workspace"]:
+            if workspace_members:
+                detected["cargo_crate_count"] = len(workspace_members)
+            else:
+                # Fallback: count Cargo.toml files in immediate subdirectories
+                crate_count = 0
+                try:
+                    for entry in os.listdir(workspace):
+                        entry_path = os.path.join(workspace, entry)
+                        if os.path.isdir(entry_path) and os.path.isfile(os.path.join(entry_path, "Cargo.toml")):
+                            crate_count += 1
+                except OSError:
+                    pass
+                detected["cargo_crate_count"] = crate_count
+        elif cargo_deps:
+            detected["cargo_crate_count"] = 1
+
+    if cargo_deps or detected["has_cargo_workspace"]:
         detected["has_rust_backend"] = True
         # Detect Tauri from Cargo dependency
         if "tauri" in cargo_deps:

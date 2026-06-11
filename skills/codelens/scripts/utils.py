@@ -208,7 +208,233 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.9.1"
+
+# ─── Shared Limits ───────────────────────────────────────────
+
+MAX_FILE_SIZE = 500 * 1024  # 500KB — skip files larger than this
+MAX_FILES_DEFAULT = 3000    # Default max files to scan per engine
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
+
+    Args:
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
+
+    Returns:
+        True if the budget has been exceeded.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is a generated/lock file that should be skipped.
+
+    Covers lock files, generated output, and vendored artifacts.
+
+    Args:
+        filename: Just the filename (not the full path).
+
+    Returns:
+        True if the file should be skipped as generated.
+    """
+    generated_patterns = (
+        # Lock files
+        'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+        'cargo.lock', 'gemfile.lock', 'composer.lock', 'poetry.lock',
+        'pdm.lock', 'uv.lock',
+        # Generated files
+        'go.sum', 'mix.lock', 'conan.lock', 'pip-wheel-metadata',
+        # Minified / bundled
+        '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+    )
+    fl = filename.lower()
+    for pattern in generated_patterns:
+        if fl.endswith(pattern) or fl == pattern:
+            return True
+    # Auto-generated suffixes
+    if fl.endswith('.generated.ts') or fl.endswith('.generated.js'):
+        return True
+    if fl.endswith('.g.dart') or fl.endswith('.g.py'):
+        return True
+    if fl.endswith('.pb.go') or fl.endswith('_pb2.py'):
+        return True
+    # snapshot files
+    if fl.endswith('.snap') or fl.endswith('.snapshot'):
+        return True
+    return False
+
+
+# ─── Binary Artifact Scanning ────────────────────────────────
+
+_BINARY_EXTENSIONS = frozenset({
+    '.so', '.dylib', '.dll', '.exe', '.bin', '.o', '.obj',
+    '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
+    '.node', '.efi', '.app', '.dmg', '.iso', '.msi',
+    '.nupkg', '.deb', '.rpm', '.apk', '.aab',
+})
+
+_ELECTRON_MARKERS = frozenset({
+    'electron', 'electron.exe', 'Electron Framework.framework',
+})
+
+_TAURI_CONFIG_FILES = frozenset({
+    'tauri.conf.json', 'tauri.conf.json5', 'tauri.config.json',
+})
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/compiled artifacts.
+
+    Detects shared libraries, executables, WASM modules, and other
+    compiled files that should not be in source control.
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with findings, stats, and recommendations.
+    """
+    workspace = os.path.abspath(workspace)
+    findings = []
+    total_size = 0
+    electron_detected = False
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in _BINARY_EXTENSIONS:
+                path = os.path.join(root, fn)
+                try:
+                    size = os.path.getsize(path)
+                    total_size += size
+                    findings.append({
+                        "file": os.path.relpath(path, workspace),
+                        "type": ext,
+                        "size_bytes": size,
+                    })
+                except OSError:
+                    pass
+
+            # Detect Electron markers
+            if fn.lower() in _ELECTRON_MARKERS:
+                electron_detected = True
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "binary_count": len(findings),
+        "total_binary_size_bytes": total_size,
+        "findings": findings[:100],  # Limit output
+        "electron_detected": electron_detected,
+        "recommendation": (
+            "Consider adding binary files to .gitignore to keep the repo clean."
+            if findings else "No binary artifacts found in source directories."
+        ),
+    }
+
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific configuration and artifacts.
+
+    Detects Tauri project structure, IPC commands, capabilities,
+    and security configuration.
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with Tauri analysis, or None if not a Tauri project.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Check if this is a Tauri project
+    is_tauri = False
+    tauri_config_path = None
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            if fn in _TAURI_CONFIG_FILES:
+                is_tauri = True
+                tauri_config_path = os.path.join(root, fn)
+                break
+        if is_tauri:
+            break
+
+    # Also check Cargo.toml for tauri dependency
+    if not is_tauri:
+        cargo_path = os.path.join(workspace, 'Cargo.toml')
+        if os.path.isfile(cargo_path):
+            try:
+                with open(cargo_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'tauri' in content.lower():
+                    is_tauri = True
+            except IOError:
+                pass
+
+    if not is_tauri:
+        return None
+
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "is_tauri_project": True,
+        "tauri_config": None,
+        "ipc_commands": [],
+        "capabilities": [],
+    }
+
+    # Parse tauri.conf.json if found
+    if tauri_config_path:
+        try:
+            with open(tauri_config_path, 'r', encoding='utf-8') as f:
+                import json as _json
+                config_data = _json.load(f)
+            result["tauri_config"] = {
+                "app_name": config_data.get("productName", config_data.get("name", "unknown")),
+                "window_count": len(config_data.get("app", {}).get("windows", [])),
+                "dev_url": config_data.get("build", {}).get("devUrl"),
+                "dist_dir": config_data.get("build", {}).get("distDir"),
+            }
+        except (IOError, ValueError):
+            pass
+
+    # Scan for #[tauri::command] in Rust files
+    ipc_commands = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            if not fn.endswith('.rs'):
+                continue
+            path = os.path.join(root, fn)
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                # Find #[tauri::command] annotated functions
+                import re
+                for m in re.finditer(
+                    r'#\[tauri::command\]\s*(?:///.*\n\s*)*?\s*pub\s+(?:async\s+)?fn\s+(\w+)',
+                    content
+                ):
+                    ipc_commands.append({
+                        "name": m.group(1),
+                        "file": os.path.relpath(path, workspace),
+                    })
+            except IOError:
+                pass
+
+    result["ipc_commands"] = ipc_commands
+
+    return result
 
 
 # ─── File Cache (Single-Pass Workspace Scanner) ──────────────
