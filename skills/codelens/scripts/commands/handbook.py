@@ -300,12 +300,34 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         "pnpm-workspace.yaml": "pnpm-workspace",
         "lerna.json": "lerna",
         "nx.json": "nx",
+        "bun.lock": "bun-workspace",
     }
     for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
         if os.path.isfile(os.path.join(workspace, indicator_file)):
             identity["is_monorepo"] = True
             if tool_name not in identity["monorepo_tools"]:
                 identity["monorepo_tools"].append(tool_name)
+
+    # Also detect monorepo by structure: multiple package.json in apps/ or packages/
+    # This catches bun-based monorepos and plain npm workspaces that don't have
+    # an explicit monorepo config file (e.g., Spacedrive uses bun.lock + apps/*)
+    if not identity["is_monorepo"]:
+        for subdir in ("apps", "packages", "services"):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                try:
+                    pkg_count = sum(
+                        1 for entry in os.listdir(subdir_path)
+                        if os.path.isdir(os.path.join(subdir_path, entry))
+                        and os.path.isfile(os.path.join(subdir_path, entry, "package.json"))
+                    )
+                    if pkg_count >= 2:
+                        identity["is_monorepo"] = True
+                        if "npm-workspace" not in identity["monorepo_tools"]:
+                            identity["monorepo_tools"].append("npm-workspace")
+                        break
+                except OSError:
+                    pass
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')

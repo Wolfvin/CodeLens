@@ -353,12 +353,33 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
                                 external.add(pkg_name)
 
             elif ext == ".rs":
-                for m in re.finditer(r'use\s+([^;]+);', content):
-                    use_path = m.group(1).strip()
-                    if not use_path.startswith('std::') and not use_path.startswith('crate::') and not use_path.startswith('super::'):
-                        # External crate
+                # Parse Rust use statements line-by-line to avoid matching
+                # 'use' inside comments or doc comments (which caused false positives
+                # like "relay connections" being detected as missing deps).
+                for line in content.split('\n'):
+                    stripped = line.lstrip()
+                    # Skip comment lines (// and /*)
+                    if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('//!') or stripped.startswith('///'):
+                        continue
+                    # Remove inline comments before matching
+                    comment_pos = stripped.find('//')
+                    if comment_pos >= 0:
+                        stripped = stripped[:comment_pos]
+                    # Match Rust use statements at the start of a line (with optional whitespace)
+                    m = re.match(r'\s*use\s+([^;]+);', stripped)
+                    if m:
+                        use_path = m.group(1).strip()
+                        # Skip self::, super::, crate::, std:: — these are internal
+                        if use_path.startswith('std::') or use_path.startswith('crate::') or use_path.startswith('super::') or use_path.startswith('self::'):
+                            continue
+                        # Handle grouped imports: use foo::{bar, baz} → extract foo
+                        if '::{' in use_path:
+                            use_path = use_path.split('::{')[0]
+                        # External crate — take the first path segment
                         pkg_name = use_path.split('::')[0]
-                        external.add(pkg_name)
+                        # Validate: only accept alphanumeric + underscore crate names
+                        if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', pkg_name):
+                            external.add(pkg_name)
 
     return {
         "external": external,

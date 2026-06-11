@@ -1,5 +1,6 @@
 """Dependents command — Module-level import tracking."""
 
+import os
 from dependents_engine import get_dependents, get_dependencies, get_dependency_graph
 from commands import register_command
 
@@ -15,12 +16,30 @@ def add_args(parser):
 
 
 def execute(args, workspace):
+    # Auto-swap: if 'file' arg is a directory that looks like a workspace root,
+    # treat it as the workspace instead. This handles the common pattern:
+    #   codelens dependents /path/to/workspace
+    # where the user passes workspace as the first positional arg.
+    file_arg = args.file
+    if file_arg and os.path.isdir(os.path.abspath(file_arg)) and args.workspace is None:
+        workspace_markers = {'.codelens', 'package.json', 'Cargo.toml', 'pyproject.toml',
+                            'go.mod', 'tsconfig.json'}
+        if any(os.path.exists(os.path.join(os.path.abspath(file_arg), m)) for m in workspace_markers):
+            args.workspace = file_arg
+            args.file = None
+
+    file_path = args.file
+
     if args.direction == "graph":
         return get_dependency_graph(workspace)
     elif args.direction == "dependencies":
-        return get_dependencies(args.file, workspace, depth=args.depth)
+        if file_path is None:
+            return {"status": "error", "error": "No file specified. Usage: codelens dependents <file> [workspace]"}
+        return get_dependencies(file_path, workspace, depth=args.depth)
     else:
-        return get_dependents(args.file, workspace, depth=args.depth)
+        if file_path is None:
+            return {"status": "error", "error": "No file specified. Usage: codelens dependents <file> [workspace]"}
+        return get_dependents(file_path, workspace, depth=args.depth)
 
 
 register_command("dependents", "Module-level import tracking", add_args, execute)

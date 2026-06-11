@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v6.0 — Quick Reference
+# CodeLens v5.8.1 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 

@@ -71,13 +71,17 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     # ─── Check 2: Unregistered files ───────────────────
-    # Only check source code files (not config/data files like .json, .toml, .yaml)
-    # Config files typically have no symbols to register, so reporting them as
-    # "unregistered" creates noise without value.
     source_extensions = {
         '.html', '.htm', '.css', '.scss', '.less', '.sass',
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.vue', '.svelte',
+    }
+    # Config/data files — expected not to be in the registry.
+    # Don't report these as unregistered since CodeLens doesn't parse them.
+    config_extensions = {
+        '.json', '.toml', '.yaml', '.yml', '.lock', '.md', '.txt',
+        '.xml', '.ini', '.cfg', '.conf', '.env', '.map',
+        '.graphql', '.gql', '.proto',
     }
     ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
                    "__pycache__", ".codelens", ".next", ".cache", "vendor"}
@@ -94,9 +98,11 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
 
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
-            if ext in source_extensions:
-                rel_path = os.path.relpath(os.path.join(root, filename), workspace)
-                disk_files.add(rel_path)
+            # Only scan actual source files, not config/data files
+            if ext not in source_extensions:
+                continue
+            rel_path = os.path.relpath(os.path.join(root, filename), workspace)
+            disk_files.add(rel_path)
 
     unregistered = disk_files - registry_files
     for rel_path in sorted(unregistered):
