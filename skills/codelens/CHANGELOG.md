@@ -5,6 +5,32 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] — 2026-06-12
+
+### Added
+
+- **NestJS route extraction** (`scripts/apimap_engine.py`): New `_extract_nestjs_routes()` function detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller-level prefixes. Previously, NestJS route decorators were misidentified as TypeGraphQL `@Query`/`@Mutation` decorators, producing incorrect `QUERY.fieldName` entries instead of proper `GET /path` routes. New NestJS framework detection added to `frameworks_detected` output.
+- **Tailwind v4 false-positive elimination** (`scripts/missing_refs.py`): Expanded `_is_likely_tailwind()` from 35 to 200+ recognized patterns. New detection categories: arbitrary value brackets (`w-[100px]`, `text-[#fff]`), data attribute variants (`data-[slot=...]`, `:data-`), star wildcard variants (`**:`), group/peer/aria/supports/motion variants, container query variants (`@sm:`, `@md:`), arbitrary variants (`[&_...]`), negative value prefix (`-mt-4`, `-translate-x-1`), and 40+ additional utility prefixes (inset-, min-w-, max-h-, col-, row-, aspect-, object-, animate-, backdrop-, blur-, etc.) and 30+ variant prefixes (focus-within:, focus-visible:, group-hover:, disabled:, rtl:, ltr:, etc.). On Cal.com (1145 TSX files with Tailwind v4), this reduced missing-refs false positives from 262 to near-zero.
+- **State-map over-matching fix** (`scripts/statemap_engine.py`): Three new filters in `_extract_js_global_state()`:
+  1. PascalCase filtering: Names starting with uppercase (no underscores) are treated as TypeScript type/enum/class exports and skipped unless the value is clearly mutable (`{}`, `[]`, `new`, `Map`, `Set`).
+  2. Enum/type suffix filtering: Names ending with `Enum`, `Type`, `Interface`, `Schema`, `Args`, `Input`, `Output`, `Result`, `Response`, `Request`, `Payload`, `Event`, `Action`, `Keys`, `Map`, `Record`, `List`, `Set`, `Dict`, `Union` are skipped unless value is mutable.
+  3. Zod/Yup schema filtering: Values starting with `z.`, `t.`, `zod.`, `joi.`, `yup.`, `v.`, `Type(` are skipped.
+  4. Conservative function-call matching: Non-mutable, non-immutable values (function calls, references) are only included if the variable name contains state keywords (`state`, `cache`, `store`, `mutex`, `lock`, `queue`, `pool`, `registry`, `buffer`, `session`). On Cal.com, this reduced state-map stores from 1052 false-positive "global" entries to approximately 50 real state items.
+- **Entrypoint config-file filtering** (`scripts/entrypoints_engine.py`): `module_export` entrypoint type now skips 20+ config file patterns including `.config.ts/js/mjs`, `vitest.`, `playwright.`, `jest.`, `eslint.`, `prettier.`, `tsconfig.`, `turbo.json`, `biome.json`, `lint-staged.`, `postcss.config`, `tailwind.config`, `next.config`, `vite.config`, `webpack.config`, `rollup.config`, `babel.config`, `i18n.config/json`, etc. These files contain `export default` but are build/test tool configuration, not application entry points.
+
+### Changed
+
+- **Version bump**: Updated from 5.7.1 to 6.0.0 across `utils.py`, `skill.json`, `SKILL.md`, `SKILL-QUICK.md`, and `CHANGELOG.md`.
+
+### Test Target Documentation
+
+- **calcom/cal.com** (GitHub): Used as test target for v6.0 improvements — a large scheduling infrastructure monorepo with 3870 TS files, 1145 TSX files, 31 JS files, 20 CSS files, 8 HTML files. Uses Next.js + NestJS + Tailwind CSS + tRPC + Zustand + Turborepo. This is the largest and most complex codebase tested against CodeLens to date. Key findings that drove improvements:
+  - `missing-refs`: 262 Tailwind utility class false positives (e.g., `**:data-[slot=scroll-area-scrollbar]:hidden`, `[&_.current-timezone:before]:hover:opacity-100`)
+  - `state-map`: 1052 false-positive "global" stores (PascalCase type exports like `BookingReferences`, `CustomFieldTypeEnum`)
+  - `api-map`: NestJS `@Get`/`@Query` decorators misidentified as TypeGraphQL, showing `QUERY.timezone` instead of `GET /api/timezone`
+  - `entrypoints`: Config files like `playwright.config.ts`, `vitest.config.ts` incorrectly classified as `module_export` entry points
+  - Other commands worked correctly: smell (14693 issues, health 70), complexity (5364 functions), secrets (64 findings), circular (81 cycles), css-deep (179 issues), perf-hint (2298 hints), side-effect (6026 functions, 89% pure), dataflow (3594 sources, 398 sinks, 1031 violations)
+
 ## [5.8.0] — 2026-06-12
 
 ### Added

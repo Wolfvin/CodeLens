@@ -1081,9 +1081,35 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
                 continue
 
+            # v6: Skip PascalCase names that look like TypeScript types/enums/classes.
+            # These are type exports, not runtime state. E.g.:
+            #   const BookingReferences = ...
+            #   const CustomFieldTypeEnum = ...
+            #   const Status = ...
+            # A name is PascalCase if it starts with uppercase and contains
+            # no underscores (ALL_CAPS already skipped above).
+            if var_name[0].isupper() and '_' not in var_name and len(var_name) > 2:
+                # Heuristic: PascalCase names are type/enum/class exports
+                # Skip unless the value clearly looks like mutable state
+                # (object literal, Map, Set, new SomeClass)
+                value_is_stateful = bool(re.match(r'^(\{|\[|new\s|Map\b|Set\b|WeakMap|WeakSet)', value_part))
+                if not value_is_stateful:
+                    continue
+
             # Skip names ending with config/enum suffixes
             if any(var_name.endswith(s) for s in config_suffixes):
                 continue
+
+            # v6: Skip names ending with common TypeScript/enum patterns
+            enum_type_suffixes = ('Enum', 'Type', 'Interface', 'Schema', 'Args',
+                                  'Input', 'Output', 'Result', 'Response', 'Request',
+                                  'Payload', 'Event', 'Action', 'Keys', 'Map',
+                                  'Record', 'List', 'Set', 'Dict', 'Union')
+            if any(var_name.endswith(s) for s in enum_type_suffixes):
+                # Only skip if value doesn't look like mutable state
+                is_mutable_early = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
+                if not is_mutable_early:
+                    continue
 
             # Skip React components — PascalCase + arrow function or function
             # A line like "const Logo = () =>" or "const Button = function" is NOT state.
@@ -1125,6 +1151,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 # Skip factories that are NOT state-related
                 pass
 
+            # v6: Skip function calls that are clearly not state
+            # e.g., const X = someFunction(), const X = z.object(), const X = t.type()
+            if re.match(r'^(z\.|t\.|zod\.|joi\.|yup\.|v\.|Type\()', value_part):
+                continue
+
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
             is_mutable = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
@@ -1133,6 +1164,17 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             if is_immutable:
                 continue
+
+            # v6: For non-mutable, non-immutable values (function calls, references),
+            # be more conservative — only include if the name suggests state.
+            # Names like "state", "cache", "store" suggest state.
+            # Names like "handler", "service", "client" suggest utilities.
+            if not is_mutable and not is_immutable:
+                state_keywords = ('state', 'cache', 'store', 'mutex', 'lock', 'queue',
+                                  'pool', 'registry', 'buffer', 'session')
+                is_likely_state = any(kw in var_name.lower() for kw in state_keywords)
+                if not is_likely_state:
+                    continue
 
             # For things that don't match either pattern, include them
             # (could be function calls that return mutable objects)

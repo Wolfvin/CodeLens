@@ -788,6 +788,20 @@ def map_entrypoints(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # v6: Skip config/build files that are NOT real entry points.
+            # Files like playwright.config.ts, vitest.config.ts, turbo.json,
+            # etc. contain "export default" but are not app entry points.
+            config_file_patterns = (
+                '.config.', 'config.ts', 'config.js', 'config.mjs',
+                'vitest.', 'playwright.', 'jest.', 'eslint.', 'prettier.',
+                'tsconfig.', 'turbo.json', '.eslintrc', '.prettierrc',
+                'biome.json', 'lint-staged.', 'postcss.config',
+                'tailwind.config', 'next.config', 'vite.config',
+                'webpack.config', 'rollup.config', 'babel.config',
+                'i18n.config', 'i18n.json', 'i18n-unused.config',
+            )
+            is_config_file = any(p in filename for p in config_file_patterns)
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -799,6 +813,11 @@ def map_entrypoints(
             # Check each requested entrypoint type
             for ep_type in types_to_scan:
                 if ep_type not in ENTRYPOINT_PATTERNS:
+                    continue
+
+                # v6: Skip module_export for config files — they contain
+                # "export default" but are NOT application entry points.
+                if ep_type == "module_export" and is_config_file:
                     continue
 
                 type_def = ENTRYPOINT_PATTERNS[ep_type]

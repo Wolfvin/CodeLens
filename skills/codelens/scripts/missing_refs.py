@@ -192,7 +192,44 @@ _JS_KEYWORDS = {
 
 
 def _is_likely_tailwind(class_name: str) -> bool:
-    """Heuristic to detect Tailwind utility classes."""
+    """Heuristic to detect Tailwind utility classes.
+
+    v6: Expanded detection for Tailwind v4 syntax including:
+    - Arbitrary value classes: w-[100px], text-[#fff]
+    - Data attribute variants: data-[slot=...], data-current:
+    - Group/peer variants: group-hover:, peer-focus:
+    - Arbitrary variants: [&_...], [@media...]
+    - Star wildcard: **:prefix-
+    - Container queries: @sm:, @md:
+    - Negative values: -mt-4, -translate-x-1
+    """
+
+    # ─── Structural patterns that are always Tailwind ──────────
+    # Arbitrary value brackets: w-[...], text-[...], origin-(--...), etc.
+    if re.search(r'\[.+\]', class_name) or re.search(r'\(.+\)', class_name):
+        return True
+
+    # Star wildcard variant: **:something or *:something
+    if class_name.startswith('**:') or ':**:' in class_name or class_name.startswith('*:'):
+        return True
+
+    # Data attribute variant: data-[...] or data-something: or in-data-...
+    if re.match(r'^(data|in-data)[-\[]', class_name) or ':data-' in class_name:
+        return True
+
+    # Group/peer/aria/supports variants
+    if re.match(r'^(group|peer|aria|supports|motion|starting)[-:]', class_name):
+        return True
+
+    # Container query variants: @sm, @md, etc.
+    if class_name.startswith('@'):
+        return True
+
+    # Negative value prefix: -mt-4, -translate-x-1
+    if re.match(r'^-[whmpglrtbfo]\w+-', class_name):
+        return True
+
+    # ─── Prefix-based detection ──────────────────────────────
     tailwind_prefixes = [
         'flex', 'grid', 'block', 'inline', 'hidden', 'visible',
         'w-', 'h-', 'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
@@ -203,13 +240,63 @@ def _is_likely_tailwind(class_name: str) -> bool:
         'opacity-', 'z-', 'overflow-',
         'hover:', 'focus:', 'active:', 'dark:', 'sm:', 'md:', 'lg:', 'xl:', '2xl:',
         'transition-', 'duration-', 'ease-',
-        'scale-', 'rotate-', 'translate-',
+        'scale-', 'rotate-', 'translate-', 'origin-',
         'ring-', 'outline-',
         'cursor-', 'select-', 'pointer-',
+        # v6: Additional prefixes
+        'inset-', 'top-', 'right-', 'bottom-', 'left-',
+        'max-sm:', 'max-md:', 'max-lg:', 'max-xl:', 'max-2xl:',  # max-width variants
+        'min-w-', 'min-h-', 'max-w-', 'max-h-',
+        'col-', 'row-', 'cols-', 'rows-',
+        'aspect-', 'object-',
+        'list-', 'table-', 'indent-',
+        'line-clamp', 'truncate',
+        'whitespace-', 'break-',
+        'decoration-', 'underline-', 'overline-',
+        'animate-', 'animation-',
+        'backdrop-', 'blur-', 'brightness-', 'contrast-',
+        'drop-shadow-', 'grayscale-', 'hue-rotate-',
+        'invert-', 'saturate-', 'sepia-',
+        'accent-', 'appearance-',
+        'resize-', 'place-', 'order-',
+        'self-', 'content-',
+        'mix-blend-', 'isolation-',
+        'from-', 'to-', 'via-',  # gradient stops
+        'divide-', 'sr-only', 'not-sr-only',
+        'bg-gradient-', 'stroke-', 'fill-',
+        'touch-', 'scroll-',
+        'container',
     ]
 
     for prefix in tailwind_prefixes:
         if class_name.startswith(prefix) or class_name == prefix.rstrip('-'):
+            return True
+
+    # ─── Variant-based detection ──────────────────────────────
+    # If the class has a Tailwind variant prefix, it's always Tailwind
+    tailwind_variants = [
+        'hover:', 'focus:', 'focus-within:', 'focus-visible:',
+        'active:', 'dark:', 'sm:', 'md:', 'lg:', 'xl:', '2xl:',
+        'group-hover:', 'group-focus:', 'peer-hover:', 'peer-focus:',
+        'first:', 'last:', 'last-of-type:', 'only:', 'odd:', 'even:',
+        'before:', 'after:', 'first-letter:', 'first-line:',
+        'placeholder:', 'file:', 'marker:', 'selection:',
+        'disabled:', 'enabled:', 'checked:', 'indeterminate:',
+        'default:', 'required:', 'valid:', 'invalid:',
+        'in-range:', 'out-of-range:', 'placeholder-shown:',
+        'autofill:', 'read-only:',
+        'not-', 'open:', 'closed:',
+        'portrait:', 'landscape:',
+        'forced-colors:', 'prefers-contrast:', 'prefers-reduced-motion:',
+        'motion-safe:', 'motion-reduce:',
+        'printing:', 'print:',
+        'rtl:', 'ltr:',
+        # Tailwind Typography plugin variants
+        'prose-', 'prose:',
+    ]
+
+    for variant in tailwind_variants:
+        if class_name.startswith(variant):
             return True
 
     # Pure number patterns like "w4", "h8"
