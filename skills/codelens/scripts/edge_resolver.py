@@ -74,6 +74,7 @@ def resolve_edges(
     - Method calls: obj.method() → tries matching fn="method" first, then "obj.method"
     - Cross-file calls: resolves to correct file:line
     - Multiple definitions: flags duplicate_define
+    - snake_case ↔ camelCase: Rust's process_order matches JS's processOrder
 
     Returns:
         (resolved_nodes, resolved_edges)
@@ -82,6 +83,15 @@ def resolve_edges(
     fn_name_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
     for node in all_nodes:
         fn_name_to_nodes[node["fn"]].append(node)
+
+    # Also build an alternate-case index for snake_case ↔ camelCase matching.
+    # This is critical for Tauri / fullstack projects where Rust (snake_case)
+    # and JS/TS (camelCase) call each other.
+    alt_case_index: Dict[str, List[Dict]] = defaultdict(list)
+    for node in all_nodes:
+        alt_key = _to_alternate_case(node["fn"])
+        if alt_key != node["fn"]:  # Only index if conversion produces a different name
+            alt_case_index[alt_key].append(node)
 
     # Also index by file:line for exact matching
     id_to_node: Dict[str, Dict] = {node["id"]: node for node in all_nodes}
@@ -114,13 +124,39 @@ def resolve_edges(
                     candidates_sorted = sorted(candidates, key=lambda c: (c.get("file", ""), c.get("line", 0)))
                     target_node = candidates_sorted[0]
 
-        # 2. Method match: "obj.method" → try just "method"
+        # 2. snake_case ↔ camelCase match (Rust ↔ JS interop)
+        if not target_node:
+            alt_key = _to_alternate_case(to_fn)
+            if alt_key in fn_name_to_nodes:
+                candidates = fn_name_to_nodes[alt_key]
+                # Prefer same-file matches first
+                from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                same_file_candidates = [c for c in candidates if c.get("file", "") == from_file]
+                if same_file_candidates:
+                    target_node = same_file_candidates[0]
+                else:
+                    candidates_sorted = sorted(candidates, key=lambda c: (c.get("file", ""), c.get("line", 0)))
+                    target_node = candidates_sorted[0]
+            elif to_fn in alt_case_index:
+                candidates = alt_case_index[to_fn]
+                from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                same_file_candidates = [c for c in candidates if c.get("file", "") == from_file]
+                if same_file_candidates:
+                    target_node = same_file_candidates[0]
+                else:
+                    candidates_sorted = sorted(candidates, key=lambda c: (c.get("file", ""), c.get("line", 0)))
+                    target_node = candidates_sorted[0]
+
+        # 3. Method match: "obj.method" → try just "method"
         if not target_node and '.' in to_fn:
             method_name = to_fn.split('.')[-1]
             if method_name in fn_name_to_nodes:
                 candidates = fn_name_to_nodes[method_name]
                 if candidates:
-                    target_node = candidates[0]
+                    # Prefer same file
+                    from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                    same_file = [c for c in candidates if c.get("file", "") == from_file]
+                    target_node = same_file[0] if same_file else candidates[0]
 
         # Build resolved edge
         if target_node:
@@ -205,3 +241,44 @@ def get_callees(node_id: str, edges: List[Dict], nodes: List[Dict]) -> List[Dict
         callees.append(callee)
 
     return callees
+
+
+# ─── Case Conversion Helpers ────────────────────────────────────
+
+def _to_alternate_case(name: str) -> str:
+    """Convert between snake_case and camelCase for cross-language matching.
+
+    This is essential for fullstack projects (e.g., Tauri, WASM) where:
+    - Rust uses snake_case: process_order, get_user_data
+    - JavaScript/TypeScript uses camelCase: processOrder, getUserData
+
+    Conversion rules:
+    - snake_case → camelCase: get_user_data → getUserData
+    - camelCase → snake_case: getUserData → get_user_data
+    - If the name doesn't match either convention, returns it unchanged.
+    """
+    if not name:
+        return name
+
+    # snake_case → camelCase
+    if '_' in name:
+        parts = name.split('_')
+        # Only convert if it looks like snake_case (lowercase parts)
+        if all(p.islower() or p == '' for p in parts if p):
+            return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
+        # Mixed like get_HTTPResponse — keep as-is
+        return name
+
+    # camelCase → snake_case
+    if name[0].islower() and any(c.isupper() for c in name[1:]):
+        result = []
+        for c in name:
+            if c.isupper():
+                result.append('_')
+                result.append(c.lower())
+            else:
+                result.append(c)
+        return ''.join(result)
+
+    # No conversion needed
+    return name

@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -31,25 +31,24 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
-  v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v5.8
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
+## What's New in v5.8
 
-- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find Next.js, React, etc. in workspace packages, not just root. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
-- **Accurate god object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation). Rust impl blocks also properly scoped.
-- **API route false positive elimination**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects: request, headers, cache, store, etc.). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
-- **CSS specificity false positive fix**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba(0, 0, 0, 0.1)`, `var(--x)`, `from -160deg` as selectors. Specificity wars dropped from 31 false positives to 4 real ones.
-- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references. Skips main(), pub functions, and test fixtures. Found 200+ genuine dead items that the text-only scanner missed.
-- **State map constant/component filtering**: Skips ALL_CAPS constants (MAX_FILES, etc.), React components (arrow functions, forwardRef, memo, styled), and immutable values. State stores dropped from 825 false positives to ~150 real ones. Removed module.exports scanning that classified every exported function as a store.
-- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist. No longer defaults to `node-project` for Rust+TS monorepos.
-- **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses angle brackets instead.
+- **Critical bug fixes**: Fixed `should_ignore_dir` missing from utils.py (broke ALL 41 commands), frontend registry deletion cleanup (data never removed from incremental scans), 8 missing `ask` command handlers
+- **Rust parser impl_for fix**: `impl_for` context no longer leaks to sibling functions outside impl blocks
+- **Circular dependency `../` import detection**: Now catches parent-directory imports (`import X from '../utils'`)
+- **SearchConfig & FrontendRegistryInput dataclasses**: Eliminates `many_params` code smell
+- **Package manager detection**: bun, pnpm, yarn, npm from lock files
+- **tRPC / oRPC framework detection**
+- **Convention engine file limits**: `MAX_FILES_PER_CATEGORY = 500` to prevent slow scans on huge codebases
+- **12 engines now use shared logger**: No more silent error swallowing
 
 ## What's New in v5
 

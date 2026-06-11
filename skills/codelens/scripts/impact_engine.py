@@ -67,6 +67,22 @@ def analyze_impact(
         # Find target nodes
         target_nodes = node_by_fn.get(name, [])
 
+        # v6.1: Fuzzy matching fallback — try substring/prefix match if exact match fails
+        if not target_nodes:
+            name_lower = name.lower()
+            # Try prefix match first (e.g., "create" matches "createDocument")
+            prefix_matches = [n for fn, nodes in node_by_fn.items()
+                              if fn.lower().startswith(name_lower) for n in nodes]
+            if prefix_matches:
+                target_nodes = prefix_matches
+            else:
+                # Try substring match (e.g., "sign" matches "signDocument")
+                substring_matches = [n for fn, nodes in node_by_fn.items()
+                                     if name_lower in fn.lower() for n in nodes]
+                # Limit fuzzy results to avoid overwhelming output
+                if substring_matches:
+                    target_nodes = substring_matches[:20]
+
         for target_node in target_nodes:
             target_id = target_node["id"]
 
@@ -182,8 +198,10 @@ def analyze_impact(
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
 
+        name_lower = name.lower()
         for cls in frontend.get("classes", []):
-            if cls["name"] == name:
+            # v6.1: Also try fuzzy match on class names
+            if cls["name"] == name or name_lower in cls["name"].lower() or cls["name"].lower().startswith(name_lower):
                 # Who uses this class in JS/TSX
                 for js_ref in cls.get("js", []):
                     affected["direct"].append({
@@ -355,6 +373,7 @@ def analyze_impact(
         "action": action,
         "risk": risk,
         "affected": affected,
+        "fuzzy_match": name not in node_by_fn if node_by_fn else False,
         "stats": {
             "direct_dependents": direct_count,
             "indirect_dependents": indirect_count,

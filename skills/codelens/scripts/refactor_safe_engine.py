@@ -291,63 +291,88 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
 
 
 def _find_dynamic_access(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
-    """Find dynamic property access patterns that might reference the symbol."""
+    """Find dynamic property access patterns that might reference the symbol.
+
+    Only flags patterns where the symbol name actually appears as a
+    computed property key (e.g., obj['symbolName']), NOT generic
+    Object.keys/values/entries or for-in loops that happen to be on
+    the same line as an unrelated mention of the name.
+    """
     refs = []
     lines = content.split('\n')
 
-    patterns = [
-        r'(?:window|global|globalThis|this)\s*\[\s*["\']' + re.escape(name) + r'["\']\s*\]',
-        r'\w+\s*\[\s*["\']' + re.escape(name) + r'["\']\s*\]',
-        r'Object\.keys\s*\(',
-        r'Object\.values\s*\(',
-        r'Object\.entries\s*\(',
-        r'for\s*\(\s*(?:const|let|var)\s+\w+\s+in\s+',
-        r'Reflect\.(?:get|set|has|ownKeys)',
-        r'getattr\s*\(',
-        r'hasattr\s*\(',
-    ]
+    # Pattern 1: Direct bracket access with the symbol name as string key
+    # e.g., obj['symbolName'], window['symbolName'], this['symbolName']
+    direct_bracket_pattern = (
+        r'(?:\w+|window|global|globalThis|this)\s*\[\s*["\']'
+        + re.escape(name)
+        + r'["\']\s*\]'
+    )
+
+    # Pattern 2: Computed property where name appears as a variable
+    # e.g., obj[dynamicVar] where dynamicVar could hold 'symbolName'
+    # We only flag this if the name itself appears as a nearby variable assignment
+    computed_var_pattern = (
+        r'(?:const|let|var)\s+'
+        + re.escape(name)
+        + r'\s*='
+    )
 
     for i, line in enumerate(lines):
-        for pattern in patterns:
-            if re.search(pattern, line):
-                # Only flag if the name could be dynamically accessed
-                if name in line or 'keys' in line or 'entries' in line or 'ownKeys' in line:
-                    refs.append({
-                        "file": rel_path,
-                        "line": i + 1,
-                        "risk": "high",
-                        "message": f"Dynamic access pattern that may reference '{name}'"
-                    })
-                    break
+        # Direct bracket access — high risk
+        if re.search(direct_bracket_pattern, line):
+            refs.append({
+                "file": rel_path,
+                "line": i + 1,
+                "risk": "high",
+                "message": f"Dynamic bracket access with '{name}' as string key"
+            })
+            continue
+
+        # Variable named the same as the symbol used in bracket access
+        if re.search(computed_var_pattern, line):
+            # Check if nearby lines use bracket access
+            context_start = max(0, i - 2)
+            context_end = min(len(lines), i + 3)
+            context = '\n'.join(lines[context_start:context_end])
+            if re.search(r'\w+\s*\[', context):
+                refs.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "risk": "medium",
+                    "message": f"Variable '{name}' may be used in dynamic property access"
+                })
 
     return refs
 
 
 def _find_eval_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
-    """Find eval/Function calls that could reference the symbol."""
+    """Find eval/Function calls that could reference the symbol.
+
+    Only flags if the symbol name appears within the eval/Function argument
+    string, avoiding false positives from unrelated eval calls.
+    """
     refs = []
     lines = content.split('\n')
 
     eval_patterns = [
         r'eval\s*\(',
         r'new\s+Function\s*\(',
-        r'setTimeout\s*\(\s*["\']',
-        r'setInterval\s*\(\s*["\']',
-        r'exec(?:Sync)?\s*\(',
-        r'subprocess\.(?:call|run|Popen)',
-        r'os\.system\s*\(',
     ]
 
     for i, line in enumerate(lines):
         for pattern in eval_patterns:
             if re.search(pattern, line):
-                refs.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "risk": "critical",
-                    "message": f"eval/exec that may dynamically reference '{name}'"
-                })
-                break
+                # Only flag if the symbol name appears in the same line
+                # as the eval/Function call — otherwise it's unrelated
+                if name in line:
+                    refs.append({
+                        "file": rel_path,
+                        "line": i + 1,
+                        "risk": "critical",
+                        "message": f"eval/Function that contains reference to '{name}'"
+                    })
+                    break
 
     return refs
 

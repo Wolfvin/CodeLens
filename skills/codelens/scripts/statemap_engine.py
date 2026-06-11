@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -1007,15 +1007,29 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
 # ─── Module-level State (JS) ───────────────────────────────────
 
 def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract module-level global variables and singletons in JS/TS."""
+    """Extract module-level global variables and singletons in JS/TS.
+
+    Filters out common false positives:
+    - ALL_CAPS constants (enums, config) that are primitive values
+    - i18n/locale translation objects
+    - Type/Interface declarations
+    - React component exports (functional components)
+    - CSS/style objects
+    """
     stores = []
     flow = []
 
-    # Skip obvious config files and test files
-    if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
+    # Skip obvious config files, test files, and locale/i18n files
+    skip_path_patterns = [
+        '.test.', '.spec.', '.config.', 'jest.', 'webpack.',
+        '/locales/', '/locale/', '/i18n/', '/intl/', '/lang/',
+        '/translations/', '/l10n/', '/messages/',
+        '.d.ts',  # TypeScript declaration files
+    ]
+    if any(x in rel_path for x in skip_path_patterns):
         return {"stores": [], "flow": []}
 
-    # v6: Expanded skip list for constants that are NOT mutable state.
+    # Expanded skip list for constants that are NOT mutable state.
     # ALL_CAPS patterns are immutable constants, not state stores.
     # PascalCase patterns that are React components or class instantiations
     # are also not state.
@@ -1031,7 +1045,22 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         'WIDTH', 'HEIGHT', 'DEPTH', 'OFFSET', 'INDEX', 'COUNT',
         'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
         'PATTERN', 'REGEX', 'MASK', 'TEMPLATE', 'SCHEMA',
+        # Additional config constant prefixes/suffixes from tauri-ipc
+        'BASE_URL', 'BASE_PATH', 'API_URL', 'API_KEY', 'API_BASE',
+        'NODE_ENV', 'APP_ENV', 'APP_NAME', 'APP_VERSION',
+        'RETRY', 'MAX_RETRIES', 'MAX_LENGTH', 'MAX_SIZE',
+        'COLORS', 'BREAKPOINTS', 'Z_INDEX',
     }
+
+    # Names that are likely config/enums (contain common suffixes)
+    config_suffixes = ('_URL', '_URI', '_PATH', '_PORT', '_HOST', '_KEY',
+                       '_SECRET', '_TOKEN', '_ENV', '_VERSION', '_NAME',
+                       '_TYPE', '_STATUS', '_CODE', '_ID', '_COLOR',
+                       '_SIZE', '_WIDTH', '_HEIGHT', '_TIMEOUT', '_RETRY',
+                       '_MAX', '_MIN', '_DEFAULT', '_CONFIG', '_ENABLED',
+                       '_DISABLED', '_PREFIX', '_SUFFIX', '_LABEL',
+                       '_TITLE', '_DESC', '_DESCRIPTION', '_MSG', '_TEXT')
+
 
     lines = content.split('\n')
     for i, line in enumerate(lines):
@@ -1043,7 +1072,7 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             var_name = m.group(1)
             value_part = m.group(2).strip() if m.group(2) else ""
 
-            # v6: Skip ALL_CAPS constants — they are immutable, not state.
+            # Skip ALL_CAPS constants — they are immutable, not state.
             # A name like MAX_FILES, FETCH_TIMEOUT_MS, COLORS, THEME, VARIANTS is a constant.
             if var_name == var_name.upper() and len(var_name) > 2:
                 continue
@@ -1052,7 +1081,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
                 continue
 
-            # v6: Skip React components — PascalCase + arrow function or function
+            # Skip names ending with config/enum suffixes
+            if any(var_name.endswith(s) for s in config_suffixes):
+                continue
+
+            # Skip React components — PascalCase + arrow function or function
             # A line like "const Logo = () =>" or "const Button = function" is NOT state.
             # Also handles: "const X: React.FC<Props> = () =>", "const X = forwardRef(...)",
             # "const X = memo(...)", "const X = styled.div(...)", etc.
@@ -1085,7 +1118,7 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if any(var_name.endswith(s) for s in _CONFIG_SUFFIXES):
                 continue
 
-            # v6: Skip class instantiations of known non-state patterns
+            # Skip class instantiations of known non-state patterns
             # "const x = createSomething()" is a factory, not necessarily state
             # But "const x = createStore()" IS state
             if re.match(r'create(?!Store|Context|Slice|Reducer|State)', value_part):
@@ -1138,10 +1171,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
-    # v6: Skip module.exports scanning — it produces massive false positives.
+    # Skip module.exports scanning — it produces massive false positives.
     # Every exported utility function gets classified as a "state store",
     # which is incorrect. Module exports are API surfaces, not state.
     # Only track stateful singletons (already handled above).
+
 
     return {"stores": stores, "flow": flow}
 

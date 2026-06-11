@@ -78,6 +78,11 @@ SIDE_EFFECT_PATTERNS = {
             r"io\s*\.\s*(?:emit|on)\s*\(",  # Socket.io
             r"reqwest::",
             r"ureq::",
+            # ── Rust network side effects ──
+            r"hyper::",
+            r"warp::",
+            r"actix_web::",
+            r"tonic::",
         ],
         "label": "network_request",
         "severity": "high"
@@ -94,6 +99,15 @@ SIDE_EFFECT_PATTERNS = {
             r"with\s+open",
             r"logging\.",
             r"log::",
+            # ── Rust IO side effects ──
+            r"println!",
+            r"eprintln!",
+            r"dbg!",
+            r"std::process::Command",
+            r"process::Command",
+            r"fs::(?:read|write|create|remove|rename|copy|canonicalize|metadata|File)",
+            r"tokio::fs::",
+            r"tokio::io::",
         ],
         "label": "io_operation",
         "severity": "low"
@@ -131,6 +145,12 @@ SIDE_EFFECT_PATTERNS = {
             r"\.query\s*\(",
             r"\.execute\s*\(",
             r"\.run\s*\(",
+            # ── Rust external side effects ──
+            r"app_handle",
+            r"tauri::api::",
+            r"tokio::spawn",
+            r"std::thread::spawn",
+            r"\.await",
         ],
         "label": "external_service",
         "severity": "high"

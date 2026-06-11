@@ -82,24 +82,21 @@ SECRET_PATTERNS = {
         "severity": "critical",
         "category": "password",
         "patterns": [
-            # Generic password assignments
+            # Generic password assignments (MUST have quotes around value)
             r'(?i)(?:password|passwd|pwd)\s*(?:=|:)\s*["\']([^"\']{6,})["\']',
             # Environment variable style
             r'(?i)(?:DB_PASSWORD|DATABASE_PASSWORD|MYSQL_PASSWORD|POSTGRES_PASSWORD|PG_PASSWORD|MONGO_PASSWORD|REDIS_PASSWORD)\s*(?:=|:)\s*["\']?([^\s"\'`]{6,})["\']?',
-            # URL-embedded passwords: user:pass@
+            # URL-embedded passwords: user:pass@  (requires @ and domain after)
             r'(?i)[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
-            # Config-style password
+            # Config-style password (JSON key-value)
             r'(?i)["\']password["\']\s*:\s*["\']([^"\']{6,})["\']',
-            # Python-style
+            # Python-style (MUST have quotes around value)
             r'(?i)password\s*=\s*["\']([^"\']{6,})["\']',
             # Java properties style
             r'(?i)(?:spring\.datasource\.password|jdbc\.password)\s*=\s*([^\s]{6,})',
-            # YAML-style passwords — ONLY match when value is a quoted string or a bare literal.
-            # Avoid false positives from JS/TS object property assignments like:
-            #   password: videoRef.meetingPassword,
-            #   password: user.password,
-            # Match: password: "literal" or password: 'literal' or password: literal_value
-            # Skip: password: something.property or password: something?.optional
+            # YAML-style passwords (MUST have quotes around value)
+            # Note: Only matches quoted values to avoid false positives on
+            # `password: someVariable` or `password: data.password`
             r'(?i)password:\s*["\']([^"\']{6,})["\']',
             # PHP-style
             r"(?i)(?:DB_PASS|DB_PASSWORD|DATABASE_PASS)\s*(?:=|:)\s*[\"']([^\"']{6,})[\"']",
@@ -258,10 +255,17 @@ SAFE_VALUE_PATTERNS = [
     r'(?i)^(true|false|null|none|undefined|nil)$',
     r'^\*+$',   # All asterisks
     r'(?i)^(password|secret|token|key)$',  # Just the word itself
-    # Variable references (not hardcoded strings) — common in JS/TS object properties
-    # e.g., "password: videoRef.meetingPassword" or "password: config.secret"
-    # These contain dots (property access) or optional chaining (?.)
-    r'(?i)^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*|\?\.[a-zA-Z_$][\w$]*)+',
+    # Rust / Swift / Kotlin type annotations — not actual secrets
+    r'^(String|Option|Some|None|Result|Ok|Err|Vec|Box|Arc|Rc|Cell|RefCell|Cow|HashMap|HashSet|BTreeMap|BTreeSet|Duration|Instant|PathBuf|IpAddr|Ipv4Addr|Ipv6Addr|SocketAddr|Url|Uri|DateTime|OffsetDateTime|NaiveDateTime|Uuid)',
+    r'^(bool|i8|i16|i32|i64|i128|isize|u8|u16|u32|u64|u128|usize|f32|f64|char|str)',
+    # Rust generic type parameters (e.g., Option<String>, Result<bool, Error>)
+    r'^[A-Z][A-Za-z0-9]+<[A-Za-z0-9_,\s]+>$',
+    # Common function calls wrapping a type (e.g., Some("value"))
+    r'^Some\(',
+    # decode/encode function names (not secrets)
+    r'(?i)^(decode|encode|decrypt|encrypt|hash|verify|validate|escape|unescape)$',
+    # Translation/localization keys
+    r'(?i)^(password_field|password_label|password_hint|password_confirm|password_reset|password_new|password_current|password_enter|password_forgot|password_change|password_required|password_strength|password_mismatch)$',
 ]
 
 # .env variable name patterns that indicate secrets
@@ -401,6 +405,11 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str,
     """Scan file content for known secret patterns."""
     findings = []
 
+    # Skip i18n/locale JSON files — they contain translated "password" etc.
+    # which are not real secrets, just UI labels
+    if _is_locale_file(rel_path):
+        return findings
+
     for category, definition in SECRET_PATTERNS.items():
         for pattern in definition["patterns"]:
             try:
@@ -415,6 +424,23 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str,
 
                     # Skip safe/false-positive values
                     if _is_safe_value(raw_value):
+                        continue
+
+                    # Context-aware false-positive filtering for Rust files
+                    # Rust type annotations like `password: String` or `password: Option<String>`
+                    # are NOT secrets — they are struct field declarations
+                    if ext == '.rs' and _is_rust_type_annotation(content, match.start(), raw_value):
+                        continue
+
+                    # Skip JSON/YAML/TOML values that are clearly type references
+                    # e.g., "type": "password" in config schemas
+                    if ext in ('.json', '.yaml', '.yml', '.toml') and _is_schema_type_ref(content, match.start(), raw_value):
+                        continue
+
+                    # Skip JS/TS property assignments where the value is a variable reference,
+                    # function call, or expression — not a hardcoded string literal.
+                    # e.g., `password: someVariable`, `password: func(args)`, `password: obj.prop`
+                    if ext in ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx') and _is_js_property_assignment(content, match.start(), raw_value):
                         continue
 
                     # Mask the value for safe reporting
@@ -731,6 +757,156 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
+
+
+def _is_locale_file(rel_path: str) -> bool:
+    """Check if a file is an i18n/locale translation file.
+
+    Locale files contain translated strings like "password", "secret", etc.
+    These are UI labels, not actual credentials.
+    """
+    locale_indicators = [
+        '/locales/', '/locale/', '/i18n/', '/lang/', '/languages/',
+        '/translations/', '/messages/', '/intl/',
+        'locales/', 'locale/', 'i18n/', 'lang/', 'languages/',
+    ]
+    # Check if it's a JSON file in a locale directory
+    if rel_path.endswith('.json'):
+        for indicator in locale_indicators:
+            if indicator in rel_path:
+                return True
+    return False
+
+
+def _is_rust_type_annotation(content: str, match_start: int, raw_value: str) -> bool:
+    """Check if a password/secret match in a Rust file is actually a type annotation
+    or a non-string-literal value.
+
+    Rust struct fields look like:
+        password: String
+        password: Option<String>
+        secret_key: &'static str
+
+    Rust struct initialization with variable values:
+        password: verge.webdav_password.clone().unwrap_or_default()
+        password: config.password.clone()
+
+    These are NOT hardcoded secrets — they are type declarations or variable references.
+    """
+    # Look at the surrounding context (100 chars before the match)
+    context_start = max(0, match_start - 100)
+    context = content[context_start:match_start + len(raw_value) + 100]
+
+    # Check the full line containing the match
+    line_start = context.rfind('\n', 0, match_start - context_start) + 1
+    line_end = context.find('\n', match_start - context_start)
+    if line_end == -1:
+        line_end = len(context)
+    line = context[line_start:line_end].strip()
+
+    # Rust struct field pattern: `field_name: Type`
+    # Check if the line looks like a struct field declaration
+    # Pattern: word colon followed by a type (not = sign)
+    if re.search(r'\b\w+\s*:\s*(?:Option<)?(?:String|bool|i32|i64|u32|u64|f32|f64|Vec|Box|Arc|Rc|PathBuf|Url|Uri|Cow|HashMap|Duration|Instant|char|str|IpAddr)', line):
+        return True
+
+    # Rust struct field with reference: `password: &'static str`
+    if re.search(r"\b\w+\s*:\s*(?:&'?\w*\s+)?str\b", line):
+        return True
+
+    # Check if it's a function parameter type annotation: `password: &str`
+    if re.search(r'\b\w+\s*:\s*(?:&str|&mut\s+str|&String)\b', line):
+        return True
+
+    # Derive/attribute context: #[derive(...)] or struct definition nearby
+    if re.search(r'#\[derive\(|\bstruct\s+\w+', line):
+        return True
+
+    # Rust struct initialization with variable/method chain:
+    # `password: some_var.clone()` or `password: config.password.clone()`
+    # `password: value.unwrap_or_default()` etc.
+    # These are NOT hardcoded secrets
+    if re.search(r'\b\w+\s*:\s*\w+', line) and not re.search(r'\b\w+\s*:\s*["\']', line):
+        # If the value after colon is NOT a string literal, it's a variable reference
+        return True
+
+    return False
+
+
+def _is_schema_type_ref(content: str, match_start: int, raw_value: str) -> bool:
+    """Check if a password/secret match in a JSON/YAML/TOML file is a schema type reference.
+
+    Config schemas often have entries like:
+        { "type": "password" }
+        { "format": "password" }
+
+    These describe the input type, not an actual secret value.
+    """
+    context_start = max(0, match_start - 80)
+    context = content[context_start:match_start + len(raw_value) + 30]
+
+    # JSON schema "type": "password" or "format": "password"
+    if re.search(r'["\'](?:type|format|input_type|widget)["\']\s*:\s*["\']password["\']', context):
+        return True
+
+    # YAML/TOML: type = "password" or type: password
+    if re.search(r'(?:type|format|input_type)\s*[=:]\s*["\']?password["\']?', context):
+        return True
+
+    return False
+
+
+def _is_js_property_assignment(content: str, match_start: int, raw_value: str) -> bool:
+    """Check if a password/secret match in a JS/TS file is a property assignment
+    with a non-literal value (variable reference, function call, etc.).
+
+    Examples that are NOT secrets:
+        password: someVariable
+        password: func(args)
+        password: obj.prop
+        password: arr[index]
+
+    Only `password: "hardcoded_string"` is an actual secret.
+    """
+    context_start = max(0, match_start - 60)
+    context_end = min(len(content), match_start + len(raw_value) + 60)
+    context = content[context_start:context_end]
+
+    # Check the line containing the match
+    line_start = context.rfind('\n', 0, match_start - context_start) + 1
+    line_end = context.find('\n', match_start - context_start)
+    if line_end == -1:
+        line_end = len(context)
+    line = context[line_start:line_end].strip()
+
+    # If the value after the colon is NOT a string literal, it's a variable reference
+    # Pattern: `password: someVar` or `password: func()` or `password: obj.prop`
+    # A real secret would be: `password: "actual_secret_value"`
+    # The captured group already stripped quotes, so raw_value is the content without quotes.
+    # But we can check if the original match context shows it's not a string literal.
+    # Look at the character right after the colon/equals and before the value
+    match_in_context = match_start - context_start
+    before_value = context[max(0, match_in_context - 5):match_in_context]
+    after_value = context[match_in_context + len(raw_value):match_in_context + len(raw_value) + 5]
+
+    # If the value is preceded by a quote, it's a real string literal — keep it
+    # If preceded by a variable name or function call, it's not a hardcoded secret
+    if re.search(r'[:=]\s*[a-zA-Z_$]', before_value.lstrip()[-2:] + raw_value[:1]):
+        # Check if the value starts with a known JS/TS identifier pattern
+        # (not a string literal since we already extracted the content from quotes)
+        # The raw_value was extracted from quotes, so if the original line has
+        # quotes around it, it's a real string.
+        # If the original line has no quotes, it's a variable reference.
+        if not re.search(r'[:=]\s*["\']', before_value + context[match_in_context:match_in_context + 1]):
+            # No quotes around value — it's a variable reference or expression
+            return True
+
+    # Also check if the line pattern looks like a property assignment with expression
+    if re.match(r'.*\b(?:password|passwd|pwd|secret|token)\s*:\s*[a-zA-Z_$]', line):
+        return True
+
+    return False
+
 
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""
