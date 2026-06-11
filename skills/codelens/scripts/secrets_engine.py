@@ -685,11 +685,10 @@ def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
                 is_covered = True
                 break
             # Check if the pattern matches the filename
-            if re.match(pattern.replace('*', '.*'), filename):
-                is_covered = True
-                break
-            # Check if the pattern matches the full path
-            if re.match(pattern.replace('*', '.*'), env_path):
+            # Use re.search instead of re.match for path-based patterns,
+            # and escape regex-special chars before replacing glob wildcard
+            safe_pattern = re.escape(pattern).replace(r'\.\*', '.*')
+            if re.search(safe_pattern, filename) or re.search(safe_pattern, env_path):
                 is_covered = True
                 break
 

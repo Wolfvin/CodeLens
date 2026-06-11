@@ -112,7 +112,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             # Filter out nodes/edges from deleted files
             del_set = set()
             for df in deleted:
-                rel = os.path.relpath(df, workspace)
+                # df may already be a relative path (from incremental.py);
+                # only re-compute if it's absolute
+                if os.path.isabs(df):
+                    rel = os.path.relpath(df, workspace)
+                else:
+                    rel = df
                 del_set.add(rel)
 
             # Clean backend nodes

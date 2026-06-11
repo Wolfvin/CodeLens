@@ -44,7 +44,6 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".html", ".vue", ".svelte",
-    ".json", ".yaml", ".yml",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)
@@ -133,11 +132,13 @@ PERF_HINT_CATEGORIES = {
                 "fix_suggestion": "Add a dependency array: useEffect(() => {...}, [deps]).",
             },
             # Large component without React.memo export
+            # v6: Only match EXPORTED components — internal helpers don't need memo
             {
-                "regex": r'(?:function|const)\s+[A-Z]\w+\s*(?:=\s*\(|\()\s*(?:props|{)',
+                "regex": r'export\s+(?:default\s+)?(?:function|const)\s+[A-Z]\w+\s*(?:=\s*\(|\()\s*(?:props|{)',
                 "negative_regex": r'React\.memo|memo\(',
-                "hint": "Component is not wrapped in React.memo — may re-render even when props are unchanged",
-                "fix_suggestion": "Wrap the component export with React.memo() if props are shallow-comparable.",
+                "negative_scope": "file",
+                "hint": "Exported component is not wrapped in React.memo — may re-render even when props are unchanged",
+                "fix_suggestion": "Wrap the component export with React.memo() if props are shallow-comparable. Note: React.memo is not always beneficial — only use when props are shallow-comparable and the component is expensive to re-render.",
             },
         ],
     },
@@ -490,6 +491,21 @@ def detect_perf_hints(
     # ─── Deduplicate findings ─────────────────────────────────
     findings = _deduplicate_findings(findings)
 
+    # v6: Per-category cap — if a single category dominates the findings,
+    # emit a summary instead of overwhelming the output.
+    MAX_PER_CATEGORY = 100
+    category_counts = {}
+    capped_findings = []
+    category_overflow = {}
+    for f in findings:
+        cat = f.get("category", "unknown")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+        if category_counts[cat] <= MAX_PER_CATEGORY:
+            capped_findings.append(f)
+        else:
+            category_overflow[cat] = category_overflow.get(cat, 0) + 1
+    findings = capped_findings
+
     # ─── Apply severity filter ────────────────────────────────
     if severity:
         findings = [f for f in findings if f.get("severity") == severity]
@@ -511,7 +527,7 @@ def detect_perf_hints(
         "workspace": workspace,
         "severity_filter": severity,
         "category_filter": category,
-        "stats": stats,
+        "stats": {**stats, "truncated_categories": category_overflow if category_overflow else None},
         "risk": risk,
         "frameworks_detected": detected_frameworks,
         "findings": findings[:200],  # Cap to avoid explosion
@@ -583,13 +599,18 @@ def _scan_file_hints(
                     line_num = content[:match.start()].count('\n') + 1
 
                     # Apply negative regex: if the negative pattern exists in the
-                    # matched region (expanded to a reasonable context window),
-                    # skip this match.
+                    # matched region, skip this match.
                     if negative_regex:
-                        # Expand context to a ~20-line window around the match
-                        context_start = max(0, match.start() - 2000)
-                        context_end = min(len(content), match.end() + 2000)
-                        context_window = content[context_start:context_end]
+                        # v6: Check scope for negative regex
+                        # 'file' scope = check entire file content (for patterns like memo)
+                        # default = check ~20-line window around the match
+                        neg_scope = pattern_def.get('negative_scope', 'window')
+                        if neg_scope == 'file':
+                            context_window = content
+                        else:
+                            context_start = max(0, match.start() - 2000)
+                            context_end = min(len(content), match.end() + 2000)
+                            context_window = content[context_start:context_end]
 
                         # For backreference patterns like \1, we need to resolve them
                         resolved_neg = negative_regex

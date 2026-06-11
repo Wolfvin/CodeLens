@@ -28,6 +28,12 @@ Tested against 3 diverse, large open-source repositories:
 
 ### Added
 
+- **`safe_read_file` utility**: Centralized file reading with size limits, encoding handling, and error recovery. Prevents crashes from missing/unreadable files. Available in `utils.py` for all engines.
+- **Multi-match query results**: `query` command now returns ALL matching definitions instead of just the first one. When multiple matches exist, returns a structured summary with `match_count` and per-match details. Single matches still return full detail with callers/callees.
+- **Per-category cap for perf-hint**: Categories exceeding 100 findings are truncated with overflow count reported in `stats.truncated_categories`. Prevents overwhelming output on large repos.
+- **File-wide negative regex scope**: `negative_scope: "file"` in perf-hint patterns checks the entire file for negative patterns (not just a 4000-char window). Used for React.memo detection to correctly identify files that wrap ANY component in memo.
+- **Config suffix filtering for state-map**: Skips variables ending with common config/constant suffixes (Config, Options, Props, Variants, Theme, Colors, Schema, Tokens, etc.) to reduce false positives.
+- **Technical term guard in ask symbol extraction**: Prevents routing keywords like "complex", "complexity", "circular" from being extracted as symbol names when ask falls through to context.
 - **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
 - **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.
 - **Monorepo-aware init config** (`scripts/framework_detect.py`): `get_recommended_config()` now generates correct `frontend_paths` and `backend_paths` for monorepo Tauri projects (e.g., `apps/readest-app/src/` for frontend, `apps/readest-app/src-tauri/src/` for backend).
@@ -35,19 +41,38 @@ Tested against 3 diverse, large open-source repositories:
 - **New framework signatures** (`scripts/framework_detect.py`): Added detection for `trpc`, `orpc`, `zustand`, `redux`, and `vite` frameworks/packages.
 - **SearchConfig dataclass** (`scripts/search_engine.py`): Introduced `SearchConfig` dataclass to replace the 11-parameter `search_workspace()` function. The old function is preserved for backward compatibility and now delegates to `search_with_config(cfg)`. This eliminates the `many_params` code smell (11 → 2 parameters) and makes call sites self-documenting.
 - **FrontendRegistryInput dataclass** (`scripts/registry.py`): Introduced `FrontendRegistryInput` dataclass to replace the 9-parameter `build_frontend_registry()` function. Legacy function preserved for backward compatibility, delegates to `build_frontend_registry_from_input(inp)`. Eliminates the `many_params` code smell (9 → 1 parameter).
-- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
-- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
+- **Binary artifact scanning** (`scripts/utils.py`): Added `scan_binary_artifacts()` function to detect executables, shared libraries, compiled objects, and build output directories. Includes build system detection and recommendations.
 - **Missing logger import fix** (`scripts/framework_detect.py`): Added `logger` import from `utils` — the module was referencing `logger.debug()` without importing it, causing `NameError` at runtime when parsing requirements.txt/pyproject.toml failed.
+
+### Changed
+
+- **Ask scoring formula**: Coverage bonus now only applies when 2+ keywords match from a pattern. Previously, patterns with many keywords (like the complexity pattern with 5 keywords) were penalized when only one matched, causing "show me" (weight 1) to outrank "complexity" (weight 3).
+- **Default keyword weight**: Reduced from 2 to 1 for unknown words. Technical terms should always score higher via explicit weights.
+- **Word-boundary matching for ask**: Single-word keywords now use `\b` boundary matching to prevent false positives like "established" matching "state".
+- **React.memo detection scope**: Only flags EXPORTED components (regex requires `export` prefix). Internal helper functions and non-exported components are no longer flagged.
+- **perf-hint fix suggestion**: React.memo suggestion now includes caveat that memo is not always beneficial.
+- **SOURCE_EXTENSIONS for perf-hint**: Removed `.json`, `.yaml`, `.yml` — config files should not be performance-scanned.
+- **ALL_CAPS constant skip in state-map**: Now matches single-word ALL_CAPS (e.g., `COLORS`, `THEME`, `VARIANTS`), not just underscore-separated names.
+- **Dead code status for exported/components**: Functions marked as `exported` or `component` are no longer classified as "dead" even with zero ref_count. These are consumed externally (e.g., JSX `<Component/>`).
+- **Limit parameter semantics**: `limit=0` now correctly returns all results (was inconsistent).
+- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
+- **Tauri+React monorepo JSX mode** (`scripts/framework_detect.py`): JSX mode is now correctly enabled when both React and Tauri are detected in a monorepo.
 
 ### Fixed
 
+- **CRITICAL: `safe_read_file` ImportError crash**: `a11y_engine.py` imported `safe_read_file` from `utils.py` which didn't exist. Added the missing function to `utils.py`.
+- **Ask routing for "show me the most complex functions"**: Now correctly routes to `complexity` command instead of falling through to `context` with symbol name "most".
+- **Query returns only first match**: Querying "Button" on a large codebase with dozens of Button components now returns all matches instead of just the first one.
+- **7086 expensive_renders false positives**: Reduced by requiring `export` prefix and file-wide memo check. Typical reduction: 7086 → ~200 on shadcn/ui.
+- **408 false "global" stores in state-map**: Reduced by skipping ALL_CAPS single-word constants, React HOC wrappers (React.memo, React.forwardRef), factory functions, and config suffix patterns.
+- **Dataflow only finds first sink**: Source→sink analysis now collects ALL reachable sinks per source, not just the first one. Catches taint violations where the same user input reaches multiple sinks.
+- **Dataflow `.value` pattern too broad**: Replaced overly broad `\.value\s*` regex with DOM-specific patterns (target.value, input.value, etc.) to prevent massive false positives on any codebase using `.value` properties.
 - **CRITICAL: `should_ignore_dir` missing from utils.py** — The function was imported by `framework_detect.py`, `tailwind_detector.py`, and 40 command modules via the import chain, but never defined in `utils.py`. This caused ALL 41 CLI commands to fail with `ImportError` on startup. Added the function with path-segment-aware matching consistent with `should_ignore()` in scan.py.
 - **CRITICAL: Frontend registry deletion cleanup used nonexistent field** — Incremental scan tried to clean deleted-file entries using `c.get("defined_in")`, but frontend classes use `css`/`js` arrays with `path` fields, and IDs use `defined_in_html`. This meant deleted files' frontend data was NEVER removed from the registry. Rewrote cleanup to properly strip refs by path and recalculate ref_count/status.
 - **CRITICAL: `ask` command missing handlers for 8 commands** — Side-effect, dataflow, missing-refs, ownership, config-drift, stack-trace, and type-infer queries all returned "Unknown command" because `_execute_ask_command` had no handler branches. Added all missing handlers.
 - **HIGH: Rust parser `impl_for` context leaked to sibling functions** — When tree-sitter walked past an `impl_item` to a sibling `function_item` outside the impl block, `current_impl_for` still held the previous impl's type name. Fixed by checking parent ancestry before assigning impl context.
 - **HIGH: Circular dependency detection missed `../` imports** — The import regex only matched `./` relative imports, silently ignoring all parent-directory imports (`import X from '../utils'`). Fixed regex to match `\.{1,2}/` for both `./` and `../`.
 - **HIGH: `vulnscan_engine.py` created its own logger** — Bypassed the shared `utils.get_logger()` which configures handlers and log level, causing all vulnscan debug/warning messages to be silently dropped. Changed to import `logger` from utils.
-- **HIGH: Version mismatch** — `utils.py` had version 5.7.0, `skill.json` and `pyproject.toml` had 5.7.1. Unified to 5.8.0 across all three.
 - **MEDIUM: `scan.py` imported unused `compute_frontend_status`** — Removed dead import.
 - **MEDIUM: `context_engine.py` used raw `open()` instead of `safe_read_file()`** — Could crash on minified/large files. Switched to the safe utility.
 - **MEDIUM: `search_engine.py` used simple set membership for directory ignoring** — Didn't benefit from path-segment-aware matching. Added `should_ignore_dir()` call.
@@ -56,11 +81,8 @@ Tested against 3 diverse, large open-source repositories:
 - **MEDIUM: `convention_engine.py` had no file count limits** — Could be extremely slow on large codebases (10K+ files). Added `MAX_FILES_PER_CATEGORY = 500` sampling limit.
 - **LOW: 12 engine files imported `DEFAULT_IGNORE_DIRS` but not `logger`** — Added `logger` to imports in: smell_engine, debugleak_engine, apimap_engine, envcheck_engine, dependents_engine, dataflow_engine, regexaudit_engine, statemap_engine, complexity_engine, typeinfer_engine, cssdeep_engine, entrypoints_engine.
 
-### Changed
-
-- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
-- **Version bump**: Updated from 5.7.1 to 5.8.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
-- **Tauri+React monorepo JSX mode** (`scripts/framework_detect.py`): JSX mode is now correctly enabled when both React and Tauri are detected in a monorepo.
+- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
+- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
 
 ### Test Target Documentation
 

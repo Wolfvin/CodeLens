@@ -105,45 +105,45 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             }
 
     # ─── Normal name lookup ───────────────────────────
+    # Collect ALL matches across frontend and backend registries,
+    # then decide whether to return a single detailed result or a
+    # multi-match summary.
+    frontend_matches = []
+    backend_matches = []
+
     if domain in (None, "frontend"):
         frontend = load_frontend_registry(workspace)
 
         for cls in frontend.get("classes", []):
             if cls["name"] == query_name:
-                if file_filter and file_filter not in json.dumps(cls):
-                    continue
-                action, action_reason = _get_query_action(cls["status"])
-                return {
-                    "found": True,
+                if file_filter:
+                    all_refs_json = json.dumps(cls.get("css", []) + cls.get("js", []))
+                    if file_filter not in all_refs_json:
+                        continue
+                frontend_matches.append({
                     "type": "class",
                     "domain": "frontend",
                     "name": cls["name"],
                     "ref_count": cls["ref_count"],
                     "status": cls["status"],
-                    "action": action,
-                    "action_reason": action_reason,
-                    "css": cls.get("css", []),
-                    "js": cls.get("js", [])
-                }
+                    "css_count": len(cls.get("css", [])),
+                    "js_count": len(cls.get("js", [])),
+                })
 
         for id_entry in frontend.get("ids", []):
             if id_entry["name"] == query_name:
                 if file_filter and file_filter not in json.dumps(id_entry):
                     continue
-                action, action_reason = _get_query_action(id_entry["status"])
-                return {
-                    "found": True,
+                frontend_matches.append({
                     "type": "id",
                     "domain": "frontend",
                     "name": id_entry["name"],
                     "ref_count": id_entry["ref_count"],
                     "status": id_entry["status"],
-                    "action": action,
-                    "action_reason": action_reason,
-                    "defined_in_html": id_entry.get("defined_in_html", []),
-                    "css": id_entry.get("css", []),
-                    "js": id_entry.get("js", [])
-                }
+                    "html_count": len(id_entry.get("defined_in_html", [])),
+                    "css_count": len(id_entry.get("css", [])),
+                    "js_count": len(id_entry.get("js", [])),
+                })
 
     if domain in (None, "backend"):
         backend = load_backend_registry(workspace)
@@ -153,60 +153,167 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             if node["fn"] == query_name:
                 if file_filter and file_filter not in node.get("file", ""):
                     continue
+                backend_matches.append(node)
 
-                all_callers = deduplicate_callers(
-                    get_callers(node["id"], backend.get("edges", []))
-                )
-                all_callees = get_callees(node["id"], backend.get("edges", []),
-                                           backend.get("nodes", []))
+    # ─── Decide: single detailed result or multi-match summary ────
+    total_matches = len(frontend_matches) + len(backend_matches)
 
-                # Apply limit to callers/callees
-                total_callers = len(all_callers)
-                total_callees = len(all_callees)
-                callers = all_callers[:limit] if limit else all_callers
-                callees = all_callees[:limit] if limit else all_callees
+    if total_matches == 0:
+        return {
+            "status": "ok",
+            "found": False,
+            "query": query_name,
+            "domain": domain or "auto",
+            "action": "CREATE",
+            "action_reason": "Name does not exist. Safe to create."
+        }
 
-                node_status = node.get("status", "active")
-                action, action_reason = _get_query_action(node_status)
-                result = {
-                    "found": True,
-                    "type": "function",
-                    "domain": "backend",
-                    "action": action,
-                    "action_reason": action_reason,
-                    "node": {
-                        "id": node["id"],
-                        "fn": node["fn"],
-                        "ref_count": node.get("ref_count", 0),
-                        "status": node_status,
-                        "file": node.get("file", ""),
-                        "line": node.get("line", 0),
-                        "async": node.get("async", False)
-                    },
-                    "callers": callers,
-                    "callees": callees,
-                    "pagination": {
-                        "callers_total": total_callers,
-                        "callees_total": total_callees,
-                        "callers_shown": len(callers),
-                        "callees_shown": len(callees),
-                        "has_more_callers": total_callers > len(callers),
-                        "has_more_callees": total_callees > len(callees),
-                    }
+    if total_matches == 1:
+        # Single match — return detailed result with callers/callees
+        if frontend_matches:
+            m = frontend_matches[0]
+            # Reload to get full details
+            frontend = load_frontend_registry(workspace)
+            if m["type"] == "class":
+                for cls in frontend.get("classes", []):
+                    if cls["name"] == query_name:
+                        action, action_reason = _get_query_action(cls["status"])
+                        return {
+                            "found": True,
+                            "type": "class",
+                            "domain": "frontend",
+                            "name": cls["name"],
+                            "ref_count": cls["ref_count"],
+                            "status": cls["status"],
+                            "action": action,
+                            "action_reason": action_reason,
+                            "css": cls.get("css", []),
+                            "js": cls.get("js", [])
+                        }
+            else:  # id
+                for id_entry in frontend.get("ids", []):
+                    if id_entry["name"] == query_name:
+                        action, action_reason = _get_query_action(id_entry["status"])
+                        return {
+                            "found": True,
+                            "type": "id",
+                            "domain": "frontend",
+                            "name": id_entry["name"],
+                            "ref_count": id_entry["ref_count"],
+                            "status": id_entry["status"],
+                            "action": action,
+                            "action_reason": action_reason,
+                            "defined_in_html": id_entry.get("defined_in_html", []),
+                            "css": id_entry.get("css", []),
+                            "js": id_entry.get("js", [])
+                        }
+
+        if backend_matches:
+            node = backend_matches[0]
+            all_callers = deduplicate_callers(
+                get_callers(node["id"], backend.get("edges", []))
+            )
+            all_callees = get_callees(node["id"], backend.get("edges", []),
+                                       backend.get("nodes", []))
+
+            # Apply limit to callers/callees
+            total_callers = len(all_callers)
+            total_callees = len(all_callees)
+            callers = all_callers[:limit] if limit and limit > 0 else all_callers
+            callees = all_callees[:limit] if limit and limit > 0 else all_callees
+
+            node_status = node.get("status", "active")
+            action, action_reason = _get_query_action(node_status)
+            result = {
+                "found": True,
+                "type": "function",
+                "domain": "backend",
+                "action": action,
+                "action_reason": action_reason,
+                "node": {
+                    "id": node["id"],
+                    "fn": node["fn"],
+                    "ref_count": node.get("ref_count", 0),
+                    "status": node_status,
+                    "file": node.get("file", ""),
+                    "line": node.get("line", 0),
+                    "async": node.get("async", False)
+                },
+                "callers": callers,
+                "callees": callees,
+                "pagination": {
+                    "callers_total": total_callers,
+                    "callees_total": total_callees,
+                    "callers_shown": len(callers),
+                    "callees_shown": len(callees),
+                    "has_more_callers": total_callers > len(callers),
+                    "has_more_callees": total_callees > len(callees),
                 }
+            }
 
-                if node.get("impl_for"):
-                    result["node"]["impl_for"] = node["impl_for"]
-                if node.get("trait_name"):
-                    result["node"]["trait_name"] = node["trait_name"]
-                if node.get("component"):
-                    result["node"]["component"] = node["component"]
-                if node.get("duplicate_define"):
-                    result["node"]["duplicate_define"] = True
+            if node.get("impl_for"):
+                result["node"]["impl_for"] = node["impl_for"]
+            if node.get("trait_name"):
+                result["node"]["trait_name"] = node["trait_name"]
+            if node.get("component"):
+                result["node"]["component"] = node["component"]
+            if node.get("duplicate_define"):
+                result["node"]["duplicate_define"] = True
 
-                return result
+            return result
 
-        # Fuzzy/substring match in backend (always try when exact match fails)
+    # ─── Multiple matches — return summary list ──────────────
+    matches_summary = []
+
+    for m in frontend_matches:
+        action, action_reason = _get_query_action(m["status"])
+        matches_summary.append({
+            "domain": "frontend",
+            "type": m["type"],
+            "name": m["name"],
+            "status": m["status"],
+            "ref_count": m["ref_count"],
+            "action": action,
+        })
+
+    for node in backend_matches:
+        node_status = node.get("status", "active")
+        action, action_reason = _get_query_action(node_status)
+        summary = {
+            "domain": "backend",
+            "type": "function",
+            "id": node["id"],
+            "fn": node["fn"],
+            "file": node.get("file", ""),
+            "line": node.get("line", 0),
+            "status": node_status,
+            "ref_count": node.get("ref_count", 0),
+            "action": action,
+        }
+        if node.get("component"):
+            summary["component"] = True
+        if node.get("duplicate_define"):
+            summary["duplicate_define"] = True
+        matches_summary.append(summary)
+
+    # Determine best overall action
+    worst_action = "EXTEND"
+    for m in matches_summary:
+        a = m.get("action", "EXTEND")
+        if a == "STOP":
+            worst_action = "STOP"
+            break
+        if a == "ASK" and worst_action not in ("STOP",):
+            worst_action = "ASK"
+        if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
+            worst_action = "LIST_FIRST"
+
+    # Fuzzy/substring match in backend (always try when exact match fails)
+    # Only search backend if domain allows it, and load registry only when needed
+    if domain in (None, "backend"):
+        # backend may already be loaded; only load if not already
+        if 'backend' not in dir():
+            backend = load_backend_registry(workspace)
         query_lower = query_name.lower()
         fuzzy_matches = []
         for node in backend.get("nodes", []):
@@ -240,12 +347,13 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             }
 
     return {
-        "status": "ok",
-        "found": False,
+        "found": True,
+        "type": "multi_match",
         "query": query_name,
-        "domain": domain or "auto",
-        "action": "CREATE",
-        "action_reason": "Name does not exist. Safe to create."
+        "match_count": total_matches,
+        "action": worst_action,
+        "action_reason": f"Found {total_matches} definitions. List all before making changes.",
+        "matches": matches_summary,
     }
 
 

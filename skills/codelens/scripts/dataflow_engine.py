@@ -48,13 +48,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"e\.target\.value",
-            r"this\.value",
-            r"input\.value",
-            r"select\.value",
-            r"textarea\.value",
-            r"form\.\w+\.value",
-            r"target\.value",
+            r"(?:target|currentTarget|element|input|select|textarea|e\.target)\.value",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -92,15 +86,7 @@ SOURCE_PATTERNS = {
     # API/network responses
     "api_responses": {
         "patterns": [
-            r"(?:fetch|axios|http\.get|https\.get|request)\s*\(",
-            # axios method calls: axios.get(), axios.post(), etc.
-            r"axios\.(?:get|post|put|delete|patch|head|options|request)\s*\(",
-            # XMLHttpRequest
-            r"XMLHttpRequest",
-            r"xhr\.(?:open|send)\s*\(",
-            r"\.open\s*\(\s*['\"](?:GET|POST|PUT|DELETE|PATCH)",
-            # jQuery AJAX
-            r"\$\.(?:ajax|get|post|getJSON)\s*\(",
+            r"(?:fetch|axios|http\.get|https\.get|request)\b\s*\(",
             r"\.json\s*\(\s*\)",
             r"response\.data",
             r"resp\.body",
@@ -219,8 +205,8 @@ SANITIZER_PATTERNS = {
             r"\.escape\s*\(",
             r"mysql\.escape\s*\(",
             r"pg\.escape\s*\(",
-            r"\$\{?\d+\}?",  # Parameterized query placeholder
-            r"\?\s*[,\)]",   # Parameterized query placeholder (?)
+            r"\$(?:\{\d+\}|\d+)",  # Parameterized query placeholder ($1 or ${1})
+            r"\?(?:\s*[,\)]|$|\s*;)",   # Parameterized query placeholder (?)
         ],
         "sanitizes_for": {"db_query"},
         "label": "sql_sanitizer"
@@ -481,7 +467,9 @@ def _build_flows(
         for src in file_sources:
             reached_sink = None
 
-            # Find the nearest sink after this source in the same file
+            # Find sinks after this source in the same file
+            # v6: Collect ALL sinks, not just the first one.
+            # A source can flow to multiple sinks (e.g., user input → DB query AND → HTML output)
             for snk in file_sinks:
                 if snk["line"] > src["line"]:
                     # Check if there's a data flow path
@@ -498,7 +486,6 @@ def _build_flows(
                             "reaches_sink": True,
                             "flow_type": "intra_file"
                         })
-                        break
 
             if not reached_sink:
                 # Check cross-file flows
