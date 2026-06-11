@@ -48,7 +48,13 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"\.value\s*",
+            r"e\.target\.value",
+            r"this\.value",
+            r"input\.value",
+            r"select\.value",
+            r"textarea\.value",
+            r"form\.\w+\.value",
+            r"target\.value",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -87,6 +93,14 @@ SOURCE_PATTERNS = {
     "api_responses": {
         "patterns": [
             r"(?:fetch|axios|http\.get|https\.get|request)\s*\(",
+            # axios method calls: axios.get(), axios.post(), etc.
+            r"axios\.(?:get|post|put|delete|patch|head|options|request)\s*\(",
+            # XMLHttpRequest
+            r"XMLHttpRequest",
+            r"xhr\.(?:open|send)\s*\(",
+            r"\.open\s*\(\s*['\"](?:GET|POST|PUT|DELETE|PATCH)",
+            # jQuery AJAX
+            r"\$\.(?:ajax|get|post|getJSON)\s*\(",
             r"\.json\s*\(\s*\)",
             r"response\.data",
             r"resp\.body",

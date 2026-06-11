@@ -3,6 +3,34 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+
+## [5.9.0] — 2026-06-12
+
+### Added
+- **C++/C project detection**: `framework_detect.py` now detects CMakeLists.txt, Makefile, .cc/.cpp/.h/.hpp files. Sets `has_cpp: true` and adds "cmake"/"make"/"cpp" to frameworks list.
+- **Go project detection**: `framework_detect.py` now detects go.mod, go.work, and .go files. Sets `has_go: true` and adds "go" to frameworks list. Also detects Go web frameworks (Gin, Echo, Fiber, Chi, Mux) from go.mod.
+- **C++/Go file scanning**: `scan.py` discover_files() now categorizes .cc/.cpp/.cxx/.c/.h/.hpp/.hxx as "cpp" and .go as "go" in the files_scanned output.
+- **C++/Go entry point patterns**: `entrypoints_engine.py` now detects `int main()` in C++ and `func main()` in Go, plus Go HTTP handlers (net/http, Gin, Echo) and C++ Crow framework routes.
+- **HTTP/network keyword routing in ask command**: Added "http request", "xhr", "fetch", "ajax", "api call", "handler", "request handler" keywords to route natural language queries about HTTP/network to api-map command.
+- **Question word exclusion in ask symbol extraction**: `_extract_symbol_name()` now skips question words (what, how, where, who, etc.) instead of returning them as symbol names.
+- **List command summary**: `list` command now returns a `summary` dict with `by_type` and `by_status` breakdowns for filtered results.
+- **XHR/AJAX patterns in dataflow engine**: Added axios.get/post/put/delete/patch/head/options/request, XMLHttpRequest, xhr.open/xhr.send, and jQuery $.ajax/$.get/$.post patterns to api_responses source detection.
+- **Precise DOM .value patterns**: Replaced overly broad `.value\s*` pattern in dataflow_engine with specific patterns (event.target.value, this.value, input.value, select.value, textarea.value, form.*.value, target.value).
+
+### Fixed
+- **CRITICAL: ask command misroutes "what functions handle HTTP requests?"** — Was parsed as context(name="what") due to missing HTTP/network keywords and question word fallback. Now correctly routes to api-map.
+- **CRITICAL: DragonflyDB and other C++/Go projects invisible** — framework_detect.py returned empty frameworks; scan.py silently dropped .cc/.cpp/.go files. Both now properly detect and categorize these files.
+- **HIGH: Spring Boot @RequestMapping pattern restricted to .py** — Changed to .java (Spring Boot is Java, not Python).
+- **HIGH: .await pattern flagged ALL async Rust as external side effect** — Removed `.await` from "external_service" patterns. Normal Rust async/await is NOT an external side effect.
+- **HIGH: Double-append bug in sideeffect_engine.py** — Last line of function body was appended twice in brace-tracking mode. Fixed by moving append before inner character loop.
+- **MEDIUM: .value\s* pattern matched ANY .value access** — Replaced with 10 specific DOM input patterns to eliminate false positives.
+- **LOW: Redundant `import re` inside function in context_engine.py** — Moved to module-level import.
+
+### Test Repositories Used
+- **dragonflydb/dragonfly** (19MB) — C++ in-memory database with CMake, Makefile, and Go tools. 259 .cc files, 110 Python files, 6 Go files.
+- **axios/axios** (5.5MB) — JavaScript HTTP client library for XHR/network. 201 JS files, 23 TS files.
+
+## [6.0.0] — 2026-06-12
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [5.9.0] — 2026-06-12

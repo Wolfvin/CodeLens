@@ -28,11 +28,10 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".php",
+    ".py", ".rs", ".vue", ".svelte",
+    ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
+    ".go",
 }
-
-# Performance limit for large codebases
-MAX_FILES_PER_RUN = 3000
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
 
@@ -79,21 +78,28 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "rust_main_fn",
             },
-            # Rust async main: #[tokio::main]
+            # C / C++
             {
-                "regex": r'#\[tokio::main\]',
-                "language": {".rs"},
+                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
                 "extract": "handler",
                 "handler_group": 0,
-                "label": "rust_tokio_main",
+                "label": "cpp_main_fn",
             },
-            # Rust actix main: #[actix_web::main]
             {
-                "regex": r'#\[actix_web::main\]',
-                "language": {".rs"},
+                "regex": r'int\s+main\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
                 "extract": "handler",
                 "handler_group": 0,
-                "label": "rust_actix_main",
+                "label": "cpp_main_short",
+            },
+            # Go
+            {
+                "regex": r'func\s+main\s*\(\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "go_main_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -221,7 +227,7 @@ ENTRYPOINT_PATTERNS = {
             # Spring Boot @RequestMapping family
             {
                 "regex": r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
-                "language": {".py"},  # also matches in .java but we don't scan those
+                "language": {".java"},  # Spring Boot is Java, not Python
                 "extract": "spring_route",
                 "label": "spring_mapping",
             },
@@ -248,30 +254,44 @@ ENTRYPOINT_PATTERNS = {
                 "path_group": 1,
                 "label": "trpc_query",
             },
-            # Laravel Route::get/post/put/delete/patch
+            # Go HTTP handlers — net/http
             {
-                "regex": r'Route::(get|post|put|patch|delete|options|any)\s*\(\s*[\'"]([^\'"]+ )[\'"]',
-                "language": {".php"},
-                "extract": "http_route",
-                "method_group": 1,
-                "path_group": 2,
-                "label": "laravel_route",
-            },
-            # Laravel Route::group
-            {
-                "regex": r'Route::group\s*\(',
-                "language": {".php"},
-                "extract": "handler_only",
-                "handler_group": 0,
-                "label": "laravel_route_group",
-            },
-            # Symfony #[Route] attribute
-            {
-                "regex": r'#\[Route\s*\(\s*[\'"]([^\'"]+ )[\'"]',
-                "language": {".php"},
-                "extract": "symfony_route_attr",
+                "regex": r'http\.HandleFunc\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
                 "path_group": 1,
-                "label": "symfony_route_attribute",
+                "label": "go_http_handlefunc",
+            },
+            {
+                "regex": r'http\.Handle\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
+                "path_group": 1,
+                "label": "go_http_handle",
+            },
+            # Go Gin framework
+            {
+                "regex": r'(?:r|router|engine)\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_gin_route",
+                "path_group": 1,
+                "label": "go_gin_handler",
+            },
+            # Go Echo framework
+            {
+                "regex": r'e\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_echo_route",
+                "path_group": 1,
+                "label": "go_echo_handler",
+            },
+            # C++ crow/drogon HTTP handlers
+            {
+                "regex": r'CROW_ROUTE\s*\([^,]+,\s*["\']([^"\']+)["\']',
+                "language": {".cc", ".cpp", ".cxx", ".h", ".hpp"},
+                "extract": "cpp_crow_route",
+                "path_group": 1,
+                "label": "cpp_crow_handler",
             },
         ],
     },
@@ -369,23 +389,6 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "svelte_onmount",
             },
-            # Laravel Event::listen
-            {
-                "regex": r'Event::listen\s*\(\s*[\'"]([^\'" ]+)[\'"]',
-                "language": {".php"},
-                "extract": "event_name",
-                "event_group": 1,
-                "label": "laravel_event_listener",
-            },
-            # Laravel $listen property in EventServiceProvider
-            {
-                "regex": r'[\'"]([\w.]+)[\'"]\s*=>\s*\[',
-                "language": {".php"},
-                "filename_filter": {"EventServiceProvider.php"},
-                "extract": "event_name",
-                "event_group": 1,
-                "label": "laravel_event_provider",
-            },
         ],
     },
 
@@ -457,22 +460,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "structopt_parser",
-            },
-            # Laravel Artisan command signature
-            {
-                "regex": r'protected\s+\$signature\s*=\s*[\'"]([^\'" ]+)[\'"]',
-                "language": {".php"},
-                "extract": "cli_command",
-                "command_group": 1,
-                "label": "laravel_artisan_command",
-            },
-            # Laravel Artisan::command
-            {
-                "regex": r'Artisan::command\s*\(\s*[\'"]([^\'" ]+)[\'"]',
-                "language": {".php"},
-                "extract": "cli_command",
-                "command_group": 1,
-                "label": "laravel_artisan_inline",
             },
         ],
     },
@@ -754,8 +741,7 @@ ENTRYPOINT_PATTERNS = {
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
-    config: Optional[Dict] = None,
-    max_files: int = MAX_FILES_PER_RUN
+    config: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -768,7 +754,6 @@ def map_entrypoints(
         entry_type: Optional filter: "main", "http_handler", "event_handler",
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
-        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -787,7 +772,6 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
-    truncated = False
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -800,11 +784,6 @@ def map_entrypoints(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
-
-            # File-count limit to prevent timeout on huge repos
-            if files_scanned >= max_files:
-                truncated = True
-                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -840,9 +819,6 @@ def map_entrypoints(
                     )
                     entrypoints.extend(file_entrypoints)
 
-        if truncated:
-            break
-
     # ─── Phase 2: Deduplicate ─────────────────────────────────
     entrypoints = _deduplicate_entrypoints(entrypoints)
 
@@ -851,7 +827,6 @@ def map_entrypoints(
 
     # ─── Phase 4: Compute stats ───────────────────────────────
     stats = _compute_stats(entrypoints)
-    stats["truncated"] = truncated
 
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)

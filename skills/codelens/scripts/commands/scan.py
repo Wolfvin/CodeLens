@@ -611,7 +611,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "php": len(files["php"]),
             "blade": len(files["blade"]),
             "vue": len(files["vue"]),
-            "svelte": len(files["svelte"])
+            "svelte": len(files["svelte"]),
+            "cpp": len(files["cpp"]),
+            "go": len(files["go"])
         },
         "python_parsed": len(python_data),
         "php_parsed": len(php_data),
@@ -646,7 +648,9 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "php": [],
         "blade": [],
         "vue": [],
-        "svelte": []
+        "svelte": [],
+        "cpp": [],
+        "go": []
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -706,6 +710,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
+            elif ext in ('.cc', '.cpp', '.cxx', '.c', '.h', '.hpp', '.hxx'):
+                files["cpp"].append(file_path)
+            elif ext == '.go':
+                files["go"].append(file_path)
 
     return files
 

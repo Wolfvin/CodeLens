@@ -4,6 +4,25 @@ import os
 import re
 from typing import Dict, Any, List, Tuple
 
+from context_engine import get_symbol_context
+from search_engine import search_symbols
+from deadcode_engine import detect_dead_code
+from secrets_engine import detect_secrets
+from circular_engine import detect_circular
+from apimap_engine import map_api_routes
+from entrypoints_engine import map_entrypoints
+from smell_engine import detect_smells
+from complexity_engine import compute_complexity
+from impact_engine import analyze_impact
+from trace_engine import trace_symbol
+from testmap_engine import map_test_coverage
+from perfhint_engine import detect_perf_hints
+from vulnscan_engine import scan_vulnerabilities
+from outline_engine import get_workspace_outline
+from envcheck_engine import check_env_vars
+from debugleak_engine import detect_debug_leaks
+from statemap_engine import map_state
+from dependents_engine import get_dependency_graph
 from commands import register_command
 from commands.scan import cmd_scan
 from commands.handbook import cmd_handbook
@@ -41,11 +60,19 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "how to configure": 3, "configuration": 3,
     "not used": 3,
 
+    # HTTP / network keywords (weight 3)
+    "http request": 3, "http requests": 3, "network request": 3, "xhr": 3,
+    "fetch": 3, "ajax": 3, "api call": 3, "api calls": 3,
+    "handler": 3, "handlers": 3, "request handler": 3,
+    "function": 2, "functions": 2, "method": 2, "methods": 2,
+    "handle": 2, "handles": 2, "process": 2, "processes": 2,
+
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
     "trace": 1, "scan": 1, "analyze": 1, "index": 1,
     "where is": 1, "where's": 1, "where does": 1,
     "what is": 1, "what's": 1, "how does": 1, "how is": 1,
+    "what functions": 1, "what methods": 1, "which functions": 1,
     "who imports": 1, "who uses": 1, "who depends": 1,
     "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
 
@@ -151,8 +178,10 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["dead code", "unused code", "unreachable", "zombie", "not used", "never called", "orphan"],
          "dead-code", {}, "high"),
 
-        # API routes
-        (["api route", "api routes", "endpoint", "endpoints", "api map", "rest route", "http route", "graphql"],
+        # API routes / HTTP handlers
+        (["api route", "api routes", "endpoint", "endpoints", "api map", "rest route", "http route",
+          "http request", "http requests", "request handler", "handlers", "xhr", "fetch", "ajax",
+          "api call", "api calls", "network request"],
          "api-map", {}, "high"),
 
         # Circular dependencies
@@ -248,8 +277,7 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
 
         # Detect / tech stack
         (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
-          "what technologies", "stack", "tauri", "electron", "what kind of app",
-          "what type of project", "is this a", "is this an"],
+          "what technologies", "stack"],
          "detect", {}, "high"),
 
         # Env configuration
@@ -352,9 +380,9 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
 
     # Remove common English filler words and type keywords
     for filler in ["the ", "a ", "an ", "this ", "that ", "these ", "those ",
-                   "function ", "class ", "method ", "variable ", "const ",
+                   "function ", "functions ", "class ", "method ", "methods ", "variable ", "const ",
                    "module ", "file ", "component ", "hook ", "type ",
-                   "interface ", "enum "]:
+                   "interface ", "enum ", "handle ", "handles ", "process ", "processes "]:
         cleaned = re.sub(r'^' + re.escape(filler), '', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(re.escape(filler.rstrip()) + r'$', '', cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip()
@@ -370,111 +398,73 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
         return match.group(1).strip()
 
     # Look for identifier-like patterns
-    # Stop words that should NOT be treated as symbol names
-    _stop_words = {
-        'is', 'are', 'was', 'were', 'am', 'be', 'been', 'being',
-        'this', 'that', 'these', 'those', 'it', 'its',
-        'a', 'an', 'the', 'my', 'your', 'our', 'their',
-        'do', 'does', 'did', 'done', 'have', 'has', 'had',
-        'will', 'would', 'could', 'should', 'can', 'may', 'might',
-        'if', 'or', 'and', 'but', 'not', 'no', 'yes',
-        'how', 'what', 'when', 'where', 'who', 'why', 'which',
-        'about', 'with', 'from', 'into', 'for', 'to', 'of', 'in', 'on', 'at',
-        'app', 'project', 'code', 'file', 'codebase', 'program',
-        'good', 'bad', 'clean', 'dirty', 'safe', 'ready',
-    }
-    if cleaned.lower() in _stop_words:
-        return ""
-
     match = re.search(r'[a-z][a-zA-Z0-9]*_[a-zA-Z0-9_]+', cleaned)
     if match:
         return match.group(0)
     match = re.search(r'[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*', cleaned)
     if match:
-        result = match.group(0)
-        if result.lower() not in _stop_words:
-            return result
+        return match.group(0)
     match = re.search(r'[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+', cleaned)
     if match:
         return match.group(0)
 
-    # Fallback: any identifier — but skip stop words
+    # Fallback: any identifier, but skip question words
+    _QUESTION_WORDS = frozenset({
+        'what', 'how', 'where', 'who', 'which', 'when', 'why', 'whose',
+        'whom', 'does', 'do', 'did', 'is', 'are', 'was', 'were',
+        'can', 'could', 'would', 'should', 'will', 'shall',
+        'has', 'have', 'had', 'not', 'no', 'if',
+    })
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
-    if match:
-        result = match.group(0)
-        if result.lower() not in _stop_words:
-            return result
+    if match and match.group(0).lower() not in _QUESTION_WORDS:
         return match.group(0)
 
-    return cleaned if cleaned else ""
+    return cleaned if cleaned and cleaned.lower() not in _QUESTION_WORDS else ""
 
 
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
-    """Execute the determined command with the given args.
-
-    All engine imports are lazy to reduce CLI startup time.
-    Only the engine needed for the specific command is imported.
-    """
+    """Execute the determined command with the given args."""
     if command == "context":
-        from context_engine import get_symbol_context
         return get_symbol_context(args.get("name", ""), workspace)
     elif command == "symbols":
-        from search_engine import search_symbols
         return search_symbols(workspace, args.get("name", ""), domain="all", fuzzy=True)
     elif command == "dead-code":
-        from deadcode_engine import detect_dead_code
         return detect_dead_code(workspace)
     elif command == "secrets":
-        from secrets_engine import detect_secrets
         return detect_secrets(workspace)
     elif command == "circular":
-        from circular_engine import detect_circular
         return detect_circular(workspace)
     elif command == "api-map":
-        from apimap_engine import map_api_routes
         return map_api_routes(workspace)
     elif command == "entrypoints":
-        from entrypoints_engine import map_entrypoints
         return map_entrypoints(workspace)
     elif command == "smell":
-        from smell_engine import detect_smells
         return detect_smells(workspace)
     elif command == "complexity":
-        from complexity_engine import compute_complexity
         return compute_complexity(workspace, sort_by="complexity", limit=30)
     elif command == "impact":
-        from impact_engine import analyze_impact
         return analyze_impact(args.get("name", ""), workspace, action=args.get("action", "modify"))
     elif command == "trace":
-        from trace_engine import trace_symbol
         return trace_symbol(args.get("name", ""), workspace, direction=args.get("direction", "both"))
     elif command == "test-map":
-        from testmap_engine import map_test_coverage
         return map_test_coverage(workspace)
     elif command == "perf-hint":
-        from perfhint_engine import detect_perf_hints
         return detect_perf_hints(workspace)
     elif command == "vuln-scan":
-        from vulnscan_engine import scan_vulnerabilities
         return scan_vulnerabilities(workspace)
     elif command == "outline":
-        from outline_engine import get_workspace_outline
         return get_workspace_outline(workspace)
     elif command == "env-check":
-        from envcheck_engine import check_env_vars
         return check_env_vars(workspace)
     elif command == "debug-leak":
-        from debugleak_engine import detect_debug_leaks
         return detect_debug_leaks(workspace)
     elif command == "state-map":
-        from statemap_engine import map_state
         return map_state(workspace)
     elif command == "scan":
         return cmd_scan(workspace)
     elif command == "handbook":
         return cmd_handbook(workspace)
     elif command == "dependents":
-        from dependents_engine import get_dependency_graph
         return get_dependency_graph(workspace)
     elif command == "css-deep":
         from cssdeep_engine import analyze_css_deep
