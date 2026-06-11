@@ -61,6 +61,13 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "not used": 3,
     "compiled": 3, "binary": 3, "artifact": 3, "built": 3, "minified": 3,
     "wasm": 3, "reverse engineer": 3, "reverse engineering": 3,
+    # IPC / frontend-backend communication terms (weight 3)
+    "ipc": 3, "tauri": 3, "invoke": 3, "bridge": 3,
+    "frontend backend": 3, "frontend-backend": 3, "cross-language": 3,
+    "ipc bridge": 3, "command handler": 3, "ipc handler": 3,
+    "frontend backend relationship": 3, "frontend backend communication": 3,
+    "rust frontend": 3, "native bridge": 3, "ipc channel": 3,
+    "command binding": 3, "exposed function": 3, "plugin command": 3,
 
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
@@ -281,6 +288,20 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         # Env configuration
         (["how to configure", "configuration", "config check", "env setup"],
          "env-check", {}, "high"),
+
+        # ─── IPC / Frontend-Backend / Tauri patterns ───────────
+
+        # IPC communication / frontend-backend bridge
+        (["ipc", "invoke", "bridge", "cross-language", "ipc bridge", "ipc handler",
+          "command handler", "ipc channel", "command binding", "exposed function",
+          "plugin command", "native bridge",
+          "frontend backend", "frontend-backend", "frontend backend relationship",
+          "frontend backend communication", "rust frontend"],
+         "api-map", {}, "high"),
+
+        # How does the frontend talk to the backend / Tauri invoke patterns
+        (["tauri", "tauri ipc", "tauri command", "tauri invoke", "tauri bridge"],
+         "api-map", {}, "high"),
 
         # ─── Generic patterns (scored lower by keyword weight) ────
 

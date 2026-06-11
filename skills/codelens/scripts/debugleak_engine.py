@@ -104,23 +104,43 @@ TEST_SKIP_PATTERNS = [
 ]
 
 MOCK_DATA_PATTERNS = [
+    # Exact compound words (high confidence — these are almost always mock/test data)
     (r'\bfakeData\b', "fakeData"),
-    (r'\bfake[A-Z]\w+', "fakeCamelCase"),
     (r'\bmockData\b', "mockData"),
-    (r'\bmock[A-Z]\w+', "mockCamelCase"),
     (r'\btestData\b', "testData"),
-    (r'\btest[A-Z]\w+', "testCamelCase"),
     (r'\bstubData\b', "stubData"),
-    (r'\bstub[A-Z]\w+', "stubCamelCase"),
     (r'\bfixtureData\b', "fixtureData"),
     (r'\bdummyData\b', "dummyData"),
-    (r'\bdummy[A-Z]\w+', "dummyCamelCase"),
     (r'\bplaceholderData\b', "placeholderData"),
     (r'\bsampleData\b', "sampleData"),
     (r'\bMOCK_\w+', "MOCK_CONSTANT"),
     (r'\bFAKE_\w+', "FAKE_CONSTANT"),
     (r'\bTEST_\w+', "TEST_CONSTANT"),
+    # CamelCase prefix patterns — these need context filtering because
+    # terms like "fakeIp", "testUrl", "testAll" can be legitimate
+    # domain terms (DNS settings, connectivity tests, etc.).
+    # The _detect_mock_data function applies additional context checks.
+    (r'\bfake[A-Z]\w+', "fakeCamelCase"),
+    (r'\bmock[A-Z]\w+', "mockCamelCase"),
+    (r'\btest[A-Z]\w+', "testCamelCase"),
+    (r'\bstub[A-Z]\w+', "stubCamelCase"),
+    (r'\bdummy[A-Z]\w+', "dummyCamelCase"),
 ]
+
+# Known domain-specific terms that use "fake"/"test"/"mock" prefixes
+# but are NOT mock data — they are legitimate business/technical terms.
+# These are typically used in DNS/proxy/networking contexts.
+_KNOWN_LEGITIMATE_PREFIX_TERMS = frozenset({
+    # DNS/networking: "fake" is a technical term (fake IP, fake DNS)
+    'fakeIp', 'fakeIP', 'fakeIpRange', 'fakeIpFilter', 'fakeIpFilterMode',
+    'fakeDns', 'fakeDNS',
+    # Connectivity testing: "test" is an action, not mock data
+    'testUrl', 'testAll', 'testDelay', 'testConnection', 'testProxy',
+    'testConnectivity', 'testLatency', 'testSpeed', 'testEndpoint',
+    'testServer', 'testHost', 'testPort', 'testApi',
+    # Tauri/IPC commands: "test" prefix is for user-facing test features
+    'testDelayUrl',
+})
 
 DEV_ONLY_PATTERNS = [
     (r'\bif\s*\(\s*DEBUG\s*\)', "if (DEBUG)"),
@@ -603,7 +623,12 @@ def _detect_test_skips(
 def _detect_mock_data(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
-    """Detect hardcoded test data in non-test files."""
+    """Detect hardcoded test data in non-test files.
+
+    Applies a domain-specific allowlist to avoid false positives for
+    legitimate business terms that happen to start with "fake", "test",
+    or "mock" (e.g., fakeIp in DNS config, testUrl for connectivity tests).
+    """
     if is_test_file:
         return  # Mock data is expected in test files
 
@@ -622,6 +647,15 @@ def _detect_mock_data(
             m = re.search(pattern, stripped)
             if not m:
                 continue
+
+            matched_text = m.group(0)
+
+            # Filter: skip known legitimate domain terms
+            # e.g., "fakeIp", "testUrl", "testAll" are real DNS/proxy terms
+            if label in ("fakeCamelCase", "testCamelCase", "mockCamelCase",
+                         "stubCamelCase", "dummyCamelCase"):
+                if matched_text in _KNOWN_LEGITIMATE_PREFIX_TERMS:
+                    continue
 
             # Additional check: is this actually an assignment/declaration?
             # We want to avoid flagging function parameters like `mockData` in tests
