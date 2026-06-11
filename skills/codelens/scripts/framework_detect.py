@@ -545,6 +545,43 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_rust_backend"] and cargo_deps:
         detected["has_rust_backend"] = True
 
+    # Also detect Rust project from Cargo.toml presence (even with 0 parsed deps)
+    if not detected["has_rust_backend"]:
+        root_cargo = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(root_cargo):
+            detected["has_rust_backend"] = True
+
+    # Fix module_system for Rust/Python polyglot projects:
+    # If no package.json was found (module_system still None or "cjs" by default)
+    # but we have Cargo.toml or pyproject.toml, set a more accurate module_system.
+    has_cargo = os.path.exists(os.path.join(workspace, "Cargo.toml"))
+    has_pyproject = os.path.exists(os.path.join(workspace, "pyproject.toml"))
+    has_pkg_json = os.path.exists(os.path.join(workspace, "package.json"))
+
+    if not has_pkg_json:
+        if has_cargo and has_pyproject:
+            detected["module_system"] = "rust-python"
+        elif has_cargo:
+            detected["module_system"] = "cargo"
+        elif has_pyproject:
+            detected["module_system"] = "python"
+    elif detected["module_system"] == "cjs" and has_cargo:
+        # Project has both package.json (cjs) and Cargo.toml — polyglot
+        if has_pyproject:
+            detected["module_system"] = "cjs-rust-python"
+        else:
+            detected["module_system"] = "cjs-rust"
+
+    # Detect polyglot project type for framework reporting
+    languages_present = []
+    if has_cargo or detected["has_rust_backend"]:
+        languages_present.append("rust")
+    if has_pyproject or pip_deps:
+        languages_present.append("python")
+    if has_pkg_json:
+        languages_present.append("javascript")
+    detected["languages"] = languages_present
+
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)

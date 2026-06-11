@@ -110,6 +110,23 @@ def map_api_routes(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip test fixtures, examples, and test files — these contain
+            # sample route definitions that are not part of the actual application.
+            # Patterns: /test/, /tests/, /fixtures/, /examples/, /__tests__/,
+            #           files matching *.test.*, *.spec.*, *_test.py, *_test.rs
+            _skip_patterns = [
+                '/test/', '/tests/', '/fixtures/', '/examples/', '/__tests__/',
+                '/test_fixtures/', '/testdata/', '/mock/', '/stubs/',
+            ]
+            rel_path_lower = rel_path.replace('\\', '/').lower()
+            if any(p in rel_path_lower for p in _skip_patterns):
+                continue
+            # Also skip test-named files
+            basename = os.path.splitext(filename)[0].lower()
+            if basename.endswith('.test') or basename.endswith('.spec') or \
+               basename.endswith('_test') or basename.endswith('_spec'):
+                continue
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()

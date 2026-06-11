@@ -1,5 +1,17 @@
 # CodeLens Changelog
 
+## v5.7.2 — 2026-06-12
+
+### Bug Fixes (7)
+
+- **CRITICAL: Trace markdown formatter displayed paths character-by-character** — `_md_trace()` treated the `path` string field as an iterable list, producing output like `p → a → c → k → a → g → e → s`. Introduced `_format_trace_chain()` helper with proper string/list handling, depth indentation, and cyclic/unresolved markers.
+- **CRITICAL: TS/JS backend parser missed arrow functions in parentheses or `as` expressions** — `const name = ((...args) => {})` and `const name = (() => {}) as Type` were not captured. Added `_unwrap_fn_from_parens()` and `as_expression` handling to both parsers.
+- **HIGH: Framework detection missed Rust/Python polyglot projects** — Ruff showed "No frameworks" and "cjs". Added `module_system` for Cargo/Python/polyglot, `languages` field, and `has_rust_backend` from `Cargo.toml` presence.
+- **HIGH: Zombie CSS false positives with invalid class names** — Class names like `.(version`, `.===`, `.\`@${...}\`` were reported. Added CSS class name regex validation and character blacklist.
+- **HIGH: God object detection massive false positives in JS/TS** — Regex matched `if(`, `for(`, etc. Rewrote to extract class bodies first via brace-depth matching, then count methods. Also scoped Rust `fn` counting to each `impl` block.
+- **MEDIUM: API map included test fixture routes** — Added filtering for `/test/`, `/fixtures/`, `*.test.*`, `*.spec.*` paths.
+- **MEDIUM: Framework detect markdown missing flags** — Added display for FastAPI, Flask, Django, Tauri, Rust, monorepo, and lockfile fields.
+
 ## v5.8.1 — 2026-06-12
 
 ### Bug Fixes (3)

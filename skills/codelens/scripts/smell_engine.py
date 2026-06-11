@@ -754,28 +754,86 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
-        class_match = re.search(r'class\s+(\w+)', content)
+        # Count actual class methods, not all function-like patterns.
+        # The old regex was too broad — it matched `if(`, `for(`, `console.log(`, etc.
+        # New approach: match methods defined inside class bodies using proper patterns.
+        #
+        # Valid method patterns inside a class:
+        #   methodName() { ... }
+        #   async methodName() { ... }
+        #   private methodName() { ... }
+        #   static methodName() { ... }
+        #   get propertyName() { ... }
+        #   set propertyName(val) { ... }
+        #   * generatorName() { ... }
+        #   #privateMethod() { ... }   (ECMAScript private)
+        #
+        # We avoid counting: if(, for(, while(, switch(, catch(, console.xxx(,
+        # require(, typeof(, etc. by requiring the name to be preceded by
+        # proper class-context keywords or being at the start of a line
+        # within a class body.
 
-        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-            })
-        elif class_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                "suggestion": "Consider extracting some methods into a separate class."
-            })
+        # Strategy: extract class bodies first, then count methods within each
+        class_pattern = re.compile(
+            r'class\s+(\w+)[^{]*\{',
+            re.MULTILINE
+        )
+        for class_match in class_pattern.finditer(content):
+            class_name = class_match.group(1)
+            # Find the matching closing brace for this class
+            class_start = class_match.end()  # position after the opening {
+            brace_depth = 1
+            pos = class_start
+            while pos < len(content) and brace_depth > 0:
+                if content[pos] == '{':
+                    brace_depth += 1
+                elif content[pos] == '}':
+                    brace_depth -= 1
+                pos += 1
+            class_body = content[class_start:pos - 1]
+
+            # Count methods within the class body
+            # Method patterns: [access_modifier] [static] [async] [*] name(
+            # Also handle: get name( / set name(
+            method_count = len(re.findall(
+                r'(?:^|\n)\s*'
+                r'(?:public|private|protected|static|abstract|readonly|override|declare)\s*'
+                r'(?:(?:public|private|protected|static|abstract|readonly|override|declare)\s*)*'
+                r'(?:async\s*)?'
+                r'(?:get\s+|set\s+)?'
+                r'(?:\*\s*)?'
+                r'#?\w+\s*\(',
+                class_body
+            ))
+
+            # Also count arrow-function class properties: name = () => or name = function
+            arrow_methods = len(re.findall(
+                r'(?:^|\n)\s*'
+                r'(?:public|private|protected|static|readonly|declare)\s*'
+                r'(?:(?:public|private|protected|static|readonly|declare)\s*)*'
+                r'#?\w+\s*=\s*(?:async\s+)?(?:function|\([^)]*\)\s*=>)',
+                class_body
+            ))
+            method_count += arrow_methods
+
+            if method_count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "critical",
+                    "message": f"Class '{class_name}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+                })
+            elif method_count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "warning",
+                    "message": f"Class '{class_name}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class."
+                })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping
@@ -822,19 +880,44 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                 })
 
     elif ext == ".rs":
-        # Count impl methods
-        impl_match = re.search(r'impl\s+(?:<[^>]+>\s*)?(\w+)', content)
-        method_count = len(re.findall(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+', content))
+        # Count impl methods per impl block (not across entire file)
+        # Old code counted ALL fn declarations in the file, even free functions.
+        # New code properly scopes to each impl block.
+        impl_pattern = re.compile(r'impl\s+(?:<[^>]+>\s*)?(\w+)[^{]*\{', re.MULTILINE)
+        for impl_match in impl_pattern.finditer(content):
+            impl_name = impl_match.group(1)
+            impl_start = impl_match.end()
+            brace_depth = 1
+            pos = impl_start
+            while pos < len(content) and brace_depth > 0:
+                if content[pos] == '{':
+                    brace_depth += 1
+                elif content[pos] == '}':
+                    brace_depth -= 1
+                pos += 1
+            impl_body = content[impl_start:pos - 1]
 
-        if impl_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "impl_for": impl_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Impl block for '{impl_match.group(1)}' has {method_count} methods",
-                "suggestion": "Split into multiple impl blocks or traits."
-            })
+            # Count fn declarations inside this impl block only
+            method_count = len(re.findall(r'(?:pub\s+)?(?:async\s+)?fn\s+\w+', impl_body))
+
+            if method_count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "impl_for": impl_name,
+                    "method_count": method_count,
+                    "severity": "critical",
+                    "message": f"Impl block for '{impl_name}' has {method_count} methods",
+                    "suggestion": "Split into multiple impl blocks or traits."
+                })
+            elif method_count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "impl_for": impl_name,
+                    "method_count": method_count,
+                    "severity": "warning",
+                    "message": f"Impl block for '{impl_name}' has {method_count} methods",
+                    "suggestion": "Consider splitting into multiple impl blocks."
+                })
 
     return smells
 

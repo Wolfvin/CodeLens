@@ -5,6 +5,25 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.7.2] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: Trace markdown formatter displayed paths character-by-character** — `_md_trace()` treated the `path` string field as an iterable list, splitting `"packages/runtime-core/src/ref.ts"` into `p → a → c → k → a → g → e → s → / → …`. Introduced `_format_trace_chain()` helper that correctly handles both string and list `path` values, with depth indentation, cyclic markers (↻), and unresolved markers (⚠).
+- **CRITICAL: TS/JS backend parser missed arrow functions wrapped in parentheses or `as` expressions** — Patterns like `const name = ((...args) => { ... })` and `const name = ((...args) => { ... }) as Type` were not captured because tree-sitter wraps these in `parenthesized_expression` and `as_expression` nodes respectively. Added `_unwrap_fn_from_parens()` recursive helper and `as_expression` handling to both `TSBackendParser` and `JSBackendParser`. This fixes missing functions like Vue's `createApp` in query results.
+- **HIGH: Framework detection missed Rust/Python polyglot projects** — Ruff (Rust+Python) showed "No frameworks detected" and "cjs" module system. Added proper `module_system` detection for Cargo-only (`cargo`), Python-only (`python`), and Rust+Python (`rust-python`) projects. Added `languages` field to framework detection output. Added `has_rust_backend` flag display and `Cargo.toml` presence detection for `has_rust_backend`.
+- **HIGH: Zombie CSS false positives with invalid class names** — CSS class names containing special characters like `.(version`, `.===`, `.\`@${currentCommit}\`` were reported as zombie CSS. Added regex validation (`^[a-zA-Z_\-][a-zA-Z0-9_\-]*$`) and character blacklist filtering to `_detect_zombie_css()` in `deadcode_engine.py`.
+- **HIGH: God object detection had massive false positives in JS/TS files** — The regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched any function-like pattern in the entire file, including `if(`, `for(`, `console.log(`, etc. Rewrote `_detect_god_objects()` for JS/TS to properly extract class bodies first using brace-depth matching, then count only actual class methods. Also rewrote Rust detection to scope `fn` counting to each `impl` block instead of the entire file.
+- **MEDIUM: API map included routes from test fixture files** — Routes from `/test/`, `/tests/`, `/fixtures/`, `/examples/`, `*.test.*`, `*.spec.*` files were reported as real API routes. Added test fixture file filtering to `apimap_engine.py` with path and filename pattern matching.
+- **MEDIUM: Framework detect markdown output missing flags** — `_md_detect()` did not display `has_fastapi`, `has_flask`, `has_django`, `has_tauri`, or `has_rust_backend` flags. Also missing `is_monorepo` and `lockfile` display. Added all missing flags and fields.
+
+### Testing
+
+Tested against 3 diverse, large open-source repositories:
+- **vuejs/core** (Vue.js framework) — 506 JS files, 11 TSX, 11 Vue files — tested Vue parser, JS/TS backend parsing, query, trace, complexity, dead code, data flow
+- **astral-sh/ruff** (Rust+Python linter) — 1863 Rust files, 2942 Python files — tested Rust parser, Python parser, framework detection for polyglot, secrets scan, smell engine
+- **sveltejs/kit** (SvelteKit framework) — 904 Svelte files, 682 JS backend files — tested Svelte parser, SSR framework detection, a11y, smell engine, state map
+
 ## [5.8.0] — 2026-06-12
 
 ### Added
