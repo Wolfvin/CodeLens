@@ -20,11 +20,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
-}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
 def detect_config_drift(
     workspace: str,
@@ -78,6 +74,8 @@ def _detect_project_type(workspace: str) -> str:
     """Detect the project type from config files."""
     if os.path.exists(os.path.join(workspace, "package.json")):
         return "node"
+    elif os.path.exists(os.path.join(workspace, "go.mod")):
+        return "go"
     elif os.path.exists(os.path.join(workspace, "Cargo.toml")):
         return "rust"
     elif os.path.exists(os.path.join(workspace, "requirements.txt")) or \
@@ -262,6 +260,31 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
 
+    elif project_type == "go":
+        go_mod_path = os.path.join(workspace, "go.mod")
+        if os.path.exists(go_mod_path):
+            try:
+                with open(go_mod_path, 'r', encoding='utf-8') as f:
+                    in_require = False
+                    for line in f:
+                        stripped = line.strip()
+                        if stripped == 'require (':
+                            in_require = True
+                            continue
+                        if stripped.startswith(')') and in_require:
+                            in_require = False
+                            continue
+                        if in_require:
+                            parts = stripped.split()
+                            if parts:
+                                declared["dependencies"][parts[0]] = stripped
+                        # Single-line require
+                        m = re.match(r'^require\s+(\S+)\s+', stripped)
+                        if m and not stripped.startswith('require ('):
+                            declared["dependencies"][m.group(1)] = stripped
+            except IOError:
+                logger.debug("Config drift: failed to parse go.mod", exc_info=True)
+
     return declared
 
 def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
@@ -357,33 +380,23 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
                                 external.add(pkg_name)
 
             elif ext == ".rs":
-                # Parse Rust use statements line-by-line to avoid matching
-                # 'use' inside comments or doc comments (which caused false positives
-                # like "relay connections" being detected as missing deps).
-                for line in content.split('\n'):
-                    stripped = line.lstrip()
-                    # Skip comment lines (// and /*)
-                    if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('//!') or stripped.startswith('///'):
-                        continue
-                    # Remove inline comments before matching
-                    comment_pos = stripped.find('//')
-                    if comment_pos >= 0:
-                        stripped = stripped[:comment_pos]
-                    # Match Rust use statements at the start of a line (with optional whitespace)
-                    m = re.match(r'\s*use\s+([^;]+);', stripped)
-                    if m:
-                        use_path = m.group(1).strip()
-                        # Skip self::, super::, crate::, std:: — these are internal
-                        if use_path.startswith('std::') or use_path.startswith('crate::') or use_path.startswith('super::') or use_path.startswith('self::'):
-                            continue
-                        # Handle grouped imports: use foo::{bar, baz} → extract foo
-                        if '::{' in use_path:
-                            use_path = use_path.split('::{')[0]
-                        # External crate — take the first path segment
+                for m in re.finditer(r'use\s+([^;]+);', content):
+                    use_path = m.group(1).strip()
+                    if not use_path.startswith('std::') and not use_path.startswith('crate::') and not use_path.startswith('super::'):
+                        # External crate
                         pkg_name = use_path.split('::')[0]
-                        # Validate: only accept alphanumeric + underscore crate names
-                        if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', pkg_name):
-                            external.add(pkg_name)
+                        external.add(pkg_name)
+
+            elif ext == ".go":
+                # Go imports — extract package path, get the first segment after domain
+                for m in re.finditer(r'import\s+"([^"]+)"', content):
+                    imp = m.group(1)
+                    _add_go_import(imp, external, relative)
+                import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+                if import_block:
+                    for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+                        imp = m.group(1)
+                        _add_go_import(imp, external, relative)
 
     return {
         "external": external,
@@ -405,6 +418,33 @@ def _detect_local_packages(workspace: str) -> Set[str]:
             if os.path.exists(os.path.join(entry_path, '__init__.py')):
                 local.add(entry)
     return local
+
+def _add_go_import(imp: str, external: Set[str], relative: Set[str]):
+    """Classify a Go import as external or relative and add to the appropriate set."""
+    # Standard library packages (common ones)
+    go_stdlib = {
+        'bufio', 'bytes', 'context', 'crypto', 'database', 'debug', 'embed',
+        'encoding', 'errors', 'expvar', 'flag', 'fmt', 'go', 'hash', 'html',
+        'image', 'index', 'internal', 'io', 'log', 'maps', 'math', 'mime',
+        'net', 'os', 'path', 'plugin', 'reflect', 'regexp', 'runtime',
+        'slices', 'sort', 'strconv', 'strings', 'sync', 'syscall', 'testing',
+        'text', 'time', 'unicode', 'unsafe', 'archive', 'compress', 'container',
+    }
+    # Internal/relative imports
+    if imp.startswith('.') or imp.startswith('./') or imp.startswith('../'):
+        relative.add(imp)
+        return
+    parts = imp.split('/')
+    if len(parts) >= 3 and (parts[0].endswith('.git') or '.' in parts[0]):
+        # e.g. github.com/user/repo — external, get repo name
+        pkg_name = parts[2] if len(parts) > 2 else parts[-1]
+        external.add(pkg_name)
+    elif parts[0] in go_stdlib:
+        # Standard library — skip
+        return
+    else:
+        # Unknown — treat as external
+        external.add(parts[0])
 
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
     """Check if a relative JS import resolves to an actual file."""

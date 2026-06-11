@@ -350,4 +350,16 @@ def _get_file_imports(workspace: str, rel_path: str) -> List[str]:
             if stripped.startswith('import ') or stripped.startswith('from '):
                 imports.append(stripped)
 
+    # Go imports
+    if rel_path.endswith('.go'):
+        # Single import
+        for m in re.finditer(r'import\s+"([^"]+)"', content):
+            imports.append(m.group(1))
+        # Import block
+        import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+        if import_block:
+            for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+                imports.append(m.group(1))
+        return imports
+
     return imports

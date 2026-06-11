@@ -21,11 +21,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
-}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".go", ".rs"}
 
 # Known API return types
 KNOWN_RETURN_TYPES = {

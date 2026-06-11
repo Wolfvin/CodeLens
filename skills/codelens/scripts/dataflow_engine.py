@@ -48,7 +48,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"(?:target|currentTarget|element|input|select|textarea|e\.target)\.value",
+            r"\.value\s*",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -64,10 +64,13 @@ SOURCE_PATTERNS = {
             r"std::env::var",
             r"dotenv::var",
             r"env!\(",
+            r"os\.Getenv",
+            r"os\.LookupEnv",
+            r"viper\.GetString",
         ],
         "label": "env_var",
         "severity": "low",
-        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs"}
+        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs", ".go"}
     },
     # File system reads
     "file_reads": {
@@ -86,16 +89,36 @@ SOURCE_PATTERNS = {
     # API/network responses
     "api_responses": {
         "patterns": [
-            r"(?:fetch|axios|http\.get|https\.get|request)\b\s*\(",
+            r"(?:fetch|axios|http\.get|https\.get|request)\s*\(",
             r"\.json\s*\(\s*\)",
             r"response\.data",
             r"resp\.body",
             r"HttpResponse",
             r"reqwest::get",
+            r"http\.Get",
+            r"http\.Post",
         ],
         "label": "api_response",
         "severity": "medium",
-        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs"}
+        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs", ".go"}
+    },
+
+    # Go user input
+    "go_user_input": {
+        "patterns": [
+            r"os\.Args",
+            r"flag\.(?:String|Bool|Int|Int64)\s*\(",
+            r"r\.URL\.Query",
+            r"r\.FormValue",
+            r"r\.PostFormValue",
+            r"c\.Param\s*\(",
+            r"c\.Query\s*\(",
+            r"c\.PostForm\s*\(",
+            r"c\.Bind\s*\(",
+        ],
+        "label": "user_input",
+        "severity": "high",
+        "languages": {".go"}
     },
 }
 
@@ -129,6 +152,9 @@ SINK_PATTERNS = {
             r"\{\!\s*\w+\s*!\}",  # Unescaped template
             r"res\.(?:send|write|end)\s*\(",
             r"response\.(?:write|send)\s*\(",
+            r"fmt\.Fprintf\s*\(\s*w\s*,",
+            r"w\.Write\s*\(",
+            r"template\.Execute\s*\(",
         ],
         "label": "html_output",
         "severity": "critical",
@@ -148,6 +174,7 @@ SINK_PATTERNS = {
             r"subprocess\.(?:call|run|Popen)",
             r"Command::new",
             r"std::process::Command",
+            r"exec\.Command\s*\(",
         ],
         "label": "command_execution",
         "severity": "critical",
@@ -162,6 +189,9 @@ SINK_PATTERNS = {
             r"open\s*\([^)]*['\"]w",
             r"std::fs::write",
             r"File::create",
+            r"os\.Create\s*\(",
+            r"os\.WriteFile\s*\(",
+            r"ioutil\.WriteFile\s*\(",
         ],
         "label": "file_write",
         "severity": "high",
@@ -205,8 +235,8 @@ SANITIZER_PATTERNS = {
             r"\.escape\s*\(",
             r"mysql\.escape\s*\(",
             r"pg\.escape\s*\(",
-            r"\$(?:\{\d+\}|\d+)",  # Parameterized query placeholder ($1 or ${1})
-            r"\?(?:\s*[,\)]|$|\s*;)",   # Parameterized query placeholder (?)
+            r"\$\{?\d+\}?",  # Parameterized query placeholder
+            r"\?\s*[,\)]",   # Parameterized query placeholder (?)
         ],
         "sanitizes_for": {"db_query"},
         "label": "sql_sanitizer"
@@ -264,11 +294,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
-}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
 
 def trace_dataflow(
@@ -471,9 +497,7 @@ def _build_flows(
         for src in file_sources:
             reached_sink = None
 
-            # Find sinks after this source in the same file
-            # v6: Collect ALL sinks, not just the first one.
-            # A source can flow to multiple sinks (e.g., user input → DB query AND → HTML output)
+            # Find the nearest sink after this source in the same file
             for snk in file_sinks:
                 if snk["line"] > src["line"]:
                     # Check if there's a data flow path
@@ -490,6 +514,7 @@ def _build_flows(
                             "reaches_sink": True,
                             "flow_type": "intra_file"
                         })
+                        break
 
             if not reached_sink:
                 # Check cross-file flows

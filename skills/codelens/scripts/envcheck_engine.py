@@ -28,18 +28,16 @@ Additional detection:
 
 import os
 import re
-import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, MAX_FILES_DEFAULT, time_budget_expired
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
+    ".py", ".rs", ".go", ".vue", ".svelte",
 }
 
 ENV_FILE_PATTERNS = {
@@ -63,11 +61,6 @@ NON_SECRET_PATTERNS = {
     "public", "frontend", "backend", "app", "max", "min",
     "timeout", "retry", "count", "size", "limit",
 }
-
-# Performance limits
-_MAX_FILES = MAX_FILES_DEFAULT
-_MAX_FILE_SIZE = MAX_FILE_SIZE
-_GLOBAL_TIMEOUT_SEC = 90
 
 
 def check_env_vars(
@@ -94,35 +87,25 @@ def check_env_vars(
     env_vars: Dict[str, Dict[str, Any]] = {}  # var_name → info
     env_files: List[Dict[str, Any]] = []
     files_scanned = 0
-    truncated = False
-    start_time = time.time()
 
     # Step 1: Scan source files for env var references
     for root, dirs, filenames in os.walk(workspace):
-        # Check global timeout
-        if time_budget_expired(start_time, _GLOBAL_TIMEOUT_SEC):
-            truncated = True
-            break
-
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
             continue
 
         for filename in filenames:
-            # Check file count limit
-            if files_scanned >= _MAX_FILES:
-                truncated = True
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
             # ─── Source file scanning ─────────────────────
             if ext in SOURCE_EXTENSIONS:
-                content = safe_read_file(file_path, _MAX_FILE_SIZE)
-                if content is None:
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                except IOError:
                     continue
 
                 files_scanned += 1
@@ -136,10 +119,15 @@ def check_env_vars(
                 elif ext == ".rs":
                     _extract_rust_env_refs(content, rel_path, env_vars)
 
+                elif ext == ".go":
+                    _extract_go_env_refs(content, rel_path, env_vars)
+
             # ─── .env file scanning ───────────────────────
             elif filename in ENV_FILE_PATTERNS or filename.startswith('.env'):
-                content = safe_read_file(file_path, _MAX_FILE_SIZE)
-                if content is None:
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                except IOError:
                     continue
 
                 env_file_info = _parse_env_file(content, rel_path, filename)
@@ -229,7 +217,6 @@ def check_env_vars(
             "undocumented": len(undocumented),
             "in_env_file": len(in_env_file),
             "files_scanned": files_scanned,
-            "truncated": truncated,
         },
         "variables": list(env_vars.values()),
         "missing_from_example": missing_from_example,
@@ -408,6 +395,42 @@ def _extract_rust_env_refs(
         for m in re.finditer(r'option_env!\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
             _register_env_ref(
                 env_vars, m.group(1), rel_path, i + 1, line.strip(), True
+            )
+
+
+# ─── Go Env Var Extraction ────────────────────────────────────
+
+def _extract_go_env_refs(
+    content: str, rel_path: str, env_vars: Dict[str, Dict[str, Any]]
+):
+    """Extract environment variable references from Go source files."""
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//'):
+            continue
+
+        # os.Getenv("VAR")
+        for m in re.finditer(r'os\.Getenv\s*\(\s*"([^"]+)"', line):
+            has_fallback = 'if' in line[:m.start()] or ', ok' in line or 'else' in line[m.end():]
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), has_fallback
+            )
+
+        # os.LookupEnv("VAR")
+        for m in re.finditer(r'os\.LookupEnv\s*\(\s*"([^"]+)"', line):
+            # LookupEnv returns (value, ok) — typically has fallback via ok check
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), True
+            )
+
+        # viper.GetString("VAR") and similar viper methods
+        for m in re.finditer(r'viper\.GetString\s*\(\s*"([^"]+)"', line):
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), False
             )
 
 

@@ -18,6 +18,7 @@ TYPE_EXTENSIONS = {
     "ts": {".ts"},
     "tsx": {".tsx", ".jsx"},
     "rust": {".rs"},
+    "go": {".go"},
     "python": {".py"},
     "vue": {".vue"},
     "svelte": {".svelte"},

@@ -62,12 +62,6 @@ def get_file_outline(
         outline = _outline_rust(content, detail_level)
     elif ext == '.py':
         outline = _outline_python(content, detail_level)
-    elif ext == '.php':
-        outline = _outline_php(content, detail_level)
-    elif ext in ('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx'):
-        outline = _outline_cpp(content, detail_level)
-    elif ext == '.go':
-        outline = _outline_go(content, detail_level)
     elif ext in ('.html', '.htm'):
         outline = _outline_html(content, detail_level)
     elif ext in ('.css', '.scss', '.less', '.sass'):
@@ -76,6 +70,8 @@ def get_file_outline(
         outline = _outline_vue(content, detail_level)
     elif ext == '.svelte':
         outline = _outline_svelte(content, detail_level)
+    elif ext == '.go':
+        outline = _outline_go(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -95,8 +91,7 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None,
-    max_files: int = 3000
+    config: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
@@ -110,15 +105,12 @@ def get_workspace_outline(
             ignore_dirs.add(p.rstrip("/"))
 
     source_extensions = {
-        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.php',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
-        '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hxx', '.go'
+        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
     }
 
     outlines = []
     errors = []
-    files_processed = 0
-    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -137,27 +129,17 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
-            # File limit to prevent timeout on huge repos
-            if files_processed >= max_files:
-                truncated = True
-                break
-
             result = get_file_outline(file_path, workspace, detail_level="minimal")
-            files_processed += 1
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
-
-        if truncated:
-            break
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
         "outlines": outlines,
-        "truncated": truncated,
         "errors": errors if errors else None
     }
 
@@ -340,7 +322,7 @@ def _outline_css(content: str, detail: str) -> Dict:
 def _outline_vue(content: str, detail: str) -> Dict:
     """Outline for Vue SFC files."""
     import re
-    outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "exports": []}, "style": {"selectors": []}}
+    outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     # Split sections
     template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
@@ -352,29 +334,10 @@ def _outline_vue(content: str, detail: str) -> Dict:
         for line_num_offset, line in enumerate(tmpl.split('\n'), 1):
             for m in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', line):
                 outline["template"]["ids"].append({"name": m.group(1)})
-            # Static class attribute: class="xxx" (NOT :class or v-bind:class)
-            for m in re.finditer(r'(?<![:(\w])class\s*=\s*["\']([^"\']+)["\']', line):
+            for m in re.finditer(r'\bclass\s*=\s*["\']([^"\']+)["\']', line):
                 for cls in m.group(1).split():
-                    cls = cls.strip()
-                    if cls and re.match(r'^[a-zA-Z_][\w-]*$', cls):
-                        outline["template"]["classes"].append({"name": cls})
-            # Dynamic :class binding — extract only string-literal class names
-            for m in re.finditer(r'(?:v-bind:|:)class\s*=\s*["\']([^"\']+)["\']', line):
-                binding = m.group(1)
-                # Extract class names from string literals inside the binding expression
-                for str_m in re.finditer(r'["\']([^"\']+)["\']', binding):
-                    for cls in str_m.group(1).split():
-                        cls = cls.strip()
-                        if cls and re.match(r'^[a-zA-Z_][\w-]*$', cls):
-                            outline["template"]["classes"].append({"name": cls})
-                # Also extract shorthand property names from object syntax: { loading, inline, disabled }
-                # These are the variable names used as class names in :class="{ active, disabled }"
-                for obj_m in re.finditer(r'\{([^}]+)\}', binding):
-                    for prop_m in re.finditer(r'(?<![.\w])([a-zA-Z_][\w-]*)\s*[,\s}]', obj_m.group(1)):
-                        prop_name = prop_m.group(1)
-                        # Skip JS keywords and operators that look like properties
-                        if prop_name not in ('true', 'false', 'null', 'undefined', 'if', 'else', 'return'):
-                            outline["template"]["classes"].append({"name": prop_name, "source": "vue_dynamic_class"})
+                    if cls.strip():
+                        outline["template"]["classes"].append({"name": cls.strip()})
 
     if script_match:
         scr = script_match.group(1)
@@ -391,7 +354,7 @@ def _outline_vue(content: str, detail: str) -> Dict:
 def _outline_svelte(content: str, detail: str) -> Dict:
     """Outline for Svelte component files."""
     import re
-    outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "exports": []}, "style": {"selectors": []}}
+    outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
     style_match = re.search(r'<style[^>]*>(.*?)</style>', content, re.DOTALL)
@@ -417,6 +380,114 @@ def _outline_svelte(content: str, detail: str) -> Dict:
     if style_match:
         css_outline = _outline_css(style_match.group(1), detail)
         outline["style"]["selectors"] = css_outline.get("selectors", [])
+
+    return outline
+
+
+def _outline_go(content: str, detail: str) -> Dict:
+    """Outline for Go source files."""
+    import re
+    outline = {
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "types": [],
+        "imports": [],
+        "exports": [],
+        "variables": [],
+    }
+
+    # Package detection
+    pkg_match = re.search(r'^package\s+(\w+)', content, re.MULTILINE)
+    if pkg_match:
+        outline["package"] = pkg_match.group(1)
+
+    # Import extraction (both single and block imports)
+    import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+    if import_block:
+        for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+            outline["imports"].append({"text": m.group(1)})
+    else:
+        single_import = re.search(r'import\s+"([^"]+)"', content)
+        if single_import:
+            outline["imports"].append({"text": single_import.group(1)})
+
+    lines = content.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Function declarations (with optional receiver)
+        m = re.match(r'^func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(', stripped)
+        if m:
+            fn_name = m.group(1)
+            is_method = bool(re.match(r'^func\s+\(', stripped))
+            receiver = None
+            if is_method:
+                recv_match = re.match(r'^func\s+\(\s*\w+\s+(?:\*?)(\w+)\s*\)', stripped)
+                if recv_match:
+                    receiver = recv_match.group(1)
+            
+            # Check if exported (starts with uppercase)
+            is_exported = fn_name[0].isupper() if fn_name else False
+            
+            entry = {"name": fn_name, "line": line_num, "method": is_method}
+            if receiver:
+                entry["receiver"] = receiver
+            outline["functions"].append(entry)
+            
+            if is_exported:
+                outline["exports"].append({"name": fn_name, "line": line_num, "kind": "function"})
+            continue
+
+        # Struct declarations
+        m = re.match(r'^type\s+(\w+)\s+struct\s*\{', stripped)
+        if m:
+            type_name = m.group(1)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["classes"].append({"name": type_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "struct"})
+            continue
+
+        # Interface declarations
+        m = re.match(r'^type\s+(\w+)\s+interface\s*\{', stripped)
+        if m:
+            type_name = m.group(1)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["interfaces"].append({"name": type_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "interface"})
+            continue
+
+        # Type aliases
+        m = re.match(r'^type\s+(\w+)\s+(?!struct\b|interface\b)(\w[\w.]*)\s*$', stripped)
+        if m:
+            type_name = m.group(1)
+            alias_of = m.group(2)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["types"].append({"name": type_name, "alias_of": alias_of, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "type"})
+            continue
+
+        # Package-level var declarations
+        m = re.match(r'^var\s+(\w+)', stripped)
+        if m:
+            var_name = m.group(1)
+            is_exported = var_name[0].isupper() if var_name else False
+            outline["variables"].append({"name": var_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": var_name, "line": line_num, "kind": "var"})
+            continue
+
+        # Package-level const declarations
+        m = re.match(r'^const\s+(\w+)', stripped)
+        if m:
+            const_name = m.group(1)
+            is_exported = const_name[0].isupper() if const_name else False
+            outline["variables"].append({"name": const_name, "line": line_num, "const": True})
+            if is_exported:
+                outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
 
     return outline
 
@@ -808,244 +879,9 @@ def _detect_language(ext: str) -> str:
     mapping = {
         '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
         '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'tsx',
-        '.rs': 'rust', '.py': 'python', '.php': 'php',
+        '.rs': 'rust', '.py': 'python', '.go': 'go',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
-        '.vue': 'vue', '.svelte': 'svelte',
-        '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.hpp': 'cpp',
-        '.cc': 'cpp', '.cxx': 'cpp', '.hxx': 'cpp',
-        '.go': 'go'
+        '.vue': 'vue', '.svelte': 'svelte'
     }
     return mapping.get(ext, 'unknown')
-
-
-def _outline_php(content: str, detail_level: str = "standard") -> Dict:
-    """Generate a lightweight outline for PHP files using regex."""
-    import re
-    functions = []
-    classes = []
-    interfaces = []
-    traits = []
-    enums = []
-    imports = []
-
-    # Namespace
-    ns_match = re.search(r'namespace\s+([\w\\]+)\s*;', content)
-    namespace = ns_match.group(1) if ns_match else None
-
-    # Use statements
-    for m in re.finditer(r'use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
-        imports.append({"name": m.group(2) or m.group(1).rsplit('\\', 1)[-1], "path": m.group(1)})
-
-    # Classes
-    for m in re.finditer(r'(?:abstract\s+|final\s+)*class\s+(\w+)', content):
-        line = content[:m.start()].count('\n') + 1
-        classes.append({"name": m.group(1), "line": line})
-
-    # Interfaces
-    for m in re.finditer(r'interface\s+(\w+)', content):
-        line = content[:m.start()].count('\n') + 1
-        interfaces.append({"name": m.group(1), "line": line})
-
-    # Traits
-    for m in re.finditer(r'trait\s+(\w+)', content):
-        line = content[:m.start()].count('\n') + 1
-        traits.append({"name": m.group(1), "line": line})
-
-    # Enums
-    for m in re.finditer(r'enum\s+(\w+)', content):
-        line = content[:m.start()].count('\n') + 1
-        enums.append({"name": m.group(1), "line": line})
-
-    # Functions (top-level only, skip class methods)
-    class_ranges = []
-    for m in re.finditer(r'(?:abstract\s+|final\s+)*class\s+\w+', content):
-        start_line = content[:m.start()].count('\n') + 1
-        brace_pos = content.find('{', m.start())
-        if brace_pos >= 0:
-            depth = 0
-            for i in range(brace_pos, len(content)):
-                if content[i] == '{': depth += 1
-                elif content[i] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end_line = content[:i].count('\n') + 1
-                        class_ranges.append((start_line, end_line))
-                        break
-
-    for m in re.finditer(r'function\s+(\w+)\s*\(', content):
-        line = content[:m.start()].count('\n') + 1
-        # Skip if inside a class
-        if any(start <= line <= end for start, end in class_ranges):
-            continue
-        functions.append({"name": m.group(1), "line": line})
-
-    return {
-        "language": "php",
-        "namespace": namespace,
-        "functions": functions,
-        "classes": classes,
-        "interfaces": interfaces,
-        "traits": traits,
-        "enums": enums,
-        "imports": imports,
-    }
-
-
-def _outline_cpp(content: str, detail_level: str = "standard") -> Dict:
-    """Generate a lightweight outline for C/C++ files using regex."""
-    import re
-
-    # Strip comments
-    stripped = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
-    stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
-
-    functions = []
-    classes = []
-    imports = []
-    types = []
-    macros = []
-
-    skip_names = {
-        'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'return',
-        'struct', 'enum', 'union', 'typedef', 'extern', 'static', 'const',
-        'void', 'int', 'long', 'short', 'char', 'float', 'double', 'bool',
-    }
-
-    current_class = ""
-    class_stack = []
-
-    for line_num, line in enumerate(stripped.split('\n'), 1):
-        stripped_line = line.strip()
-
-        # Track struct/class scope
-        struct_match = re.search(r'\b(?:struct|class)\s+([A-Za-z_]\w*)', stripped_line)
-        if struct_match:
-            current_class = struct_match.group(1)
-            classes.append({
-                "name": current_class,
-                "line": line_num,
-                "methods": [],
-            })
-            if '{' in stripped_line:
-                class_stack.append(current_class)
-
-        # Track brace depth for scope
-        open_braces = stripped_line.count('{')
-        close_braces = stripped_line.count('}')
-
-        # Extract #include
-        inc_match = re.match(r'#include\s+[<"]([^>"]+)[>"]', stripped_line)
-        if inc_match:
-            imports.append({"name": inc_match.group(1), "line": line_num})
-
-        # Extract #define macros
-        macro_match = re.match(r'#define\s+([A-Z][A-Z0-9_]*)\s*\(', stripped_line)
-        if macro_match:
-            macros.append({"name": macro_match.group(1), "line": line_num})
-
-        # Extract functions
-        fn_match = re.search(
-            r'(?:[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*(?:\s*[*&])?\s+)+'
-            r'([A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)?)\s*\(',
-            stripped_line
-        )
-        if fn_match:
-            name = fn_match.group(1).split('::')[-1]
-            if name not in skip_names and not name.startswith('_'):
-                fn_info = {"name": name, "line": line_num}
-                if '::' in fn_match.group(1):
-                    fn_info["method_of"] = fn_match.group(1).split('::')[0]
-                elif current_class:
-                    fn_info["method_of"] = current_class
-                functions.append(fn_info)
-
-        # Extract typedefs
-        td_match = re.search(r'\btypedef\s+.*?\s+([A-Za-z_]\w*)\s*;', stripped_line)
-        if td_match:
-            types.append({"name": td_match.group(1), "line": line_num})
-
-    # Close any remaining class scopes
-    while class_stack:
-        class_stack.pop()
-
-    return {
-        "language": "cpp",
-        "functions": functions,
-        "classes": classes,
-        "imports": imports,
-        "types": types,
-        "macros": macros,
-    }
-
-
-def _outline_go(content: str, detail_level: str = "standard") -> Dict:
-    """Generate a lightweight outline for Go files using regex."""
-    import re
-
-    # Strip comments
-    stripped = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
-    stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL)
-
-    functions = []
-    types = []
-    imports = []
-
-    skip_names = {
-        'if', 'else', 'for', 'range', 'switch', 'case', 'return',
-        'func', 'struct', 'interface', 'type', 'var', 'const',
-        'true', 'false', 'nil',
-    }
-
-    for line_num, line in enumerate(stripped.split('\n'), 1):
-        stripped_line = line.strip()
-
-        # Package declaration
-        pkg_match = re.match(r'\bpackage\s+([A-Za-z_]\w*)', stripped_line)
-        if pkg_match:
-            pass  # Could track package name
-
-        # Import declarations
-        imp_match = re.match(r'\bimport\s+["]([^"]+)["]', stripped_line)
-        if imp_match:
-            imports.append({"name": imp_match.group(1), "line": line_num})
-
-        # Method: func (receiver) methodName(...)
-        method_match = re.search(
-            r'\bfunc\s+\([^)]+\)\s+([A-Za-z_]\w*)\s*[\(]',
-            stripped_line
-        )
-        if method_match:
-            name = method_match.group(1)
-            if name not in skip_names:
-                recv_match = re.search(r'\bfunc\s+\(\s*\w+\s+(?:\*)?(\w+)\)', stripped_line)
-                fn_info = {"name": name, "line": line_num}
-                if recv_match:
-                    fn_info["method_of"] = recv_match.group(1)
-                functions.append(fn_info)
-            continue
-
-        # Free function: func name(...)
-        fn_match = re.search(r'\bfunc\s+([A-Za-z_]\w*)\s*[\(]', stripped_line)
-        if fn_match:
-            name = fn_match.group(1)
-            if name not in skip_names:
-                functions.append({"name": name, "line": line_num})
-            continue
-
-        # Type declarations
-        type_match = re.search(r'\btype\s+([A-Za-z_]\w*)\s+(struct|interface)', stripped_line)
-        if type_match:
-            types.append({
-                "name": type_match.group(1),
-                "line": line_num,
-                "kind": type_match.group(2),
-            })
-
-    return {
-        "language": "go",
-        "functions": functions,
-        "classes": types,  # Go types mapped to classes slot for consistency
-        "imports": imports,
-        "types": types,
-    }

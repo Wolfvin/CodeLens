@@ -21,8 +21,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
+    ".py", ".rs", ".go", ".vue", ".svelte", ".css", ".scss", ".less"
 }
 
 # Performance limits for large codebases
@@ -100,13 +99,13 @@ def detect_dead_code(
             lines = content.split('\n')
 
             # ─── Unreachable Code ────────────────────────
-            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
                 if len(results["unreachable"]) < max_results:
                     unreachable = _detect_unreachable_code(content, ext, rel_path)
                     results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
-            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
                 if len(results["unused_vars"]) < max_results:
                     unused = _detect_unused_variables(content, ext, rel_path)
                     results["unused_vars"].extend(unused)
@@ -117,6 +116,9 @@ def detect_dead_code(
 
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".go":
+                _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
 
         if truncated:
             break
@@ -153,14 +155,6 @@ def detect_dead_code(
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
 
-    # Compute removal safety and recommended action
-    removal_safety = "safe" if total == 0 else "caution"
-    recommended_action = "No dead code found." if total == 0 else (
-        f"Found {total} dead code item(s) across {len(by_category)} category(ies). "
-        f"Review and remove unreachable code, unused exports, and zombie CSS. "
-        f"Run with --format markdown for detailed removal guidance."
-    )
-
     return {
         "status": "ok",
         "workspace": workspace,
@@ -171,9 +165,7 @@ def detect_dead_code(
             "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
-        "categories_checked": list(categories),
-        "removal_safety": removal_safety,
-        "recommended_action": recommended_action
+        "categories_checked": list(categories)
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -228,10 +220,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
                 function_start_depth = brace_depth  # v6: record depth at function start
+        elif ext == ".go":
+            if re.match(r'(?:func\s+)\w+', stripped):
+                in_function = True
+                found_terminal = False
+                function_start_depth = brace_depth
 
         # Detect terminal statements
         if in_function:
-            if re.match(r'(?:return|throw|break|continue)\s', stripped):
+            if re.match(r'(?:return|throw|break|continue|panic)\s', stripped):
                 found_terminal = True
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
@@ -308,23 +305,6 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             #     typically used across files — skipping avoids false positives.
             #     TODO: Cross-file reference check for ALL_CAPS vars.
             if var_name.isupper():  # Constants are often used elsewhere
-                continue
-
-            # v6.2: Skip React hooks (useXxx pattern) — they are always used
-            # as hooks by other components/files that import them. Marking them
-            # as "unused" is almost always a false positive since the single-file
-            # check can't see cross-file imports.
-            if var_name.startswith('use') and len(var_name) > 3 and var_name[3].isupper():
-                # Check if this is exported (then definitely used cross-file)
-                # or if it's a hook pattern (useXxx = ... arrow function)
-                line_text = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ""
-                if 'export' in line_text or re.search(r'(?:const|let|var)\s+use[A-Z]\w+\s*=\s*(?:\(|async)', line_text):
-                    continue
-
-            # v6.2: Skip exported variables — they are used by other files.
-            # Check if the declaration line contains 'export' keyword.
-            decl_line = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ""
-            if 'export' in decl_line:
                 continue
 
             # Check if variable is used anywhere else in the file
@@ -448,6 +428,53 @@ def _collect_py_exports_imports(
             "line": line_num
         })
 
+def _collect_go_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Go exports and imports (uppercase = exported)."""
+    # Go imports
+    for m in re.finditer(r'import\s+"([^"]+)"', content):
+        imports[rel_path].add(m.group(1).split('/')[-1])
+    import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+    if import_block:
+        for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+            imports[rel_path].add(m.group(1).split('/')[-1])
+
+    # Go exports (uppercase = exported)
+    for m in re.finditer(r'^func\s+(\w+)\s*\(', content, re.MULTILINE):
+        fn_name = m.group(1)
+        if fn_name[0].isupper():
+            exports[rel_path].append({
+                "name": fn_name,
+                "type": "go_exported_func",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^type\s+(\w+)\s+', content, re.MULTILINE):
+        type_name = m.group(1)
+        if type_name[0].isupper():
+            exports[rel_path].append({
+                "name": type_name,
+                "type": "go_exported_type",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^var\s+(\w+)', content, re.MULTILINE):
+        var_name = m.group(1)
+        if var_name[0].isupper():
+            exports[rel_path].append({
+                "name": var_name,
+                "type": "go_exported_var",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^const\s+(\w+)', content, re.MULTILINE):
+        const_name = m.group(1)
+        if const_name[0].isupper():
+            exports[rel_path].append({
+                "name": const_name,
+                "type": "go_exported_const",
+                "line": content[:m.start()].count('\n') + 1
+            })
+
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
     all_imports: Dict[str, Set[str]],
@@ -467,24 +494,11 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
-        # Skip config files consumed by tools at runtime (not imported by app code)
-        # e.g., postcss.config.mjs, tailwind.config.ts, next.config.mjs, vite.config.ts
-        if any(x in file_path for x in ['.config.mjs', '.config.js', '.config.ts', '.config.cjs',
-                                          'jest.config', 'wdio.conf', 'playwright.config',
-                                          'vitest.config', 'webpack.config', 'rollup.config',
-                                          'tsconfig.json', 'biome.json']):
-            continue
-
-        # Skip middleware files — they're consumed by the framework, not imported
-        if 'middleware' in file_path.lower():
-            continue
-
         for export in exports:
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup',
-                        'config', 'middleware', 'withPWA', 'defineConfig', 'defineCloudflareConfig'}:
+            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
             if name not in all_imported_names:
@@ -533,16 +547,13 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
         # v6: Report functions with ref_count == 0 and status == "dead"
         # But skip: main() functions (entry points), pub functions (public API),
-        # Tauri IPC commands (exposed to frontend), and functions in test files
+        # and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
             if name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
-                continue
-            # Skip Tauri IPC commands — they're called from the frontend via invoke()
-            if node.get("is_tauri_command") or status == "ipc_exposed":
                 continue
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
@@ -576,26 +587,9 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
         if cls["status"] == "dead" and not cls.get("js"):
-            # Try to get file and line from CSS references
-            css_refs = cls.get("css", [])
-            file_path = "unknown"
-            line_num = 0
-            if css_refs and isinstance(css_refs, list):
-                first_ref = css_refs[0]
-                if isinstance(first_ref, dict):
-                    p = first_ref.get("path", "")
-                    if p:
-                        file_path = p
-                    line_num = first_ref.get("line", 0)
-
-            # If no CSS ref found, try to infer from the class name
-            # by searching CSS files directly
-            if file_path == "unknown":
-                file_path, line_num = _find_css_class_in_files(workspace, cls["name"])
-
             zombie.append({
-                "file": file_path,
-                "line": line_num,
+                "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
+                "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
                 "class": cls["name"],
                 "severity": "info",
                 "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
@@ -603,33 +597,6 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
             })
 
     return zombie[:50]
-
-
-def _find_css_class_in_files(workspace: str, class_name: str) -> tuple:
-    """Find the CSS file and line where a class is defined."""
-    # Sanitize class name for regex (handle special characters)
-    safe_name = re.escape(class_name)
-    pattern = re.compile(r'\.' + safe_name + r'\s*[{,:]')
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in {'.css', '.scss', '.less', '.sass'}:
-                continue
-            file_path = os.path.join(root, filename)
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                for m in pattern.finditer(content):
-                    line_num = content[:m.start()].count('\n') + 1
-                    rel_path = os.path.relpath(file_path, workspace)
-                    return rel_path, line_num
-            except IOError:
-                continue
-    return "unknown", 0
 
 def _detect_dead_listeners(workspace: str) -> List[Dict]:
     """Detect event listeners that listen for events on selectors that don't exist in HTML."""

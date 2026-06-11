@@ -21,15 +21,14 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file
+from utils import DEFAULT_IGNORE_DIRS, logger, safe_read_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
+    ".py", ".rs", ".vue", ".svelte", ".go"
 }
 
 # Thresholds
@@ -43,7 +42,6 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
-MAX_FILE_SIZE = 500 * 1024  # 500KB
 
 
 def detect_smells(
@@ -98,18 +96,7 @@ def detect_smells(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # Skip minified files
-            if '.min.' in filename:
-                continue
-
-            # Skip files exceeding size cap
-            try:
-                if os.path.getsize(file_path) > MAX_FILE_SIZE:
-                    continue
-            except OSError:
-                continue
-
-            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            content = safe_read_file(file_path)
             if content is None:
                 continue
 
@@ -341,6 +328,13 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
+    elif ext == ".go":
+        for i, line in enumerate(lines):
+            if re.match(r'(?:func\s+)\w+', line.strip()):
+                m = re.match(r'func\s+(\w+)', line.strip())
+                if m:
+                    fn_starts.append((i, m.group(1)))
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -444,6 +438,11 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         elif ext == ".rs":
             # Rust: 4 spaces per level
             level = indent // 4
+        elif ext == ".go":
+            # Go: tabs per level (1 tab = 1 level)
+            tab_count = line[:len(line) - len(stripped)].count('\t')
+            space_indent = len(line) - len(stripped) - tab_count
+            level = tab_count + space_indent // 4
         else:
             # JS/TS: 2 spaces per level
             level = indent // 2
@@ -582,6 +581,35 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
+                })
+
+    elif ext == ".go":
+        for m in re.finditer(r'func\s+\w+\s*(?:\([^)]*\)\s*)?\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options struct for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an options struct."
                 })
 
     return smells
@@ -871,18 +899,7 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # Skip minified files
-            if '.min.' in filename:
-                continue
-
-            # Skip files exceeding size cap
-            try:
-                if os.path.getsize(file_path) > MAX_FILE_SIZE:
-                    continue
-            except OSError:
-                continue
-
-            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            content = safe_read_file(file_path)
             if content is None:
                 continue
 
@@ -956,18 +973,7 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
 
             file_path = os.path.join(root, filename)
 
-            # Skip minified files
-            if '.min.' in filename:
-                continue
-
-            # Skip files exceeding size cap
-            try:
-                if os.path.getsize(file_path) > MAX_FILE_SIZE:
-                    continue
-            except OSError:
-                continue
-
-            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            content = safe_read_file(file_path)
             if content is None:
                 continue
 
