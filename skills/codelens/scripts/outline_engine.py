@@ -123,6 +123,10 @@ def get_workspace_outline(
             if ext not in source_extensions:
                 continue
 
+            # Skip TypeScript declaration files (auto-generated, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 

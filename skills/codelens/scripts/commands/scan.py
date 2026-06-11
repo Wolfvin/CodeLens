@@ -10,7 +10,7 @@ from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
     load_backend_registry, save_backend_registry,
-    build_frontend_registry
+    build_frontend_registry, compute_frontend_status
 )
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import (
@@ -24,6 +24,9 @@ from parsers.fallback_js_frontend import parse_js_frontend_fallback
 from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
+from parsers.fallback_java import parse_java_fallback
+from parsers.fallback_c import parse_c_fallback
+from parsers.fallback_go import parse_go_fallback
 
 from commands import register_command
 
@@ -124,40 +127,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                                                   and (e.get("to", "") in remaining_ids or not e.get("to", "")))]
                 save_backend_registry(workspace, existing_backend)
 
-            # Clean frontend data — remove entries whose only references are in deleted files.
-            # Class schema: {name, ref_count, status, css: [{path, ...}], js: [{path, ...}]}
-            # ID schema: {name, ref_count, status, defined_in_html: [{path, ...}], css: [{path, ...}], js: [{path, ...}]}
+            # Clean frontend data
             fe_classes = existing_frontend.get("classes", [])
             if isinstance(fe_classes, list):
-                cleaned_classes = []
-                for c in fe_classes:
-                    # Strip refs from deleted files, keep refs from surviving files
-                    surviving_css = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
-                    surviving_js = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
-                    if surviving_css or surviving_js:
-                        c["css"] = surviving_css
-                        c["js"] = surviving_js
-                        c["ref_count"] = len(surviving_css) + len(surviving_js)
-                        c["status"] = "active" if c["ref_count"] > 0 else "dead"
-                        cleaned_classes.append(c)
-                    # else: all refs were in deleted files → drop the entry
-                existing_frontend["classes"] = cleaned_classes
-
+                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
                 fe_ids = existing_frontend.get("ids", [])
-                cleaned_ids = []
-                for i in fe_ids:
-                    surviving_html = [r for r in i.get("defined_in_html", []) if r.get("path", "") not in del_set]
-                    surviving_css = [r for r in i.get("css", []) if r.get("path", "") not in del_set]
-                    surviving_js = [r for r in i.get("js", []) if r.get("path", "") not in del_set]
-                    if surviving_html or surviving_css or surviving_js:
-                        i["defined_in_html"] = surviving_html
-                        i["css"] = surviving_css
-                        i["js"] = surviving_js
-                        i["ref_count"] = len(surviving_css) + len(surviving_js)
-                        i["status"] = "active" if i["ref_count"] > 0 else ("dead" if not surviving_html else "active")
-                        cleaned_ids.append(i)
-                    # else: all refs were in deleted files → drop the entry
-                existing_frontend["ids"] = cleaned_ids
+                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
                 save_frontend_registry(workspace, existing_frontend)
 
             # Continue with incremental scan for changed/new files
@@ -474,11 +449,45 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
+    # Parse Java files
+    java_data = []
+    if files["java"]:
+        for path in files["java"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_java_fallback(content, os.path.relpath(path, workspace))
+                java_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Java file: {path}")
+
+    # Parse C/C++ files
+    c_cpp_data = []
+    if files["c_cpp"]:
+        for path in files["c_cpp"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_c_fallback(content, os.path.relpath(path, workspace))
+                c_cpp_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read C/C++ file: {path}")
+
     # Parse Go files
     go_data = []
     if files["go"]:
-        from parsers.fallback_go import parse_go_fallback
-
         for path in files["go"]:
             if incremental and changed_files and path not in changed_files:
                 continue
@@ -488,11 +497,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 refs = parse_go_fallback(content, os.path.relpath(path, workspace))
                 go_data.append({
                     "path": os.path.relpath(path, workspace),
-                    "nodes": refs.get("backend", {}).get("functions", []),
-                    "edges": refs.get("backend", {}).get("edges", []),
-                    "types": refs.get("backend", {}).get("types", []),
-                    "imports": refs.get("backend", {}).get("imports", []),
-                    "package": refs.get("package", ""),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
                 })
             except IOError:
                 logger.debug(f"Failed to read Go file: {path}")
@@ -501,7 +507,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data + go_data
+        new_parsed_data = rust_data + js_backend_data + python_data + java_data + c_cpp_data + go_data
+        # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
+        for item in new_parsed_data:
+            for node in item.get("nodes", []):
+                if "fn" not in node and "name" in node:
+                    node["fn"] = node["name"]
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -512,9 +523,15 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data + go_data:
+        for item in rust_data + js_backend_data + python_data + java_data + c_cpp_data + go_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
+
+        # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
+        # (JS/Rust/Python parsers use 'fn', Java/C/Go parsers use 'name')
+        for node in all_nodes:
+            if "fn" not in node and "name" in node:
+                node["fn"] = node["name"]
 
         resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
 
@@ -545,9 +562,14 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "python": len(files["python"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
-            "go": len(files["go"])
+            "java": len(files["java"]),
+            "c_cpp": len(files["c_cpp"]),
+            "go": len(files["go"]),
+            "binaries": len(files["binaries"])
         },
         "python_parsed": len(python_data),
+        "java_parsed": len(java_data),
+        "c_cpp_parsed": len(c_cpp_data),
         "go_parsed": len(go_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
@@ -559,7 +581,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "binary_warning": f"Found {len(files['binaries'])} binary file(s) — not analyzed for code quality" if files["binaries"] else None,
+        "binary_files": [os.path.relpath(f, workspace) for f in files["binaries"]] if files["binaries"] else []
     }
 
 
@@ -578,9 +602,45 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "python": [],
         "vue": [],
         "svelte": [],
-        "go": []
+        "java": [],
+        "c_cpp": [],
+        "go": [],
+        "binaries": [],
     }
 
+    BINARY_EXTENSIONS = {
+        '.so', '.a', '.o', '.dll', '.dylib', '.lib',
+        '.exe', '.wasm', '.apk', '.jar', '.class',
+        '.obj', '.pdb', '.bin', '.dex',
+    }
+
+    # Binary detection uses a lighter ignore set — 'bin' directories
+    # often contain meaningful .wasm/.so artifacts alongside build output
+    BINARY_IGNORE_DIRS = frozenset({
+        'node_modules', '.git', 'dist', '.codelens', '.next', '.cache',
+        'vendor', '.venv', 'venv', 'env', '.idea', '.vscode', 'coverage',
+        '.pytest_cache', '.tox', '__pycache__', '.cargo', '.rustup',
+        'target', 'build',
+    })
+
+    # First pass: discover binary files with lighter ignore rules
+    for root, dirs, filenames in os.walk(workspace):
+        rel_root = os.path.relpath(root, workspace)
+        parts = rel_root.replace(os.sep, '/').split('/')
+        if any(part in BINARY_IGNORE_DIRS for part in parts if part != '.'):
+            dirs[:] = [d for d in dirs if d not in BINARY_IGNORE_DIRS]
+            continue
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        dirs[:] = [d for d in dirs if d not in BINARY_IGNORE_DIRS and not d.startswith('.')]
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in BINARY_EXTENSIONS:
+                file_path = os.path.join(root, filename)
+                files["binaries"].append(file_path)
+
+    # Second pass: discover source files with standard ignore rules
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
         
@@ -604,6 +664,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 continue
 
             ext = os.path.splitext(filename)[1].lower()
+
+            # Skip TypeScript declaration files (type-only, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
 
             if ext in ('.html', '.htm'):
                 files["html"].append(file_path)
@@ -630,11 +694,30 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["vue"].append(file_path)
             elif ext == '.svelte':
                 files["svelte"].append(file_path)
-            elif ext == '.go':
-                files["go"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
+            elif ext in ('.java', '.kt'):
+                files["java"].append(file_path)
+            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
+                files["c_cpp"].append(file_path)
+            elif ext == '.go':
+                files["go"].append(file_path)
+            elif ext in BINARY_EXTENSIONS:
+                files["binaries"].append(file_path)
 
+    return _deduplicate_files(files)
+
+
+def _deduplicate_files(files: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """Remove duplicate file entries across all categories."""
+    for key in files:
+        seen = set()
+        unique = []
+        for f in files[key]:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
+        files[key] = unique
     return files
 
 

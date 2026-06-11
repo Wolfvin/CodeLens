@@ -36,6 +36,14 @@ SOURCE_EXTENSIONS = {
     ".json", ".toml", ".cfg", ".ini", ".conf",
 }
 
+# Lock/auto-generated files to skip — they contain URLs/hashes that trigger
+# false positives (e.g., @scope in npm registry URLs looks like credentials)
+LOCK_FILES_TO_SKIP = {
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+    "bun.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock",
+    "Cargo.lock", "composer.lock", "pipfile.lock",
+}
+
 # ─── Secret Pattern Definitions ────────────────────────────────
 
 SECRET_PATTERNS = {
@@ -338,6 +346,15 @@ def detect_secrets(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip auto-generated lock files — they contain URLs/hashes that
+            # trigger false positives (e.g., @scope in npm registry URLs)
+            if os.path.basename(file_path) in LOCK_FILES_TO_SKIP:
+                continue
+
+            # Skip TypeScript declaration files (type-only, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
