@@ -79,14 +79,16 @@ def compute_summary(workspace, outline_data, scan_result):
     for outline in outline_data.get('outlines', []):
         lang = outline.get('language', 'unknown')
         files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-        total_functions += len(outline.get('functions', []))
-        total_classes += len(outline.get('classes', []))
-        total_interfaces += len(outline.get('interfaces', []))
-        total_types += len(outline.get('types', []))
-        total_exports += len(outline.get('exports', []))
-        total_components += len(outline.get('components', []))
-        total_imports += len(outline.get('imports', []))
-        for cls in outline.get('classes', []):
+        # Outline data may be nested under 'outline' key or at top level
+        ol = outline.get('outline', outline)
+        total_functions += len(ol.get('functions', []))
+        total_classes += len(ol.get('classes', []))
+        total_interfaces += len(ol.get('interfaces', []))
+        total_types += len(ol.get('types', []))
+        total_exports += len(ol.get('exports', []))
+        total_components += len(ol.get('components', []))
+        total_imports += len(ol.get('imports', []))
+        for cls in ol.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)
@@ -156,3 +158,48 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.0"
+
+
+# ─── Safe File Reading ──────────────────────────────────────
+
+# Default maximum file size for engines that scan source files.
+# Files larger than this are skipped to avoid slow regex/memory issues.
+DEFAULT_MAX_FILE_SIZE = 200 * 1024  # 200KB
+
+
+def safe_read_file(file_path: str, max_size: int = DEFAULT_MAX_FILE_SIZE) -> Optional[str]:
+    """
+    Safely read a file with size checking.
+
+    Returns file content as string, or None if the file:
+    - doesn't exist or can't be read
+    - exceeds max_size
+    - appears to be minified/bundled (few lines with very long average length)
+
+    This function should be used by all engine scanners instead of raw open()/read().
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+
+        # Detect minified/bundled files: very few lines with very long average length
+        # These are not human-written code and should be skipped
+        line_count = content.count('\n') + 1
+        if line_count < 50 and len(content) > 0:
+            avg_line_len = len(content) / line_count
+            if avg_line_len > 500:
+                return None
+
+        # Skip files that are almost certainly auto-generated
+        first_500 = content[:500].lower()
+        minified_markers = ['/*!', 'minified', 'uglify', 'webpack/bootstrap', 'bundled']
+        if any(marker in first_500 for marker in minified_markers):
+            return None
+
+        return content
+    except (IOError, OSError):
+        return None

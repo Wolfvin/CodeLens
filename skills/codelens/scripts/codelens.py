@@ -214,8 +214,12 @@ def main():
     for cmd_name, cmd_info in sorted(registry.items()):
         sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
         cmd_info["add_args"](sub)
+        # Add per-command format option so --format works AFTER command name
+        sub.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
+                         help="Output format (default: json)")
 
-    # Global format option
+    # Global format option (works BEFORE command name)
+    # This is needed for backward compatibility: `codelens --format markdown <cmd> <path>`
     parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
                         help="Output format (default: json)")
 

@@ -24,7 +24,14 @@ def execute(args, workspace):
     )
     # Add decision tree fields
     if result.get("status") == "ok":
-        affected_count = len(result.get("affected", result.get("affected_files", [])))
+        affected = result.get("affected", {})
+        # Count actual items: direct + indirect dependents, not dict keys
+        if isinstance(affected, dict):
+            affected_count = len(affected.get("direct", [])) + len(affected.get("indirect", []))
+        elif isinstance(affected, list):
+            affected_count = len(affected)
+        else:
+            affected_count = 0
         if affected_count == 0:
             result["risk_level"] = "low"
             result["recommended_action"] = "Safe to proceed. No dependent code found."

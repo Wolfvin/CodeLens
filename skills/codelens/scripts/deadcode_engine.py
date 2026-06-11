@@ -204,7 +204,8 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
 
     # Remove comments and strings for more accurate detection
     clean_content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
-    clean_content = re.sub(r'/\*.*?\*/', '', clean_content, flags=re.DOTALL)
+    # Use bounded quantifier to avoid catastrophic backtracking
+    clean_content = re.sub(r'/\*[\s\S]{0,50000}?\*/', '', clean_content)
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
         # Find const/let/var declarations

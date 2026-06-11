@@ -19,6 +19,7 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
@@ -41,6 +42,12 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
+
+# Performance limits
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
+MAX_LINE_LENGTH = 500       # Lines longer than this indicate minified/bundled files
+MAX_RESULTS_PER_CATEGORY = 100  # Cap results per category to avoid explosion
+PER_FILE_TIMEOUT_SEC = 8    # Max seconds per file across all detectors
 
 def detect_smells(
     workspace: str,
@@ -94,17 +101,36 @@ def detect_smells(
             rel_path = os.path.relpath(file_path, workspace)
 
             try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    files_scanned += 1
+                    continue
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
                 continue
 
-            files_scanned += 1
             lines = content.split('\n')
             line_count = len(lines)
 
+            # Skip minified/bundled files (very long lines = not human-written code)
+            if line_count > 0 and line_count < 50:
+                avg_line_len = len(content) / line_count
+                if avg_line_len > MAX_LINE_LENGTH:
+                    files_scanned += 1
+                    continue
+
+            # Skip files that are almost certainly auto-generated
+            first_lines = '\n'.join(lines[:5]).lower()
+            if any(marker in first_lines for marker in ['/*!', '/*!', 'minified', 'uglify', 'webpack', 'bundled']):
+                files_scanned += 1
+                continue
+
+            files_scanned += 1
+            file_start = time.monotonic()
+
             # Large file detection
-            if "large_file" in categories:
+            if "large_file" in categories and len(all_smells["large_file"]) < MAX_RESULTS_PER_CATEGORY:
                 if line_count > LARGE_FILE_LINES_CRITICAL:
                     all_smells["large_file"].append({
                         "file": rel_path,
@@ -122,38 +148,46 @@ def detect_smells(
                         "suggestion": "Consider splitting into smaller modules."
                     })
 
+            # Per-file timeout check before running expensive detectors
+            if time.monotonic() - file_start > PER_FILE_TIMEOUT_SEC:
+                continue
+
             # Long function detection
-            if "long_fn" in categories:
+            if "long_fn" in categories and len(all_smells["long_fn"]) < MAX_RESULTS_PER_CATEGORY:
                 fns = _detect_long_functions(content, ext, rel_path)
                 all_smells["long_fn"].extend(fns)
 
+            # Per-file timeout check
+            if time.monotonic() - file_start > PER_FILE_TIMEOUT_SEC:
+                continue
+
             # Deep nesting detection
-            if "deep_nesting" in categories:
+            if "deep_nesting" in categories and len(all_smells["deep_nesting"]) < MAX_RESULTS_PER_CATEGORY:
                 nested = _detect_deep_nesting(content, ext, rel_path)
                 all_smells["deep_nesting"].extend(nested)
 
             # Too many parameters
-            if "many_params" in categories:
+            if "many_params" in categories and len(all_smells["many_params"]) < MAX_RESULTS_PER_CATEGORY:
                 params = _detect_many_params(content, ext, rel_path)
                 all_smells["many_params"].extend(params)
 
             # Callback hell
-            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"} and len(all_smells["callback_hell"]) < MAX_RESULTS_PER_CATEGORY:
                 cb = _detect_callback_hell(content, rel_path)
                 all_smells["callback_hell"].extend(cb)
 
             # Magic values
-            if "magic_values" in categories:
+            if "magic_values" in categories and len(all_smells["magic_values"]) < MAX_RESULTS_PER_CATEGORY:
                 magic = _detect_magic_values(content, ext, rel_path)
                 all_smells["magic_values"].extend(magic)
 
             # Complex conditionals
-            if "complex_conditional" in categories:
+            if "complex_conditional" in categories and len(all_smells["complex_conditional"]) < MAX_RESULTS_PER_CATEGORY:
                 conds = _detect_complex_conditionals(content, ext, rel_path)
                 all_smells["complex_conditional"].extend(conds)
 
             # God object (classes/modules with too many methods)
-            if "god_object" in categories:
+            if "god_object" in categories and len(all_smells["god_object"]) < MAX_RESULTS_PER_CATEGORY:
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
 

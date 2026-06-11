@@ -39,11 +39,11 @@ def add_args(parser):
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    # Auto-enable incremental mode if registry already exists
-    if not incremental:
-        registry_path = os.path.join(workspace, '.codelens', 'backend.json')
-        if os.path.exists(registry_path):
-            incremental = True
+    # Only auto-enable incremental if the user didn't explicitly request a full scan
+    # and the registry already exists. We check for explicit --incremental flag.
+    # Note: When user runs "scan" without --incremental, they expect a full scan.
+    # Auto-incremental was causing confusion where 2nd scan would miss changes.
+    # Now: explicit --incremental for incremental, bare "scan" for full scan.
     return cmd_scan(workspace, incremental)
 
 

@@ -25,9 +25,19 @@ developers toward the optimal fix.
 
 import os
 import re
+import signal
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
+
+# ─── Safety Limits ────────────────────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this to avoid slow regex
+PER_REGEX_TIMEOUT_SEC = 2    # Max seconds per single regex.finditer call
+PER_FILE_TIMEOUT_SEC = 10   # Max seconds per file across all patterns
+MAX_MATCHES_PER_PATTERN = 50  # Cap matches per pattern per file to prevent runaway results
+WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with wide quantifiers
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -62,7 +72,7 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'(?:for\s*\(|while\s*\(|\.forEach\s*\()'
-                    r'[^}]{0,300}?'
+                    r'[^}]{0,80}?'
                     r'\.(?:find|findOne|findById|query|execute|raw|sql|createQuery)\s*\('
                 ),
                 "hint": "Sequential DB query inside loop — potential N+1 query problem",
@@ -72,7 +82,7 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'(?:for\s+\w+\s+in\s+|while\s+)'
-                    r'[\s\S]{0,300}?'
+                    r'[^\n]{0,80}?'
                     r'(?:'
                     r'objects\.(?:filter|get|select_related|prefetch_related|all|exclude|annotate|aggregate)\s*\('
                     r'|\.query\s*\.\s*(?:filter|get|all|join|filter_by)\s*\('
@@ -88,9 +98,9 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'(?:for\s*\(|while\s*\(|\.forEach\s*\()'
-                    r'[^}]{0,300}?'
+                    r'[^}]{0,80}?'
                     r'(?:knex|sequelize|getRepository|createQueryBuilder|Model\.)'
-                    r'[^;]{0,80}?\.(?:select|where|from|find|query)\s*\('
+                    r'[^;]{0,60}?\.(?:select|where|from|find|query)\s*\('
                 ),
                 "hint": "Query builder call inside loop — potential N+1 query problem",
                 "fix_suggestion": "Move the query builder outside the loop, use IN-clause or a DataLoader pattern.",
@@ -182,7 +192,7 @@ PERF_HINT_CATEGORIES = {
                 "regex": (
                     r'(?:app\.(?:get|post|put|delete|patch)|router\.(?:get|post|put|delete|patch)|'
                     r'server\.(?:get|post|put|delete|patch))'
-                    r'[^}]{0,500}?'
+                    r'[^}]{0,150}?'
                     r'fs\.(?:readFileSync|writeFileSync|appendFileSync|unlinkSync|existsSync|'
                     r'readdirSync|statSync|mkdirSync|rmSync)'
                 ),
@@ -199,7 +209,7 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'@(?:app|router)\.(?:route|get|post|put|delete|patch)\s*\([^)]*\)'
-                    r'[^}]{0,500}?'
+                    r'[^}]{0,150}?'
                     r'subprocess\.(?:call|run|check_output|check_call)\s*\('
                 ),
                 "hint": "Subprocess call inside request handler — blocks the worker thread",
@@ -209,7 +219,7 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'@(?:app|blueprint)\.(?:route|get|post|put|delete)\s*\([^)]*\)'
-                    r'[^}]{0,500}?'
+                    r'[^}]{0,150}?'
                     r'open\s*\([^)]+\)\.read\s*\(\s*\)'
                 ),
                 "hint": "Synchronous file read in route handler — blocks the worker thread",
@@ -219,7 +229,7 @@ PERF_HINT_CATEGORIES = {
             {
                 "regex": (
                     r'@(?:app|blueprint)\.(?:route|get|post|put|delete)\s*\([^)]*\)'
-                    r'[^}]{0,500}?'
+                    r'[^}]{0,150}?'
                     r'requests\.(?:get|post|put|delete|patch|head)\s*\('
                 ),
                 "hint": "Blocking HTTP request (requests library) in route handler — stalls the worker",
@@ -362,7 +372,7 @@ PERF_HINT_CATEGORIES = {
             },
             # No ETag / If-Modified-Since header handling in API responses
             {
-                "regex": r'(?:app|router)\.(?:get|all)\s*\(\s*["\'][^"\']+["\'][^}]{0,1000}?(?:res\.(?:json|send|end))',
+                "regex": r'(?:app|router)\.(?:get|all)\s*\(\s*["\'][^"\']+["\'][^}]{0,200}?(?:res\.(?:json|send|end))',
                 "negative_regex": r'(?:ETag|etag|If-Modified-Since|Cache-Control|cache-control|stale-while-revalidate)',
                 "hint": "API response without caching headers (ETag, Cache-Control) — clients re-fetch unchanged data",
                 "fix_suggestion": "Add ETag, Cache-Control, or Last-Modified headers to enable conditional requests.",
@@ -451,6 +461,10 @@ def detect_perf_hints(
             rel_path = os.path.relpath(file_path, workspace)
 
             try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    files_scanned += 1
+                    continue
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
@@ -462,8 +476,10 @@ def detect_perf_hints(
             is_test = _is_test_file(rel_path)
 
             # Scan for all categories relevant to this file type
+            file_start = time.monotonic()
             file_findings = _scan_file_hints(
-                content, rel_path, ext, is_test, categories_to_scan
+                content, rel_path, ext, is_test, categories_to_scan,
+                file_start_time=file_start
             )
             findings.extend(file_findings)
 
@@ -505,7 +521,8 @@ def _scan_file_hints(
     rel_path: str,
     ext: str,
     is_test: bool,
-    categories: Dict[str, Dict[str, Any]]
+    categories: Dict[str, Dict[str, Any]],
+    file_start_time: Optional[float] = None
 ) -> List[Dict[str, Any]]:
     """Scan a single file's content for performance anti-patterns."""
     findings: List[Dict[str, Any]] = []
@@ -516,6 +533,12 @@ def _scan_file_hints(
             continue
 
         for pattern_def in cat_def["patterns"]:
+            # Per-file timeout: skip remaining patterns if file is taking too long
+            if file_start_time is not None:
+                elapsed = time.monotonic() - file_start_time
+                if elapsed > PER_FILE_TIMEOUT_SEC:
+                    logger.debug(f"Per-file timeout ({PER_FILE_TIMEOUT_SEC}s) reached for {rel_path}, skipping remaining patterns")
+                    return findings
             # Handle special pattern types
             if pattern_def.get("self_call_regex"):
                 # Recursive function detection: find function defs that call themselves
@@ -536,8 +559,23 @@ def _scan_file_hints(
             regex = pattern_def["regex"]
             negative_regex = pattern_def.get("negative_regex")
 
+            # Truncate content for regex patterns with wide quantifiers
+            # to prevent catastrophic backtracking on large files.
+            # Patterns with {0,N} or .*? are the main risk.
+            scan_content = content
+            if len(content) > WIDE_QUANT_TRUNCATION and _has_wide_quantifier(regex):
+                scan_content = content[:WIDE_QUANT_TRUNCATION]
+
             try:
-                for match in re.finditer(regex, content, re.DOTALL):
+                # Use a timeout to prevent catastrophic backtracking
+                matches = _timed_finditer(regex, scan_content)
+                if matches is None:
+                    # Timed out — skip this pattern for this file
+                    continue
+
+                for match_idx, match in enumerate(matches):
+                    if match_idx >= MAX_MATCHES_PER_PATTERN:
+                        break
                     line_num = content[:match.start()].count('\n') + 1
 
                     # Apply negative regex: if the negative pattern exists in the
@@ -923,3 +961,84 @@ def _generate_recommendations(
     )
 
     return recs
+
+
+# ─── Regex Safety Helpers ──────────────────────────────────────
+
+# Precompiled check for patterns prone to catastrophic backtracking
+_WIDE_QUANTIFIER_RE = re.compile(r'\{0,\d+\}|\.\*\?|\.\+\?')
+
+
+def _has_wide_quantifier(regex_pattern: str) -> bool:
+    """Check if a regex pattern contains wide quantifiers that risk backtracking."""
+    return bool(_WIDE_QUANTIFIER_RE.search(regex_pattern))
+
+
+class _RegexTimeout(Exception):
+    """Raised when a regex search exceeds the time limit."""
+    pass
+
+
+def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEOUT_SEC):
+    """
+    Run re.finditer with a time limit to prevent catastrophic backtracking.
+    Returns list of matches (capped at MAX_MATCHES_PER_PATTERN), or None if timed out.
+    """
+    compiled = re.compile(pattern, re.DOTALL)
+
+    # For short content, just run directly (no timeout overhead)
+    if len(content) < 5000:
+        try:
+            matches = []
+            for i, match in enumerate(compiled.finditer(content)):
+                if i >= MAX_MATCHES_PER_PATTERN:
+                    break
+                matches.append(match)
+            return matches
+        except (re.error, RuntimeError):
+            return None
+
+    # For longer content, use threading-based timeout
+    try:
+        import threading
+
+        result = [None]  # Use list to share between threads
+        error = [None]
+
+        def _run():
+            try:
+                matches = []
+                for i, match in enumerate(compiled.finditer(content)):
+                    if i >= MAX_MATCHES_PER_PATTERN:
+                        break
+                    matches.append(match)
+                result[0] = matches
+            except (re.error, RuntimeError) as e:
+                error[0] = e
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        worker.join(timeout=timeout)
+
+        if worker.is_alive():
+            # Thread is still running — it will be cleaned up at exit
+            # because it's daemon. Log and skip this pattern.
+            logger.debug(f"Regex timed out after {timeout}s for pattern: {pattern[:80]}...")
+            return None
+
+        if error[0]:
+            return None
+
+        return result[0]
+
+    except Exception:
+        # Fallback: just try running directly with a result limit
+        try:
+            matches = []
+            for i, match in enumerate(compiled.finditer(content)):
+                if i >= MAX_MATCHES_PER_PATTERN:
+                    break
+                matches.append(match)
+            return matches
+        except (re.error, RuntimeError):
+            return None

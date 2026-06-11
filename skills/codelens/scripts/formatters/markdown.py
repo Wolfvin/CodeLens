@@ -396,14 +396,16 @@ def _md_trace(data: Dict, lines: list) -> None:
                     lines.append(f"### {dir_key.title()}")
                     for chain in dir_chains[:10]:
                         if isinstance(chain, dict):
-                            path = chain.get("path", [])
-                            if path:
+                            path = chain.get("path", "")
+                            if path and isinstance(path, str):
+                                lines.append(f"- {path}")
+                            elif path and isinstance(path, list):
                                 lines.append(f"- {' → '.join(str(p) for p in path)}")
                             else:
                                 fn = chain.get("fn", "")
                                 file = chain.get("file", "")
-                                depth = chain.get("depth", "")
-                                lines.append(f"- `{' → ' * depth}{fn}` ({file})")
+                                depth = chain.get("depth", 0)
+                                lines.append(f"- `{'  ' * depth}{fn}` ({file})")
                         elif isinstance(chain, list):
                             lines.append(f"- {' → '.join(str(p) for p in chain)}")
                         else:
@@ -412,8 +414,15 @@ def _md_trace(data: Dict, lines: list) -> None:
         elif isinstance(chains, list):
             for chain in chains[:10]:
                 if isinstance(chain, dict):
-                    path = chain.get("path", [])
-                    lines.append(f"- {' → '.join(str(p) for p in path)}")
+                    path = chain.get("path", "")
+                    if path and isinstance(path, str):
+                        lines.append(f"- {path}")
+                    elif path and isinstance(path, list):
+                        lines.append(f"- {' → '.join(str(p) for p in path)}")
+                    else:
+                        fn = chain.get("fn", "")
+                        file = chain.get("file", "")
+                        lines.append(f"- `{fn}` ({file})")
                 elif isinstance(chain, list):
                     lines.append(f"- {' → '.join(str(p) for p in chain)}")
                 else:
@@ -447,13 +456,22 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     stats = data.get("stats", {})
     lines.append("## Dead Code Analysis")
     lines.append("")
-    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
-    lines.append(f"- Unreachable: {stats.get('unreachable', 0)} | Unused exports: {stats.get('unused_exports', 0)} | Zombie CSS: {stats.get('zombie_css', 0)}")
+    lines.append(f"- Total dead: {stats.get('total_dead_code', stats.get('total_dead', 0))}")
+    by_cat = stats.get('by_category', {})
+    lines.append(f"- Unreachable: {by_cat.get('unreachable', stats.get('unreachable', 0))} | Unused exports: {by_cat.get('unused_exports', stats.get('unused_exports', 0))} | Zombie CSS: {by_cat.get('zombie_css', stats.get('zombie_css', 0))}")
     removal_safety = data.get("removal_safety", "")
     if removal_safety:
         lines.append(f"- **Removal safety:** {removal_safety}")
     lines.append("")
-    items = data.get("dead_items", data.get("items", []))
+    # Dead code results may be in 'results' (categorized dict) or 'items' (flat list)
+    results_dict = data.get("results", {})
+    if isinstance(results_dict, dict) and results_dict:
+        items = []
+        for cat_items in results_dict.values():
+            if isinstance(cat_items, list):
+                items.extend(cat_items)
+    else:
+        items = data.get("dead_items", data.get("items", []))
     if items:
         lines.append("### Items")
         for item in items[:15]:
@@ -1779,6 +1797,12 @@ def _md_ask(data: Dict, lines: list) -> None:
         "debug-leak": _md_debug_leak,
         "state-map": _md_state_map,
         "dependents": _md_dependents,
+        "diff": _md_diff,
+        "detect": _md_detect,
+        "refactor-safe": _md_refactor_safe,
+        "css-deep": _md_css_deep,
+        "a11y": _md_a11y,
+        "regex-audit": _md_regex_audit,
     }
 
     formatter = formatter_map.get(sub_command)
