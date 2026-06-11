@@ -20,7 +20,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".cc", ".cpp", ".cxx", ".c", ".h"}
 
 def detect_config_drift(
     workspace: str,
@@ -390,16 +390,107 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
 
 
 def _detect_local_packages(workspace: str) -> Set[str]:
-    """Detect local package names (directories with __init__.py) in the workspace.
-    These are not external dependencies — they're part of the project itself.
+    """Detect local package names (directories with __init__.py or Cargo.toml)
+    in the workspace. These are not external dependencies — they're part of
+    the project itself.
+
+    For Rust workspaces, also reads Cargo.toml [workspace] members and
+    the [package] name from each member's Cargo.toml.
+
+    For Python, detects directories with __init__.py as local packages.
     """
     local = set()
+
+    # Detect Python local packages
     for entry in os.listdir(workspace):
         entry_path = os.path.join(workspace, entry)
         if os.path.isdir(entry_path):
             # Check if it's a Python package (has __init__.py)
             if os.path.exists(os.path.join(entry_path, '__init__.py')):
                 local.add(entry)
+
+    # Detect Rust workspace members and crate-local modules
+    cargo_toml = os.path.join(workspace, "Cargo.toml")
+    if os.path.isfile(cargo_toml):
+        try:
+            with open(cargo_toml, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Parse [workspace] members
+            in_workspace = False
+            in_array_members = False
+            for line in content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[workspace]':
+                    in_workspace = True
+                    continue
+                elif stripped.startswith('['):
+                    in_workspace = False
+                    in_array_members = False
+                    continue
+
+                if in_workspace:
+                    # Array form: members = ["crate1", "crate2"]
+                    m = re.match(r'members\s*=\s*\[', stripped)
+                    if m:
+                        in_array_members = True
+                        # Extract members from same line
+                        for name_m in re.finditer(r'"([^"]+)"', stripped):
+                            local.add(name_m.group(1))
+                        if ']' in stripped:
+                            in_array_members = False
+                        continue
+                    if in_array_members:
+                        for name_m in re.finditer(r'"([^"]+)"', stripped):
+                            local.add(name_m.group(1))
+                        if ']' in stripped:
+                            in_array_members = False
+
+            # Also read each workspace member's Cargo.toml to get the crate name
+            # This is important because the directory name may differ from the crate name
+            workspace_members_dir = os.path.join(workspace, "crates")
+            if os.path.isdir(workspace_members_dir):
+                for member_dir in os.listdir(workspace_members_dir):
+                    member_cargo = os.path.join(workspace_members_dir, member_dir, "Cargo.toml")
+                    if os.path.isfile(member_cargo):
+                        try:
+                            with open(member_cargo, 'r', encoding='utf-8') as f:
+                                member_content = f.read()
+                            # Extract [package] name
+                            in_package = False
+                            for line in member_content.split('\n'):
+                                stripped = line.strip()
+                                if stripped == '[package]':
+                                    in_package = True
+                                    continue
+                                elif stripped.startswith('['):
+                                    in_package = False
+                                    continue
+                                if in_package:
+                                    m = re.match(r'name\s*=\s*"([^"]+)"', stripped)
+                                    if m:
+                                        local.add(m.group(1))
+                        except IOError:
+                            pass
+
+            # Also detect the root crate's own name
+            in_package = False
+            for line in content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[package]':
+                    in_package = True
+                    continue
+                elif stripped.startswith('['):
+                    in_package = False
+                    continue
+                if in_package:
+                    m = re.match(r'name\s*=\s*"([^"]+)"', stripped)
+                    if m:
+                        local.add(m.group(1))
+
+        except IOError:
+            logger.debug("Config drift: failed to read Cargo.toml for workspace members", exc_info=True)
+
     return local
 
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:

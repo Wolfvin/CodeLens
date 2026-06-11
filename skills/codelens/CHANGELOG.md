@@ -5,6 +5,38 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] — 2026-06-12
+
+### Added
+
+- **Go fallback parser** (`scripts/parsers/fallback_go.py`): New regex-based Go parser that extracts functions, methods (with receivers), structs, interfaces, and function call edges. Supports Go's exported/unexported naming convention (uppercase = exported). This enables CodeLens to analyze Go codebases like Prometheus, InfluxDB, and CockroachDB.
+- **C/C++ fallback parser** (`scripts/parsers/fallback_cpp.py`): New regex-based C/C++ parser that extracts functions, methods, classes, namespaces, and function call edges. Handles both standalone functions and class member functions (including out-of-class definitions like `ClassName::methodName`).
+- **`resolve_tauri_ipc_from_apimap` in edge_resolver** (`scripts/edge_resolver.py`): Implements Tauri IPC cross-language edge resolution by matching frontend `invoke('commandName')` calls to Rust `#[tauri::command]` handlers. Creates synthetic `tauri_ipc` edges so Rust handlers appear as "active" in the call graph.
+- **`scan_binary_artifacts` and `scan_tauri_artifacts` in utils** (`scripts/utils.py`): Implements binary artifact scanning (detects .exe, .dll, .so, .wasm, Electron apps, large assets) and Tauri-specific artifact scanning (src-tauri/ detection, tauri.conf.json parsing, capabilities/permissions, sidecar binaries, security audit).
+- **`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file` in utils** (`scripts/utils.py`): Performance constants and utility functions previously missing but imported by envcheck_engine, refactor_safe_engine, and other modules.
+- **Go and C++ file parsing in scan command** (`scripts/commands/scan.py`): The scan command now actually parses .go and .cpp/.c/.h files (previously discovered them but silently skipped).
+- **Rust inline test detection** (`scripts/testmap_engine.py`): New `_split_rust_inline_tests()` function that detects `#[cfg(test)]` modules within Rust source files and extracts `#[test]` functions. These inline tests are now correctly recognized for test coverage mapping, instead of being invisible.
+- **Rust workspace member detection in config-drift** (`scripts/configdrift_engine.py`): `_detect_local_packages()` now reads Cargo.toml [workspace] members, root crate name, and sub-crate names from crates/ directories. This eliminates false "missing dependency" reports for workspace-internal crates.
+
+### Fixed
+
+- **CRITICAL: `scan` command broken** — `resolve_tauri_ipc_from_apimap` was missing from `edge_resolver.py`, causing ImportError that prevented the scan command from loading. 8+ downstream commands returned empty results because the registry was never built.
+- **CRITICAL: `binary-scan` command broken** — `scan_binary_artifacts` and `scan_tauri_artifacts` were missing from `utils.py`, causing ImportError that prevented the binary-scan command from loading.
+- **CRITICAL: 4 more commands broken on import** — `ask`, `env_check`, `handbook`, `refactor_safe` commands failed to load due to missing `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, and `is_generated_file` in `utils.py`. Total: 6 commands completely broken on every invocation.
+- **HIGH: Go/C++ files discovered but never parsed** — `discover_files()` in scan.py put .go and .cpp files into `files["go"]` and `files["cpp"]`, but there were no parsing loops for them. Files were silently ignored, making all Go and C++ analysis return empty results.
+- **HIGH: Rust match arm dead-code false positives** — The `_detect_unreachable_code()` function flagged code after `return`/`break` in Rust match arms as "unreachable", but each match arm is a separate branch. Added match expression tracking (`in_match` flag) and arm boundary detection (`,` separator and `=>` pattern) to suppress false positives.
+- **HIGH: Rust `#[test]` functions invisible to test-map** — Rust source files with inline `#[cfg(test)]` modules were classified as source files (not test files) because they didn't match `TEST_FILE_PATTERNS`. The `#[test]` functions within were never detected, reporting 0% test coverage for Rust codebases. Added inline test detection and splitting.
+- **HIGH: `config-drift` false positives for Rust workspace members** — Sub-crates in Rust workspaces (e.g., `crates/reqwest`) were reported as "missing dependencies" because `_detect_local_packages()` only detected Python packages. Added Cargo.toml [workspace] member parsing.
+- **MEDIUM: `debug-leak` timeout on large codebases** — Default `MAX_FILES_PER_RUN` was 3000, causing timeouts on repos with 3000+ source files. Reduced to 1500.
+- **MEDIUM: Duplicate version lines in pyproject.toml** — The file had 5 `version` lines (5.7.1 x4, then 5.9.0), which is invalid TOML. Consolidated to single `version = "5.10.0"`.
+- **MEDIUM: Source extensions missing Go/C++** — `deadcode_engine.py` and `configdrift_engine.py` didn't include `.go`, `.cc`, `.cpp`, `.c`, `.h` extensions, so these files were always skipped.
+
+### Test Target Documentation
+
+- **prometheus/prometheus** (GitHub): Go time-series database/monitoring system. 39MB repo, ~1800 .go files. Tests Go fallback parser and Go-specific analysis. Previous version returned empty results for all commands on this repo due to missing Go parser.
+- **axios/axios** (GitHub): JavaScript HTTP/XHR client library. 5.5MB repo, ~220 source files. Tests XHR/network pattern detection and JavaScript analysis.
+- **seanmonstar/reqwest** (GitHub): Rust HTTP client library. 1.9MB repo, ~76 .rs files with inline tests. Tests Rust parser, inline test detection, and Rust-specific analysis patterns.
+
 ## [5.8.1] — 2026-06-12
 
 ### Added

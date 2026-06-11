@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.7.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Tauri IPC cross-language edge resolution, self-edge prevention. v5.9: PHP/Blade support, C++/Go support, XHR/network patterns, list command. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo detection, SvelteKit routes, Svelte stores, framework-adaptive perf-hint. v6.1: Tauri/Remix/Astro detection, smell_engine enhanced. v5.7.2: 7 critical bugfixes. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect.",
+  "version": "5.10.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Go/C++ fallback parsers, Rust match arm dead-code fix, Rust inline test detection, Rust workspace member detection in config-drift, scan+binary-scan fix, 6 broken imports fixed. v5.9: PHP/Blade support, C++/Go support, XHR/network patterns, list command. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo detection, SvelteKit routes, Svelte stores, framework-adaptive perf-hint. v6.1: Tauri/Remix/Astro detection, smell_engine enhanced. v5.7.2: 7 critical bugfixes. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 14 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML/CSS/SCSS), workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis",

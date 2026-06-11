@@ -26,6 +26,8 @@ from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
 from parsers.fallback_php import parse_php_fallback
 from parsers.blade_parser import parse_blade_template
+from parsers.fallback_go import parse_go_fallback
+from parsers.fallback_cpp import parse_cpp_fallback
 
 from commands import register_command
 
@@ -499,6 +501,42 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read PHP file: {path}")
 
+    # Parse Go files
+    go_data = []
+    if files["go"]:
+        for path in files["go"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_go_fallback(content, os.path.relpath(path, workspace))
+                go_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Go file: {path}")
+
+    # Parse C/C++ files
+    cpp_data = []
+    if files["cpp"]:
+        for path in files["cpp"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_cpp_fallback(content, os.path.relpath(path, workspace))
+                cpp_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read C/C++ file: {path}")
+
     # Parse Blade templates
     blade_data = []
     blade_frontend_data = []
@@ -540,7 +578,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data + php_data
+        new_parsed_data = rust_data + js_backend_data + python_data + php_data + go_data + cpp_data
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -551,7 +589,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data + php_data:
+        for item in rust_data + js_backend_data + python_data + php_data + go_data + cpp_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
 
@@ -617,8 +655,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "blade": len(files["blade"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
-            "cpp": len(files["cpp"]),
-            "go": len(files["go"])
+            "go": len(files["go"]),
+            "cpp": len(files["cpp"])
         },
         "python_parsed": len(python_data),
         "php_parsed": len(php_data),

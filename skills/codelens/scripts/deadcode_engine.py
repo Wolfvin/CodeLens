@@ -21,7 +21,8 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
+    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
+    ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
 }
 
 # Performance limits for large codebases
@@ -171,6 +172,11 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     v6: Fixed function scope tracking by using brace depth tracking instead of
     resetting in_function on every closing brace. Now only exits function scope
     when the brace depth returns to the level it was at before the function started.
+
+    v5.10: Fixed Rust match arm false positives. In Rust, each match arm ends
+    with a terminal statement (return/expression), but the next arm is a separate
+    branch and NOT unreachable. We now track match arm boundaries (comma after
+    expression or closing brace) and reset the terminal flag at each new arm.
     """
     items = []
     lines = content.split('\n')
@@ -182,6 +188,11 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     found_terminal = False
     terminal_line = 0
     terminal_type = ""
+
+    # v5.10: Rust match arm tracking
+    in_match = False
+    match_start_depth = 0
+    last_arm_depth = 0
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -199,6 +210,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             if found_terminal:
                 continue
             continue
+
+        # v5.10: Track Rust match expressions
+        if ext == ".rs":
+            if re.match(r'\s*match\s+', stripped):
+                in_match = True
+                match_start_depth = brace_depth
+            # End match when we return to the depth where match started
+            if in_match and brace_depth <= match_start_depth and '{' not in stripped:
+                in_match = False
 
         # Detect function start
         if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -221,9 +241,25 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
         # Detect terminal statements
         if in_function:
             if re.match(r'(?:return|throw|break|continue)\s', stripped):
+                # v5.10: In Rust match arms, terminal statements are normal —
+                # the next arm is NOT unreachable. Skip reporting if we're in a match.
+                if ext == ".rs" and in_match:
+                    found_terminal = False  # Reset, don't flag match arm terminals
+                    continue
                 found_terminal = True
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
+
+            # v5.10: Rust match arm separator — new arm starts after => or pattern
+            if ext == ".rs" and in_match:
+                # A new match arm pattern resets the terminal flag
+                if re.match(r'\s*[\w].*=>', stripped) or re.match(r'\s*_\s*=>', stripped):
+                    found_terminal = False
+                    continue
+                # Comma at match depth signals end of arm — next arm is not unreachable
+                if stripped.endswith(',') and brace_depth <= match_start_depth + 1:
+                    found_terminal = False
+                    continue
 
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
@@ -231,6 +267,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             if ext != ".py" and brace_depth < function_start_depth:
                 in_function = False
                 found_terminal = False
+                in_match = False
                 continue
 
             # Check if we're at a lower indentation (function ended in Python)

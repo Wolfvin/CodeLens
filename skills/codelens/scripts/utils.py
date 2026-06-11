@@ -1,7 +1,9 @@
 """Shared utilities for CodeLens."""
 
 import os
+import re
 import json
+import time
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Set, Tuple
@@ -208,7 +210,215 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.10.0"
+
+
+# ─── Performance Constants ──────────────────────────────────
+
+# Maximum file size to read (500KB) — used by env_check and other engines
+MAX_FILE_SIZE = 500 * 1024
+
+# Default max files to scan per run — used by env_check and debug_leak
+MAX_FILES_DEFAULT = 3000
+
+
+def time_budget_expired(start_time: float, budget_sec: float = 90.0) -> bool:
+    """Check if the time budget has expired.
+
+    Used by engines that need to limit execution time on large codebases.
+
+    Args:
+        start_time: The start time from time.time().
+        budget_sec: Maximum allowed seconds (default 90s).
+
+    Returns:
+        True if the budget has expired.
+    """
+    return (time.time() - start_time) > budget_sec
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped in analysis.
+
+    Generated files include lock files, minified files, compiled outputs,
+    and vendor directories. Analyzing these produces false positives and
+    wastes time.
+
+    Args:
+        filename: Just the filename (not full path), e.g. "package-lock.json".
+
+    Returns:
+        True if the file is auto-generated.
+    """
+    generated_patterns = {
+        # Lock files
+        'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+        'Cargo.lock', 'Gemfile.lock', 'composer.lock', 'poetry.lock',
+        'pdm.lock', 'uv.lock',
+        # Generated/minified
+        '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+        # Build outputs
+        '.d.ts',  # TypeScript declaration files
+    }
+    for pattern in generated_patterns:
+        if filename.endswith(pattern) or filename == pattern:
+            return True
+    return False
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/compiled artifacts.
+
+    Detects:
+    - Compiled binaries (.exe, .dll, .so, .dylib, .wasm)
+    - Electron apps (dist/electron-* directories)
+    - Build output directories
+    - Large asset files
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with detected artifacts categorized by type.
+    """
+    workspace = os.path.abspath(workspace)
+    binaries = []
+    electron_apps = []
+    build_outputs = []
+    large_assets = []
+    LARGE_ASSET_THRESHOLD = 5 * 1024 * 1024  # 5MB
+
+    binary_extensions = {
+        '.exe', '.dll', '.so', '.dylib', '.wasm', '.o', '.obj',
+        '.pyc', '.pyo', '.class', '.jar', '.war',
+    }
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [
+            d for d in dirs
+            if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')
+        ]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        rel_root = os.path.relpath(root, workspace)
+
+        # Detect Electron app directories
+        if 'dist' in rel_root.split(os.sep) and 'electron' in rel_root.lower():
+            electron_apps.append(rel_root)
+
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            file_path = os.path.join(root, fn)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            # Binary files
+            if ext in binary_extensions:
+                try:
+                    size = os.path.getsize(file_path)
+                    binaries.append({
+                        "path": rel_path,
+                        "size_bytes": size,
+                        "type": ext,
+                    })
+                except OSError:
+                    pass
+
+            # Large asset files
+            try:
+                size = os.path.getsize(file_path)
+                if size > LARGE_ASSET_THRESHOLD and ext not in binary_extensions:
+                    large_assets.append({
+                        "path": rel_path,
+                        "size_bytes": size,
+                        "type": ext,
+                    })
+            except OSError:
+                pass
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "binaries": binaries[:50],
+        "electron_apps": electron_apps[:10],
+        "build_outputs": build_outputs[:20],
+        "large_assets": large_assets[:30],
+        "stats": {
+            "total_binaries": len(binaries),
+            "total_electron_apps": len(electron_apps),
+            "total_large_assets": len(large_assets),
+        }
+    }
+
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts.
+
+    Detects:
+    - src-tauri/ directory structure
+    - tauri.conf.json configuration
+    - Cargo.toml with tauri dependency
+    - Tauri capabilities/permissions
+    - Sidecar binaries
+    - Updater configuration
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with Tauri analysis, or None if not a Tauri project.
+    """
+    workspace = os.path.abspath(workspace)
+    src_tauri = os.path.join(workspace, "src-tauri")
+    tauri_conf = os.path.join(src_tauri, "tauri.conf.json")
+
+    if not os.path.isdir(src_tauri):
+        return None
+
+    result = {
+        "src_tauri_found": True,
+        "tauri_conf_exists": os.path.isfile(tauri_conf),
+        "capabilities": [],
+        "sidecars": [],
+        "security_notes": [],
+    }
+
+    # Parse tauri.conf.json if present
+    if os.path.isfile(tauri_conf):
+        try:
+            with open(tauri_conf, 'r', encoding='utf-8') as f:
+                conf = json.load(f)
+
+            # Check security settings
+            security = conf.get("security", {})
+            if security.get("dangerousDisableAssetCspModification"):
+                result["security_notes"].append({
+                    "severity": "high",
+                    "message": "dangerousDisableAssetCspModification is enabled — CSP is weakened"
+                })
+            if security.get("assetProtocol", {}).get("enableScope", True) is False:
+                result["security_notes"].append({
+                    "severity": "high",
+                    "message": "Asset protocol scope is disabled — all files accessible"
+                })
+
+            # Check for sidecars
+            bundle = conf.get("bundle", {})
+            external_bin = bundle.get("externalBin", [])
+            result["sidecars"] = external_bin
+
+        except (json.JSONDecodeError, IOError):
+            result["tauri_conf_parse_error"] = True
+
+    # Check capabilities directory
+    caps_dir = os.path.join(src_tauri, "capabilities")
+    if os.path.isdir(caps_dir):
+        for fn in os.listdir(caps_dir):
+            if fn.endswith('.json'):
+                result["capabilities"].append(fn)
+
+    return result
 
 
 # ─── File Cache (Single-Pass Workspace Scanner) ──────────────
