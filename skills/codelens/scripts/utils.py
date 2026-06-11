@@ -38,6 +38,46 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+
+def should_ignore_dir(rel_path: str) -> bool:
+    """Check if a relative path should be ignored during directory traversal.
+
+    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS to avoid
+    false positives from substring matches. For example, "target" matches
+    "src/target/debug" but NOT "test-target/src" because "target" must
+    appear as a complete path segment.
+
+    This is the shared utility version used by framework_detect and other
+    modules that walk the filesystem without a config-based ignore list.
+    For config-based ignore matching, use should_ignore() in commands/scan.py.
+    """
+    # Normalize to forward slashes for consistent matching
+    normalized = rel_path.replace('\\', '/')
+
+    for ignore_dir in DEFAULT_IGNORE_DIRS:
+        # Check if the ignore_dir appears as a complete path segment
+        # Segment is preceded by '/' or is at the start of the path
+        # "target" should match "/target/" or start with "target/"
+        # but NOT "/test-target/" or "/my_target/"
+
+        # Check 1: at the start of the path (e.g., "node_modules/pkg")
+        if normalized.startswith(ignore_dir + '/'):
+            return True
+
+        # Check 2: as a full segment (preceded by '/')
+        if '/' + ignore_dir + '/' in normalized:
+            return True
+
+        # Check 3: matches the entire last segment (e.g., path ends with "/.git")
+        if normalized.endswith('/' + ignore_dir):
+            return True
+
+        # Check 4: exact match (path IS the ignore dir)
+        if normalized == ignore_dir:
+            return True
+
+    return False
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result) -> dict:
@@ -159,3 +199,48 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"
+
+
+# ─── Safe File Reading ──────────────────────────────────────
+
+# Default maximum file size for engines that scan source files.
+# Files larger than this are skipped to avoid slow regex/memory issues.
+DEFAULT_MAX_FILE_SIZE = 200 * 1024  # 200KB
+
+
+def safe_read_file(file_path: str, max_size: int = DEFAULT_MAX_FILE_SIZE) -> Optional[str]:
+    """
+    Safely read a file with size checking.
+
+    Returns file content as string, or None if the file:
+    - doesn't exist or can't be read
+    - exceeds max_size
+    - appears to be minified/bundled (few lines with very long average length)
+
+    This function should be used by all engine scanners instead of raw open()/read().
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+
+        # Detect minified/bundled files: very few lines with very long average length
+        # These are not human-written code and should be skipped
+        line_count = content.count('\n') + 1
+        if line_count < 50 and len(content) > 0:
+            avg_line_len = len(content) / line_count
+            if avg_line_len > 500:
+                return None
+
+        # Skip files that are almost certainly auto-generated
+        first_500 = content[:500].lower()
+        minified_markers = ['/*!', 'minified', 'uglify', 'webpack/bootstrap', 'bundled']
+        if any(marker in first_500 for marker in minified_markers):
+            return None
+
+        return content
+    except (IOError, OSError):
+        return None

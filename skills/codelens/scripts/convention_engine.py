@@ -15,6 +15,10 @@ import re
 from typing import Dict, Any, List, Optional, Tuple
 from utils import DEFAULT_IGNORE_DIRS, logger
 
+# Maximum files per category to sample for convention detection.
+# Prevents slow scans on very large codebases (10K+ files).
+MAX_FILES_PER_CATEGORY = 500
+
 
 def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
@@ -62,6 +66,19 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
                 vue_files.append(full_path)
             elif ext == '.svelte':
                 svelte_files.append(full_path)
+    
+    # Apply file count limits to prevent slow scans on huge codebases
+    if len(js_files) > MAX_FILES_PER_CATEGORY:
+        logger.debug(f"Convention engine: sampling {MAX_FILES_PER_CATEGORY}/{len(js_files)} JS/TS files")
+        js_files = js_files[:MAX_FILES_PER_CATEGORY]
+    if len(py_files) > MAX_FILES_PER_CATEGORY:
+        logger.debug(f"Convention engine: sampling {MAX_FILES_PER_CATEGORY}/{len(py_files)} Python files")
+        py_files = py_files[:MAX_FILES_PER_CATEGORY]
+    if len(rs_files) > MAX_FILES_PER_CATEGORY:
+        logger.debug(f"Convention engine: sampling {MAX_FILES_PER_CATEGORY}/{len(rs_files)} Rust files")
+        rs_files = rs_files[:MAX_FILES_PER_CATEGORY]
+    if len(all_source_files) > MAX_FILES_PER_CATEGORY * 2:
+        all_source_files = all_source_files[:MAX_FILES_PER_CATEGORY * 2]
     
     # ─── Naming Conventions ──────────────────────────────────
     

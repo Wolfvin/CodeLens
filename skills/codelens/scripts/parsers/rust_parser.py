@@ -85,8 +85,28 @@ class RustParser(BaseParser):
                 current_impl_for, current_trait_name = self._parse_impl(node, source)
 
             elif node.type == 'function_item':
+                # Only apply impl_for if this function is a descendant of an impl_item.
+                # Walk up the tree to check if any ancestor is an impl_item.
+                impl_for_this_fn = current_impl_for
+                trait_for_this_fn = current_trait_name
+                parent = node.parent
+                found_impl = False
+                while parent is not None:
+                    if parent.type == 'impl_item':
+                        found_impl = True
+                        break
+                    # If we hit a module or source_file before an impl, this function
+                    # is at module level, not inside an impl.
+                    if parent.type in ('source_file', 'mod_item', 'declaration_statement'):
+                        break
+                    parent = parent.parent
+
+                if not found_impl:
+                    impl_for_this_fn = None
+                    trait_for_this_fn = None
+
                 decl = self._parse_function_item(node, source, file_path,
-                                                  current_impl_for, current_trait_name)
+                                                  impl_for_this_fn, trait_for_this_fn)
                 if decl:
                     fn_declarations.append(decl)
                     nodes.append(decl["node"])
