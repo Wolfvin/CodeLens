@@ -13,7 +13,8 @@ State Management Frameworks Detected:
  7. Recoil        — atom, selector, useRecoilState
  8. Jotai         — atom, useAtom
  9. XState        — createMachine, StateMachine
-10. Module-level  — global variables, singletons, module.exports of stateful objects
+10. Svelte Stores — writable(), readable(), derived() from svelte/store
+11. Module-level  — global variables, singletons, module.exports of stateful objects
 
 Per-state-slice extraction: name, type (store/context/atom/global),
     defined_in, consumers, actions/mutations that modify it
@@ -23,7 +24,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -33,7 +34,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store"}
 
 
 def map_state(
@@ -90,14 +91,6 @@ def map_state(
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 _collect_js_imports(content, rel_path, all_imports_by_file)
                 _collect_js_exports(content, rel_path, all_exports_by_file)
-
-            elif ext == ".vue":
-                # Extract script section from Vue SFC for import/export collection
-                script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
-                if script_match:
-                    script_content = script_match.group(1)
-                    _collect_js_imports(script_content, rel_path, all_imports_by_file)
-                    _collect_js_exports(script_content, rel_path, all_exports_by_file)
 
             elif ext == ".py":
                 _collect_py_imports(content, rel_path, all_imports_by_file)
@@ -184,6 +177,14 @@ def map_state(
                     frameworks_detected.add("module_level_py")
                     stores.extend(py_global_results["stores"])
                     state_flow.extend(py_global_results["flow"])
+
+    # ─── Svelte Stores (workspace-level detection) ───────────
+    if _is_svelte_workspace(workspace):
+        svelte_stores, svelte_flow = _detect_svelte_stores(workspace, config)
+        if svelte_stores:
+            frameworks_detected.add("svelte_stores")
+            stores.extend(svelte_stores)
+            state_flow.extend(svelte_flow)
 
     # ─── Post-processing: Resolve consumers ──────────────────
 
@@ -383,13 +384,23 @@ def _extract_initial_state(content: str, offset: int) -> Optional[str]:
 # ─── React Context ─────────────────────────────────────────────
 
 def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract React Context definitions and providers."""
+    """Extract React Context definitions and providers.
+
+    Handles:
+    - createContext (named: const FooContext = createContext())
+    - createContext (anonymous: const [provider, useFoo] = createContext())
+    - useContext(ContextName) consumption
+    - <ContextName.Provider value={...}> provision
+    - Custom hook wrappers: const useFoo = () => useContext(FooContext)
+    - Variable exports matching *Context naming convention
+    """
     stores = []
     flow = []
 
-    # createContext
+    # createContext — named pattern: const FooContext = createContext()
+    # v6.2: Also handles generic type params: const FooContext = createContext<Type>(null)
     for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*\(',
+        r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
         content
     ):
         ctx_name = m.group(1)
@@ -413,8 +424,39 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
             "type": "define",
         })
 
-    # useContext(ContextName)
-    for m in re.finditer(r'useContext\s*\(\s*(\w+Context)\s*\)', content):
+    # createContext — variable assignment without "Context" suffix
+    # e.g., const ProxiesContext = createContext()
+    # v6.2: Also handles generic type params: const Foo = createContext<Type>(null)
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
+        content
+    ):
+        ctx_name = m.group(1)
+        # Skip if already captured by the Context-suffix pattern above
+        if ctx_name.endswith('Context') or ctx_name.endswith('Provider'):
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+
+        stores.append({
+            "name": ctx_name,
+            "type": "context",
+            "framework": "react_context",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+        flow.append({
+            "from": rel_path,
+            "action": f"createContext({ctx_name})",
+            "to": ctx_name,
+            "file": rel_path,
+            "type": "define",
+        })
+
+    # useContext(ContextName) or useContext(Name)
+    for m in re.finditer(r'useContext\s*\(\s*(\w+)\s*\)', content):
         ctx_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         flow.append({
@@ -426,7 +468,7 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     # <ContextName.Provider value={...}>
-    for m in re.finditer(r'<(\w+Context)\.Provider\s+value\s*=\s*\{', content):
+    for m in re.finditer(r'<(\w+(?:Context)?)\.Provider\s+value\s*=\s*\{', content):
         ctx_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         flow.append({
@@ -702,60 +744,6 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
             "actions": actions,
             "getters": getters,
             "consumers": [],
-        })
-
-    # Setup Stores: defineStore('name', () => { ... }) — Pinia's recommended pattern since v2
-    for m in re.finditer(
-        r'defineStore\s*\(\s*[\'"](\w+)[\'"]\s*,\s*(?:\([^)]*\)\s*=>|function\s*\([^)]*\))',
-        content
-    ):
-        store_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Avoid duplicating if already matched by Options API regex above
-        if any(s["name"] == store_name and s.get("framework") == "pinia" for s in stores):
-            continue
-
-        # Extract reactive variables as state slices
-        store_body = content[m.end():m.end() + 5000]
-        store_end = _find_matching_brace(store_body)
-        store_body = store_body[:store_end]
-
-        slices = []
-        for prop_m in re.finditer(
-            r'(?:const|let)\s+(\w+)\s*=\s*(?:ref|reactive|computed)\s*\(',
-            store_body
-        ):
-            slices.append({"name": prop_m.group(1)})
-
-        # Extract return values as the public API / actions
-        actions = []
-        return_match = re.search(r'return\s*\{([^}]+)\}', store_body, re.DOTALL)
-        if return_match:
-            for prop_m in re.finditer(r'(\w+)', return_match.group(1)):
-                name = prop_m.group(1)
-                if name not in {s["name"] for s in slices} and not name.startswith('_'):
-                    actions.append(name)
-
-        # Also look for function declarations inside the setup store body (these are actions)
-        for fn_m in re.finditer(
-            r'(?:async\s+)?(?:function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>)',
-            store_body
-        ):
-            fn_name = fn_m.group(1) or fn_m.group(2)
-            if fn_name and fn_name not in actions and not fn_name.startswith('_'):
-                actions.append(fn_name)
-
-        stores.append({
-            "name": store_name,
-            "type": "store",
-            "framework": "pinia",
-            "defined_in": rel_path,
-            "line": line_num,
-            "slices": slices,
-            "actions": actions,
-            "consumers": [],
-            "store_type": "setup",
         })
 
     # useStoreName()
@@ -1069,29 +1057,15 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
 # ─── Module-level State (JS) ───────────────────────────────────
 
 def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract module-level global variables and singletons in JS/TS.
-
-    Filters out common false positives:
-    - ALL_CAPS constants (enums, config) that are primitive values
-    - i18n/locale translation objects
-    - Type/Interface declarations
-    - React component exports (functional components)
-    - CSS/style objects
-    """
+    """Extract module-level global variables and singletons in JS/TS."""
     stores = []
     flow = []
 
-    # Skip obvious config files, test files, and locale/i18n files
-    skip_path_patterns = [
-        '.test.', '.spec.', '.config.', 'jest.', 'webpack.',
-        '/locales/', '/locale/', '/i18n/', '/intl/', '/lang/',
-        '/translations/', '/l10n/', '/messages/',
-        '.d.ts',  # TypeScript declaration files
-    ]
-    if any(x in rel_path for x in skip_path_patterns):
+    # Skip obvious config files and test files
+    if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
         return {"stores": [], "flow": []}
 
-    # Expanded skip list for constants that are NOT mutable state.
+    # v6: Expanded skip list for constants that are NOT mutable state.
     # ALL_CAPS patterns are immutable constants, not state stores.
     # PascalCase patterns that are React components or class instantiations
     # are also not state.
@@ -1107,116 +1081,82 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         'WIDTH', 'HEIGHT', 'DEPTH', 'OFFSET', 'INDEX', 'COUNT',
         'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
         'PATTERN', 'REGEX', 'MASK', 'TEMPLATE', 'SCHEMA',
-        # Additional config constant prefixes/suffixes from tauri-ipc
-        'BASE_URL', 'BASE_PATH', 'API_URL', 'API_KEY', 'API_BASE',
-        'NODE_ENV', 'APP_ENV', 'APP_NAME', 'APP_VERSION',
-        'RETRY', 'MAX_RETRIES', 'MAX_LENGTH', 'MAX_SIZE',
-        'COLORS', 'BREAKPOINTS', 'Z_INDEX',
     }
-
-    # Names that are likely config/enums (contain common suffixes)
-    config_suffixes = ('_URL', '_URI', '_PATH', '_PORT', '_HOST', '_KEY',
-                       '_SECRET', '_TOKEN', '_ENV', '_VERSION', '_NAME',
-                       '_TYPE', '_STATUS', '_CODE', '_ID', '_COLOR',
-                       '_SIZE', '_WIDTH', '_HEIGHT', '_TIMEOUT', '_RETRY',
-                       '_MAX', '_MIN', '_DEFAULT', '_CONFIG', '_ENABLED',
-                       '_DISABLED', '_PREFIX', '_SUFFIX', '_LABEL',
-                       '_TITLE', '_DESC', '_DESCRIPTION', '_MSG', '_TEXT')
-
 
     lines = content.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
 
         # Module-level const/let/var with initial values (potential globals)
-        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
+        # Only match if the line is NOT indented (module-level, not inside a function/class)
+        if not line[0].isspace() if line else True:
+            m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
+        else:
+            m = None
         if m:
             var_name = m.group(1)
             value_part = m.group(2).strip() if m.group(2) else ""
 
-            # Skip ALL_CAPS constants — they are immutable, not state.
-            # A name like MAX_FILES, FETCH_TIMEOUT_MS, COLORS, THEME, VARIANTS is a constant.
-            if var_name == var_name.upper() and len(var_name) > 2:
+            # v6: Skip ALL_CAPS constants — they are immutable, not state.
+            # A name like MAX_FILES, FETCH_TIMEOUT_MS is a constant.
+            if var_name == var_name.upper() and '_' in var_name:
                 continue
 
             # Skip common non-state constants
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
                 continue
 
-            # v6: Skip PascalCase names that look like TypeScript types/enums/classes.
-            # These are type exports, not runtime state. E.g.:
-            #   const BookingReferences = ...
-            #   const CustomFieldTypeEnum = ...
-            #   const Status = ...
-            # A name is PascalCase if it starts with uppercase and contains
-            # no underscores (ALL_CAPS already skipped above).
-            if var_name[0].isupper() and '_' not in var_name and len(var_name) > 2:
-                # Heuristic: PascalCase names are type/enum/class exports
-                # Skip unless the value clearly looks like mutable state
-                # (object literal, Map, Set, new SomeClass)
-                value_is_stateful = bool(re.match(r'^(\{|\[|new\s|Map\b|Set\b|WeakMap|WeakSet)', value_part))
-                if not value_is_stateful:
-                    continue
-
-            # Skip names ending with config/enum suffixes
-            if any(var_name.endswith(s) for s in config_suffixes):
-                continue
-
-            # v6: Skip names ending with common TypeScript/enum patterns
-            enum_type_suffixes = ('Enum', 'Type', 'Interface', 'Schema', 'Args',
-                                  'Input', 'Output', 'Result', 'Response', 'Request',
-                                  'Payload', 'Event', 'Action', 'Keys', 'Map',
-                                  'Record', 'List', 'Set', 'Dict', 'Union')
-            if any(var_name.endswith(s) for s in enum_type_suffixes):
-                # Only skip if value doesn't look like mutable state
-                is_mutable_early = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
-                if not is_mutable_early:
-                    continue
-
-            # Skip React components — PascalCase + arrow function or function
+            # v6: Skip React components — PascalCase + arrow function or function
             # A line like "const Logo = () =>" or "const Button = function" is NOT state.
             # Also handles: "const X: React.FC<Props> = () =>", "const X = forwardRef(...)",
             # "const X = memo(...)", "const X = styled.div(...)", etc.
             if value_part.startswith('((') or value_part.startswith('()') or value_part.startswith('function'):
                 continue
+            # Arrow functions with destructured props: "const X = ({ prop1, prop2 })" or
+            # "const X = ({ prop1 }: Props)" — React component pattern.
+            # Even without '=>' on the same line, ({...}) is destructured props.
+            if value_part.startswith('({'):
+                continue
             # Arrow functions with optional type annotation: "value =>", "() =>", "<T>(...) =>"
             if '=>' in value_part and not value_part.startswith('{'):
                 continue
             # Skip forwardRef, memo, styled, createStyled, etc.
-            if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
-                continue
-            # Skip React.memo and React.forwardRef
-            if re.match(r'^React\.(forwardRef|memo)\s*\(', value_part):
+            # Handle generic type params: forwardRef<T>(...), memo<T>(...)
+            if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\b', value_part):
                 continue
             # Skip JSX components: "const X = <SomeComponent"
             if value_part.startswith('<'):
                 continue
-            # Skip factory functions that return components: "const X = createX(...)"
-            if re.match(r'^[A-Z]\w+\s*\(', value_part) and '=>' not in value_part:
+            # Skip known UI component library patterns (Radix, Headless UI, etc.)
+            # e.g., "const DropdownMenu = Root" or "const X = SomeLibrary.X"
+            if re.match(r'^[A-Z]\w*\.\w+', value_part):
+                continue
+            # Skip re-exports from UI libraries: "const X = Primitive"
+            # where Primitive is a PascalCase import (likely a component)
+            if re.match(r'^[A-Z]\w*$', value_part) and var_name[0].isupper() and '_' not in var_name:
+                # Heuristic: if both the variable name and value are PascalCase single words,
+                # this is likely a component alias, not state.
                 continue
 
-            # v7: Skip known config/constant suffixes — these are immutable design tokens,
-            # not mutable state. Examples: ThemeConfig, ButtonVariants, ColorMapping, etc.
-            _CONFIG_SUFFIXES = (
-                'Config', 'Options', 'Props', 'Defaults', 'Mapping', 'Registry',
-                'Theme', 'Colors', 'Variants', 'Schema', 'Meta', 'Presets',
-                'Constants', 'Definitions', 'Mappings', 'Settings', 'Params',
-                'Tokens', 'Breakpoints', 'Spacings', 'Typography', 'Palette',
-            )
-            if any(var_name.endswith(s) for s in _CONFIG_SUFFIXES):
+            # Skip Svelte store creators — they are detected by _detect_svelte_stores()
+            if re.match(r'^(writable|readable|derived)\s*\(', value_part):
                 continue
 
-            # Skip class instantiations of known non-state patterns
+            # v6.2: Skip React Context patterns — they are detected by _extract_react_context().
+            # Variables ending in "Context" that are assigned createContext() are
+            # React Context objects, not generic module-level state.
+            if var_name.endswith('Context'):
+                continue
+            # Also skip if value is createContext(...)
+            if re.match(r'^createContext\s*\(', value_part):
+                continue
+
+            # v6: Skip class instantiations of known non-state patterns
             # "const x = createSomething()" is a factory, not necessarily state
             # But "const x = createStore()" IS state
             if re.match(r'create(?!Store|Context|Slice|Reducer|State)', value_part):
                 # Skip factories that are NOT state-related
                 pass
-
-            # v6: Skip function calls that are clearly not state
-            # e.g., const X = someFunction(), const X = z.object(), const X = t.type()
-            if re.match(r'^(z\.|t\.|zod\.|joi\.|yup\.|v\.|Type\()', value_part):
-                continue
 
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
@@ -1226,17 +1166,6 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             if is_immutable:
                 continue
-
-            # v6: For non-mutable, non-immutable values (function calls, references),
-            # be more conservative — only include if the name suggests state.
-            # Names like "state", "cache", "store" suggest state.
-            # Names like "handler", "service", "client" suggest utilities.
-            if not is_mutable and not is_immutable:
-                state_keywords = ('state', 'cache', 'store', 'mutex', 'lock', 'queue',
-                                  'pool', 'registry', 'buffer', 'session')
-                is_likely_state = any(kw in var_name.lower() for kw in state_keywords)
-                if not is_likely_state:
-                    continue
 
             # For things that don't match either pattern, include them
             # (could be function calls that return mutable objects)
@@ -1275,11 +1204,10 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
-    # Skip module.exports scanning — it produces massive false positives.
+    # v6: Skip module.exports scanning — it produces massive false positives.
     # Every exported utility function gets classified as a "state store",
     # which is incorrect. Module exports are API surfaces, not state.
     # Only track stateful singletons (already handled above).
-
 
     return {"stores": stores, "flow": flow}
 
@@ -1341,6 +1269,267 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
+
+# ─── Svelte Stores ─────────────────────────────────────────────
+
+def _detect_svelte_stores(
+    workspace: str, config: Optional[Dict] = None
+) -> tuple:
+    """
+    Detect Svelte stores (writable, readable, derived) across the workspace.
+
+    Two-pass approach:
+      1. Scan all .svelte/.js/.ts files for store definitions
+         (writable(), readable(), derived() from 'svelte/store').
+      2. Scan for consumers — files that import a store and use
+         $storeName, storeName.subscribe(), storeName.set(), or
+         storeName.update().
+
+    Returns:
+        (stores_list, flow_list)
+    """
+    stores: List[Dict[str, Any]] = []
+    flow: List[Dict[str, Any]] = []
+
+    # ── Pass 1: find store definitions ──────────────────────────
+    # store_name -> { file, line, store_type }
+    store_defs: Dict[str, Dict[str, Any]] = {}
+
+    svelte_extensions = {".svelte", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in svelte_extensions:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            # Only process files that import from svelte/store
+            has_svelte_store = bool(re.search(
+                r'(?:from\s+[\'"]svelte/store[\'"]|import\s+.*svelte[\'"]\/store[\'"])',
+                content
+            ))
+            if not has_svelte_store:
+                continue
+
+            # Detect writable() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*writable\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "writable",
+                }
+
+            # Detect readable() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*readable\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "readable",
+                }
+
+            # Detect derived() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*derived\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "derived",
+                }
+
+    # ── Build store dicts from definitions ──────────────────────
+    for store_name, info in store_defs.items():
+        is_derived = info["store_type"] == "derived"
+        store_type = "derived_store" if is_derived else "store"
+        actions = ["set", "update"] if info["store_type"] == "writable" else []
+
+        stores.append({
+            "name": store_name,
+            "type": store_type,
+            "framework": "svelte_stores",
+            "defined_in": info["file"],
+            "line": info["line"],
+            "store_type": info["store_type"],
+            "slices": [],
+            "actions": actions,
+            "consumers": [],
+        })
+
+        flow.append({
+            "from": info["file"],
+            "action": f"{info['store_type']}({store_name})",
+            "to": store_name,
+            "file": info["file"],
+            "type": "define",
+        })
+
+    # ── Pass 2: find consumers ──────────────────────────────────
+    # Consumers are files that import a store and then use it via:
+    #   $storeName            (Svelte auto-subscription, read)
+    #   storeName.subscribe() (manual subscription, read)
+    #   storeName.set()       (write)
+    #   storeName.update()    (write)
+    all_consumer_info: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in svelte_extensions:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            for store_name, info in store_defs.items():
+                # Skip the definition file for consumer detection
+                if info["file"] == rel_path:
+                    continue
+
+                # Check if this file imports the store name
+                imports_store = bool(re.search(
+                    r'import\s+(?:\{[^}]*\b' + re.escape(store_name) + r'\b[^}]*\}|\*\s+as\s+\w+)\s+from',
+                    content
+                )) or bool(re.search(
+                    r'(?:const|let|var)\s+\{[^}]*\b' + re.escape(store_name) + r'\b[^}]*\}\s*=\s*require\s*\(',
+                    content
+                ))
+
+                if not imports_store:
+                    continue
+
+                # Detect $storeName usage (Svelte auto-subscription)
+                dollar_pattern = r'\$' + re.escape(store_name) + r'\b'
+                if re.search(dollar_pattern, content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "read",
+                        "pattern": f"${store_name}",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"${store_name}",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "read",
+                    })
+
+                # Detect storeName.subscribe()
+                if re.search(re.escape(store_name) + r'\.subscribe\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "read",
+                        "pattern": f"{store_name}.subscribe",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.subscribe()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "read",
+                    })
+
+                # Detect storeName.set()
+                if re.search(re.escape(store_name) + r'\.set\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "write",
+                        "pattern": f"{store_name}.set",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.set()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "write",
+                    })
+
+                # Detect storeName.update()
+                if re.search(re.escape(store_name) + r'\.update\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "write",
+                        "pattern": f"{store_name}.update",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.update()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "write",
+                    })
+
+    # ── Merge consumers into stores ─────────────────────────────
+    for store in stores:
+        sname = store["name"]
+        if sname in all_consumer_info:
+            store["consumers"] = all_consumer_info[sname]
+
+    return stores, flow
+
+
+def _is_svelte_workspace(workspace: str) -> bool:
+    """Check whether the workspace uses Svelte/SvelteKit."""
+    # Check for any .svelte files
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            if filename.endswith('.svelte'):
+                return True
+
+    # Check package.json for svelte dependency
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8', errors='ignore') as f:
+                pkg = f.read()
+            if '"svelte"' in pkg:
+                return True
+        except IOError:
+            pass
+
+    return False
 
 
 # ─── Import/Export Collection ──────────────────────────────────
@@ -1501,6 +1690,22 @@ def _generate_state_recommendations(
             "severity": "info",
             "message": "Both Recoil and Jotai detected — choose one atomic state library",
             "suggestion": "Standardize on one atomic state management library for consistency.",
+        })
+
+    # Svelte stores with no $-prefix consumers
+    svelte_stores = [s for s in stores if s.get("framework") == "svelte_stores"]
+    svelte_no_auto_sub = [
+        s for s in svelte_stores
+        if not any(c.get("pattern", "").startswith("$") for c in s.get("consumers", []))
+    ]
+    if svelte_no_auto_sub:
+        recommendations.append({
+            "type": "pattern",
+            "severity": "info",
+            "message": f"{len(svelte_no_auto_sub)} Svelte store(s) not consumed via $ auto-subscription",
+            "affected": [s["name"] for s in svelte_no_auto_sub[:10]],
+            "suggestion": "Using the $storeName prefix in .svelte files enables reactive auto-subscription. "
+                          "Consider using it instead of manual .subscribe() calls for simpler code.",
         })
 
     return recommendations

@@ -309,6 +309,23 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             if var_name.isupper():  # Constants are often used elsewhere
                 continue
 
+            # v6.2: Skip React hooks (useXxx pattern) — they are always used
+            # as hooks by other components/files that import them. Marking them
+            # as "unused" is almost always a false positive since the single-file
+            # check can't see cross-file imports.
+            if var_name.startswith('use') and len(var_name) > 3 and var_name[3].isupper():
+                # Check if this is exported (then definitely used cross-file)
+                # or if it's a hook pattern (useXxx = ... arrow function)
+                line_text = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ""
+                if 'export' in line_text or re.search(r'(?:const|let|var)\s+use[A-Z]\w+\s*=\s*(?:\(|async)', line_text):
+                    continue
+
+            # v6.2: Skip exported variables — they are used by other files.
+            # Check if the declaration line contains 'export' keyword.
+            decl_line = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ""
+            if 'export' in decl_line:
+                continue
+
             # Check if variable is used anywhere else in the file
             # Count occurrences excluding the declaration
             usage_pattern = r'\b' + re.escape(var_name) + r'\b'

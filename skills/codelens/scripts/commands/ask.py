@@ -40,6 +40,10 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "tech stack": 3, "frameworks": 3, "detect framework": 3,
     "how to configure": 3, "configuration": 3,
     "not used": 3,
+    # Tauri IPC terms (weight 3) — high specificity for Tauri apps
+    "tauri command": 3, "tauri ipc": 3, "ipc bridge": 3, "invoke": 3,
+    "frontend backend": 3, "frontend-backend": 3, "cross-language": 3,
+    "rust command": 3, "ipc command": 3, "ipc call": 3, "ipc route": 3,
 
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
@@ -250,9 +254,17 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
 
         # Detect / tech stack
         (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
-          "what technologies", "stack", "tauri", "electron", "what kind of app",
+          "what technologies", "stack", "electron", "what kind of app",
           "what type of project", "is this a", "is this an"],
          "detect", {}, "high"),
+
+        # Tauri IPC commands / frontend-backend communication
+        (["tauri command", "tauri ipc", "ipc bridge", "invoke", "ipc command",
+          "ipc call", "ipc route", "frontend backend", "frontend-backend",
+          "cross-language", "rust command", "rust backend", "backend communication",
+          "how does the frontend", "how does frontend", "communicate with rust",
+          "communicate with backend", "ipc"],
+         "api-map", {}, "high"),
 
         # Env configuration
         (["how to configure", "configuration", "config check", "env setup"],
@@ -269,8 +281,12 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "symbols", {"name": _extract_symbol_name}, "high"),
 
         # Trace
-        (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
+        (["trace", "call chain", "call path", "connected to", "flows to", "flow from"],
          "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
+
+        # How does (generic, lower priority than specific patterns above)
+        (["how does", "how is"],
+         "trace", {"name": _extract_symbol_name, "direction": "both"}, "low"),
 
         # Show me (generic — low weight keywords)
         (["show me"],
