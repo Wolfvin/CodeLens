@@ -60,11 +60,19 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "how to configure": 3, "configuration": 3,
     "not used": 3,
 
+    # HTTP / network keywords (weight 3)
+    "http request": 3, "http requests": 3, "network request": 3, "xhr": 3,
+    "fetch": 3, "ajax": 3, "api call": 3, "api calls": 3,
+    "handler": 3, "handlers": 3, "request handler": 3,
+    "function": 2, "functions": 2, "method": 2, "methods": 2,
+    "handle": 2, "handles": 2, "process": 2, "processes": 2,
+
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
     "trace": 1, "scan": 1, "analyze": 1, "index": 1,
     "where is": 1, "where's": 1, "where does": 1,
     "what is": 1, "what's": 1, "how does": 1, "how is": 1,
+    "what functions": 1, "what methods": 1, "which functions": 1,
     "who imports": 1, "who uses": 1, "who depends": 1,
     "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
 
@@ -170,8 +178,10 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["dead code", "unused code", "unreachable", "zombie", "not used", "never called", "orphan"],
          "dead-code", {}, "high"),
 
-        # API routes
-        (["api route", "api routes", "endpoint", "endpoints", "api map", "rest route", "http route", "graphql"],
+        # API routes / HTTP handlers
+        (["api route", "api routes", "endpoint", "endpoints", "api map", "rest route", "http route",
+          "http request", "http requests", "request handler", "handlers", "xhr", "fetch", "ajax",
+          "api call", "api calls", "network request"],
          "api-map", {}, "high"),
 
         # Circular dependencies
@@ -370,9 +380,9 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
 
     # Remove common English filler words and type keywords
     for filler in ["the ", "a ", "an ", "this ", "that ", "these ", "those ",
-                   "function ", "class ", "method ", "variable ", "const ",
+                   "function ", "functions ", "class ", "method ", "methods ", "variable ", "const ",
                    "module ", "file ", "component ", "hook ", "type ",
-                   "interface ", "enum "]:
+                   "interface ", "enum ", "handle ", "handles ", "process ", "processes "]:
         cleaned = re.sub(r'^' + re.escape(filler), '', cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(re.escape(filler.rstrip()) + r'$', '', cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.strip()
@@ -398,12 +408,18 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     if match:
         return match.group(0)
 
-    # Fallback: any identifier
+    # Fallback: any identifier, but skip question words
+    _QUESTION_WORDS = frozenset({
+        'what', 'how', 'where', 'who', 'which', 'when', 'why', 'whose',
+        'whom', 'does', 'do', 'did', 'is', 'are', 'was', 'were',
+        'can', 'could', 'would', 'should', 'will', 'shall',
+        'has', 'have', 'had', 'not', 'no', 'if',
+    })
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
-    if match:
+    if match and match.group(0).lower() not in _QUESTION_WORDS:
         return match.group(0)
 
-    return cleaned if cleaned else ""
+    return cleaned if cleaned and cleaned.lower() not in _QUESTION_WORDS else ""
 
 
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:

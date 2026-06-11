@@ -6,6 +6,7 @@ Gives AI everything needed to understand a symbol without reading the whole file
 """
 
 import os
+import re
 from typing import Dict, List, Any, Optional
 from utils import logger, safe_read_file
 
@@ -318,7 +319,6 @@ def _get_file_imports(workspace: str, rel_path: str) -> List[str]:
     except IOError:
         return []
 
-    import re
     imports = []
 
     # ES imports

@@ -150,7 +150,9 @@ SIDE_EFFECT_PATTERNS = {
             r"tauri::api::",
             r"tokio::spawn",
             r"std::thread::spawn",
-            r"\.await",
+            # Note: .await is NOT an external side effect — it is normal Rust
+            # async/await syntax. Only flag actual I/O operations like
+            # reqwest::, db::, fs:: etc. which are already covered above.
         ],
         "label": "external_service",
         "severity": "high"
@@ -320,6 +322,7 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
         started = False
         for i in range(fn_line - 1, min(fn_line + 200, len(lines))):
             line = lines[i]
+            fn_body_lines.append(line)
             for ch in line:
                 if ch == '{':
                     brace_count += 1
@@ -327,9 +330,7 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
                 elif ch == '}':
                     brace_count -= 1
                     if started and brace_count == 0:
-                        fn_body_lines.append(line)
                         break
-            fn_body_lines.append(line)
             if started and brace_count == 0:
                 break
 

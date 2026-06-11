@@ -29,6 +29,8 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
+    ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
+    ".go",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -75,6 +77,29 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "rust_main_fn",
+            },
+            # C / C++
+            {
+                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "cpp_main_fn",
+            },
+            {
+                "regex": r'int\s+main\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "cpp_main_short",
+            },
+            # Go
+            {
+                "regex": r'func\s+main\s*\(\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "go_main_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -202,7 +227,7 @@ ENTRYPOINT_PATTERNS = {
             # Spring Boot @RequestMapping family
             {
                 "regex": r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
-                "language": {".py"},  # also matches in .java but we don't scan those
+                "language": {".java"},  # Spring Boot is Java, not Python
                 "extract": "spring_route",
                 "label": "spring_mapping",
             },
@@ -228,6 +253,45 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "trpc_procedure",
                 "path_group": 1,
                 "label": "trpc_query",
+            },
+            # Go HTTP handlers — net/http
+            {
+                "regex": r'http\.HandleFunc\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
+                "path_group": 1,
+                "label": "go_http_handlefunc",
+            },
+            {
+                "regex": r'http\.Handle\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
+                "path_group": 1,
+                "label": "go_http_handle",
+            },
+            # Go Gin framework
+            {
+                "regex": r'(?:r|router|engine)\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_gin_route",
+                "path_group": 1,
+                "label": "go_gin_handler",
+            },
+            # Go Echo framework
+            {
+                "regex": r'e\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_echo_route",
+                "path_group": 1,
+                "label": "go_echo_handler",
+            },
+            # C++ crow/drogon HTTP handlers
+            {
+                "regex": r'CROW_ROUTE\s*\([^,]+,\s*["\']([^"\']+)["\']',
+                "language": {".cc", ".cpp", ".cxx", ".h", ".hpp"},
+                "extract": "cpp_crow_route",
+                "path_group": 1,
+                "label": "cpp_crow_handler",
             },
         ],
     },

@@ -91,6 +91,16 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
 
     total = len(results)
     paginated = results[offset:offset + limit]
+
+    # Build summary counts by type and status
+    by_type = {}
+    by_status = {}
+    for r in results:
+        t = r.get("type", "unknown")
+        s = r.get("status", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+        by_status[s] = by_status.get(s, 0) + 1
+
     return {
         "status": "ok",
         "domain": domain,
@@ -100,6 +110,10 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
         "offset": offset,
         "limit": limit,
         "has_more": offset + limit < total,
+        "summary": {
+            "by_type": by_type,
+            "by_status": by_status,
+        },
         "results": paginated
     }
 
