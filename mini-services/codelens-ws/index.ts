@@ -734,6 +734,33 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
           direction: 'both',
         },
       }
+    case 'test-map':
+    case 'config-drift':
+    case 'type-infer':
+    case 'ownership':
+    case 'entrypoints':
+    case 'api-map':
+    case 'state-map':
+    case 'handbook':
+    case 'stack-trace':
+    case 'diff':
+    case 'validate':
+    case 'outline':
+    case 'dependents':
+    case 'list':
+    case 'context':
+    case 'detect':
+    case 'init':
+    case 'missing-refs':
+      // P3 / context / utility commands — use pulse animation
+      return {
+        ...normalizeGeneric(command, cliResult),
+        animation: {
+          type: 'pulse',
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          intensity: 'low',
+        },
+      }
     default:
       return normalizeGeneric(command, cliResult)
   }

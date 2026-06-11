@@ -569,19 +569,24 @@ function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
 }
 
 // ---- Gini coefficient (measures inequality) ----
+// Optimized from O(n²) to O(n log n) using the sorted-sum method.
+// The Gini coefficient can be computed as:
+//   G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n
+// where x_i are sorted in ascending order and i is 1-indexed.
+// This avoids the double-nested loop of the naive implementation.
 
 function computeGini(values: number[]): number {
   if (values.length === 0) return 0
   const n = values.length
-  const mean = values.reduce((s, v) => s + v, 0) / n
-  if (mean === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const sum = sorted.reduce((s, v) => s + v, 0)
+  if (sum === 0) return 0
 
-  let sumAbsDiff = 0
+  // Compute weighted sum: Σ(i * x_i) where i is 1-indexed
+  let weightedSum = 0
   for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      sumAbsDiff += Math.abs(values[i] - values[j])
-    }
+    weightedSum += (i + 1) * sorted[i]
   }
 
-  return sumAbsDiff / (2 * n * n * mean)
+  return (2 * weightedSum) / (n * sum) - (n + 1) / n
 }

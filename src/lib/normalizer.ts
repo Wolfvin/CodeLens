@@ -72,6 +72,8 @@ class Normalizer {
       init: this.normalizeInit,
       detect: this.normalizeDetect,
       watch: this.normalizeWatch,
+      handbook: this.normalizeGeneric,
+      ask: this.normalizeGeneric,
     }
     return map[name] ?? null
   }
@@ -2206,6 +2208,37 @@ class Normalizer {
       none: 'safe',
     }
     return map[risk ?? ''] ?? 'low'
+  }
+
+  /** Generic normalizer for commands that don't have a specialized handler.
+   *  Produces a simple GraphEvent with summary metadata from the CLI output. */
+  private normalizeGeneric(output: any): GraphEvent {
+    const command = output?.command ?? 'unknown'
+    const status = output?.status ?? 'ok'
+    const risk = this.mapRiskLevel(output?.risk ?? output?.risk_level)
+
+    // Try to extract summary info from common CLI output shapes
+    const summary = output?.summary
+      ?? output?.metadata?.summary
+      ?? (status === 'error' ? `Error: ${output?.error ?? 'unknown'}` : `${command} completed`)
+
+    const targetIds: string[] = []
+    if (Array.isArray(output?.nodes)) {
+      for (const n of output.nodes.slice(0, 20)) {
+        if (n?.id) targetIds.push(n.id)
+      }
+    }
+
+    return this.makeEvent(
+      command,
+      Array.isArray(output?.nodes) ? output.nodes : [],
+      Array.isArray(output?.edges) ? output.edges : [],
+      'pulse',
+      targetIds,
+      risk,
+      command,
+      summary,
+    )
   }
 }
 

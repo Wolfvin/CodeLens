@@ -8,10 +8,13 @@ Design principles:
 - `status` always present on every node — AI doesn't need to infer
 - Empty arrays [] preferred over missing fields — schema consistency
 - Supports TSX/Vue/Svelte/Tailwind metadata
+
+v5.8: Added FrontendRegistryInput dataclass to replace 9-param function.
 """
 
 import json
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from utils import logger
@@ -156,6 +159,46 @@ def compute_frontend_status(
     return "active"
 
 
+@dataclass
+class FrontendRegistryInput:
+    """Groups all parsed data needed to build the frontend registry.
+
+    Why a dataclass? The old build_frontend_registry() had 9 positional parameters,
+    which is a code smell (many_params). Grouping them into a dataclass:
+    - Makes call sites self-documenting
+    - Reduces risk of passing arguments in the wrong order
+    - Allows easy extension without breaking existing callers
+    """
+    workspace: str = ""
+    html_data: List[Dict] = field(default_factory=list)
+    css_data: List[Dict] = field(default_factory=list)
+    js_data: List[Dict] = field(default_factory=list)
+    tsx_data: List[Dict] = field(default_factory=list)
+    vue_data: List[Dict] = field(default_factory=list)
+    svelte_data: List[Dict] = field(default_factory=list)
+    tailwind_info: Optional[Dict] = None
+    frameworks: Optional[List[str]] = None
+
+
+def build_frontend_registry_from_input(inp: FrontendRegistryInput) -> Dict[str, Any]:
+    """Build the frontend registry from a FrontendRegistryInput dataclass.
+
+    This is the canonical implementation. The legacy build_frontend_registry()
+    function delegates here. New code should prefer using FrontendRegistryInput.
+    """
+    return _build_frontend_registry_impl(
+        workspace=inp.workspace,
+        html_data=inp.html_data,
+        css_data=inp.css_data,
+        js_data=inp.js_data,
+        tsx_data=inp.tsx_data,
+        vue_data=inp.vue_data,
+        svelte_data=inp.svelte_data,
+        tailwind_info=inp.tailwind_info,
+        frameworks=inp.frameworks,
+    )
+
+
 def build_frontend_registry(
     workspace: str,
     html_data: List[Dict],
@@ -170,7 +213,36 @@ def build_frontend_registry(
     """
     Build the complete frontend registry from all parsed data.
     Merges references per class/id name and computes status/flags.
+
+    Accepts individual parameters for backward compatibility with scan commands.
+    Internally delegates to build_frontend_registry_from_input().
     """
+    inp = FrontendRegistryInput(
+        workspace=workspace,
+        html_data=html_data,
+        css_data=css_data,
+        js_data=js_data,
+        tsx_data=tsx_data,
+        vue_data=vue_data,
+        svelte_data=svelte_data,
+        tailwind_info=tailwind_info,
+        frameworks=frameworks,
+    )
+    return build_frontend_registry_from_input(inp)
+
+
+def _build_frontend_registry_impl(
+    workspace: str,
+    html_data: List[Dict],
+    css_data: List[Dict],
+    js_data: List[Dict],
+    tsx_data: List[Dict],
+    vue_data: List[Dict],
+    svelte_data: List[Dict],
+    tailwind_info: Optional[Dict],
+    frameworks: Optional[List[str]]
+) -> Dict[str, Any]:
+    """Internal implementation of build_frontend_registry."""
     class_map: Dict[str, Dict] = {}
     id_map: Dict[str, Dict] = {}
 
