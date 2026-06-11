@@ -348,6 +348,23 @@ def _detect_print_statements(
                 if '__main__' in context and 'if __name__' in context:
                     continue
 
+            # Rust: println!/eprintln! are standard output mechanisms, not debug leaks.
+            # Only flag them if they're in test functions or contain debug patterns.
+            # In production Rust code, println! is the equivalent of console.log in Node.js
+            # CLI apps, and eprintln! is for stderr output — neither is a debug leak.
+            if ext == ".rs" and label in ("println!()", "eprintln!()"):
+                # Check if inside a test function
+                context_start = max(0, i - 15)
+                context = '\n'.join(lines[context_start:i + 1])
+                is_in_test = bool(re.search(r'#\[test\]|#\[tokio::test\]|fn test_|fn it_', context))
+                # Check if the line contains debug-specific patterns
+                has_debug_pattern = bool(re.search(
+                    r'\bdbg!\(|debug|todo|fixme|FIXME|TODO|hack|HACK|TEMP|temp\b',
+                    stripped, re.IGNORECASE
+                ))
+                if not is_in_test and not has_debug_pattern:
+                    continue  # Standard Rust output, not a debug leak
+
             severity = "medium"
             should_remove = True
 

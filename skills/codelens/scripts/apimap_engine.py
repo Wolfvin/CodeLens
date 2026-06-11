@@ -191,6 +191,16 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── React Router ──────────────────────────────────
+            # Must detect BEFORE Vue Router to avoid false positives.
+            # React Router uses <Route path="..."> in JSX, createBrowserRouter,
+            # and useRoutes — these patterns must not be confused with Vue Router.
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                react_routes = _extract_react_router_routes(content, rel_path)
+                if react_routes:
+                    frameworks_detected.add("react-router")
+                    routes.extend(react_routes)
+
             # ─── Vue Router ──────────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"}:
                 vue_routes = _extract_vue_router_routes(content, rel_path)
@@ -1871,6 +1881,108 @@ def _generate_recommendations(
     return recommendations
 
 
+# ─── React Router ────────────────────────────────────────────────
+
+def _extract_react_router_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract React Router route definitions from a JS/TSX file.
+    
+    Detects:
+    - <Route path="..." element={...} /> in JSX
+    - createBrowserRouter([{ path: "..." }])
+    - useRoutes([{ path: "..." }])
+    - React Router v6 data APIs (loader, action)
+    
+    This must run BEFORE Vue Router detection to prevent false positives
+    where React Router JSX patterns are misidentified as Vue Router routes.
+    """
+    routes = []
+    
+    # Only detect React Router in files that have react-router imports or JSX Route elements
+    has_react_router = bool(re.search(
+        r'(?:from\s+[\'"]react-router|createBrowserRouter|useRoutes|'
+        r'<Route\s|<Routes\s)',
+        content
+    ))
+    
+    if not has_react_router:
+        return []
+    
+    # Extract <Route path="..." element={...} /> patterns (JSX syntax)
+    for m in re.finditer(r'<Route\s+[^>]*?path\s*=\s*["\']([^"\']+)["\']', content):
+        route_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract surrounding attributes
+        tag_content = content[m.start():m.start() + 500]
+        
+        # Element/component
+        element_match = re.search(r'element\s*=\s*\{(<\w+|{)', tag_content)
+        component_match = re.search(r'component\s*=\s*\{(\w+)', tag_content)
+        
+        component = None
+        if element_match:
+            component = element_match.group(1).strip('<{')
+        elif component_match:
+            component = component_match.group(1)
+        
+        # Skip empty paths (layout wrappers)
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": "GET",
+            "path": route_path,
+            "handler_name": component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "react-router",
+            "type": "page_route",
+            "component": component,
+            "lazy_loaded": "lazy" in tag_content.lower(),
+        }
+        
+        routes.append(route)
+    
+    # Extract createBrowserRouter/useRoutes patterns: { path: "..." }
+    # Only extract if not already found via JSX above (avoid duplicates)
+    found_paths = {r["path"] for r in routes}
+    for m in re.finditer(r'\{\s*path\s*:\s*["\']([^"\']+)["\']', content):
+        route_path = m.group(1)
+        if route_path in found_paths:
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract context for component/loader info
+        context = content[m.start():m.start() + 500]
+        
+        element_match = re.search(r'element\s*:\s*(?:<(\w+)|{)', context)
+        loader_match = re.search(r'loader\s*:\s*(\w+)', context)
+        
+        component = None
+        if element_match:
+            component = element_match.group(1)
+        elif loader_match:
+            component = loader_match.group(1)
+        
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": "GET",
+            "path": route_path,
+            "handler_name": component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "react-router",
+            "type": "page_route",
+            "component": component,
+        }
+        
+        routes.append(route)
+    
+    return routes
+
+
 # ─── Vue Router ────────────────────────────────────────────────
 
 def _extract_vue_router_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
@@ -1886,6 +1998,16 @@ def _extract_vue_router_routes(content: str, rel_path: str) -> List[Dict[str, An
     """
     routes = []
     
+    # Don't detect vue-router in React TSX/JSX files — these are React Router patterns.
+    # Check for React Router first to avoid false positives.
+    if rel_path.endswith('.tsx') or rel_path.endswith('.jsx'):
+        has_react_router = bool(re.search(
+            r'(?:from\s+[\'"]react-router|createBrowserRouter|useRoutes|<Route\s)',
+            content
+        ))
+        if has_react_router:
+            return []
+    
     # Only scan files that have vue-router imports or route definitions
     has_vue_router = bool(re.search(
         r'(?:from\s+[\'"]vue-router[\'"]|import\s+.*vue-router|'
@@ -1894,10 +2016,11 @@ def _extract_vue_router_routes(content: str, rel_path: str) -> List[Dict[str, An
     ))
     
     # Also check for route-like patterns even without explicit vue-router import
-    # (some projects re-export the router)
-    has_route_pattern = bool(re.search(
-        r'path\s*:\s*[\'"][/:]', content
-    ))
+    # (some projects re-export the router), but ONLY for .vue files or files
+    # that don't have React Router patterns (to avoid false positives).
+    has_route_pattern = False
+    if rel_path.endswith('.vue'):
+        has_route_pattern = bool(re.search(r'path\s*:\s*[\'"][/:]', content))
     
     if not has_vue_router and not has_route_pattern:
         return []

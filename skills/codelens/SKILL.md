@@ -35,9 +35,20 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5.8
+# CodeLens v5.8.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v5.8.1
+
+- **React Router detection**: New `_extract_react_router_routes()` — detects `<Route path="...">` in JSX, `createBrowserRouter`, `useRoutes`. Prevents vue-router false positives in React projects.
+- **`dependents` command fix**: Workspace path was consumed by `file` arg, causing wrong workspace detection. Added auto-swap when `file` is a directory with project markers.
+- **`config-drift` Rust parsing fix**: Greedy regex `use\s+([^;]+);` matched `use` in comments, producing nonsensical "missing dependencies". Now parses line-by-line, skips comments, validates crate names.
+- **`handbook` monorepo detection**: Added `bun.lock` indicator and structural detection (multiple `package.json` in `apps/`/`packages/`). Correctly identifies bun-based monorepos like Spacedrive.
+- **Rust `main()` dead code fix**: `main()` in `.rs` files no longer reported as dead code — it's an entry point.
+- **Rust `println!`/`eprintln!` debug-leak fix**: Standard Rust output macros are no longer flagged as debug leaks (was 3101 false positives → ~187 real). Only flagged in `#[test]` functions or with debug patterns.
+- **`api-map` vue-router false positive fix**: React Router routes in TSX files no longer misidentified as Vue Router.
+- **`validate` config file noise fix**: `.toml`, `.json`, `.yaml`, `.lock`, `.md` files no longer reported as "unregistered".
 
 ## What's New in v5.8
 

@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.7.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: SearchConfig/FrontendRegistryInput dataclasses (fixes many_params smell), O(n log n) Gini coefficient, bun.lock detection, trpc/orpc detection, improved normalizer coverage. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
+  "version": "5.8.1",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8.1: React Router detection, fix dependents workspace arg swap, fix config-drift Rust use parsing (no more greedy comment matching), fix handbook monorepo detection (bun.lock + structural), fix Rust main() dead code false positive, fix Rust println!/eprintln! debug-leak false positives, fix api-map vue-router false positive in React projects, fix validate config file false positives. v5.8: SearchConfig/FrontendRegistryInput dataclasses, bun.lock detection, trpc/orpc detection, monorepo support. Agent-optimized: handbook, ask, markdown formatters, semantic conventions. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",

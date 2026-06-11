@@ -495,7 +495,13 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
         # and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
-            if name == "main":
+            # Handle both simple "main" and qualified names like "crate::main"
+            bare_name = name.split('::')[-1] if '::' in name else name
+            if bare_name == "main":
+                continue
+            # Also skip Rust #[tokio::main] and #[actix::main] entry point functions
+            # These are async entry points that appear as "main" in the registry
+            if file_path.endswith('.rs') and name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
