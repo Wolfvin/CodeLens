@@ -6,6 +6,7 @@ Auto-detects frameworks from package.json, config files, and file patterns.
 import json
 import os
 from typing import Dict, List, Any, Optional
+from utils import logger
 
 
 # Known framework signatures
@@ -115,7 +116,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 detected["module_system"] = "cjs"
 
         except (json.JSONDecodeError, IOError):
-            pass
+            logger.debug("Failed to parse package file", exc_info=True)
 
     # 2. Check config files
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -177,7 +178,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                             if detected["has_tailwind"]:
                                 break
                     except IOError:
-                        pass
+                        logger.debug("Failed to parse package file", exc_info=True)
             if detected["has_tailwind"]:
                 break
 

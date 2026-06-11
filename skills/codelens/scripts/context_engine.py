@@ -7,6 +7,7 @@ Gives AI everything needed to understand a symbol without reading the whole file
 
 import os
 from typing import Dict, List, Any, Optional
+from utils import logger
 
 
 def get_symbol_context(
@@ -272,7 +273,7 @@ def _get_minimal_outline(workspace: str, rel_path: str) -> Optional[Dict]:
         if result["status"] == "ok":
             return result["outline"]
     except Exception:
-        pass
+        logger.debug("Code snippet extraction failed", exc_info=True)
 
     return None
 

@@ -17,14 +17,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
 
@@ -38,7 +31,6 @@ TEST_FILE_PATTERNS = [
     r'/test/',
     r'\.test\.py$',
 ]
-
 
 def map_test_coverage(
     workspace: str,
@@ -180,7 +172,6 @@ def map_test_coverage(
         "untested_list": _get_untested_list(coverage_map)[:50]
     }
 
-
 def _parse_source_file(content: str, ext: str, rel_path: str) -> Dict:
     """Parse a source file for functions and imports."""
     functions = []
@@ -215,7 +206,6 @@ def _parse_source_file(content: str, ext: str, rel_path: str) -> Dict:
             imports.append(m.group(1).strip())
 
     return {"functions": functions, "imports": imports}
-
 
 def _parse_test_file(content: str, ext: str, rel_path: str) -> Dict:
     """Parse a test file for test names and imports."""
@@ -263,7 +253,6 @@ def _parse_test_file(content: str, ext: str, rel_path: str) -> Dict:
         "tested_functions": tested_functions
     }
 
-
 def _find_tests_for_function(
     fn_name: str,
     src_path: str,
@@ -301,7 +290,6 @@ def _find_tests_for_function(
 
     return list(set(matches))[:10]
 
-
 def _compute_confidence(test_matches: List[str], fn_name: str) -> str:
     """Compute confidence level of the test coverage assessment."""
     if not test_matches:
@@ -319,7 +307,6 @@ def _compute_confidence(test_matches: List[str], fn_name: str) -> str:
         return "medium"
 
     return "low"
-
 
 def _find_untested_files(
     source_files: Dict[str, Dict],
@@ -359,7 +346,6 @@ def _find_untested_files(
 
     return sorted(untested, key=lambda x: x["function_count"], reverse=True)
 
-
 def _find_orphan_tests(
     source_files: Dict[str, Dict],
     test_files: Dict[str, Dict],
@@ -389,7 +375,6 @@ def _find_orphan_tests(
 
     return orphans
 
-
 def _parse_coverage_files(workspace: str) -> Optional[Dict]:
     """Try to parse existing coverage reports."""
     # Check for coverage/lcov.info
@@ -409,7 +394,6 @@ def _parse_coverage_files(workspace: str) -> Optional[Dict]:
 
     return None
 
-
 def _find_in_registry(function_name: str, workspace: str) -> Optional[Dict]:
     """Check backend registry for function info."""
     try:
@@ -424,10 +408,9 @@ def _find_in_registry(function_name: str, workspace: str) -> Optional[Dict]:
                     "ref_count": node.get("ref_count", 0)
                 }
     except Exception:
-        pass
+        logger.debug("Test mapping failed", exc_info=True)
 
     return None
-
 
 def _generate_function_recommendations(function_name: str, coverage: List[Dict]) -> List[str]:
     """Generate recommendations for a specific function's test coverage."""
@@ -466,7 +449,6 @@ def _generate_function_recommendations(function_name: str, coverage: List[Dict])
             )
 
     return recs
-
 
 def _get_untested_list(coverage_map: Dict[str, Dict[str, Any]]) -> List[Dict]:
     """Get list of untested functions sorted by importance (most referenced first)."""

@@ -21,16 +21,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # ─── Configuration ─────────────────────────────────────────────
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -48,7 +41,6 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
-
 
 def detect_smells(
     workspace: str,
@@ -277,7 +269,6 @@ def detect_smells(
         "categories_checked": list(categories)
     }
 
-
 # ─── Individual Smell Detectors ────────────────────────────────
 
 def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -342,7 +333,6 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _find_function_end(lines: List[str], start: int, ext: str) -> int:
     """Find the end line of a function starting at `start`."""
     if ext == ".py":
@@ -369,7 +359,6 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
                         return i + 1
         return min(start + 300, len(lines))
 
-
 def _extract_fn_name_js(line: str) -> str:
     """Extract function name from JS/TS line."""
     m = re.search(r'function\s+(\w+)', line)
@@ -379,7 +368,6 @@ def _extract_fn_name_js(line: str) -> str:
     if m:
         return m.group(1)
     return "anonymous"
-
 
 def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect deeply nested code blocks.
@@ -459,7 +447,6 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         })
 
     return smells
-
 
 def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions with too many parameters."""
@@ -558,7 +545,6 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
     """Detect callback hell / deeply nested promises."""
     smells = []
@@ -610,7 +596,6 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
             callback_depth = 0
 
     return smells
-
 
 def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect magic numbers and strings (unexplained constants)."""
@@ -696,7 +681,6 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect overly complex conditional expressions."""
     smells = []
@@ -730,7 +714,6 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
             })
 
     return smells
-
 
 def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect god objects (classes/modules with too many methods)."""
@@ -821,7 +804,6 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     """Detect potential duplicate code patterns across files (lightweight)."""
     smells = []
@@ -878,7 +860,6 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             })
 
     return smells[:30]  # Cap results
-
 
 def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
     """Detect inconsistent coding patterns across the workspace."""

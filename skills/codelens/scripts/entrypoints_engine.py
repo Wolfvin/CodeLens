@@ -21,16 +21,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 # ─── Configuration ─────────────────────────────────────────────
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -679,7 +672,6 @@ ENTRYPOINT_PATTERNS = {
     },
 }
 
-
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
@@ -782,7 +774,6 @@ def map_entrypoints(
         "execution_graph": execution_graph,
         "recommendations": recommendations,
     }
-
 
 # ─── Entrypoint Extraction ─────────────────────────────────────
 
@@ -903,10 +894,9 @@ def _extract_entrypoints(
             results.append(entrypoint)
 
     except re.error:
-        pass
+        logger.warning("Invalid regex in entrypoint pattern", exc_info=True)
 
     return results
-
 
 # ─── Handler Name Extraction ───────────────────────────────────
 
@@ -941,7 +931,6 @@ def _find_handler_name(content: str, line_num: int, ext: str) -> str:
 
     return "anonymous"
 
-
 def _find_handler_after_decorator(content: str, line_num: int, ext: str) -> str:
     """Find the function name after a Python decorator (for Flask/FastAPI)."""
     lines = content.split('\n')
@@ -955,7 +944,6 @@ def _find_handler_after_decorator(content: str, line_num: int, ext: str) -> str:
 
     return "anonymous"
 
-
 def _find_click_command_name(content: str, line_num: int) -> str:
     """Find the function name decorated with @click.command()."""
     lines = content.split('\n')
@@ -967,7 +955,6 @@ def _find_click_command_name(content: str, line_num: int) -> str:
             return m.group(1)
 
     return "unknown"
-
 
 def _path_from_file(rel_path: str) -> str:
     """Derive an API path from a file path (for Next.js app directory)."""
@@ -987,7 +974,6 @@ def _path_from_file(rel_path: str) -> str:
 
     return '/' + os.path.splitext(os.path.basename(rel_path))[0]
 
-
 def _method_from_spring_label(label: str) -> str:
     """Derive HTTP method from a Spring-style label."""
     if "get" in label.lower():
@@ -1001,7 +987,6 @@ def _method_from_spring_label(label: str) -> str:
     elif "patch" in label.lower():
         return "PATCH"
     return "ANY"
-
 
 # ─── Execution Graph Builder ───────────────────────────────────
 
@@ -1060,7 +1045,6 @@ def _build_execution_graph(
 
     return graph
 
-
 def _find_called_functions(content: str, handler_name: str) -> List[str]:
     """Find functions called within a handler function's body.
 
@@ -1112,7 +1096,6 @@ def _find_called_functions(content: str, handler_name: str) -> List[str]:
 
     return called
 
-
 # ─── Deduplication ─────────────────────────────────────────────
 
 def _deduplicate_entrypoints(entrypoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1128,7 +1111,6 @@ def _deduplicate_entrypoints(entrypoints: List[Dict[str, Any]]) -> List[Dict[str
 
     return unique
 
-
 # ─── Stats Computation ─────────────────────────────────────────
 
 def _compute_stats(entrypoints: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1142,7 +1124,6 @@ def _compute_stats(entrypoints: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_entrypoints": len(entrypoints),
         "by_type": dict(by_type),
     }
-
 
 # ─── Recommendations ───────────────────────────────────────────
 

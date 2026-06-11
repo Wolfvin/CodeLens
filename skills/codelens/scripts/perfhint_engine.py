@@ -27,16 +27,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # ─── Configuration ─────────────────────────────────────────────
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -385,7 +378,6 @@ PERF_HINT_CATEGORIES = {
     },
 }
 
-
 # ─── Main Detection Function ──────────────────────────────────
 
 def detect_perf_hints(
@@ -506,7 +498,6 @@ def detect_perf_hints(
         "recommendations": recommendations,
     }
 
-
 # ─── Per-file Hint Scanner ─────────────────────────────────────
 
 def _scan_file_hints(
@@ -591,7 +582,6 @@ def _scan_file_hints(
 
     return findings
 
-
 def _detect_recursive_functions(
     content: str,
     rel_path: str,
@@ -655,7 +645,6 @@ def _detect_recursive_functions(
 
     return findings
 
-
 def _detect_duplicate_api_calls(
     content: str,
     rel_path: str,
@@ -701,7 +690,6 @@ def _detect_duplicate_api_calls(
 
     return findings
 
-
 # ─── Category-File Relevance ───────────────────────────────────
 
 def _category_applies_to_file(category: str, ext: str) -> bool:
@@ -735,13 +723,11 @@ def _category_applies_to_file(category: str, ext: str) -> bool:
     # Default: allow for known source extensions
     return ext in SOURCE_EXTENSIONS
 
-
 # ─── Helper Functions ──────────────────────────────────────────
 
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory or is a test file."""
     return any(indicator in rel_path for indicator in TEST_INDICATORS)
-
 
 def _downgrade_severity(severity: str) -> str:
     """Downgrade severity by one level (for test files / dev-only code)."""
@@ -753,7 +739,6 @@ def _downgrade_severity(severity: str) -> str:
     }
     return downgrade.get(severity, severity)
 
-
 def _extract_matched_summary(match: re.Match) -> str:
     """Extract a short summary of the match for the detail field."""
     matched_text = match.group(0)
@@ -762,13 +747,11 @@ def _extract_matched_summary(match: re.Match) -> str:
         return matched_text[:77] + "..."
     return matched_text
 
-
 def _truncate_url(url: str) -> str:
     """Truncate long URLs for display in findings."""
     if len(url) > 60:
         return url[:57] + "..."
     return url
-
 
 def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove duplicate findings (same file, line, category, hint)."""
@@ -787,7 +770,6 @@ def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]
             unique.append(finding)
 
     return unique
-
 
 # ─── Stats & Risk Computation ──────────────────────────────────
 
@@ -809,7 +791,6 @@ def _compute_stats(
         "by_severity": dict(by_severity),
         "files_scanned": files_scanned,
     }
-
 
 def _compute_risk(findings: List[Dict[str, Any]]) -> str:
     """Compute overall risk level based on findings.
@@ -839,7 +820,6 @@ def _compute_risk(findings: List[Dict[str, Any]]) -> str:
         return "medium"
 
     return "low"
-
 
 # ─── Recommendations ───────────────────────────────────────────
 

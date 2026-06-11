@@ -5,6 +5,19 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.7.0] — 2026-06-11
+
+### Added
+
+- **Shared DEFAULT_IGNORE_DIRS across 22 engines**: All engine files now import `DEFAULT_IGNORE_DIRS` from `utils.py` instead of defining local copies with inconsistent entries. Added `.nuxt` to the shared set. Eliminated ~132 lines of duplicated configuration.
+
+### Changed
+
+- **Query command status consistency**: All 4 found-code-paths in `query.py` now return `status: "ok"` (was missing on 3 paths: frontend class, frontend id, backend function).
+- **Comprehensive logging across 15 files**: Replaced 26 bare `except ... pass` blocks with `logger.debug()`/`logger.warning()` calls in: refactor_safe_engine, context_engine, ownership_engine, registry, testmap_engine, sideeffect_engine, deadcode_engine, circular_engine, entrypoints_engine, configdrift_engine, diff_engine, incremental, framework_detect, handbook, and watch.
+- **Outline engine logging**: 5 `except Exception: pass` blocks in tree-sitter fallback functions now log at debug level.
+- **Convention engine logging**: 5 `except Exception: pass` blocks in semantic detectors now log at debug level.
+
 ## [5.6.0] — 2026-06-11
 
 ### Added

@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set, Tuple
+from utils import logger
 
 
 MTIME_CACHE_FILE = ".codelens/mtimes.json"
@@ -22,7 +23,7 @@ def _to_rel_paths(changed_files: Set[str], workspace: str) -> Set[str]:
         try:
             rel_paths.add(os.path.relpath(f, workspace))
         except ValueError:
-            pass
+            logger.debug("Path relativity conversion failed", exc_info=True)
     return rel_paths
 
 
@@ -34,7 +35,7 @@ def load_mtimes(workspace: str) -> Dict[str, float]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            pass
+            logger.debug("Failed to load mtimes cache", exc_info=True)
     return {}
 
 
@@ -57,7 +58,7 @@ def get_current_mtimes(workspace: str, files: List[str]) -> Dict[str, float]:
             rel_path = os.path.relpath(f, workspace)
             mtimes[rel_path] = mtime
         except OSError:
-            pass
+            logger.debug("File mtime access failed", exc_info=True)
     return mtimes
 
 

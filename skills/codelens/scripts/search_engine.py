@@ -7,7 +7,7 @@ No tree-sitter dependency — pure Python re module for maximum compatibility.
 import os
 import re
 from typing import Dict, List, Any, Optional, Set
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # File type to extension mapping
 TYPE_EXTENSIONS = {
@@ -28,18 +28,11 @@ TYPE_EXTENSIONS = {
 }
 
 # Default ignore patterns
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 DEFAULT_IGNORE_FILES = {
     ".DS_Store", "package-lock.json", "yarn.lock",
     "pnpm-lock.yaml", ".env", ".env.local",
 }
-
 
 def search_workspace(
     workspace: str,
@@ -102,7 +95,7 @@ def search_workspace(
         target_extensions = {file_type if file_type.startswith('.') else f'.{file_type}'}
 
     # Build ignore set from config
-    ignore_dirs = DEFAULT_IGNORE_DIRS.copy()
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     ignore_files = DEFAULT_IGNORE_FILES.copy()
     if config:
         for pattern_str in config.get("ignore", []):
@@ -233,7 +226,6 @@ def search_workspace(
         },
         "errors": errors if errors else None
     }
-
 
 def search_symbols(
     workspace: str,

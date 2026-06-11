@@ -376,7 +376,7 @@ def _detect_conventions(workspace: str) -> Dict[str, Any]:
         if result.get("status") == "ok":
             return result.get("conventions", conventions)
     except ImportError:
-        pass
+        logger.debug("Convention engine import failed, using fallback", exc_info=True)
     except Exception:
         logger.warning("Convention engine failed", exc_info=True)
 

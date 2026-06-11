@@ -9,6 +9,7 @@ import os
 import copy
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
+from utils import logger
 
 
 SNAPSHOTS_DIR = ".codelens/snapshots"
@@ -64,7 +65,7 @@ def list_snapshots(workspace: str) -> List[Dict[str, str]]:
                     "file": filename
                 })
             except (json.JSONDecodeError, IOError):
-                pass
+                logger.debug("Snapshot comparison failed", exc_info=True)
 
     return snapshots
 
@@ -365,4 +366,4 @@ def _cleanup_old_snapshots(snap_dir: str, keep: int = 20):
         try:
             os.remove(os.path.join(snap_dir, old_file))
         except OSError:
-            pass
+            logger.debug("Failed to remove old snapshot", exc_info=True)

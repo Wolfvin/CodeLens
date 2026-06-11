@@ -6,6 +6,7 @@ using tree-sitter for accurate AST-based extraction.
 
 import os
 from typing import Dict, List, Any, Optional
+from utils import logger
 
 
 def get_file_outline(
@@ -160,7 +161,7 @@ def _outline_javascript(content: str, detail: str) -> Dict:
             _extract_js_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        pass
+        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".js", exc_info=True)
 
     # Regex fallback
     _extract_js_outline_regex(content, outline, detail)
@@ -183,7 +184,7 @@ def _outline_typescript(content: str, detail: str) -> Dict:
             _extract_ts_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        pass
+        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".ts", exc_info=True)
 
     _extract_ts_outline_regex(content, outline, detail)
     return outline
@@ -205,7 +206,7 @@ def _outline_tsx(content: str, detail: str) -> Dict:
             _extract_tsx_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        pass
+        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".tsx", exc_info=True)
 
     _extract_tsx_outline_regex(content, outline, detail)
     return outline
@@ -227,7 +228,7 @@ def _outline_rust(content: str, detail: str) -> Dict:
             _extract_rust_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        pass
+        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".rs", exc_info=True)
 
     _extract_rust_outline_regex(content, outline, detail)
     return outline
@@ -249,7 +250,7 @@ def _outline_python(content: str, detail: str) -> Dict:
             _extract_python_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        pass
+        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".py", exc_info=True)
 
     _extract_python_outline_regex(content, outline, detail)
     return outline

@@ -14,6 +14,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
+from utils import logger
 
 
 def get_codelens_dir(workspace: str) -> str:
@@ -49,7 +50,7 @@ def load_config(workspace: str) -> Dict[str, Any]:
                 saved = json.load(f)
                 defaults.update(saved)
         except (json.JSONDecodeError, IOError):
-            pass  # Use defaults if config is corrupt
+            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
     return defaults
 
 
@@ -69,7 +70,7 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            pass  # Return empty registry if corrupt
+            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -98,7 +99,7 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            pass  # Return empty registry if corrupt
+            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,

@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict, deque
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # ─── Source Patterns (where data enters) ───────────────────────
 
@@ -263,15 +263,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
-
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
-
 
 def trace_dataflow(
     workspace: str,
@@ -440,7 +432,6 @@ def trace_dataflow(
         "recommendations": recommendations
     }
 
-
 def _build_flows(
     sources: List[Dict],
     sinks: List[Dict],
@@ -521,7 +512,6 @@ def _build_flows(
                     })
 
     return flows
-
 
 def _trace_intra_file_flow(
     workspace: str, file_path: str,
@@ -605,7 +595,6 @@ def _trace_intra_file_flow(
 
     return chain
 
-
 def _extract_variable_name(line: str) -> Optional[str]:
     """Extract the variable name from a source line."""
     # const/let/var x = ...
@@ -622,7 +611,6 @@ def _extract_variable_name(line: str) -> Optional[str]:
         return m.group(1)
     return None
 
-
 def _extract_assignment_target(line: str, source_var: str) -> Optional[str]:
     """Check if line assigns source_var to a new variable."""
     # const/let/var newVar = ...sourceVar...
@@ -634,7 +622,6 @@ def _extract_assignment_target(line: str, source_var: str) -> Optional[str]:
     if m:
         return m.group(1)
     return None
-
 
 def _build_import_map(workspace: str) -> Dict[str, List[str]]:
     """Build a map of file → files that import it."""
@@ -675,7 +662,6 @@ def _build_import_map(workspace: str) -> Dict[str, List[str]]:
 
     return reverse_map
 
-
 def _check_sanitizer(
     source: Dict, sink: Dict,
     all_sanitizers: List[Dict],
@@ -700,7 +686,6 @@ def _check_sanitizer(
 
     return False
 
-
 def _compute_dataflow_risk(violations: List[Dict]) -> str:
     """Compute overall risk based on violations found."""
     if not violations:
@@ -719,7 +704,6 @@ def _compute_dataflow_risk(violations: List[Dict]) -> str:
             max_severity = "medium"
 
     return max_severity
-
 
 def _generate_dataflow_recommendations(
     violations: List[Dict],

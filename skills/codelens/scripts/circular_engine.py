@@ -11,6 +11,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
+from utils import logger
 
 
 def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
@@ -67,6 +68,7 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
         from registry import load_backend_registry
         backend = load_backend_registry(workspace)
     except Exception:
+        logger.debug("Circular dependency detection failed", exc_info=True)
         return []
 
     nodes = backend.get("nodes", [])

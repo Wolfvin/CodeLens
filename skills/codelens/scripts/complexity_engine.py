@@ -26,16 +26,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # ─── Configuration ─────────────────────────────────────────────
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -65,7 +58,6 @@ PARAM_HIGH = 7
 # Nesting depth thresholds
 NESTING_MODERATE = 4
 NESTING_HIGH = 6
-
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
@@ -230,7 +222,6 @@ def compute_complexity(
         "recommendations": recommendations,
     }
 
-
 # ─── Function Extraction ───────────────────────────────────────
 
 def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -246,7 +237,6 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_rs_functions(lines, content)
 
     return functions
-
 
 def _extract_js_functions(lines: List[str], content: str, ext: str) -> List[Dict]:
     """Extract JS/TS function definitions."""
@@ -304,7 +294,6 @@ def _extract_js_functions(lines: List[str], content: str, ext: str) -> List[Dict
 
     return functions
 
-
 def _extract_py_functions(lines: List[str], content: str) -> List[Dict]:
     """Extract Python function definitions."""
     functions = []
@@ -323,7 +312,6 @@ def _extract_py_functions(lines: List[str], content: str) -> List[Dict]:
             })
 
     return functions
-
 
 def _extract_rs_functions(lines: List[str], content: str) -> List[Dict]:
     """Extract Rust function definitions."""
@@ -345,7 +333,6 @@ def _extract_rs_functions(lines: List[str], content: str) -> List[Dict]:
 
     return functions
 
-
 # ─── Function Body Extraction ──────────────────────────────────
 
 def _get_function_body_and_end(
@@ -363,7 +350,6 @@ def _get_function_body_and_end(
         return _get_py_function_body(lines, start)
     else:
         return _get_brace_function_body(lines, start)
-
 
 def _get_py_function_body(lines: List[str], start: int) -> Tuple[str, int]:
     """Extract Python function body using indentation."""
@@ -388,7 +374,6 @@ def _get_py_function_body(lines: List[str], start: int) -> Tuple[str, int]:
         body_lines.append(line)
 
     return '\n'.join(body_lines), start + len(body_lines)
-
 
 def _get_brace_function_body(lines: List[str], start: int) -> Tuple[str, int]:
     """Extract JS/TS/Rust function body using brace counting."""
@@ -422,7 +407,6 @@ def _get_brace_function_body(lines: List[str], start: int) -> Tuple[str, int]:
 
     return '\n'.join(body_lines), start + len(body_lines)
 
-
 # ─── Cyclomatic Complexity ─────────────────────────────────────
 
 def _compute_cyclomatic(fn_body: str, ext: str) -> int:
@@ -454,7 +438,6 @@ def _compute_cyclomatic(fn_body: str, ext: str) -> int:
         decisions += _count_rs_decisions(clean)
 
     return decisions + 1
-
 
 def _count_js_decisions(clean: str) -> int:
     """Count decision points in JS/TS code."""
@@ -488,7 +471,6 @@ def _count_js_decisions(clean: str) -> int:
 
     return count
 
-
 def _count_py_decisions(clean: str) -> int:
     """Count decision points in Python code."""
     count = 0
@@ -517,7 +499,6 @@ def _count_py_decisions(clean: str) -> int:
 
     return count
 
-
 def _count_rs_decisions(clean: str) -> int:
     """Count decision points in Rust code."""
     count = 0
@@ -543,7 +524,6 @@ def _count_rs_decisions(clean: str) -> int:
     # Rust doesn't have ternary but has if-as-expression
 
     return count
-
 
 # ─── Cognitive Complexity ──────────────────────────────────────
 
@@ -575,7 +555,6 @@ def _compute_cognitive(fn_body: str, ext: str) -> int:
         total = _cognitive_rs(lines)
 
     return total
-
 
 def _cognitive_js(lines: List[str]) -> int:
     """Compute cognitive complexity for JS/TS code."""
@@ -630,7 +609,6 @@ def _cognitive_js(lines: List[str]) -> int:
                     nesting -= 1
 
     return total
-
 
 def _cognitive_py(lines: List[str]) -> int:
     """
@@ -694,7 +672,6 @@ def _cognitive_py(lines: List[str]) -> int:
 
     return total
 
-
 def _cognitive_rs(lines: List[str]) -> int:
     """Compute cognitive complexity for Rust code."""
     total = 0
@@ -741,7 +718,6 @@ def _cognitive_rs(lines: List[str]) -> int:
 
     return total
 
-
 # ─── LOC Counting ──────────────────────────────────────────────
 
 def _count_loc(fn_body: str) -> int:
@@ -783,7 +759,6 @@ def _count_loc(fn_body: str) -> int:
 
     return loc
 
-
 # ─── Parameter Counting ────────────────────────────────────────
 
 def _count_params(params_str: str, ext: str) -> int:
@@ -820,7 +795,6 @@ def _count_params(params_str: str, ext: str) -> int:
     params = [p.strip() for p in params_str.split(',') if p.strip()]
     return len(params)
 
-
 # ─── Nesting Depth ─────────────────────────────────────────────
 
 def _compute_max_nesting(fn_body: str, ext: str) -> int:
@@ -832,7 +806,6 @@ def _compute_max_nesting(fn_body: str, ext: str) -> int:
         return _max_nesting_python(clean)
     else:
         return _max_nesting_brace(clean)
-
 
 def _max_nesting_python(clean: str) -> int:
     """Compute max nesting depth for Python using indentation."""
@@ -859,7 +832,6 @@ def _max_nesting_python(clean: str) -> int:
 
     return max_depth
 
-
 def _max_nesting_brace(clean: str) -> int:
     """Compute max nesting depth for brace-based languages."""
     max_depth = 0
@@ -873,7 +845,6 @@ def _max_nesting_brace(clean: str) -> int:
             current_depth = max(0, current_depth - 1)
 
     return max_depth
-
 
 # ─── Classification and Suggestions ────────────────────────────
 
@@ -889,7 +860,6 @@ def _classify_complexity(cyclomatic: int) -> str:
         return "very_complex"
     else:
         return "untamable"
-
 
 def _generate_refactoring_suggestion(
     cc: int, cog: int, loc: int, params: int, nesting: int, fn_name: str
@@ -945,7 +915,6 @@ def _generate_refactoring_suggestion(
         return "Function complexity is within acceptable limits."
 
     return " | ".join(suggestions)
-
 
 def _generate_recommendations(
     functions: List[Dict],
@@ -1021,7 +990,6 @@ def _generate_recommendations(
 
     return recs
 
-
 # ─── String/Comment Removal Helpers ────────────────────────────
 
 def _remove_strings(code: str, ext: str) -> str:
@@ -1049,7 +1017,6 @@ def _remove_strings(code: str, ext: str) -> str:
         result = re.sub(r"r'(?:#*)'[^']*'(?:#*)'", "r''", result)
 
     return result
-
 
 def _remove_comments(code: str, ext: str) -> str:
     """Remove comments to avoid false positive matches."""

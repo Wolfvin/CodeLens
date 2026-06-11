@@ -13,6 +13,7 @@ Detects and reports coding conventions from the codebase including:
 import os
 import re
 from typing import Dict, Any, List, Optional, Tuple
+from utils import logger
 
 
 def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -553,7 +554,7 @@ def _detect_module_system(files: List[str], workspace: str) -> str:
             elif mtype == "commonjs":
                 return "CommonJS"
         except Exception:
-            pass
+            logger.debug("Failed to read package.json for module system detection", exc_info=True)
     
     # Fallback: analyze imports
     esm = 0
@@ -1111,7 +1112,7 @@ def _detect_css_framework(all_source_files: List[str], workspace: str) -> Dict[s
             if "bulma" in deps:
                 scores["bulma"] += 5
         except Exception:
-            pass
+            logger.debug("Failed to read package.json for CSS framework detection", exc_info=True)
 
     # Check source files for class name patterns and imports
     sample = all_source_files[:30]
@@ -1225,7 +1226,7 @@ def _detect_auth_pattern(all_source_files: List[str], workspace: str) -> Dict[st
             if "@clerk/nextjs" in deps or "@clerk/clerk-js" in deps:
                 scores["clerk"] += 5
         except Exception:
-            pass
+            logger.debug("Failed to read package.json for auth pattern detection", exc_info=True)
 
     # Check Python dependencies
     req_path = os.path.join(workspace, 'requirements.txt')
@@ -1244,7 +1245,7 @@ def _detect_auth_pattern(all_source_files: List[str], workspace: str) -> Dict[st
             if 'flask-login' in req_content or 'django' in req_content:
                 scores["jwt"] += 1  # Generic session-based auth
         except Exception:
-            pass
+            logger.debug("Failed to read requirements.txt for auth pattern detection", exc_info=True)
 
     # Check source files for import patterns and middleware
     sample = all_source_files[:30]
@@ -1428,7 +1429,7 @@ def _detect_deployment_pattern(workspace: str) -> Dict[str, Any]:
                     found_platforms["netlify"] = []
                 found_platforms["netlify"].append("package.json (netlify dependency)")
         except Exception:
-            pass
+            logger.debug("Failed to read package.json for deployment pattern detection", exc_info=True)
 
     # Check for .github/workflows (CI/CD but hints at deployment)
     github_workflows = os.path.join(workspace, '.github', 'workflows')

@@ -29,16 +29,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
+from utils import DEFAULT_IGNORE_DIRS
 
 # ─── Configuration ─────────────────────────────────────────────
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -68,7 +61,6 @@ VALIDATION_PATTERNS = {
     "validate", "validation", "validator", "schema", "joi",
     "zod", "yup", "celebrate", "checkSchema",
 }
-
 
 def map_api_routes(
     workspace: str,
@@ -274,7 +266,6 @@ def map_api_routes(
         "recommendations": recommendations,
     }
 
-
 # ─── JS Route Extraction ───────────────────────────────────────
 
 def _extract_js_routes(
@@ -381,7 +372,6 @@ def _extract_js_routes(
 
     return routes
 
-
 def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
     """Return the detected JS framework name."""
     if is_fastify:
@@ -393,7 +383,6 @@ def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
     if is_express:
         return "express"
     return "unknown"
-
 
 def _extract_inline_middleware(
     content: str, start_pos: int, rel_path: str, line_num: int
@@ -441,7 +430,6 @@ def _extract_inline_middleware(
 
     return middleware
 
-
 def _split_args(args_str: str) -> List[str]:
     """Split function arguments at depth 0 commas."""
     args = []
@@ -463,7 +451,6 @@ def _split_args(args_str: str) -> List[str]:
         args.append(''.join(current))
     return args
 
-
 def _classify_middleware(name: str) -> str:
     """Classify middleware by its name patterns."""
     lower = name.lower()
@@ -481,7 +468,6 @@ def _classify_middleware(name: str) -> str:
             return "validation"
     return "custom"
 
-
 def _infer_handler_name(content: str, offset: int) -> str:
     """Try to infer the handler function name from code near offset."""
     snippet = content[offset:offset + 300]
@@ -490,7 +476,6 @@ def _infer_handler_name(content: str, offset: int) -> str:
     if m:
         return m.group(1) or m.group(2) or "anonymous"
     return "anonymous"
-
 
 def _infer_handler_name_from_args(content: str, start_pos: int) -> str:
     """Infer handler name from the last argument of a route call."""
@@ -525,7 +510,6 @@ def _infer_handler_name_from_args(content: str, start_pos: int) -> str:
 
     return "anonymous"
 
-
 def _detect_request_response_types(
     content: str, offset: int
 ) -> tuple:
@@ -551,7 +535,6 @@ def _detect_request_response_types(
         resp_type = m.group(1)
 
     return req_type, resp_type
-
 
 # ─── JS Middleware Extraction ──────────────────────────────────
 
@@ -596,7 +579,6 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
             })
 
     return middleware
-
 
 # ─── Next.js Routes ────────────────────────────────────────────
 
@@ -726,7 +708,6 @@ def _extract_nextjs_routes(
 
     return routes
 
-
 # ─── Nuxt Routes ───────────────────────────────────────────────
 
 def _extract_nuxt_routes(
@@ -776,7 +757,6 @@ def _extract_nuxt_routes(
             })
 
     return routes
-
 
 # ─── Python Routes (Flask / FastAPI / Django) ─────────────────
 
@@ -936,7 +916,6 @@ def _extract_python_routes(
 
     return routes
 
-
 def _find_next_python_function(content: str, offset: int) -> str:
     """Find the next Python function definition after offset."""
     remaining = content[offset:offset + 500]
@@ -944,7 +923,6 @@ def _find_next_python_function(content: str, offset: int) -> str:
     if m:
         return m.group(1)
     return "anonymous"
-
 
 def _extract_python_decorator_middleware(
     content: str, offset: int, rel_path: str, line_num: int
@@ -981,7 +959,6 @@ def _extract_python_decorator_middleware(
                 })
 
     return middleware
-
 
 def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
     """Extract middleware declarations from Python files (Flask/Django/FastAPI)."""
@@ -1030,7 +1007,6 @@ def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
             })
 
     return middleware
-
 
 # ─── GraphQL ───────────────────────────────────────────────────
 
@@ -1097,7 +1073,6 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
 
     return routes
 
-
 def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
@@ -1158,7 +1133,6 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
     return routes
 
-
 def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from Python code (Graphene, Strawberry, Ariadne)."""
     routes = []
@@ -1206,7 +1180,6 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
 
     return routes
 
-
 def _find_next_js_function(content: str, offset: int) -> str:
     """Find the next JS/TS function name after offset."""
     remaining = content[offset:offset + 300]
@@ -1223,7 +1196,6 @@ def _find_next_js_function(content: str, offset: int) -> str:
     if m:
         return m.group(1)
     return "anonymous"
-
 
 # ─── gRPC ──────────────────────────────────────────────────────
 
@@ -1258,7 +1230,6 @@ def _extract_grpc_services(content: str, rel_path: str) -> List[Dict[str, Any]]:
             })
 
     return routes
-
 
 # ─── tRPC ──────────────────────────────────────────────────────
 
@@ -1445,7 +1416,6 @@ def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
     return routes
 
-
 # ─── oRPC ──────────────────────────────────────────────────────
 
 def _extract_orpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
@@ -1606,7 +1576,6 @@ def _extract_orpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
     return routes
 
-
 def _extract_orpc_router_pairs(
     obj_body: str,
     procedures: Dict[str, Dict],
@@ -1662,7 +1631,6 @@ def _extract_orpc_router_pairs(
                 "framework": "orpc",
             })
 
-
 # ─── Helpers ───────────────────────────────────────────────────
 
 def _normalize_path(path: str) -> str:
@@ -1677,7 +1645,6 @@ def _normalize_path(path: str) -> str:
         path = path.rstrip('/')
     return path
 
-
 def _is_deprecated_route(route: Dict[str, Any]) -> bool:
     """Check if a route is marked as deprecated."""
     handler = route.get("handler_name", "")
@@ -1691,7 +1658,6 @@ def _is_deprecated_route(route: Dict[str, Any]) -> bool:
     # This is a heuristic — in practice we'd check the file content for
     # @deprecated or deprecated: true comments near the route
     return False
-
 
 def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Group routes by path prefix (e.g., /api/users, /api/posts)."""
@@ -1725,7 +1691,6 @@ def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         })
 
     return result
-
 
 def _generate_recommendations(
     routes: List[Dict[str, Any]],

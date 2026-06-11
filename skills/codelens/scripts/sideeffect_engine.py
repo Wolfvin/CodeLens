@@ -22,14 +22,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
 
@@ -144,7 +137,6 @@ SIDE_EFFECT_PATTERNS = {
     },
 }
 
-
 def analyze_side_effects(
     workspace: str,
     function_name: Optional[str] = None,
@@ -177,6 +169,7 @@ def analyze_side_effects(
         backend = load_backend_registry(workspace)
         registry_nodes = backend.get("nodes", [])
     except Exception:
+        logger.debug("Failed to load backend registry", exc_info=True)
         registry_nodes = []
 
     # If specific function requested, find it
@@ -270,7 +263,6 @@ def analyze_side_effects(
         "count": total
     }
 
-
 def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
     """Analyze a single function from registry node."""
     file_path = os.path.join(workspace, node.get("file", ""))
@@ -335,7 +327,6 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
         "is_async": node.get("async", False)
     }
 
-
 def _scan_for_function(workspace: str, function_name: str, file_filter: Optional[str] = None) -> Dict:
     """Scan workspace for a function not in registry."""
     for root, dirs, filenames in os.walk(workspace):
@@ -395,7 +386,6 @@ def _scan_for_function(workspace: str, function_name: str, file_filter: Optional
         "message": f"Function '{function_name}' not found in workspace"
     }
 
-
 def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Extract function definitions from file."""
     functions = []
@@ -425,7 +415,6 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 functions.append({"name": m.group(1), "line": i + 1, "async": "async" in line})
 
     return functions
-
 
 def _get_function_body(content: str, fn_info: Dict, ext: str) -> str:
     """Get the body of a function."""
@@ -461,7 +450,6 @@ def _get_function_body(content: str, fn_info: Dict, ext: str) -> str:
                     if started and brace_count == 0:
                         return '\n'.join(body_lines)
         return '\n'.join(body_lines)
-
 
 def _detect_effects(fn_body: str, ext: str) -> List[Dict]:
     """Detect side effects in a function body."""

@@ -13,20 +13,12 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
 }
-
 
 def detect_dead_code(
     workspace: str,
@@ -135,7 +127,6 @@ def detect_dead_code(
         "categories_checked": list(categories)
     }
 
-
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect code that comes after return/throw/break/continue and is therefore unreachable."""
     items = []
@@ -207,7 +198,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
 
     return items
 
-
 def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect variables that are declared but never read."""
     items = []
@@ -271,7 +261,6 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
 
     return items[:100]  # Cap to avoid noise
 
-
 def _collect_js_exports_imports(
     content: str, ext: str, rel_path: str,
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
@@ -316,7 +305,6 @@ def _collect_js_exports_imports(
         elif m.group(3):  # Default import
             imports[rel_path].add(m.group(3))
 
-
 def _collect_py_exports_imports(
     content: str, rel_path: str,
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
@@ -347,7 +335,6 @@ def _collect_py_exports_imports(
             "type": "python_definition",
             "line": line_num
         })
-
 
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
@@ -388,13 +375,13 @@ def _detect_unused_exports(
 
     return unused[:50]
 
-
 def _detect_zombie_css(workspace: str) -> List[Dict]:
     """Detect CSS classes defined but never used in HTML/JS/TSX."""
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
     except Exception:
+        logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
     zombie = []
@@ -413,13 +400,13 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
 
     return zombie[:50]
 
-
 def _detect_dead_listeners(workspace: str) -> List[Dict]:
     """Detect event listeners that listen for events on selectors that don't exist in HTML."""
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
     except Exception:
+        logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
     # Get all known IDs and classes

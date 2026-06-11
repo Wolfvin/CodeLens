@@ -19,14 +19,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
+from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py"}
 
@@ -108,7 +101,6 @@ KNOWN_RETURN_TYPES = {
     "map": "map",
     "filter": "filter",
 }
-
 
 def infer_types(
     workspace: str,
@@ -224,12 +216,10 @@ def infer_types(
         "count": len(type_map)
     }
 
-
 def _has_typescript_annotations(content: str) -> bool:
     """Check if a TypeScript file has type annotations."""
     # Look for explicit type annotations
     return bool(re.search(r':\s*(?:string|number|boolean|any|void|never|object|undefined|null|Array|Record|Map|Set|Promise)\b', content))
-
 
 def _infer_js_types(content: str, rel_path: str) -> Dict[str, Any]:
     """Infer types for a JS/TS file."""
@@ -315,7 +305,6 @@ def _infer_js_types(content: str, rel_path: str) -> Dict[str, Any]:
 
     return types
 
-
 def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
     """Infer types for a Python file."""
     types = {}
@@ -377,7 +366,6 @@ def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
 
     return types
 
-
 def _infer_literal_type(value: str) -> Optional[str]:
     """Infer type from a JS literal value."""
     value = value.strip()
@@ -422,7 +410,6 @@ def _infer_literal_type(value: str) -> Optional[str]:
 
     return None
 
-
 def _infer_literal_type_py(value: str) -> Optional[str]:
     """Infer type from a Python literal value."""
     value = value.strip()
@@ -457,7 +444,6 @@ def _infer_literal_type_py(value: str) -> Optional[str]:
 
     return None
 
-
 def _extract_fn_body(content: str, start: int) -> Optional[str]:
     """Extract function body from starting position."""
     brace_count = 0
@@ -477,7 +463,6 @@ def _extract_fn_body(content: str, start: int) -> Optional[str]:
                 return ''.join(body_chars)
 
     return None
-
 
 def _infer_return_type(fn_body: str) -> str:
     """Infer return type from function body."""
@@ -503,7 +488,6 @@ def _infer_return_type(fn_body: str) -> str:
         return list(return_types)[0]
 
     return " | ".join(sorted(return_types))
-
 
 def _extract_params(fn_sig: str) -> List[Dict]:
     """Extract parameter names and inferred types from function signature."""

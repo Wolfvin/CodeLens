@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional
 from registry import load_config, load_frontend_registry, load_backend_registry
 from diff_engine import save_snapshot
 from outline_engine import get_workspace_outline
-from utils import write_output_files, compute_summary, logger
+from utils import write_output_files, compute_summary, logger, DEFAULT_IGNORE_DIRS
 from commands import register_command
 from commands.scan import cmd_scan
 
@@ -200,14 +200,9 @@ def _watch_polling(
 
     # Track file mtimes
     last_mtimes: Dict[str, float] = {}
-    ignore_dirs = {
-        'node_modules', '.git', 'dist', 'build', 'target',
-        '__pycache__', '.codelens', '.next', '.cache',
-        'vendor', '.venv', 'venv', 'env',
-    }
 
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext in _WATCH_EXTENSIONS:
@@ -235,7 +230,7 @@ def _watch_polling(
 
             # Check for new files
             for root, dirs, filenames in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
                 for filename in filenames:
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in _WATCH_EXTENSIONS:

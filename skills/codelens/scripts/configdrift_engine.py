@@ -18,17 +18,9 @@ import re
 import json
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-
-
-DEFAULT_IGNORE_DIRS = {
-    "node_modules", ".git", "dist", "build", "target",
-    "__pycache__", ".codelens", ".next", ".nuxt",
-    "coverage", ".cache", "vendor", "bin", "obj",
-    ".terraform", ".venv", "venv", "env",
-}
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
-
 
 def detect_config_drift(
     workspace: str,
@@ -78,7 +70,6 @@ def detect_config_drift(
         "recommendations": _generate_drift_recommendations(drift)
     }
 
-
 def _detect_project_type(workspace: str) -> str:
     """Detect the project type from config files."""
     if os.path.exists(os.path.join(workspace, "package.json")):
@@ -90,7 +81,6 @@ def _detect_project_type(workspace: str) -> str:
         return "python"
     else:
         return "unknown"
-
 
 def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
     """Load declared dependencies from config files."""
@@ -110,7 +100,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                 declared["dev_dependencies"] = pkg.get("devDependencies", {})
                 declared["peer_dependencies"] = pkg.get("peerDependencies", {})
             except (json.JSONDecodeError, IOError):
-                pass
+                logger.debug("Config drift: failed to parse file", exc_info=True)
 
     elif project_type == "rust":
         cargo_path = os.path.join(workspace, "Cargo.toml")
@@ -143,7 +133,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                         name = stripped.split('=')[0].strip()
                         declared["dev_dependencies"][name] = stripped
             except IOError:
-                pass
+                logger.debug("Config drift: failed to parse file", exc_info=True)
 
     elif project_type == "python":
         # requirements.txt
@@ -159,7 +149,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                             if name:
                                 declared["dependencies"][name] = stripped
             except IOError:
-                pass
+                logger.debug("Config drift: failed to parse file", exc_info=True)
 
         # pyproject.toml
         pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -178,10 +168,9 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                         in_deps = False
                         continue
             except IOError:
-                pass
+                logger.debug("Config drift: failed to parse file", exc_info=True)
 
     return declared
-
 
 def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
     """Scan all source files for actual import statements."""
@@ -267,7 +256,6 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
         "phantom": phantom
     }
 
-
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
     """Check if a relative JS import resolves to an actual file."""
     if import_path.startswith('@/'):
@@ -283,7 +271,6 @@ def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
             return True
 
     return False
-
 
 def _compute_drift(
     declared: Dict, actual: Dict,
@@ -382,14 +369,12 @@ def _compute_drift(
 
     return drift
 
-
 def _normalize_pkg_name(name: str, project_type: str) -> str:
     """Normalize package name for comparison."""
     # Remove @scope prefix for comparison
     if project_type == "node" and name.startswith('@'):
         return name.lower()
     return name.lower().replace('-', '_').replace('.', '_')
-
 
 def _generate_drift_recommendations(drift: Dict) -> List[str]:
     """Generate recommendations based on drift findings."""
