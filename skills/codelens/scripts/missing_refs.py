@@ -77,13 +77,9 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
         if has_js and not has_css:
             js_locs = [f"{r['path']}:{r['line']}" for r in cls.get("js", [])]
             sources = set(r.get("source", "") for r in cls.get("js", []))
-            # Only flag if it looks like a CSS class (not Tailwind utility or JS keyword)
+            # Only flag if it looks like a CSS class (not Tailwind utility)
             is_tailwind = _is_likely_tailwind(name)
-            is_js_keyword = name in _JS_KEYWORDS
-            # Skip Vue dot-ref sources (e.g., layoutClass from .layoutClass) — these are
-            # JS properties, not CSS class names
-            is_vue_dot_ref = 'vue_dot_ref' in sources
-            if not is_tailwind and not is_js_keyword and not is_vue_dot_ref:
+            if not is_tailwind:
                 issues["html_no_css"].append({
                     "name": name,
                     "status": cls["status"],
@@ -171,136 +167,104 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
     }
 
 
-# Common JS keywords/properties that should NOT be reported as CSS class names
-_JS_KEYWORDS = {
-    # JavaScript reserved words
-    'class', 'extends', 'implements', 'import', 'export', 'default',
-    'return', 'const', 'let', 'var', 'function', 'if', 'else',
-    'true', 'false', 'null', 'undefined', 'this', 'new', 'typeof',
-    'switch', 'case', 'break', 'continue', 'for', 'while', 'do',
-    'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield',
-    # Common JS built-in properties/methods that appear in Vue :class bindings
-    'includes', 'value', 'length', 'push', 'pop', 'map', 'filter',
-    'forEach', 'reduce', 'find', 'some', 'every', 'keys', 'values',
-    'entries', 'toString', 'constructor', 'prototype', 'hasOwnProperty',
-    'indexOf', 'splice', 'slice', 'join', 'split', 'replace', 'trim',
-    'name', 'type', 'key', 'id', 'style', 'href', 'src', 'data',
-    'active', 'selected', 'disabled', 'hidden', 'open', 'closed',
-    # Vue-specific
-    'setup', 'props', 'emit', 'slot', 'ref', 'reactive', 'computed',
-}
-
-
 def _is_likely_tailwind(class_name: str) -> bool:
     """Heuristic to detect Tailwind utility classes.
 
-    v6: Expanded detection for Tailwind v4 syntax including:
-    - Arbitrary value classes: w-[100px], text-[#fff]
-    - Data attribute variants: data-[slot=...], data-current:
-    - Group/peer variants: group-hover:, peer-focus:
-    - Arbitrary variants: [&_...], [@media...]
-    - Star wildcard: **:prefix-
-    - Container queries: @sm:, @md:
-    - Negative values: -mt-4, -translate-x-1
+    Covers:
+    - Standard utility prefixes (w-, h-, p-, m-, text-, bg-, etc.)
+    - Important modifier prefix (!)
+    - Negative value prefix (-)
+    - Responsive prefixes (sm:, md:, lg:, xl:, 2xl:)
+    - State variants (hover:, focus:, active:, dark:, etc.)
+    - Arbitrary value syntax ([...])
+    - Fractional values (w-1/2, w-1/3)
     """
+    # Strip leading ! (important modifier) and - (negative value)
+    stripped = class_name.lstrip('!')
 
-    # ─── Structural patterns that are always Tailwind ──────────
-    # Arbitrary value brackets: w-[...], text-[...], origin-(--...), etc.
-    if re.search(r'\[.+\]', class_name) or re.search(r'\(.+\)', class_name):
-        return True
-
-    # Star wildcard variant: **:something or *:something
-    if class_name.startswith('**:') or ':**:' in class_name or class_name.startswith('*:'):
-        return True
-
-    # Data attribute variant: data-[...] or data-something: or in-data-...
-    if re.match(r'^(data|in-data)[-\[]', class_name) or ':data-' in class_name:
-        return True
-
-    # Group/peer/aria/supports variants
-    if re.match(r'^(group|peer|aria|supports|motion|starting)[-:]', class_name):
-        return True
-
-    # Container query variants: @sm, @md, etc.
-    if class_name.startswith('@'):
-        return True
-
-    # Negative value prefix: -mt-4, -translate-x-1
-    if re.match(r'^-[whmpglrtbfo]\w+-', class_name):
-        return True
-
-    # ─── Prefix-based detection ──────────────────────────────
     tailwind_prefixes = [
+        # Layout
         'flex', 'grid', 'block', 'inline', 'hidden', 'visible',
-        'w-', 'h-', 'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
+        'table', 'flow-root', 'contents', 'list-',
+        # Spacing
+        'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
+        'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
         'pt-', 'pb-', 'pl-', 'pr-', 'px-', 'py-',
-        'text-', 'bg-', 'border-', 'rounded-', 'shadow-',
-        'gap-', 'space-', 'justify-', 'items-',
-        'font-', 'tracking-', 'leading-',
-        'opacity-', 'z-', 'overflow-',
-        'hover:', 'focus:', 'active:', 'dark:', 'sm:', 'md:', 'lg:', 'xl:', '2xl:',
-        'transition-', 'duration-', 'ease-',
-        'scale-', 'rotate-', 'translate-', 'origin-',
-        'ring-', 'outline-',
-        'cursor-', 'select-', 'pointer-',
-        # v6: Additional prefixes
-        'inset-', 'top-', 'right-', 'bottom-', 'left-',
-        'max-sm:', 'max-md:', 'max-lg:', 'max-xl:', 'max-2xl:',  # max-width variants
-        'min-w-', 'min-h-', 'max-w-', 'max-h-',
-        'col-', 'row-', 'cols-', 'rows-',
-        'aspect-', 'object-',
-        'list-', 'table-', 'indent-',
-        'line-clamp', 'truncate',
-        'whitespace-', 'break-',
-        'decoration-', 'underline-', 'overline-',
-        'animate-', 'animation-',
-        'backdrop-', 'blur-', 'brightness-', 'contrast-',
-        'drop-shadow-', 'grayscale-', 'hue-rotate-',
-        'invert-', 'saturate-', 'sepia-',
-        'accent-', 'appearance-',
-        'resize-', 'place-', 'order-',
-        'self-', 'content-',
-        'mix-blend-', 'isolation-',
-        'from-', 'to-', 'via-',  # gradient stops
-        'divide-', 'sr-only', 'not-sr-only',
-        'bg-gradient-', 'stroke-', 'fill-',
-        'touch-', 'scroll-',
-        'container',
+        # Typography
+        'text-', 'font-', 'tracking-', 'leading-', 'whitespace-',
+        'break-', 'truncate', 'overflow-ellipsis', 'overflow-clip',
+        'underline', 'overline', 'line-through', 'no-underline',
+        'uppercase', 'lowercase', 'capitalize', 'normal-case',
+        # Colors & backgrounds
+        'bg-', 'from-', 'via-', 'to-', 'bg-gradient-',
+        # Border
+        'border-', 'rounded-', 'ring-', 'outline-', 'divide-',
+        # Effects
+        'shadow-', 'opacity-', 'blur-', 'brightness-', 'contrast-',
+        'drop-shadow-', 'grayscale-', 'hue-rotate-', 'invert-', 'saturate-', 'sepia-',
+        # Flexbox & Grid
+        'gap-', 'space-', 'justify-', 'items-', 'self-', 'place-',
+        'flex-', 'grid-', 'order-', 'col-', 'row-',
+        # Positioning
+        'absolute', 'relative', 'fixed', 'sticky',
+        'top-', 'bottom-', 'left-', 'right-', 'inset-',
+        'z-',
+        # Overflow
+        'overflow-', 'overscroll-',
+        # Transitions & Animation
+        'transition-', 'duration-', 'ease-', 'animate-',
+        'delay-',
+        # Transform
+        'scale-', 'rotate-', 'translate-', 'skew-', 'origin-',
+        # Interactivity
+        'cursor-', 'select-', 'pointer-', 'resize-', 'appearance-',
+        'accent-',
+        # SVG
+        'fill-', 'stroke-',
+        # Accessibility
+        'sr-only', 'not-sr-only',
+        # Typography plugin (@tailwindcss/typography)
+        'prose', 'prose-',
     ]
 
     for prefix in tailwind_prefixes:
-        if class_name.startswith(prefix) or class_name == prefix.rstrip('-'):
+        if stripped.startswith(prefix) or stripped == prefix.rstrip('-'):
             return True
 
-    # ─── Variant-based detection ──────────────────────────────
-    # If the class has a Tailwind variant prefix, it's always Tailwind
-    tailwind_variants = [
-        'hover:', 'focus:', 'focus-within:', 'focus-visible:',
-        'active:', 'dark:', 'sm:', 'md:', 'lg:', 'xl:', '2xl:',
-        'group-hover:', 'group-focus:', 'peer-hover:', 'peer-focus:',
-        'first:', 'last:', 'last-of-type:', 'only:', 'odd:', 'even:',
-        'before:', 'after:', 'first-letter:', 'first-line:',
-        'placeholder:', 'file:', 'marker:', 'selection:',
-        'disabled:', 'enabled:', 'checked:', 'indeterminate:',
-        'default:', 'required:', 'valid:', 'invalid:',
-        'in-range:', 'out-of-range:', 'placeholder-shown:',
-        'autofill:', 'read-only:',
-        'not-', 'open:', 'closed:',
-        'portrait:', 'landscape:',
-        'forced-colors:', 'prefers-contrast:', 'prefers-reduced-motion:',
-        'motion-safe:', 'motion-reduce:',
-        'printing:', 'print:',
-        'rtl:', 'ltr:',
-        # Tailwind Typography plugin variants
-        'prose-', 'prose:',
-    ]
+    # Responsive/state variants: sm:, md:, lg:, xl:, 2xl:, hover:, focus:, etc.
+    variant_pattern = re.compile(
+        r'^(?:!)?'  # optional important modifier
+        r'(?:'
+        r'sm:|md:|lg:|xl:|2xl:|3xl:|4xl:'  # responsive
+        r'|hover:|focus:|active:|visited:|focus-within:|focus-visible:'
+        r'|disabled:|checked:|selected:|default:|optional:|required:'
+        r'|invalid:|valid:|in-range:|out-of-range:'
+        r'|dark:|light:|motion-safe:|motion-reduce:'
+        r'|first:|last:|odd:|even:|only:'
+        r'|group-hover:|group-focus:|group-active:|group-dark:'
+        r'|peer-hover:|peer-focus:|peer-active:|peer-dark:'
+        r')'
+    )
+    if variant_pattern.match(class_name):
+        # After stripping the variant, check if remaining is a utility
+        remaining = variant_pattern.sub('', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining)
 
-    for variant in tailwind_variants:
-        if class_name.startswith(variant):
-            return True
+    # Arbitrary value syntax: w-[100px], bg-[#fff], etc.
+    if re.search(r'\[.+\]', stripped):
+        return True
+
+    # Negative values: -mb-4, -mt-8, etc.
+    if stripped.startswith('-') and any(stripped[1:].startswith(p) for p in ['m', 'p', 'w', 'h', 'inset', 'top', 'bottom', 'left', 'right', 'z', 'space', 'gap', 'rotate', 'translate', 'skew']):
+        return True
 
     # Pure number patterns like "w4", "h8"
-    if re.match(r'^[whmp][\d]+$', class_name):
+    if re.match(r'^[whmp][\d]+$', stripped):
+        return True
+
+    # Fractional values: w-1/2, w-1/3, h-2/3
+    if re.match(r'^[wh]\d+/\d+$', stripped):
         return True
 
     return False

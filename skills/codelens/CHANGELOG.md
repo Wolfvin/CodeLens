@@ -5,56 +5,26 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-06-12
+## [5.9.0] — 2026-06-12
 
-### Added
+### Fixed
 
-- **NestJS route extraction** (`scripts/apimap_engine.py`): New `_extract_nestjs_routes()` function detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller-level prefixes. Previously, NestJS route decorators were misidentified as TypeGraphQL `@Query`/`@Mutation` decorators, producing incorrect `QUERY.fieldName` entries instead of proper `GET /path` routes. New NestJS framework detection added to `frameworks_detected` output.
-- **Tailwind v4 false-positive elimination** (`scripts/missing_refs.py`): Expanded `_is_likely_tailwind()` from 35 to 200+ recognized patterns. New detection categories: arbitrary value brackets (`w-[100px]`, `text-[#fff]`), data attribute variants (`data-[slot=...]`, `:data-`), star wildcard variants (`**:`), group/peer/aria/supports/motion variants, container query variants (`@sm:`, `@md:`), arbitrary variants (`[&_...]`), negative value prefix (`-mt-4`, `-translate-x-1`), and 40+ additional utility prefixes (inset-, min-w-, max-h-, col-, row-, aspect-, object-, animate-, backdrop-, blur-, etc.) and 30+ variant prefixes (focus-within:, focus-visible:, group-hover:, disabled:, rtl:, ltr:, etc.). On Cal.com (1145 TSX files with Tailwind v4), this reduced missing-refs false positives from 262 to near-zero.
-- **State-map over-matching fix** (`scripts/statemap_engine.py`): Three new filters in `_extract_js_global_state()`:
-  1. PascalCase filtering: Names starting with uppercase (no underscores) are treated as TypeScript type/enum/class exports and skipped unless the value is clearly mutable (`{}`, `[]`, `new`, `Map`, `Set`).
-  2. Enum/type suffix filtering: Names ending with `Enum`, `Type`, `Interface`, `Schema`, `Args`, `Input`, `Output`, `Result`, `Response`, `Request`, `Payload`, `Event`, `Action`, `Keys`, `Map`, `Record`, `List`, `Set`, `Dict`, `Union` are skipped unless value is mutable.
-  3. Zod/Yup schema filtering: Values starting with `z.`, `t.`, `zod.`, `joi.`, `yup.`, `v.`, `Type(` are skipped.
-  4. Conservative function-call matching: Non-mutable, non-immutable values (function calls, references) are only included if the variable name contains state keywords (`state`, `cache`, `store`, `mutex`, `lock`, `queue`, `pool`, `registry`, `buffer`, `session`). On Cal.com, this reduced state-map stores from 1052 false-positive "global" entries to approximately 50 real state items.
-- **Entrypoint config-file filtering** (`scripts/entrypoints_engine.py`): `module_export` entrypoint type now skips 20+ config file patterns including `.config.ts/js/mjs`, `vitest.`, `playwright.`, `jest.`, `eslint.`, `prettier.`, `tsconfig.`, `turbo.json`, `biome.json`, `lint-staged.`, `postcss.config`, `tailwind.config`, `next.config`, `vite.config`, `webpack.config`, `rollup.config`, `babel.config`, `i18n.config/json`, etc. These files contain `export default` but are build/test tool configuration, not application entry points.
-
-### Changed
-
-- **Version bump**: Updated from 5.7.1 to 6.0.0 across `utils.py`, `skill.json`, `SKILL.md`, `SKILL-QUICK.md`, and `CHANGELOG.md`.
+- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
+- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
+- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
+- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
+- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
+- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
+- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
+- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
 
 ### Test Target Documentation
 
-- **calcom/cal.com** (GitHub): Used as test target for v6.0 improvements — a large scheduling infrastructure monorepo with 3870 TS files, 1145 TSX files, 31 JS files, 20 CSS files, 8 HTML files. Uses Next.js + NestJS + Tailwind CSS + tRPC + Zustand + Turborepo. This is the largest and most complex codebase tested against CodeLens to date. Key findings that drove improvements:
-  - `missing-refs`: 262 Tailwind utility class false positives (e.g., `**:data-[slot=scroll-area-scrollbar]:hidden`, `[&_.current-timezone:before]:hover:opacity-100`)
-  - `state-map`: 1052 false-positive "global" stores (PascalCase type exports like `BookingReferences`, `CustomFieldTypeEnum`)
-  - `api-map`: NestJS `@Get`/`@Query` decorators misidentified as TypeGraphQL, showing `QUERY.timezone` instead of `GET /api/timezone`
-  - `entrypoints`: Config files like `playwright.config.ts`, `vitest.config.ts` incorrectly classified as `module_export` entry points
-  - Other commands worked correctly: smell (14693 issues, health 70), complexity (5364 functions), secrets (64 findings), circular (81 cycles), css-deep (179 issues), perf-hint (2298 hints), side-effect (6026 functions, 89% pure), dataflow (3594 sources, 398 sinks, 1031 violations)
+- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
 
 ## [5.8.0] — 2026-06-12
 
 ### Added
-
-- **New framework signatures** (`scripts/framework_detect.py`): Added detection for **SolidJS** (`solid-js`), **Express**, **Fastify**, **Hono**, **Koa**, **NestJS** (`@nestjs/core`), **Webpack**, **Turborepo** (`turbo.json`). Also added Python library detection for **httpx**, **Starlite/Litestar**.
-- **Go module (go.mod) support** (`scripts/framework_detect.py`): Added `go.mod` parsing for Go dependency detection. Detects `has_go_backend` flag and Go framework dependencies (Gin, Echo). Added `go_packages` field to FRAMEWORK_SIGNATURES for Go crate matching.
-- **Generated file exclusion** (`scripts/utils.py`): Added `GENERATED_FILE_PATTERNS` frozenset containing lock files and generated files (Cargo.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, bun.lockb, go.sum, poetry.lock, uv.lock, Gemfile.lock, composer.lock). Added `is_generated_file()` helper function.
-- **refactor-safe excludes generated files** (`scripts/refactor_safe_engine.py`): String references from Cargo.lock, package-lock.json etc. are now excluded from refactoring safety checks, eliminating false positives from generated dependency files.
-- **Python type alias false positive fix** (`scripts/deadcode_engine.py`): Python type aliases (e.g., `URLTypes = Union[...]`, `HeaderTypes: TypeAlias = ...`) are no longer flagged as unused variables. Detection skips names ending in "Types"/"Type" when the RHS contains typing patterns, and skips `TypeAlias` annotations entirely.
-- **module_system now None for non-JS projects** (`scripts/framework_detect.py`): When no package.json is found, `module_system` is `None` instead of incorrectly defaulting to "cjs". This fixes Rust and Python projects showing misleading "cjs" module system.
-
-### Changed
-
-- **Version alignment**: Unified to 5.8.0 across `utils.py`, `skill.json`, and `pyproject.toml`.
-- **`has_go_backend` detection flag** (`scripts/framework_detect.py`): New flag added to `detect_frameworks()` output alongside existing `has_rust_backend`.
-
-### Test Target Documentation
-
-- **encode/httpx** (Python async HTTP client, 60 Python files, 1241 backend nodes, 3347 edges): Tested init, scan, detect, smell, dead-code, complexity, dataflow, env-check, handbook, ask. Found issues: type alias false positives (fixed), module_system incorrectly showing "cjs" (fixed), detect not recognizing httpx library (fixed).
-- **solidjs/solid** (SolidJS reactive framework, TS/JSX monorepo, 336 backend nodes): Tested init, scan, detect, entrypoints. Found issues: SolidJS not detected (fixed), module_system correctly shows "esm".
-- **actix/actix-web** (Rust async web framework, 312 Rust files, 3730 backend nodes, 20139 edges): Tested init, scan, detect, circular, refactor-safe, side-effect. Found issues: Cargo.lock scanned by refactor-safe (fixed), module_system incorrectly showing "cjs" (fixed).
-- **vuejs/pinia** (Vue state management, 36 Vue files, 111 TS files, 175 backend nodes): Tested init, scan, detect, api-map, secrets, css-deep, trace, incremental scan. All working correctly with vue_mode auto-enabled.
-
-### Added (from previous 5.8.0 release)
 
 - **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
 - **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.

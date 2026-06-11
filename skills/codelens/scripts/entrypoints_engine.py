@@ -968,7 +968,12 @@ def _extract_entrypoints(
 
             elif extract_type == "test_name":
                 name_group = pattern_def.get("name_group")
-                entrypoint["test_name"] = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
+                test_name = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
+                # Filter out empty/whitespace-only test names (e.g., it(\n...) matches)
+                if test_name.strip() and test_name.strip() not in ('\\n', '\\r', '\\t'):
+                    entrypoint["test_name"] = test_name.strip()
+                else:
+                    continue  # Skip this match — empty test name
 
             elif extract_type == "click_command":
                 command_group = pattern_def.get("command_group")
