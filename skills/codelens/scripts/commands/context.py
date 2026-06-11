@@ -105,7 +105,7 @@ def execute(args, workspace):
         backend = load_backend_registry(workspace)
         is_large = len(backend.get("nodes", [])) > _LARGE_CODEBASE_THRESHOLD
     except Exception:
-        pass
+        logger.debug("Could not determine codebase size, assuming not large", exc_info=True)
 
     if result.get("found") and result.get("context") and not is_large:
         quality = {}

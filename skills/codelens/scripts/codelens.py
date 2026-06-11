@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)
+CodeLens — Live Codebase Reference Intelligence (Tree-sitter Edition)
 
 Usage:
     python3 codelens.py scan <workspace>              # Scan workspace and build registry
@@ -203,7 +203,7 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description=f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
