@@ -31,7 +31,7 @@ from utils import DEFAULT_IGNORE_DIRS, walk_source_files
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
+    ".py", ".rs", ".vue", ".svelte", ".go", ".php"
 }
 
 # Performance caps

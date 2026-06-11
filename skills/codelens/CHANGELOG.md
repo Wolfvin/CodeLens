@@ -2,8 +2,43 @@
 
 All notable changes to CodeLens will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [6.0.0] — 2026-06-12
+
+### Added
+
+- **Go language support** (`scripts/parsers/fallback_go.py`): Full Go parser with regex-based fallback. Extracts functions, methods with receivers, type declarations (struct/interface), struct fields, interface methods, import statements (single and grouped), constants, call edges, defer calls, goroutine detection, and function body length measurement. Tested on gin-gonic/gin (99 files -> 1200 nodes, 4993 edges).
+- **Go framework detection** (`scripts/framework_detect.py`): Parses go.mod to detect Go frameworks including Gin, Echo, Fiber, Chi, Gorilla Mux, and Beego. Handles both require blocks and the module line (for repos that ARE the framework). Also sets has_go_backend flag.
+- **PHP framework detection** (`scripts/framework_detect.py`): Parses composer.json to detect PHP frameworks including Laravel, Symfony, WordPress, Drupal, and CodeIgniter. Handles both require and require-dev sections.
+- **Laravel-specific config** (`scripts/framework_detect.py`): get_recommended_config() now provides Laravel-specific path recommendations (app/, routes/, resources/views/, etc.) and ignores storage/ and bootstrap/cache/.
+- **Go-specific config** (`scripts/framework_detect.py`): get_recommended_config() now provides Go-specific path recommendations (cmd/, internal/, pkg/, api/) and ignores vendor/.
+- **Cargo workspace detection** (`scripts/framework_detect.py`): Parses [workspace] section and members list from Cargo.toml, enabling detection of Rust frameworks in workspace-based repos (e.g., actix-web).
+- **resolve_tauri_ipc_from_apimap** (`scripts/edge_resolver.py`): Cross-language Tauri IPC edge resolution. Connects JS/TS invoke() calls to Rust #[tauri::command] handler nodes.
+- **walk_source_files** (`scripts/utils.py`): Single-pass workspace file walker with consistent ignore-dir filtering, extension filtering, max_files limiting, and generated file skipping.
+- **is_generated_file** (`scripts/utils.py`): Detects lock files, minified files, source maps, declaration files, and bundle/chunk files.
+- **scan_binary_artifacts** (`scripts/utils.py`): Scans workspace for binary/compiled artifacts, large files, Electron app indicators, and build output directories.
+- **scan_tauri_artifacts** (`scripts/utils.py`): Scans workspace for Tauri-specific artifacts including config files, Rust commands, JS invoke calls, capabilities/permissions, sidecars, updater config, and WebView security settings.
+
+### Fixed
+
+- **CRITICAL: 7 commands failed to import** — ask, context, handbook, refactor-safe, scan, smell, watch all failed at import time due to missing functions in edge_resolver.py and utils.py. All missing functions have been implemented.
+- **CRITICAL: Go files produced 0 nodes/edges** — Go files were discovered and counted during scan but never parsed, silently dropped from the backend registry. Now fully parsed with the new Go fallback parser.
+- **CRITICAL: Laravel not detected as framework** — composer.json was never parsed for PHP dependencies. Now Laravel, Symfony, WordPress, Drupal, and CodeIgniter are properly detected.
+- **CRITICAL: Go frameworks not detected** — go.mod was never parsed. Now Gin, Echo, Fiber, Chi, Mux, and Beego are properly detected.
+- **CRITICAL: Actix-web not detected** — Cargo workspace members were not parsed. Now workspace-based Rust projects detect their member crate names.
+- **HIGH: handbook command crashed** — detect_smells(), map_entrypoints(), and detect_secrets() were called with max_files keyword argument they do not accept. Removed invalid keyword arguments.
+- **HIGH: Go/PHP files not analyzed by smell engine** — SOURCE_EXTENSIONS in smell_engine.py only included JS/TS/Rust/Python/Vue/Svelte. Added .go and .php extensions.
+- **MEDIUM: Duplicate version fields in pyproject.toml** — The file contained 6 duplicate version entries. Consolidated to single version = 6.0.0.
+
+### Test Target Documentation
+
+- **pallets/flask** (GitHub): Python/Flask web framework. 83 Python files, 1620 backend nodes, 2888 edges. 407 code smells detected (health 55), 386 dead code, 1 secret, 1 CVE, 50 circular deps.
+- **vuejs/core** (GitHub): Vue.js core framework (JS/TS/Vue). 528 files, 1725 nodes, 10797 edges. Framework detection correctly identifies Vue.
+- **laravel/laravel** (GitHub): PHP/Laravel web framework. 26 PHP files, 16 nodes, 83 edges. Framework detection correctly identifies Laravel (previously missed).
+- **gin-gonic/gin** (GitHub): Go/Gin web framework. 99 Go files, 1200 nodes, 4993 edges. Framework detection correctly identifies Gin (previously 0 nodes, undetected). 453 smells detected (health 90).
+- **actix/actix-web** (GitHub): Rust/Actix-web framework. 312 Rust files, 3730 nodes, 20139 edges. 2056 smells detected (health 60). Framework detection correctly identifies Actix (previously missed).
 
 ## [5.8.1] — 2026-06-12
 

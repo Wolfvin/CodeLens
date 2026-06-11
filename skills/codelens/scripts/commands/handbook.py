@@ -97,7 +97,7 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
     health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
     if not quick:
         try:
-            smell_result = detect_smells(workspace, max_files=500)
+            smell_result = detect_smells(workspace)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -111,7 +111,7 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
     entrypoints = []
     if not quick:
         try:
-            ep_result = map_entrypoints(workspace, max_files=500)
+            ep_result = map_entrypoints(workspace)
             entrypoints = [
                 {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
                 for e in ep_result.get("entrypoints", [])[:30]
@@ -163,7 +163,7 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
         logger.warning("Dead code detection failed", exc_info=True)
     if not quick:
         try:
-            secrets_result = detect_secrets(workspace, max_files=500)
+            secrets_result = detect_secrets(workspace)
             secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
             if secrets_count > 0:
                 risks.append({"type": "secrets", "count": secrets_count})
