@@ -86,7 +86,7 @@ SOURCE_PATTERNS = {
     # API/network responses
     "api_responses": {
         "patterns": [
-            r"(?:fetch|axios|http\.get|https\.get|request)\s*\(",
+            r"(?:fetch|axios|http\.get|https\.get|request)\b\s*\(",
             r"\.json\s*\(\s*\)",
             r"response\.data",
             r"resp\.body",
@@ -205,8 +205,8 @@ SANITIZER_PATTERNS = {
             r"\.escape\s*\(",
             r"mysql\.escape\s*\(",
             r"pg\.escape\s*\(",
-            r"\$\{?\d+\}?",  # Parameterized query placeholder
-            r"\?\s*[,\)]",   # Parameterized query placeholder (?)
+            r"\$(?:\{\d+\}|\d+)",  # Parameterized query placeholder ($1 or ${1})
+            r"\?(?:\s*[,\)]|$|\s*;)",   # Parameterized query placeholder (?)
         ],
         "sanitizes_for": {"db_query"},
         "label": "sql_sanitizer"

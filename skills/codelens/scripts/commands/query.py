@@ -114,8 +114,10 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
         for cls in frontend.get("classes", []):
             if cls["name"] == query_name:
-                if file_filter and file_filter not in cls.get("path", "") and file_filter not in json.dumps(cls.get("css", [])):
-                    continue
+                if file_filter:
+                    all_refs_json = json.dumps(cls.get("css", []) + cls.get("js", []))
+                    if file_filter not in all_refs_json:
+                        continue
                 frontend_matches.append({
                     "type": "class",
                     "domain": "frontend",
@@ -304,7 +306,12 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
             worst_action = "LIST_FIRST"
 
-        # Fuzzy/substring match in backend (always try when exact match fails)
+    # Fuzzy/substring match in backend (always try when exact match fails)
+    # Only search backend if domain allows it, and load registry only when needed
+    if domain in (None, "backend"):
+        # backend may already be loaded; only load if not already
+        if 'backend' not in dir():
+            backend = load_backend_registry(workspace)
         query_lower = query_name.lower()
         fuzzy_matches = []
         for node in backend.get("nodes", []):

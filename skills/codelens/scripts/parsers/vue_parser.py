@@ -42,7 +42,10 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
     backend_edges = []
 
     # ─── Extract template section ────────────────────────────
-    template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
+    # Use greedy match to capture the entire template including nested <template> slots.
+    # Vue named slots use nested <template v-slot:...> which would be truncated
+    # by non-greedy (.*?) matching.
+    template_match = re.search(r'<template>(.*)</template>', content, re.DOTALL)
     template_content = template_match.group(1) if template_match else ""
 
     # ─── Extract script sections (may have <script setup> + <script>) ───

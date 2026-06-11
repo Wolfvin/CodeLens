@@ -23,20 +23,28 @@ _edge_cache: Dict[str, Any] = {
 }
 
 
-def _compute_fingerprint(edges: List[Dict]) -> str:
-    """Compute a content-based fingerprint for the edges list.
+def _compute_fingerprint(edges: List[Dict], nodes: Optional[List[Dict]] = None) -> str:
+    """Compute a content-based fingerprint for the edges list (and optionally nodes).
     Uses length + first/last edge IDs to detect changes efficiently.
+    Also includes nodes fingerprint to detect stale node_map after metadata changes.
     This avoids the id() pitfall where Python reuses memory addresses."""
     if not edges:
         return "empty"
     first = edges[0]
     last = edges[-1]
-    return f"len={len(edges)}|first_from={first.get('from','')}|first_to={first.get('to','')}|last_from={last.get('from','')}|last_to={last.get('to','')}"
+    fp = f"len={len(edges)}|first_from={first.get('from','')}|first_to={first.get('to','')}|last_from={last.get('from','')}|last_to={last.get('to','')}"
+    if nodes:
+        fp += f"|nodes={len(nodes)}"
+        if nodes:
+            fn0 = nodes[0].get("fn", "")
+            fnN = nodes[-1].get("fn", "")
+            fp += f"|first_fn={fn0}|last_fn={fnN}"
+    return fp
 
 
 def _build_index(edges: List[Dict], nodes: Optional[List[Dict]] = None) -> None:
     """Build or rebuild the caller/callee index if the edges list changed."""
-    fingerprint = _compute_fingerprint(edges)
+    fingerprint = _compute_fingerprint(edges, nodes)
     if _edge_cache["fingerprint"] == fingerprint and _edge_cache["to_index"] is not None:
         return  # Cache is fresh
 
@@ -260,14 +268,22 @@ def _to_alternate_case(name: str) -> str:
     if not name:
         return name
 
+    # Preserve leading underscores (e.g. _private_func → _privateFunc)
+    leading = ''
+    while name.startswith('_'):
+        leading += '_'
+        name = name[1:]
+    if not name:
+        return leading  # name was all underscores
+
     # snake_case → camelCase
     if '_' in name:
         parts = name.split('_')
         # Only convert if it looks like snake_case (lowercase parts)
         if all(p.islower() or p == '' for p in parts if p):
-            return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
+            return leading + parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
         # Mixed like get_HTTPResponse — keep as-is
-        return name
+        return leading + name
 
     # camelCase → snake_case
     if name[0].islower() and any(c.isupper() for c in name[1:]):
@@ -278,7 +294,7 @@ def _to_alternate_case(name: str) -> str:
                 result.append(c.lower())
             else:
                 result.append(c)
-        return ''.join(result)
+        return leading + ''.join(result)
 
     # No conversion needed
-    return name
+    return leading + name

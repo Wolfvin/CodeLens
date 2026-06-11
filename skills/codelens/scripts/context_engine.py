@@ -159,11 +159,11 @@ def get_symbol_context(
         match_type = "exact" if exact_node else "fuzzy"
 
         if match_node is not None:
+            node = match_node  # Always assign so subsequent code can reference it
             # If frontend already found this name (e.g. CSS class), note the overlap
             if context["definition"] is not None:
                 context["definition"]["also_matched_in"] = "frontend"
             else:
-                node = match_node
                 context["definition"] = {
                     "type": "function",
                     "name": node["fn"],
