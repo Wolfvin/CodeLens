@@ -107,6 +107,45 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    # JVM / Android
+    "android": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["AndroidManifest.xml", "build.gradle", "build.gradle.kts"],
+        "indicators": ["android-sdk", "com.android"]
+    },
+    "gradle": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+        "indicators": []
+    },
+    "maven": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["pom.xml"],
+        "indicators": []
+    },
+    # Native / Systems
+    "cmake": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["CMakeLists.txt"],
+        "indicators": []
+    },
+    "emscripten": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": [],
+        "indicators": ["emcc", "emscripten", "EMSCRIPTEN"]
+    },
+    # Go
+    "go_modules": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["go.mod"],
+        "indicators": []
     }
 }
 
@@ -156,6 +195,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_android": False,
+        "has_gradle": False,
+        "has_cmake": False,
+        "has_emscripten": False,
+        "has_go": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -226,7 +270,29 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "android":
+                    detected["has_android"] = True
+                elif fw_name == "gradle":
+                    detected["has_gradle"] = True
+                elif fw_name == "cmake":
+                    detected["has_cmake"] = True
+                elif fw_name == "go_modules":
+                    detected["has_go"] = True
                 break
+            # Check subdirectories for AndroidManifest.xml (app/src/main/AndroidManifest.xml)
+            if cfg_file == "AndroidManifest.xml":
+                for subpath in ['app/src/main/AndroidManifest.xml', 'src/main/AndroidManifest.xml']:
+                    if os.path.exists(os.path.join(workspace, subpath)):
+                        detected["frameworks"].append(fw_name)
+                        detected["has_android"] = True
+                        break
+                if detected["has_android"] and "gradle" not in detected["frameworks"]:
+                    # Android projects always use Gradle
+                    if os.path.exists(os.path.join(workspace, "build.gradle")) or os.path.exists(os.path.join(workspace, "build.gradle.kts")):
+                        detected["frameworks"].append("gradle")
+                        detected["has_gradle"] = True
+                if detected["has_android"] or detected["has_gradle"]:
+                    break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
             for subdir in ('apps', 'packages', 'projects', 'services'):
@@ -268,7 +334,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         if pkg_name:
                             pip_deps.add(pkg_name)
         except IOError:
-            logger.debug("Failed to parse requirements.txt", exc_info=True)
+            _logger.debug("Failed to parse requirements.txt", exc_info=True)
 
     # 3b. pyproject.toml
     pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -303,13 +369,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 4. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+        # Path-segment-aware ignore check
+        rel_root = os.path.relpath(root, workspace)
+        parts = rel_root.replace(os.sep, '/').split('/')
+        if any(part in DEFAULT_IGNORE_DIRS for part in parts if part != '.'):
             continue
 
         for f in files:
@@ -326,12 +389,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip:
+            rel_root = os.path.relpath(root, workspace)
+            parts = rel_root.replace(os.sep, '/').split('/')
+            if any(part in DEFAULT_IGNORE_DIRS for part in parts if part != '.'):
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
@@ -350,6 +410,44 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     except IOError:
                         pass
             if detected["has_tailwind"]:
+                break
+
+    # 6. Check for Emscripten/WASM in Makefiles and build files
+    if not detected["has_emscripten"]:
+        for makefile_name in ['Makefile', 'makefile', 'GNUmakefile']:
+            makefile_path = os.path.join(workspace, makefile_name)
+            if os.path.exists(makefile_path):
+                try:
+                    with open(makefile_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(8192)  # Read first 8KB
+                    if 'emcc' in content or 'EMSCRIPTEN' in content or 'emscripten' in content:
+                        detected["frameworks"].append("emscripten")
+                        detected["has_emscripten"] = True
+                        break
+                except IOError:
+                    pass
+
+    # 7. Check for .wasm files (indicates WASM output)
+    # Note: Use a less aggressive ignore list than DEFAULT_IGNORE_DIRS
+    # because binary output dirs like 'bin' may contain .wasm artifacts
+    if not detected["has_emscripten"]:
+        _LIGHT_IGNORE = frozenset({
+            'node_modules', '.git', 'dist', '.codelens', '.next', '.cache',
+            'vendor', '.venv', 'venv', 'env', '.idea', '.vscode', 'coverage',
+            '.pytest_cache', '.tox', '__pycache__', '.cargo', '.rustup',
+        })
+        for root, dirs, files in os.walk(workspace):
+            # Prune obviously irrelevant dirs but allow 'bin', 'build', 'target'
+            dirs[:] = [d for d in dirs if d not in _LIGHT_IGNORE and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for f in files:
+                if f.endswith('.wasm'):
+                    detected["frameworks"].append("emscripten")
+                    detected["has_emscripten"] = True
+                    break
+            if detected["has_emscripten"]:
                 break
 
     return detected

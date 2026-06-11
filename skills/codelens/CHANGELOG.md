@@ -5,6 +5,40 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-12
+
+### Added
+- **Java parser** (`fallback_java.py`): Regex-based Java parser extracting classes, methods, imports, and annotations. Detects Android, Spring, and plain Java projects.
+- **C/C++ parser** (`fallback_c.py`): Regex-based C/C++ parser extracting functions, structs, enums, includes, macros, and typedefs.
+- **Go parser** (`fallback_go.py`): Regex-based Go parser extracting functions, methods (with receivers), types (struct, interface), imports, and package declarations.
+- **Binary file detection**: Scan now discovers and reports binary files (`.so`, `.a`, `.dll`, `.exe`, `.wasm`, `.apk`, `.jar`, `.class`, `.dex`, etc.) with a dedicated `binaries` category and `binary_warning` in scan output.
+- **Android/Gradle framework detection**: Detects Android projects via `AndroidManifest.xml`, `build.gradle`, and Gradle build system.
+- **Emscripten/WASM framework detection**: Detects Emscripten via Makefile `emcc` references and `.wasm` file presence.
+- **CMake framework detection**: Detects CMake via `CMakeLists.txt`.
+- **Go modules framework detection**: Detects Go via `go.mod`.
+- **Maven framework detection**: Detects Maven via `pom.xml`.
+- **Handbook identity for Android/Gradle/Emscripten/Go/Maven**: Project type no longer shows "unknown" for these project types. Detects `android-app`, `jvm-project`, `wasm-project`, `go-project`, `java-project`.
+- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore check added to `utils.py`.
+- **`should_ignore_file()` utility**: File extension-based ignore check for minified files, source maps, and type declarations.
+
+### Fixed
+- **Secrets engine false positives from lock files**: `package-lock.json` npm registry URLs (e.g., `//registry.npmjs.org/@scope/`) were being matched as embedded credentials. Added `LOCK_FILES_TO_SKIP` set to skip all known lock file formats. Reduced 21 false positives to 0 on sqlite-wasm.
+- **Secrets engine `.d.ts` false positives**: TypeScript declaration files no longer scanned for secrets.
+- **`.d.ts` files in smell analysis**: Auto-generated TypeScript declaration files now excluded from code smell detection. Health score improved from 45 → 85 on sqlite-wasm (8454-line `.d.ts` file was inflating all smell categories).
+- **`.d.ts` files in scan discovery**: Declaration files no longer parsed as regular TypeScript backend source.
+- **`.d.ts` files in outline engine**: Declaration files excluded from workspace outline generation.
+- **Import error on `safe_read_file`**: `a11y_engine.py` imported `safe_read_file` from utils which didn't exist. Removed unused import.
+- **Import error on `should_ignore_dir`**: `tailwind_detector.py` imported `should_ignore_dir` from utils which didn't exist. Added the function to `utils.py`.
+- **`framework_detect.py` logger NameError**: Code referenced `logger` but module defined `_logger`. Fixed reference.
+- **Framework detection substring matching**: `if ignore in root` checks in framework_detect.py caused false-positive directory skipping (e.g., `src/bin/` matched by `bin`). Replaced with path-segment-aware matching.
+- **Edge resolver `KeyError: 'fn'`**: Java/C/Go parsers used `name` field while edge_resolver expected `fn`. Added node normalization in scan.py.
+- **Binary file deduplication**: Two-pass file discovery could produce duplicate entries. Added `_deduplicate_files()` utility.
+
+### Changed
+- **Smell engine SOURCE_EXTENSIONS**: Added `.java`, `.c`, `.cpp`, `.go` for multi-language smell detection.
+- **Scan output format**: `files_scanned` now includes `java`, `c_cpp`, `go`, `binaries` categories. Added `java_parsed`, `c_cpp_parsed`, `go_parsed` counts.
+- **Binary file discovery**: Uses lighter ignore rules than source file discovery — `bin` directories may contain `.wasm`/`.so` artifacts.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

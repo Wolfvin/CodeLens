@@ -38,6 +38,21 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+
+def should_ignore_file(filename: str) -> bool:
+    """Check if a file should be ignored based on extension patterns.
+
+    Covers minified files, source maps, and type declarations.
+    """
+    lower = filename.lower()
+    for ext in DEFAULT_IGNORE_EXTENSIONS:
+        if lower.endswith(ext):
+            return True
+    # Also check .d.tsx
+    if lower.endswith('.d.tsx'):
+        return True
+    return False
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result) -> dict:
@@ -122,6 +137,21 @@ def compute_summary(workspace, outline_data, scan_result):
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
+def should_ignore_dir(rel_path: str) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching so that a workspace named
+    'test-dist' doesn't falsely match the 'dist' ignore rule.
+    """
+    if rel_path == '.':
+        return False
+    parts = rel_path.replace(os.sep, '/').split('/')
+    for part in parts:
+        if part in DEFAULT_IGNORE_DIRS:
+            return True
+    return False
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -158,4 +188,4 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.0"

@@ -362,8 +362,99 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
+    # Check Gradle / Android projects
+    gradle_type = None
+    has_gradle = os.path.isfile(os.path.join(workspace, 'build.gradle')) or os.path.isfile(os.path.join(workspace, 'build.gradle.kts'))
+    if has_gradle:
+        # Check if it's an Android project
+        android_manifest = os.path.join(workspace, 'app', 'src', 'main', 'AndroidManifest.xml')
+        alt_manifest = os.path.join(workspace, 'src', 'main', 'AndroidManifest.xml')
+        if os.path.exists(android_manifest) or os.path.exists(alt_manifest):
+            gradle_type = "android-app"
+        else:
+            gradle_type = "jvm-project"
+
+        # Extract name from settings.gradle
+        for settings_file in ['settings.gradle', 'settings.gradle.kts']:
+            settings_path = os.path.join(workspace, settings_file)
+            if os.path.isfile(settings_path):
+                try:
+                    with open(settings_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    m = re.search(r'rootProject\.name\s*=\s*["\']([^"\']+)["\']', content)
+                    if m:
+                        identity["name"] = m.group(1)
+                except Exception:
+                    pass
+                break
+
+    # Check Maven
+    maven_type = None
+    pom_path = os.path.join(workspace, 'pom.xml')
+    if os.path.isfile(pom_path):
+        maven_type = "java-project"
+        try:
+            with open(pom_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            m = re.search(r'<name>([^<]+)</name>', content)
+            if m:
+                identity["name"] = m.group(1)
+            ver_match = re.search(r'<version>([^<]+)</version>', content)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+
+    # Check Go
+    go_type = None
+    go_mod = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod):
+        go_type = "go-project"
+        try:
+            with open(go_mod, 'r', encoding='utf-8') as f:
+                content = f.read()
+            m = re.search(r'module\s+([\w./-]+)', content)
+            if m:
+                identity["name"] = m.group(1)
+            ver_match = re.search(r'go\s+(\d+\.\d+)', content)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+
+    # Check Emscripten / WASM
+    emscripten_type = None
+    if not has_package_json:  # Don't override package.json-based type
+        for makefile_name in ['Makefile', 'makefile']:
+            makefile_path = os.path.join(workspace, makefile_name)
+            if os.path.exists(makefile_path):
+                try:
+                    with open(makefile_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(8192)
+                    if 'emcc' in content or 'EMSCRIPTEN' in content:
+                        emscripten_type = "wasm-project"
+                        break
+                except IOError:
+                    pass
+        # Also check for .wasm files
+        if emscripten_type is None:
+            for root, dirs, fnames in os.walk(workspace):
+                skip = False
+                for d in dirs:
+                    if d in DEFAULT_IGNORE_DIRS:
+                        skip = True
+                        break
+                if skip:
+                    continue
+                for fn in fnames:
+                    if fn.endswith('.wasm'):
+                        emscripten_type = "wasm-project"
+                        break
+                if emscripten_type:
+                    break
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, gradle_type, maven_type, go_type, emscripten_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string

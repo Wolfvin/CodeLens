@@ -28,7 +28,8 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
+    ".py", ".rs", ".vue", ".svelte",
+    ".java", ".c", ".cpp", ".go",
 }
 
 # Thresholds
@@ -91,6 +92,10 @@ def detect_smells(
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
+                continue
+
+            # Skip TypeScript declaration files (auto-generated, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
             file_path = os.path.join(root, filename)

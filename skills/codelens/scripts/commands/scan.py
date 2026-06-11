@@ -24,6 +24,9 @@ from parsers.fallback_js_frontend import parse_js_frontend_fallback
 from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
+from parsers.fallback_java import parse_java_fallback
+from parsers.fallback_c import parse_c_fallback
+from parsers.fallback_go import parse_go_fallback
 
 from commands import register_command
 
@@ -446,11 +449,70 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
+    # Parse Java files
+    java_data = []
+    if files["java"]:
+        for path in files["java"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_java_fallback(content, os.path.relpath(path, workspace))
+                java_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Java file: {path}")
+
+    # Parse C/C++ files
+    c_cpp_data = []
+    if files["c_cpp"]:
+        for path in files["c_cpp"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_c_fallback(content, os.path.relpath(path, workspace))
+                c_cpp_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read C/C++ file: {path}")
+
+    # Parse Go files
+    go_data = []
+    if files["go"]:
+        for path in files["go"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_go_fallback(content, os.path.relpath(path, workspace))
+                go_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Go file: {path}")
+
     # Build backend registry with edge resolution
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data
+        new_parsed_data = rust_data + js_backend_data + python_data + java_data + c_cpp_data + go_data
+        # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
+        for item in new_parsed_data:
+            for node in item.get("nodes", []):
+                if "fn" not in node and "name" in node:
+                    node["fn"] = node["name"]
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -461,9 +523,15 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data:
+        for item in rust_data + js_backend_data + python_data + java_data + c_cpp_data + go_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
+
+        # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
+        # (JS/Rust/Python parsers use 'fn', Java/C/Go parsers use 'name')
+        for node in all_nodes:
+            if "fn" not in node and "name" in node:
+                node["fn"] = node["name"]
 
         resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
 
@@ -493,9 +561,16 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "rust": len(files["rust"]),
             "python": len(files["python"]),
             "vue": len(files["vue"]),
-            "svelte": len(files["svelte"])
+            "svelte": len(files["svelte"]),
+            "java": len(files["java"]),
+            "c_cpp": len(files["c_cpp"]),
+            "go": len(files["go"]),
+            "binaries": len(files["binaries"])
         },
         "python_parsed": len(python_data),
+        "java_parsed": len(java_data),
+        "c_cpp_parsed": len(c_cpp_data),
+        "go_parsed": len(go_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -506,7 +581,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "binary_warning": f"Found {len(files['binaries'])} binary file(s) — not analyzed for code quality" if files["binaries"] else None,
+        "binary_files": [os.path.relpath(f, workspace) for f in files["binaries"]] if files["binaries"] else []
     }
 
 
@@ -524,9 +601,46 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "rust": [],
         "python": [],
         "vue": [],
-        "svelte": []
+        "svelte": [],
+        "java": [],
+        "c_cpp": [],
+        "go": [],
+        "binaries": [],
     }
 
+    BINARY_EXTENSIONS = {
+        '.so', '.a', '.o', '.dll', '.dylib', '.lib',
+        '.exe', '.wasm', '.apk', '.jar', '.class',
+        '.obj', '.pdb', '.bin', '.dex',
+    }
+
+    # Binary detection uses a lighter ignore set — 'bin' directories
+    # often contain meaningful .wasm/.so artifacts alongside build output
+    BINARY_IGNORE_DIRS = frozenset({
+        'node_modules', '.git', 'dist', '.codelens', '.next', '.cache',
+        'vendor', '.venv', 'venv', 'env', '.idea', '.vscode', 'coverage',
+        '.pytest_cache', '.tox', '__pycache__', '.cargo', '.rustup',
+        'target', 'build',
+    })
+
+    # First pass: discover binary files with lighter ignore rules
+    for root, dirs, filenames in os.walk(workspace):
+        rel_root = os.path.relpath(root, workspace)
+        parts = rel_root.replace(os.sep, '/').split('/')
+        if any(part in BINARY_IGNORE_DIRS for part in parts if part != '.'):
+            dirs[:] = [d for d in dirs if d not in BINARY_IGNORE_DIRS]
+            continue
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        dirs[:] = [d for d in dirs if d not in BINARY_IGNORE_DIRS and not d.startswith('.')]
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in BINARY_EXTENSIONS:
+                file_path = os.path.join(root, filename)
+                files["binaries"].append(file_path)
+
+    # Second pass: discover source files with standard ignore rules
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
         
@@ -550,6 +664,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 continue
 
             ext = os.path.splitext(filename)[1].lower()
+
+            # Skip TypeScript declaration files (type-only, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
 
             if ext in ('.html', '.htm'):
                 files["html"].append(file_path)
@@ -578,7 +696,28 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
+            elif ext in ('.java', '.kt'):
+                files["java"].append(file_path)
+            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
+                files["c_cpp"].append(file_path)
+            elif ext == '.go':
+                files["go"].append(file_path)
+            elif ext in BINARY_EXTENSIONS:
+                files["binaries"].append(file_path)
 
+    return _deduplicate_files(files)
+
+
+def _deduplicate_files(files: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """Remove duplicate file entries across all categories."""
+    for key in files:
+        seen = set()
+        unique = []
+        for f in files[key]:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
+        files[key] = unique
     return files
 
 
