@@ -8,33 +8,8 @@ from complexity_engine import compute_complexity
 from sideeffect_engine import analyze_side_effects
 from smell_engine import detect_smells
 from testmap_engine import map_test_coverage
+from utils import is_file_path, deduplicate_callers, logger
 from commands import register_command
-
-
-# Known file extensions used to detect file path queries
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
-
-
-def _is_file_path(name: str) -> bool:
-    """Check if a name looks like a file path."""
-    if '/' in name:
-        return True
-    for ext in _FILE_PATH_EXTENSIONS:
-        if name.endswith(ext):
-            return True
-    return False
-
-
-def _deduplicate_callers(callers: List[Dict]) -> List[Dict]:
-    """Deduplicate callers by (file, line) tuple."""
-    seen = set()
-    unique = []
-    for c in callers:
-        key = (c.get("file", ""), c.get("line", 0))
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
-    return unique
 
 
 def add_args(parser):
@@ -52,32 +27,59 @@ def execute(args, workspace):
     symbol = args.name
 
     # ─── File path lookup ─────────────────────────────
-    if _is_file_path(symbol):
+    if is_file_path(symbol):
         from registry import load_backend_registry
         workspace_abs = os.path.abspath(workspace)
         backend = load_backend_registry(workspace_abs)
+        # Try exact match first
         matching_nodes = [n for n in backend.get("nodes", []) if n.get("file", "") == symbol]
 
+        # If no exact match, try substring/partial match
+        if not matching_nodes:
+            # Match by end-of-path (e.g., "layout.tsx" matches "apps/web/app/layout.tsx")
+            matching_nodes = [n for n in backend.get("nodes", [])
+                              if n.get("file", "").endswith(symbol)
+                              or n.get("file", "").endswith('/' + symbol)]
+
         if matching_nodes:
-            symbols = []
+            # Group by file if multiple files match
+            file_groups = {}
             for node in matching_nodes:
-                symbols.append({
+                f = node.get("file", "")
+                if f not in file_groups:
+                    file_groups[f] = []
+                file_groups[f].append({
                     "fn": node["fn"],
                     "line": node.get("line", 0),
                     "status": node.get("status", "active"),
                     "async": node.get("async", False),
                     "ref_count": node.get("ref_count", 0)
                 })
-            return {
-                "found": True,
-                "context": {
-                    "type": "file",
-                    "file": symbol,
-                    "symbols": symbols
+
+            # If single file, return flat; if multiple, return grouped
+            if len(file_groups) == 1:
+                f, syms = list(file_groups.items())[0]
+                return {
+                    "status": "ok",
+                    "found": True,
+                    "context": {
+                        "type": "file",
+                        "file": f,
+                        "symbols": syms
+                    }
                 }
-            }
+            else:
+                return {
+                    "status": "ok",
+                    "found": True,
+                    "context": {
+                        "type": "files",
+                        "files": [{"file": f, "symbols": syms} for f, syms in file_groups.items()]
+                    }
+                }
         else:
             return {
+                "status": "ok",
                 "found": False,
                 "symbol": symbol,
                 "context": None
@@ -93,7 +95,7 @@ def execute(args, workspace):
 
     # Deduplicate callers
     if result.get("found") and result.get("context"):
-        result["context"]["callers"] = _deduplicate_callers(result["context"].get("callers", []))
+        result["context"]["callers"] = deduplicate_callers(result["context"].get("callers", []))
 
     # Enrich with quality metrics
     if result.get("found") and result.get("context"):
@@ -109,7 +111,7 @@ def execute(args, workspace):
                     quality["complexity"] = fn_data[0].get("cyclomatic", "N/A")
                     quality["complexity_level"] = fn_data[0].get("complexity_level", "N/A")
         except Exception:
-            pass
+            logger.debug("Complexity analysis failed for %s", args.name, exc_info=True)
 
         try:
             se = analyze_side_effects(workspace, function_name=args.name)
@@ -123,7 +125,7 @@ def execute(args, workspace):
                     quality["side_effects"] = False
                     quality["side_effect_types"] = []
         except Exception:
-            pass
+            logger.debug("Side-effect analysis failed for %s", args.name, exc_info=True)
 
         # Determine safety from existing data
         defn = result["context"].get("definition") or {}
@@ -147,7 +149,7 @@ def execute(args, workspace):
                 if fn_name == args.name:
                     quality.setdefault("smells", []).append(s.get("category", ""))
         except Exception:
-            pass
+            logger.debug("Smell detection failed for %s", args.name, exc_info=True)
 
         # Test coverage hint
         try:
@@ -156,7 +158,7 @@ def execute(args, workspace):
                 coverage = tc.get("coverage", {})
                 quality["test_coverage"] = "covered" if coverage.get("has_tests") else "untested"
         except Exception:
-            pass
+            logger.debug("Test coverage check failed for %s", args.name, exc_info=True)
 
         if quality:
             result["context"]["quality"] = quality

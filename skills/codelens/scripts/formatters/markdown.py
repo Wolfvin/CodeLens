@@ -242,6 +242,28 @@ def _md_context(data: Dict, lines: list) -> None:
     found = data.get("found", False)
     ctx = data.get("context", {})
 
+    # Handle file path context (type: "file" or "files")
+    if found and ctx and ctx.get("type") in ("file", "files"):
+        if ctx.get("type") == "file":
+            lines.append(f"## Context: `{ctx.get('file', symbol)}`")
+            lines.append("")
+            syms = ctx.get("symbols", [])
+            lines.append(f"**Symbols:** {len(syms)}")
+            lines.append("")
+            for s in syms:
+                lines.append(f"- `{s.get('fn', '?')}` (line {s.get('line', '?')}) — status: {s.get('status', 'active')}, refs: {s.get('ref_count', 0)}")
+            lines.append("")
+        elif ctx.get("type") == "files":
+            files = ctx.get("files", [])
+            lines.append(f"## Context: `{symbol}` (matched {len(files)} files)")
+            lines.append("")
+            for f_entry in files:
+                lines.append(f"### `{f_entry.get('file', '?')}`")
+                for s in f_entry.get("symbols", []):
+                    lines.append(f"- `{s.get('fn', '?')}` (line {s.get('line', '?')}) — status: {s.get('status', 'active')}, refs: {s.get('ref_count', 0)}")
+                lines.append("")
+        return
+
     lines.append(f"## Context: `{symbol}`")
     lines.append("")
 

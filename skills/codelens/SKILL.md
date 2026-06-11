@@ -45,6 +45,18 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Performance Anti-Pattern Detection**: 8 categories — N+1 queries, sync blocking, memory leaks, expensive re-renders, large bundles, inefficient iterations, unoptimized images, cache misses
 - **Deep CSS Analysis**: Unused custom properties (--var), orphan @keyframes, specificity wars (!important overuse), duplicate property declarations, z-index abuse, non-standard @media breakpoints
 
+## What's New in v5.6 — Real-World Tested
+
+- **TSX backend extraction**: 6.2x more backend nodes from TSX files when tree-sitter-typescript is unavailable. Uses `parse_js_backend_fallback` on TSX to extract functions and imports.
+- **Shared utils module**: Centralized `write_output_files`, `compute_summary`, `is_file_path`, `deduplicate_callers`, `DEFAULT_IGNORE_DIRS`, `CODELENS_VERSION`, and `logger`. Eliminates 290+ lines of duplicated code.
+- **Proper logging**: Replaced 56 `except Exception: pass` blocks with `logger.warning()`/`logger.debug()`. Errors are now visible instead of silently swallowed.
+- **Fuzzy file path lookup**: `context layout.tsx` and `query layout.tsx` now match partial paths (end-of-path matching). Returns grouped results for multiple matches.
+- **Registry freshness check**: Handbook skips re-scan if registry is less than 5 minutes old (2.8s → 0.3s for consecutive runs).
+- **Incremental deleted file handling**: Selectively removes deleted file entries from registry instead of full rescan.
+- **Path segment matching**: `is_frontend_file`/`is_backend_file` no longer use substring matching. Prevents `src/` from falsely matching `src/server/api/auth.ts`.
+- **Workspace detection depth limit**: Walks up at most 10 directory levels (was unlimited).
+- **God objects Python scoping**: Method count now scoped to each class using indentation (was counting ALL `def` in file).
+
 ## What's New in v5.2 — Agent Optimization
 
 - **`handbook` command**: One-stop project orientation for AI agents. Aggregates identity, structure, health, conventions, risks, and quick reference into a single output. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`.

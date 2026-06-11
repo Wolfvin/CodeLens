@@ -11,6 +11,7 @@ from typing import Dict, List, Any, Optional
 from registry import load_config, load_frontend_registry, load_backend_registry
 from diff_engine import save_snapshot
 from outline_engine import get_workspace_outline
+from utils import write_output_files, compute_summary, logger
 from commands import register_command
 from commands.scan import cmd_scan
 
@@ -89,10 +90,10 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
             backend = load_backend_registry(workspace)
             save_snapshot(workspace, frontend, backend)
         except Exception:
-            pass
+            logger.debug("Failed to save snapshot after rescan", exc_info=True)
 
         # Generate outline.json + summary.json
-        summary = _write_output_files(workspace, scan_result)
+        summary = write_output_files(workspace, scan_result)
         print(_format_watch_summary(summary, changed_count=len(changed)))
 
     # ─── Initial scan ──────────────────────────────────────
@@ -105,10 +106,10 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
         backend = load_backend_registry(workspace)
         save_snapshot(workspace, frontend, backend)
     except Exception:
-        pass
+        logger.debug("Failed to save initial snapshot", exc_info=True)
 
     # Generate outline.json + summary.json
-    summary = _write_output_files(workspace, scan_result)
+    summary = write_output_files(workspace, scan_result)
     print(_format_watch_summary(summary))
 
     # ─── Start watcher ─────────────────────────────────────
@@ -178,8 +179,8 @@ def _watch_polling(
                 backend = load_backend_registry(workspace)
                 save_snapshot(workspace, frontend, backend)
             except Exception:
-                pass
-            summary = _write_output_files(workspace, scan_result)
+                logger.debug("Failed to save snapshot in polling mode", exc_info=True)
+            summary = write_output_files(workspace, scan_result)
             print(_format_watch_summary(summary, changed_count=len(changed)))
 
         def on_change_callback(filepath):
@@ -214,7 +215,7 @@ def _watch_polling(
                 try:
                     last_mtimes[filepath] = os.path.getmtime(filepath)
                 except OSError:
-                    pass
+                    logger.debug(f"Failed to get mtime for: {filepath}")
 
     print(f'[CodeLens] Polling {workspace} every 2s (debounce: {debounce}s) — Press Ctrl+C to stop')
     try:
@@ -244,88 +245,10 @@ def _watch_polling(
                                 last_mtimes[filepath] = os.path.getmtime(filepath)
                                 on_change_callback(filepath)
                             except OSError:
-                                pass
+                                logger.debug(f"Failed to get mtime for new file: {filepath}")
 
     except KeyboardInterrupt:
         print('[CodeLens] Stopped.')
-
-
-def _write_output_files(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
-    """After a scan, generate outline.json and summary.json into .codelens/."""
-    try:
-        codelens_dir = os.path.join(workspace, '.codelens')
-        os.makedirs(codelens_dir, exist_ok=True)
-
-        outline_data = get_workspace_outline(workspace)
-
-        outline_path = os.path.join(codelens_dir, 'outline.json')
-        with open(outline_path, 'w', encoding='utf-8') as f:
-            json.dump(outline_data, f, indent=2, ensure_ascii=False)
-
-        summary = _compute_summary(workspace, outline_data, scan_result)
-
-        summary_path = os.path.join(codelens_dir, 'summary.json')
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-
-        return summary
-    except Exception:
-        return {}
-
-
-def _compute_summary(
-    workspace: str,
-    outline_data: Dict[str, Any],
-    scan_result: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Compute an aggregate summary from outline + scan data."""
-    total_functions = 0
-    total_classes = 0
-    total_interfaces = 0
-    total_types = 0
-    total_exports = 0
-    total_components = 0
-    total_imports = 0
-    files_by_lang: Dict[str, int] = {}
-
-    for outline in outline_data.get('outlines', []):
-        lang = outline.get('language', 'unknown')
-        files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-
-        total_functions += len(outline.get('functions', []))
-        total_classes += len(outline.get('classes', []))
-        total_interfaces += len(outline.get('interfaces', []))
-        total_types += len(outline.get('types', []))
-        total_exports += len(outline.get('exports', []))
-        total_components += len(outline.get('components', []))
-        total_imports += len(outline.get('imports', []))
-
-        for cls in outline.get('classes', []):
-            total_functions += len(cls.get('methods', []))
-
-    be_nodes = scan_result.get('backend', {}).get('nodes', 0)
-    be_edges = scan_result.get('backend', {}).get('edges', 0)
-    fe_classes = scan_result.get('frontend', {}).get('classes', 0)
-    fe_ids = scan_result.get('frontend', {}).get('ids', 0)
-
-    return {
-        'workspace': workspace,
-        'last_updated': datetime.now(timezone.utc).isoformat(),
-        'files': outline_data.get('files_outlined', 0),
-        'total_lines': outline_data.get('total_lines', 0),
-        'functions': total_functions,
-        'classes': total_classes,
-        'interfaces': total_interfaces,
-        'types': total_types,
-        'exports': total_exports,
-        'components': total_components,
-        'imports': total_imports,
-        'backend_nodes': be_nodes,
-        'backend_edges': be_edges,
-        'frontend_classes': fe_classes,
-        'frontend_ids': fe_ids,
-        'files_by_language': files_by_lang,
-    }
 
 
 def _format_watch_summary(summary: Dict[str, Any], changed_count: int = 0) -> str:

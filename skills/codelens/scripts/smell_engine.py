@@ -761,10 +761,30 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
             })
 
     elif ext == ".py":
-        # Count class methods in Python
-        class_blocks = re.findall(r'class\s+(\w+)[^:]*:', content)
-        for class_name in class_blocks:
-            method_count = len(re.findall(r'\s+def\s+\w+', content))
+        # Count class methods in Python with proper scoping
+        lines = content.split('\n')
+        class_starts = []  # (line_idx, class_name, indent_level)
+        for i, line in enumerate(lines):
+            m = re.match(r'^(\s*)class\s+(\w+)', line)
+            if m:
+                class_starts.append((i, m.group(2), len(m.group(1))))
+        
+        for start_idx, class_name, class_indent in class_starts:
+            method_count = 0
+            for i in range(start_idx + 1, len(lines)):
+                line = lines[i]
+                if not line.strip():
+                    continue
+                # Get current line indent
+                stripped = line.lstrip()
+                current_indent = len(line) - len(stripped)
+                # If we've dedented past the class level, we're out of the class
+                if current_indent <= class_indent and stripped:
+                    break
+                # Count methods (def at one indent level deeper than class)
+                if current_indent > class_indent and re.match(r'\s+def\s+\w+', line):
+                    method_count += 1
+            
             if method_count >= GOD_CLASS_METHODS_CRITICAL:
                 smells.append({
                     "file": rel_path,

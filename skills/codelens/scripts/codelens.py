@@ -59,6 +59,7 @@ from formatters import format_output
 from registry import load_frontend_registry, load_backend_registry
 from diff_engine import save_snapshot
 from outline_engine import get_workspace_outline
+from utils import write_output_files, CODELENS_VERSION, logger
 
 
 # ─── Error Suggestion Helper ──────────────────────────────────
@@ -157,13 +158,15 @@ def _detect_workspace() -> Optional[str]:
         if os.path.exists(os.path.join(cwd, marker)):
             return cwd
 
-    # Walk up from cwd to find a project root
+    # Walk up from cwd to find a project root (max 10 levels)
     parent = os.path.dirname(cwd)
-    while parent != os.path.dirname(parent):
+    depth = 0
+    while parent != os.path.dirname(parent) and depth < 10:
         for marker in markers:
             if os.path.exists(os.path.join(parent, marker)):
                 return parent
         parent = os.path.dirname(parent)
+        depth += 1
 
     # Use cwd as fallback if it has source files
     for ext in ('.py', '.js', '.ts', '.tsx', '.rs', '.html', '.css', '.vue', '.svelte'):
@@ -194,86 +197,6 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
         return detected
 
     return os.getcwd()
-
-
-# ─── Output File Generation (used by scan dispatch enrichment) ─
-
-def _write_output_files(workspace: str, scan_result) -> dict:
-    """After a scan, generate outline.json and summary.json into .codelens/."""
-    import json
-    from datetime import datetime, timezone
-    try:
-        codelens_dir = os.path.join(workspace, '.codelens')
-        os.makedirs(codelens_dir, exist_ok=True)
-
-        outline_data = get_workspace_outline(workspace)
-
-        outline_path = os.path.join(codelens_dir, 'outline.json')
-        with open(outline_path, 'w', encoding='utf-8') as f:
-            json.dump(outline_data, f, indent=2, ensure_ascii=False)
-
-        # Compute aggregate summary
-        summary = _compute_summary(workspace, outline_data, scan_result)
-
-        summary_path = os.path.join(codelens_dir, 'summary.json')
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-
-        return summary
-    except Exception:
-        return {}
-
-
-def _compute_summary(workspace, outline_data, scan_result):
-    """Compute an aggregate summary from outline + scan data."""
-    import json
-    from datetime import datetime, timezone
-
-    total_functions = 0
-    total_classes = 0
-    total_interfaces = 0
-    total_types = 0
-    total_exports = 0
-    total_components = 0
-    total_imports = 0
-    files_by_lang = {}
-
-    for outline in outline_data.get('outlines', []):
-        lang = outline.get('language', 'unknown')
-        files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-        total_functions += len(outline.get('functions', []))
-        total_classes += len(outline.get('classes', []))
-        total_interfaces += len(outline.get('interfaces', []))
-        total_types += len(outline.get('types', []))
-        total_exports += len(outline.get('exports', []))
-        total_components += len(outline.get('components', []))
-        total_imports += len(outline.get('imports', []))
-        for cls in outline.get('classes', []):
-            total_functions += len(cls.get('methods', []))
-
-    be_nodes = scan_result.get('backend', {}).get('nodes', 0)
-    be_edges = scan_result.get('backend', {}).get('edges', 0)
-    fe_classes = scan_result.get('frontend', {}).get('classes', 0)
-    fe_ids = scan_result.get('frontend', {}).get('ids', 0)
-
-    return {
-        'workspace': workspace,
-        'last_updated': datetime.now(timezone.utc).isoformat(),
-        'files': outline_data.get('files_outlined', 0),
-        'total_lines': outline_data.get('total_lines', 0),
-        'functions': total_functions,
-        'classes': total_classes,
-        'interfaces': total_interfaces,
-        'types': total_types,
-        'exports': total_exports,
-        'components': total_components,
-        'imports': total_imports,
-        'backend_nodes': be_nodes,
-        'backend_edges': be_edges,
-        'frontend_classes': fe_classes,
-        'frontend_ids': fe_ids,
-        'files_by_language': files_by_lang,
-    }
 
 
 # ─── CLI Entry Point ──────────────────────────────────────────
@@ -321,12 +244,13 @@ def main():
                 backend = load_backend_registry(workspace)
                 save_snapshot(workspace, frontend, backend)
             except Exception:
-                pass
+                logger.warning("Failed to save snapshot", exc_info=True)
             # Generate outline.json + summary.json
             try:
-                _write_output_files(workspace, result)
+                write_output_files(workspace, result)
                 result["outline_generated"] = True
             except Exception:
+                logger.warning("Failed to write output files", exc_info=True)
                 result["outline_generated"] = False
 
         # ─── Watch is a long-running command — it already printed output ──

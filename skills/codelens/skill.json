@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.5.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. Auto-triggers: check exists, who calls, find secrets, security audit, API routes, endpoints, global state, env vars, debug code, complexity, regex audit, a11y, production ready, refactor, deploy check, performance, dead code, CVE scan. 41 commands including handbook, ask (NL router with score-based routing), --format markdown (41 specific formatters). Agent-optimized: one-shot orientation, decision trees in output, quality metrics in context, semantic convention detection (ORM, error handling, API patterns, state management, testing, CSS framework, authentication, deployment), AGENT.md generation. Modular architecture with command registry. Auto-incremental scan. oRPC/tRPC route detection. Context by file path. bun.lock support. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
+  "version": "5.6.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. oRPC/tRPC detection. bun.lock. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",

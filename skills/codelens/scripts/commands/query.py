@@ -7,40 +7,7 @@ from typing import Dict, Any, List
 from registry import load_frontend_registry, load_backend_registry
 from edge_resolver import get_callers, get_callees
 from commands import register_command
-
-
-# Known file extensions used to detect file path queries
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
-
-
-def _is_file_path(name: str) -> bool:
-    """Check if a name looks like a file path."""
-    if '/' in name:
-        return True
-    for ext in _FILE_PATH_EXTENSIONS:
-        if name.endswith(ext):
-            return True
-    return False
-
-
-def _deduplicate_callers(callers: List[Dict]) -> List[Dict]:
-    """Deduplicate callers by (file, line) tuple extracted from the 'from' field."""
-    seen = set()
-    unique = []
-    for c in callers:
-        from_id = c.get("from", "")
-        # Extract file and line from "file:line:fn" format
-        if ":" in from_id:
-            parts = from_id.rsplit(":", 2)
-            file_part = parts[0] if len(parts) >= 2 else from_id
-            line_part = parts[1] if len(parts) >= 2 else "0"
-            key = (file_part, line_part)
-        else:
-            key = (from_id, "0")
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
-    return unique
+from utils import is_file_path, deduplicate_callers, logger
 
 
 def _get_query_action(status: str) -> tuple:
@@ -76,9 +43,16 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     workspace = os.path.abspath(workspace)
 
     # ─── File path lookup ─────────────────────────────
-    if _is_file_path(query_name) and domain in (None, "backend"):
+    if is_file_path(query_name) and domain in (None, "backend"):
         backend = load_backend_registry(workspace)
+        # Try exact match first
         matching_nodes = [n for n in backend.get("nodes", []) if n.get("file", "") == query_name]
+
+        # If no exact match, try partial path match
+        if not matching_nodes:
+            matching_nodes = [n for n in backend.get("nodes", [])
+                              if n.get("file", "").endswith(query_name)
+                              or n.get("file", "").endswith('/' + query_name)]
 
         if matching_nodes:
             # Group results by file
@@ -101,6 +75,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 for f, syms in file_groups.items()
             ]
             return {
+                "status": "ok",
                 "found": True,
                 "type": "file",
                 "domain": "backend",
@@ -157,7 +132,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 if file_filter and file_filter not in node.get("file", ""):
                     continue
 
-                callers = _deduplicate_callers(
+                callers = deduplicate_callers(
                     get_callers(node["id"], backend.get("edges", []))
                 )
                 callees = get_callees(node["id"], backend.get("edges", []),

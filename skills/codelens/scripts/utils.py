@@ -1,0 +1,158 @@
+"""Shared utilities for CodeLens."""
+
+import os
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
+
+# ─── Logging ─────────────────────────────────────────────────
+
+def get_logger(name: str = "codelens") -> logging.Logger:
+    """Get a configured logger for CodeLens."""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(
+            '[%(name)s] %(levelname)s: %(message)s'
+        ))
+        logger.addHandler(handler)
+        logger.setLevel(logging.WARNING)  # Only warnings and above by default
+    return logger
+
+logger = get_logger()
+
+# ─── Shared Configuration ───────────────────────────────────
+
+DEFAULT_IGNORE_DIRS = frozenset({
+    'node_modules', '.git', 'dist', 'build', 'target',
+    '__pycache__', '.codelens', '.next', '.cache',
+    'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
+    '_archive', 'coverage', '.pytest_cache', '.tox',
+    'bin', 'obj', '.terraform', '.cargo', '.rustup',
+    'storybook-static', '.storybook',
+})
+
+DEFAULT_IGNORE_EXTENSIONS = frozenset({
+    '.min.js', '.min.css', '.map', '.bundle.js',
+    '.chunk.js', '.d.ts',  # declaration files
+})
+
+# ─── Output File Generation ─────────────────────────────────
+
+def write_output_files(workspace: str, scan_result) -> dict:
+    """After a scan, generate outline.json and summary.json into .codelens/."""
+    try:
+        from outline_engine import get_workspace_outline
+        codelens_dir = os.path.join(workspace, '.codelens')
+        os.makedirs(codelens_dir, exist_ok=True)
+
+        outline_data = get_workspace_outline(workspace)
+
+        outline_path = os.path.join(codelens_dir, 'outline.json')
+        with open(outline_path, 'w', encoding='utf-8') as f:
+            json.dump(outline_data, f, indent=2, ensure_ascii=False)
+
+        summary = compute_summary(workspace, outline_data, scan_result)
+
+        summary_path = os.path.join(codelens_dir, 'summary.json')
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+
+        return summary
+    except Exception:
+        logger.warning("Failed to write output files", exc_info=True)
+        return {}
+
+
+def compute_summary(workspace, outline_data, scan_result):
+    """Compute an aggregate summary from outline + scan data."""
+    total_functions = 0
+    total_classes = 0
+    total_interfaces = 0
+    total_types = 0
+    total_exports = 0
+    total_components = 0
+    total_imports = 0
+    files_by_lang = {}
+
+    for outline in outline_data.get('outlines', []):
+        lang = outline.get('language', 'unknown')
+        files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
+        total_functions += len(outline.get('functions', []))
+        total_classes += len(outline.get('classes', []))
+        total_interfaces += len(outline.get('interfaces', []))
+        total_types += len(outline.get('types', []))
+        total_exports += len(outline.get('exports', []))
+        total_components += len(outline.get('components', []))
+        total_imports += len(outline.get('imports', []))
+        for cls in outline.get('classes', []):
+            total_functions += len(cls.get('methods', []))
+
+    be_nodes = scan_result.get('backend', {}).get('nodes', 0)
+    be_edges = scan_result.get('backend', {}).get('edges', 0)
+    fe_classes = scan_result.get('frontend', {}).get('classes', 0)
+    fe_ids = scan_result.get('frontend', {}).get('ids', 0)
+
+    return {
+        'workspace': workspace,
+        'last_updated': datetime.now(timezone.utc).isoformat(),
+        'files': outline_data.get('files_outlined', 0),
+        'total_lines': outline_data.get('total_lines', 0),
+        'functions': total_functions,
+        'classes': total_classes,
+        'interfaces': total_interfaces,
+        'types': total_types,
+        'exports': total_exports,
+        'components': total_components,
+        'imports': total_imports,
+        'backend_nodes': be_nodes,
+        'backend_edges': be_edges,
+        'frontend_classes': fe_classes,
+        'frontend_ids': fe_ids,
+        'files_by_language': files_by_lang,
+    }
+
+
+# ─── Path and Caller Utilities ───────────────────────────────
+
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+
+
+def is_file_path(name: str) -> bool:
+    """Check if a name looks like a file path."""
+    if '/' in name:
+        return True
+    for ext in _FILE_PATH_EXTENSIONS:
+        if name.endswith(ext):
+            return True
+    return False
+
+
+def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
+    """Deduplicate callers by (file, line) tuple."""
+    seen = set()
+    unique = []
+    for c in callers:
+        # Try dict format first (file, line keys)
+        if "file" in c and "line" in c:
+            key = (c.get("file", ""), c.get("line", 0))
+        else:
+            # Try 'from' ID format (file:line:fn)
+            from_id = c.get("from", "")
+            if ":" in from_id:
+                parts = from_id.rsplit(":", 2)
+                file_part = parts[0] if len(parts) >= 2 else from_id
+                line_part = parts[1] if len(parts) >= 2 else "0"
+                key = (file_part, line_part)
+            else:
+                key = (from_id, "0")
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
+
+
+# ─── Version ────────────────────────────────────────────────
+
+CODELENS_VERSION = "5.6.0"

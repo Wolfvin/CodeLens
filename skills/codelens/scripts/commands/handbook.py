@@ -19,6 +19,7 @@ from vulnscan_engine import scan_vulnerabilities
 from outline_engine import get_workspace_outline
 from commands import register_command
 from commands.scan import cmd_scan
+from utils import write_output_files, compute_summary, CODELENS_VERSION, logger
 
 
 def add_args(parser):
@@ -43,20 +44,45 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     # 1. Identity — extract from package.json / pyproject.toml / README
     identity = _extract_project_identity(workspace)
 
-    # 2. Run scan first (needed for registry data)
-    scan_result = cmd_scan(workspace)
+    # 2. Run scan first (needed for registry data) — skip if registry is fresh
+    scan_result = None
+    registry_path = os.path.join(workspace, '.codelens', 'backend.json')
+    if os.path.exists(registry_path):
+        try:
+            import time
+            mtime = os.path.getmtime(registry_path)
+            if time.time() - mtime < 300:  # 5 minutes freshness
+                from registry import load_backend_registry, load_frontend_registry
+                backend = load_backend_registry(workspace)
+                frontend = load_frontend_registry(workspace)
+                scan_result = {
+                    "status": "ok",
+                    "backend": {
+                        "nodes": len(backend.get("nodes", [])) if isinstance(backend.get("nodes"), list) else backend.get("nodes", 0),
+                        "edges": len(backend.get("edges", [])) if isinstance(backend.get("edges"), list) else backend.get("edges", 0)
+                    },
+                    "frontend": {
+                        "classes": len(frontend.get("classes", [])) if isinstance(frontend.get("classes"), list) else frontend.get("classes", 0),
+                        "ids": len(frontend.get("ids", [])) if isinstance(frontend.get("ids"), list) else frontend.get("ids", 0)
+                    }
+                }
+        except Exception:
+            logger.warning("Scan result loading failed", exc_info=True)
+    if scan_result is None:
+        scan_result = cmd_scan(workspace)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
-        _write_output_files(workspace, scan_result)
+        write_output_files(workspace, scan_result)
     except Exception:
-        pass
+        logger.warning("Failed to write output files", exc_info=True)
 
     # 4. Frameworks
     try:
         fw_result = detect_frameworks(workspace)
         frameworks = fw_result.get("frameworks", [])
     except Exception:
+        logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
 
     # 5. Health (from smell engine)
@@ -69,6 +95,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             "warning": smell_result.get("stats", {}).get("warning", 0),
         }
     except Exception:
+        logger.warning("Health detection failed", exc_info=True)
         health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
     # 6. Entrypoints
@@ -79,6 +106,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             for e in ep_result.get("entrypoints", [])[:30]
         ]
     except Exception:
+        logger.warning("Entrypoint mapping failed", exc_info=True)
         entrypoints = []
 
     # 7. API Routes
@@ -89,6 +117,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             for r in api_result.get("routes", [])[:50]
         ]
     except Exception:
+        logger.warning("API route mapping failed", exc_info=True)
         api_routes = []
 
     # 8. State management
@@ -99,6 +128,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             for s in state_result.get("stores", [])[:20]
         ]
     except Exception:
+        logger.warning("State management mapping failed", exc_info=True)
         state_stores = []
 
     # 9. Risks (circular deps, dead code, secrets)
@@ -108,36 +138,37 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         for chain in circ_result.get("chains", [])[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
-        pass
+        logger.warning("Circular dependency detection failed", exc_info=True)
     try:
         dead_result = detect_dead_code(workspace)
         dead_count = dead_result.get("stats", {}).get("total_dead", 0)
         if dead_count > 0:
             risks.append({"type": "dead_code", "count": dead_count})
     except Exception:
-        pass
+        logger.warning("Dead code detection failed", exc_info=True)
     try:
         secrets_result = detect_secrets(workspace)
         secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
         if secrets_count > 0:
             risks.append({"type": "secrets", "count": secrets_count})
     except Exception:
-        pass
+        logger.warning("Secrets detection failed", exc_info=True)
     try:
         vuln_result = scan_vulnerabilities(workspace)
         vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
         if vuln_count > 0:
             risks.append({"type": "vulnerabilities", "count": vuln_count})
     except Exception:
-        pass
+        logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
     try:
-        summary = _compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
     except Exception:
+        logger.warning("Summary computation failed", exc_info=True)
         summary = {}
 
     # 12. Conventions
@@ -149,7 +180,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "codelens_version": "5.2.0"
+            "codelens_version": CODELENS_VERSION
         },
         "identity": identity,
         "frameworks": frameworks,
@@ -216,7 +247,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             else:
                 identity["type"] = "node-project"
         except Exception:
-            pass
+            logger.warning("package.json parsing failed", exc_info=True)
 
     # Try pyproject.toml
     pyproject_path = os.path.join(workspace, 'pyproject.toml')
@@ -237,7 +268,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             else:
                 identity["type"] = "python-project"
         except Exception:
-            pass
+            logger.warning("pyproject.toml parsing failed", exc_info=True)
 
     # Try Cargo.toml
     cargo_path = os.path.join(workspace, 'Cargo.toml')
@@ -253,7 +284,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["version"] = ver_match.group(1)
             identity["type"] = "rust-project"
         except Exception:
-            pass
+            logger.warning("Cargo.toml parsing failed", exc_info=True)
 
     return identity
 
@@ -318,7 +349,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                             if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
                                 src_count += 1
                 except Exception:
-                    pass
+                    logger.warning("Directory file counting failed", exc_info=True)
                 if entry.lower() in dir_hints:
                     desc = dir_hints[entry.lower()]
                 elif src_count:
@@ -327,7 +358,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                     desc = "directory"
                 dir_map[entry + '/'] = desc
     except Exception:
-        pass
+        logger.warning("Directory map building failed", exc_info=True)
     return dir_map
 
 
@@ -347,7 +378,7 @@ def _detect_conventions(workspace: str) -> Dict[str, Any]:
     except ImportError:
         pass
     except Exception:
-        pass
+        logger.warning("Convention engine failed", exc_info=True)
 
     # Fallback: basic convention detection from filenames
     files = []
@@ -506,84 +537,6 @@ def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
     agent_md_path = os.path.join(codelens_dir, 'AGENT.md')
     with open(agent_md_path, 'w', encoding='utf-8') as f:
         f.write(content)
-
-
-def _write_output_files(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
-    """After a scan, generate outline.json and summary.json into .codelens/."""
-    try:
-        codelens_dir = os.path.join(workspace, '.codelens')
-        os.makedirs(codelens_dir, exist_ok=True)
-
-        outline_data = get_workspace_outline(workspace)
-
-        outline_path = os.path.join(codelens_dir, 'outline.json')
-        with open(outline_path, 'w', encoding='utf-8') as f:
-            json.dump(outline_data, f, indent=2, ensure_ascii=False)
-
-        summary = _compute_summary(workspace, outline_data, scan_result)
-
-        summary_path = os.path.join(codelens_dir, 'summary.json')
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-
-        return summary
-    except Exception:
-        return {}
-
-
-def _compute_summary(
-    workspace: str,
-    outline_data: Dict[str, Any],
-    scan_result: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Compute an aggregate summary from outline + scan data."""
-    total_functions = 0
-    total_classes = 0
-    total_interfaces = 0
-    total_types = 0
-    total_exports = 0
-    total_components = 0
-    total_imports = 0
-    files_by_lang: Dict[str, int] = {}
-
-    for outline in outline_data.get('outlines', []):
-        lang = outline.get('language', 'unknown')
-        files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-
-        total_functions += len(outline.get('functions', []))
-        total_classes += len(outline.get('classes', []))
-        total_interfaces += len(outline.get('interfaces', []))
-        total_types += len(outline.get('types', []))
-        total_exports += len(outline.get('exports', []))
-        total_components += len(outline.get('components', []))
-        total_imports += len(outline.get('imports', []))
-
-        for cls in outline.get('classes', []):
-            total_functions += len(cls.get('methods', []))
-
-    be_nodes = scan_result.get('backend', {}).get('nodes', 0)
-    be_edges = scan_result.get('backend', {}).get('edges', 0)
-    fe_classes = scan_result.get('frontend', {}).get('classes', 0)
-    fe_ids = scan_result.get('frontend', {}).get('ids', 0)
-
-    return {
-        'workspace': workspace,
-        'last_updated': datetime.now(timezone.utc).isoformat(),
-        'files': outline_data.get('files_outlined', 0),
-        'total_lines': outline_data.get('total_lines', 0),
-        'functions': total_functions,
-        'classes': total_classes,
-        'interfaces': total_interfaces,
-        'types': total_types,
-        'exports': total_exports,
-        'components': total_components,
-        'imports': total_imports,
-        'backend_nodes': be_nodes,
-        'backend_edges': be_edges,
-        'frontend_classes': fe_classes,
-        'frontend_ids': fe_ids,
-        'files_by_language': files_by_lang,
-    }
 
 
 register_command("handbook", "Generate project handbook for AI agents", add_args, execute)

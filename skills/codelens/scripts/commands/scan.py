@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
+from utils import logger
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -74,19 +75,65 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         changed, new, deleted = find_changed_files(workspace, all_discovered)
 
         if not changed and not new and not deleted:
+            # Load existing registry counts
+            existing_backend = load_backend_registry(workspace)
+            existing_frontend = load_frontend_registry(workspace)
+            be_nodes = existing_backend.get("nodes", [])
+            be_edges = existing_backend.get("edges", [])
+            fe_classes = existing_frontend.get("classes", [])
+            fe_ids = existing_frontend.get("ids", [])
+
             return {
                 "status": "ok",
                 "workspace": workspace,
                 "message": "No changes detected. Registry is up to date.",
                 "files_scanned": {k: 0 for k in files},
-                "incremental": True
+                "incremental": True,
+                "backend": {
+                    "nodes": len(be_nodes) if isinstance(be_nodes, list) else be_nodes,
+                    "edges": len(be_edges) if isinstance(be_edges, list) else be_edges
+                },
+                "frontend": {
+                    "classes": len(fe_classes) if isinstance(fe_classes, list) else fe_classes,
+                    "ids": len(fe_ids) if isinstance(fe_ids, list) else fe_ids
+                },
+                "frameworks": config.get("frameworks", [])
             }
 
-        # Handle deleted files: remove from mtimes cache and do full rescan
+        # Handle deleted files: remove from mtimes cache and clean registry
         if deleted:
             remove_from_mtimes_cache(workspace, deleted)
-            incremental = False
-            changed_files = None
+            # Remove deleted files from existing registry instead of full rescan
+            existing_backend = load_backend_registry(workspace)
+            existing_frontend = load_frontend_registry(workspace)
+
+            # Filter out nodes/edges from deleted files
+            del_set = set()
+            for df in deleted:
+                rel = os.path.relpath(df, workspace)
+                del_set.add(rel)
+
+            # Clean backend nodes
+            be_nodes = existing_backend.get("nodes", [])
+            if isinstance(be_nodes, list):
+                existing_backend["nodes"] = [n for n in be_nodes if n.get("file", "") not in del_set]
+                # Clean edges that reference deleted nodes
+                remaining_ids = {n["id"] for n in existing_backend["nodes"] if "id" in n}
+                existing_backend["edges"] = [e for e in existing_backend.get("edges", [])
+                                              if e.get("from", "") in remaining_ids or e.get("to", "") in remaining_ids
+                                              or e.get("from_fn", "") or e.get("to_fn", "")]
+                save_backend_registry(workspace, existing_backend)
+
+            # Clean frontend data
+            fe_classes = existing_frontend.get("classes", [])
+            if isinstance(fe_classes, list):
+                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
+                fe_ids = existing_frontend.get("ids", [])
+                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
+                save_frontend_registry(workspace, existing_frontend)
+
+            # Continue with incremental scan for changed/new files
+            changed_files = set(changed + new)
         else:
             changed_files = set(changed + new)
 
@@ -100,7 +147,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.html_parser import HTMLParser
             html_parser = HTMLParser()
         except Exception:
-            pass
+            logger.debug("HTML tree-sitter parser not available, using fallback")
 
         for path in files["html"]:
             if incremental and changed_files and path not in changed_files:
@@ -118,7 +165,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "ids": refs.get("ids", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read HTML file: {path}")
 
     # Parse CSS files
     css_data = []
@@ -128,7 +175,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.css_parser import CSSParser
             css_parser = CSSParser()
         except Exception:
-            pass
+            logger.debug("CSS tree-sitter parser not available, using fallback")
 
         for path in files["css"]:
             if incremental and changed_files and path not in changed_files:
@@ -146,7 +193,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "ids": refs.get("ids", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read CSS file: {path}")
 
     # Parse JS Frontend files
     js_frontend_data = []
@@ -156,7 +203,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.js_frontend_parser import JSFrontendParser
             js_fe_parser = JSFrontendParser()
         except Exception:
-            pass
+            logger.debug("JS frontend tree-sitter parser not available, using fallback")
 
         for path in files["js_frontend"]:
             if incremental and changed_files and path not in changed_files:
@@ -174,7 +221,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "ids": refs.get("ids", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read JS frontend file: {path}")
 
     # Parse TSX/JSX files
     tsx_data = []
@@ -185,7 +232,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.tsx_parser import TSXParser
             tsx_parser = TSXParser()
         except Exception:
-            pass
+            logger.debug("TSX tree-sitter parser not available, using fallback")
 
         for path in files["tsx"]:
             if incremental and changed_files and path not in changed_files:
@@ -207,14 +254,22 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                             "edges": refs["backend"].get("edges", [])
                         })
                 else:
-                    # Fallback: treat as JS frontend
+                    # Fallback: use BOTH frontend and backend parsers
                     fb_refs = parse_js_frontend_fallback(content, os.path.relpath(path, workspace))
                     tsx_data.append({
                         "path": os.path.relpath(path, workspace),
                         "frontend": fb_refs,
                     })
+                    # Also extract backend data (functions, imports) from TSX
+                    be_refs = parse_js_backend_fallback(content, os.path.relpath(path, workspace))
+                    if be_refs.get("nodes") or be_refs.get("edges"):
+                        tsx_backend_data.append({
+                            "path": os.path.relpath(path, workspace),
+                            "nodes": be_refs.get("nodes", []),
+                            "edges": be_refs.get("edges", [])
+                        })
             except IOError:
-                pass
+                logger.debug(f"Failed to read TSX/JSX file: {path}")
 
     # Parse Vue files
     vue_data = []
@@ -234,7 +289,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     refs = parse_vue_sfc(content, os.path.relpath(path, workspace))
                     vue_data.append(refs)
             except IOError:
-                pass
+                logger.debug(f"Failed to read Vue file: {path}")
 
     # Parse Svelte files
     svelte_data = []
@@ -254,7 +309,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     refs = parse_svelte_component(content, os.path.relpath(path, workspace))
                     svelte_data.append(refs)
             except IOError:
-                pass
+                logger.debug(f"Failed to read Svelte file: {path}")
 
     # Tailwind analysis
     # In incremental mode, skip tailwind re-analysis since we only have
@@ -276,7 +331,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
 
                 tailwind_info = analyze_tailwind_usage(workspace, all_classes)
             except Exception:
-                pass
+                logger.debug("Tailwind analysis failed", exc_info=True)
 
     # Build frontend registry
     if incremental and changed_files:
@@ -304,7 +359,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.js_backend_parser import JSBackendParser
             js_be_parser = JSBackendParser()
         except Exception:
-            pass
+            logger.debug("JS backend tree-sitter parser not available, using fallback")
 
         for path in files["js_backend"]:
             if incremental and changed_files and path not in changed_files:
@@ -322,7 +377,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read JS backend file: {path}")
 
     # Parse Rust files
     rust_data = []
@@ -332,7 +387,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.rust_parser import RustParser
             rust_parser = RustParser()
         except Exception:
-            pass
+            logger.debug("Rust tree-sitter parser not available, using fallback")
 
         for path in files["rust"]:
             if incremental and changed_files and path not in changed_files:
@@ -350,7 +405,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read Rust file: {path}")
 
     # Parse Python files
     python_data = []
@@ -360,7 +415,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             from parsers.python_parser import PythonParser
             py_parser = PythonParser()
         except Exception:
-            pass
+            logger.debug("Python tree-sitter parser not available, using fallback")
 
         for path in files["python"]:
             if incremental and changed_files and path not in changed_files:
@@ -378,7 +433,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                pass
+                logger.debug(f"Failed to read Python file: {path}")
 
     # Build backend registry with edge resolution
     if incremental and changed_files:
@@ -514,16 +569,24 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
 def is_frontend_file(file_path: str, config: Dict) -> bool:
     """Check if a file is in a frontend path."""
+    # Normalize to forward slashes
+    normalized = file_path.replace('\\', '/')
     for fp in config.get("frontend_paths", []):
-        if fp in file_path:
+        fp_norm = fp.replace('\\', '/')
+        # Match as path segment prefix
+        if normalized.startswith(fp_norm) or f"/{fp_norm}" in normalized or normalized == fp_norm:
             return True
     return False
 
 
 def is_backend_file(file_path: str, config: Dict) -> bool:
     """Check if a file is in a backend path."""
+    # Normalize to forward slashes
+    normalized = file_path.replace('\\', '/')
     for bp in config.get("backend_paths", []):
-        if bp in file_path:
+        bp_norm = bp.replace('\\', '/')
+        # Match as path segment prefix
+        if normalized.startswith(bp_norm) or f"/{bp_norm}" in normalized or normalized == bp_norm:
             return True
     return False
 
