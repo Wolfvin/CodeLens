@@ -633,14 +633,30 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
             then_chain_depth = 0
 
     # Also detect nested callback patterns (function(err, result))
+    # Track indentation to avoid counting sequential (non-nested) callbacks.
+    # Sequential callbacks at the same indent level are NOT callback hell.
     callback_depth = 0
     cb_start_line = 0
+    cb_base_indent = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
+        current_indent = len(line) - len(stripped) if stripped else 0
+
+        # If we're tracking a callback chain and indentation returns to
+        # the base level, the previous callback has closed — reset depth.
+        if callback_depth > 0 and current_indent <= cb_base_indent and stripped:
+            callback_depth = 0
+
         if re.search(r'function\s*\(\s*(?:err|error)', stripped) or re.search(r'\(err(?:or)?\)', stripped):
             if callback_depth == 0:
                 cb_start_line = i + 1
-            callback_depth += 1
+                cb_base_indent = current_indent
+            elif current_indent > cb_base_indent:
+                # Only increment if truly MORE nested
+                callback_depth += 1
+            # Same or less indent = sequential callback, don't increment
+            else:
+                callback_depth = 1  # Reset to this callback as new base
 
         if callback_depth >= 3:
             smells.append({

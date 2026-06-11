@@ -4,9 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelens"
-version = "5.7.1"
-version = "5.7.1"
-version = "5.9.0"
+version = "5.10.0"
 description = "Live Codebase Reference Intelligence — 41 commands for AI-powered code analysis, security auditing, and quality scoring"
 readme = "README.md"
 license = {text = "MIT"}

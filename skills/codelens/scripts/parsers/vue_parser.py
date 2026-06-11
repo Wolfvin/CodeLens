@@ -42,8 +42,12 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
     backend_edges = []
 
     # ─── Extract template section ────────────────────────────
-    template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
-    template_content = template_match.group(1) if template_match else ""
+    # Use greedy match (.*) to capture the entire template including nested
+    # <template v-slot:...> elements. Non-greedy (.*?) would truncate at the
+    # first inner </template>, silently dropping most of the template content.
+    # Also allow attributes on <template> like <template lang="pug">.
+    template_match = re.search(r'<template([^>]*)>(.*)</template>', content, re.DOTALL)
+    template_content = template_match.group(2) if template_match else ""
 
     # ─── Extract script sections (may have <script setup> + <script>) ───
     script_sections = _extract_script_sections(content)
@@ -101,10 +105,17 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
 
     # ─── Parse script sections for backend data ──────────────
     if combined_script:
+        # Determine line offset from the script section that matched
+        line_offset = 0
+        for section in script_sections:
+            s_content = section["content"]
+            if s_content == combined_script:
+                line_offset = section.get("line_offset", 0)
+                break
         _parse_script_section(
             combined_script, file_path,
             backend_nodes, backend_edges,
-            is_setup=is_setup, is_ts=is_ts
+            is_setup=is_setup, is_ts=is_ts, line_offset=line_offset
         )
 
     result = {
@@ -146,6 +157,7 @@ def _extract_script_sections(content: str) -> List[Dict[str, Any]]:
             "content": script_content,
             "setup": is_setup,
             "lang": lang,
+            "line_offset": content[:match.start()].count('\n') + 1,
         })
     return sections
 
@@ -326,7 +338,8 @@ def _parse_style_section(style_content: str, file_path: str,
 
 def _parse_script_section(script_content: str, file_path: str,
                            nodes: List[Dict], edges: List[Dict],
-                           is_setup: bool = False, is_ts: bool = False):
+                           is_setup: bool = False, is_ts: bool = False,
+                           line_offset: int = 0):
     """Parse <script> or <script setup> section for backend nodes and edges.
     
     Extracts:
@@ -336,6 +349,10 @@ def _parse_script_section(script_content: str, file_path: str,
     - ref/reactive/computed/watch declarations (Composition API)
     - defineProps/defineEmits (script setup)
     - Options API methods (if non-setup)
+    
+    Args:
+        line_offset: Line number offset of the <script> tag within the .vue file.
+                     Used to compute correct absolute line numbers for nodes.
     """
     lines = script_content.split('\n')
 
@@ -375,6 +392,7 @@ def _parse_script_section(script_content: str, file_path: str,
 
     # ─── Parse function declarations ──────────────────────
     for line_num, line in enumerate(lines, 1):
+        abs_line = line_num + line_offset  # Absolute line in .vue file
         stripped = line.strip()
 
         # Regular function: function name(...) or export function name(...)
@@ -384,17 +402,17 @@ def _parse_script_section(script_content: str, file_path: str,
         )
         if fn_match:
             fn_name = fn_match.group(1)
-            node_id = f"{file_path}:{line_num}"
+            node_id = f"{file_path}:{abs_line}"
             nodes.append({
                 "id": node_id,
                 "fn": fn_name,
                 "file": file_path,
-                "line": line_num,
+                "line": abs_line,
                 "type": "function",
                 "async": "async" in stripped,
             })
             # Check for function calls inside
-            _extract_calls_from_line(stripped, fn_name, node_id, file_path, line_num, edges)
+            _extract_calls_from_line(stripped, fn_name, node_id, file_path, abs_line, edges)
             continue
 
         # Arrow function: const name = (...) => or export const name = (...) =>
@@ -404,12 +422,12 @@ def _parse_script_section(script_content: str, file_path: str,
         )
         if arrow_match:
             fn_name = arrow_match.group(1)
-            node_id = f"{file_path}:{line_num}"
+            node_id = f"{file_path}:{abs_line}"
             nodes.append({
                 "id": node_id,
                 "fn": fn_name,
                 "file": file_path,
-                "line": line_num,
+                "line": abs_line,
                 "type": "function",
                 "async": "async" in stripped,
             })
@@ -424,12 +442,12 @@ def _parse_script_section(script_content: str, file_path: str,
         if comp_match:
             var_name = comp_match.group(1)
             reactive_type = comp_match.group(2)
-            node_id = f"{file_path}:{line_num}"
+            node_id = f"{file_path}:{abs_line}"
             nodes.append({
                 "id": node_id,
                 "fn": var_name,
                 "file": file_path,
-                "line": line_num,
+                "line": abs_line,
                 "type": "reactive_var",
                 "reactive_type": reactive_type,
             })
@@ -449,12 +467,12 @@ def _parse_script_section(script_content: str, file_path: str,
         )
         if pinia_match:
             store_var = pinia_match.group(1)
-            node_id = f"{file_path}:{line_num}"
+            node_id = f"{file_path}:{abs_line}"
             nodes.append({
                 "id": node_id,
                 "fn": store_var,
                 "file": file_path,
-                "line": line_num,
+                "line": abs_line,
                 "type": "pinia_store",
             })
             # Extract store name from defineStore('name', ...)
@@ -467,7 +485,7 @@ def _parse_script_section(script_content: str, file_path: str,
                     "label": name_match.group(1),
                 })
             # Scan next few lines for store body calls (useXxxStore, etc.)
-            _extract_calls_from_line(stripped, store_var, node_id, file_path, line_num, edges)
+            _extract_calls_from_line(stripped, store_var, node_id, file_path, abs_line, edges)
             continue
 
         # defineProps / defineEmits (script setup macros)
@@ -478,12 +496,12 @@ def _parse_script_section(script_content: str, file_path: str,
         if define_match:
             var_name = define_match.group(1) or define_match.group(2)
             macro_name = define_match.group(2)
-            node_id = f"{file_path}:{line_num}"
+            node_id = f"{file_path}:{abs_line}"
             nodes.append({
                 "id": node_id,
                 "fn": var_name,
                 "file": file_path,
-                "line": line_num,
+                "line": abs_line,
                 "type": "setup_macro",
                 "macro": macro_name,
             })
@@ -506,12 +524,12 @@ def _parse_script_section(script_content: str, file_path: str,
                                     'if', 'for', 'while', 'switch', 'catch', 'return',
                                     'import', 'export', 'const', 'let', 'var', 'class',
                                     'new', 'typeof', 'instanceof', 'void', 'delete', 'throw'):
-                    node_id = f"{file_path}:{line_num}"
+                    node_id = f"{file_path}:{abs_line}"
                     nodes.append({
                         "id": node_id,
                         "fn": fn_name,
                         "file": file_path,
-                        "line": line_num,
+                        "line": abs_line,
                         "type": "method",
                     })
 

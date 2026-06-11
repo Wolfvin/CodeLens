@@ -248,7 +248,33 @@ def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = '
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.10.0"
+
+# ─── Shared Constants ────────────────────────────────────────
+
+# Default maximum file size for engines that scan source files.
+# Files larger than this are skipped to avoid slow regex/memory issues.
+MAX_FILE_SIZE = 200 * 1024  # 200KB
+
+# Default maximum number of files to scan per category.
+# Prevents extremely slow scans on huge codebases (10K+ files).
+MAX_FILES_DEFAULT = 2000
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if a time budget has been exceeded.
+
+    Used by engines to bail out early on very large codebases.
+
+    Args:
+        start_time: Unix timestamp from time.time() when scanning started.
+        budget_sec: Maximum seconds allowed for the scan.
+
+    Returns:
+        True if the budget has been exceeded, False otherwise.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
 
 
 # ─── Binary Artifact Scanning ──────────────────────────────────

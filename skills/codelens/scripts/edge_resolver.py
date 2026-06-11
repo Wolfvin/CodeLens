@@ -311,3 +311,71 @@ def _to_alternate_case(name: str) -> str:
 
     # No conversion needed
     return leading + name
+
+
+def resolve_tauri_ipc_from_apimap(
+    nodes: List[Dict],
+    edges: List[Dict],
+    api_routes: List[Dict]
+) -> List[Dict]:
+    """Resolve cross-language Tauri IPC edges from API map results.
+
+    When a Tauri app's TypeScript frontend calls `invoke('commandName')`,
+    the Rust handler `#[tauri::command] fn command_name()` is not directly
+    called by any Rust code — it's invoked through the IPC bridge. This
+    function creates synthetic edges connecting TS invoke calls to their
+    Rust handler counterparts.
+
+    Args:
+        nodes: Resolved backend nodes list.
+        edges: Resolved backend edges list.
+        api_routes: API map routes (from apimap_engine).
+
+    Returns:
+        Updated edges list with new IPC cross-language edges appended.
+    """
+    ipc_edges = []
+    node_map = {n["id"]: n for n in nodes if "id" in n}
+
+    for route in api_routes:
+        handler = route.get("handler", "")
+        method = route.get("method", "")
+        path = route.get("path", "")
+        source_file = route.get("file", "")
+
+        # Look for Tauri IPC routes: invoke('xxx') → Rust #[tauri::command]
+        if not handler or route.get("framework") != "tauri_ipc":
+            continue
+
+        # Find the Rust handler node
+        rust_node_id = None
+        for n in nodes:
+            fn = n.get("fn", "")
+            # Match handler name (snake_case) with invoke command (camelCase or snake_case)
+            if fn == handler or _to_alternate_case(fn) == handler:
+                rust_node_id = n.get("id")
+                break
+
+        if not rust_node_id:
+            continue
+
+        # Find the TypeScript invoke() caller node(s)
+        for n in nodes:
+            fn = n.get("fn", "")
+            nfile = n.get("file", "")
+            if "invoke" in fn.lower() and nfile.endswith((".ts", ".tsx", ".js", ".jsx")):
+                ipc_edge = {
+                    "from": n["id"],
+                    "to": rust_node_id,
+                    "to_fn": handler,
+                    "type": "tauri_ipc",
+                    "resolved": True,
+                }
+                ipc_edges.append(ipc_edge)
+
+    # Mark Rust Tauri commands as ipc_exposed
+    for n in nodes:
+        if n.get("is_tauri_command"):
+            n.setdefault("status", "ipc_exposed")
+
+    return edges + ipc_edges

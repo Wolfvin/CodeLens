@@ -6,7 +6,7 @@ using tree-sitter for accurate AST-based extraction.
 
 import os
 from typing import Dict, List, Any, Optional
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger, safe_read_file
 
 
 def get_file_outline(
@@ -42,9 +42,14 @@ def get_file_outline(
     rel_path = os.path.relpath(file_path, workspace) if workspace else file_path
 
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-    except IOError as e:
+        content = safe_read_file(file_path)
+        if content is None:
+            return {
+                "status": "error",
+                "message": f"Cannot read file or file too large: {file_path}",
+                "outline": None
+            }
+    except Exception as e:
         return {
             "status": "error",
             "message": f"Cannot read file: {e}",

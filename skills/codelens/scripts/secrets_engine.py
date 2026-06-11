@@ -686,8 +686,8 @@ def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
                 break
             # Check if the pattern matches the filename
             # Use re.search instead of re.match for path-based patterns,
-            # and escape regex-special chars before replacing glob wildcard
-            safe_pattern = re.escape(pattern).replace(r'\.\*', '.*')
+            # and properly handle glob wildcards (* → .*, ? → .)
+            safe_pattern = re.escape(pattern).replace(r'\*', '.*').replace(r'\?', '.')
             if re.search(safe_pattern, filename) or re.search(safe_pattern, env_path):
                 is_covered = True
                 break
@@ -742,11 +742,12 @@ def _mask_value(value: str) -> str:
 
 def _is_safe_value(value: str) -> bool:
     """Check if a value is a known safe / false-positive pattern."""
-    if not value or len(value) < MIN_SECRET_LENGTH:
-        # Allow short values for private key patterns etc.
-        # But flag them for password-like checks
-        if len(value) < 4:
-            return True
+    if not value or len(value) < 4:
+        return True
+    if len(value) < MIN_SECRET_LENGTH:
+        # Too short to be a real credential — skip to avoid false positives
+        # on short variable names like pwd="test" (6 chars)
+        return True
 
     for pattern in SAFE_VALUE_PATTERNS:
         if re.match(pattern, value.strip()):
