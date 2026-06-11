@@ -2,6 +2,51 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.3.0] — 2026-06-11
+
+### Architecture
+- **Major refactoring**: Broke `codelens.py` (3504 lines) into modular command structure
+  - `commands/` directory with 41 command modules using registry pattern
+  - `formatters/` directory with JSON and markdown formatters
+  - `parsers/fallback_*.py` — 6 fallback parsers moved out of main file
+  - `codelens.py` is now 307 lines (slim entry point with auto-dispatch)
+
+### Added
+- **Semantic convention detection** in `convention_engine.py`:
+  - ORM pattern detection (Prisma, SQLAlchemy, TypeORM, Mongoose, Drizzle, Knex)
+  - Error handling pattern detection (try-catch, Result type, Either, custom errors)
+  - API response format detection (envelope, NextResponse, Express, tRPC)
+  - State management library detection (Zustand, Redux, MobX, Recoil, Jotai, Pinia, Context API)
+  - Testing framework detection (Jest, Vitest, Pytest, Mocha, Playwright)
+- **Integration test suite** (`test_integration.py`):
+  - Smoke tests for all 41 commands (JSON + markdown format)
+  - Decision tree field validation (query, impact, smell, dead-code)
+  - Health score range validation
+  - Context quality metrics validation
+  - Module structure verification
+
+### Changed
+- **Health score formula** rewritten: percentile-based scoring replaces linear deduction
+  - Old: `max(0, 100 - (critical*10 + warning*3 + info))` — always 0 for medium+ projects
+  - New: density-based tiers + critical ratio adjustment — meaningful scores for all project sizes
+  - Example: Clean project = 100, average = 90, messy = 55, high-density = 9
+- `handbook` now includes `"status": "ok"` in output
+- `scan` incremental mode reports `changed_files_count`
+- `_md_trace` handles dict-format chains (up/down directions)
+- `_md_impact` handles dict-format affected (direct/indirect groups)
+- `_md_query` shows callers/callees and extracts name from node.fn
+- `ask` command routing: specific topic patterns checked before generic ones
+- `_extract_symbol_name`: strips filler words, prefers code-style identifiers
+- `_build_directory_map`: uses dir_hints for common names, recursive file counting
+- `entrypoints_engine`: `match.lastindex` NoneType guard added
+
+### Fixed
+- UnboundLocalError in `smell` command (local imports shadowing top-level)
+- KeyError in `_md_impact` (affected is dict, not list)
+- KeyError in `_md_trace` (chains is dict, not list)
+- `ask` misrouting "show me API routes" to context instead of api-map
+- `_extract_symbol_name` extracting "the" instead of "verify_token"
+
 ## [5.2.0] — 2026-06-11
 
 ### Added

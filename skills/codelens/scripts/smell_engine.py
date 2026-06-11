@@ -195,8 +195,53 @@ def detect_smells(
     )
     info_count = total_smells - critical_count - warning_count
 
-    # Compute health score (0-100)
-    health_score = max(0, 100 - (critical_count * 10 + warning_count * 3 + info_count))
+    # Compute health score (0-100) — percentile-based
+    # Old formula: max(0, 100 - (critical*10 + warning*3 + info))
+    # Problem: always returns 0 for medium+ projects.
+    # New formula: density-based tiers + critical ratio adjustment
+    files_scanned_safe = max(files_scanned, 1)
+    density = total_smells / files_scanned_safe  # smells per file
+
+    if density <= 0.5:
+        base_score = 95
+    elif density <= 2:
+        base_score = 85
+    elif density <= 5:
+        base_score = 70
+    elif density <= 10:
+        base_score = 55
+    elif density <= 20:
+        base_score = 40
+    elif density <= 50:
+        base_score = 25
+    elif density <= 100:
+        base_score = 20
+    else:
+        base_score = 8
+
+    # Critical penalty: based on critical count per file (capped)
+    critical_per_file = critical_count / files_scanned_safe
+    if critical_per_file <= 1:
+        critical_penalty = 0
+    elif critical_per_file <= 5:
+        critical_penalty = 5
+    elif critical_per_file <= 10:
+        critical_penalty = 10
+    elif critical_per_file <= 20:
+        critical_penalty = 15
+    else:
+        critical_penalty = min(25, int(critical_per_file * 0.5))
+
+    # Critical ratio adjustment: fewer criticals relative to total = healthier
+    critical_ratio = critical_count / max(total_smells, 1)
+    if critical_ratio < 0.1:
+        ratio_bonus = 5
+    elif critical_ratio < 0.3:
+        ratio_bonus = 0
+    else:
+        ratio_bonus = -5
+
+    health_score = max(0, min(100, base_score - critical_penalty + ratio_bonus))
 
     # Top priority smells (critical first, then by category importance)
     priority_order = ["god_object", "long_fn", "deep_nesting", "callback_hell",

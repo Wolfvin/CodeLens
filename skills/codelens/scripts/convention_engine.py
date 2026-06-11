@@ -103,7 +103,7 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
             conventions["patterns"]["components"] = component_pattern
     
     # Error handling
-    conventions["patterns"]["error_handling"] = _detect_error_handling(all_source_files, workspace)
+    conventions["patterns"]["error_handling"] = _detect_error_handling_basic(all_source_files, workspace)
     
     # File organization
     conventions["patterns"]["file_organization"] = _detect_file_organization(workspace)
@@ -111,6 +111,30 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     # Module system
     if js_files:
         conventions["patterns"]["module_system"] = _detect_module_system(js_files, workspace)
+    
+    # ─── Semantic Convention Detection ─────────────────────────
+    
+    conventions["semantic"] = {}
+    
+    sem_orm = _detect_orm_patterns(all_source_files, workspace)
+    if sem_orm.get("orm"):
+        conventions["semantic"]["orm"] = sem_orm
+    
+    sem_error = _detect_error_handling(all_source_files, workspace)
+    if sem_error.get("style"):
+        conventions["semantic"]["error_handling"] = sem_error
+    
+    sem_api = _detect_api_response_pattern(all_source_files, workspace)
+    if sem_api.get("format"):
+        conventions["semantic"]["api_response"] = sem_api
+    
+    sem_state = _detect_state_management(js_files, workspace)
+    if sem_state.get("library"):
+        conventions["semantic"]["state_management"] = sem_state
+    
+    sem_test = _detect_testing_framework(all_source_files, workspace)
+    if sem_test.get("framework"):
+        conventions["semantic"]["testing"] = sem_test
     
     return {
         "status": "ok",
@@ -408,7 +432,7 @@ def _detect_component_pattern(files: List[str], workspace: str) -> str:
     return pattern
 
 
-def _detect_error_handling(files: List[str], workspace: str) -> str:
+def _detect_error_handling_basic(files: List[str], workspace: str) -> str:
     """Detect dominant error handling pattern."""
     try_catch = 0
     result_type = 0
@@ -540,3 +564,471 @@ def _detect_module_system(files: List[str], workspace: str) -> str:
     elif cjs > esm:
         return "CommonJS"
     return "mixed"
+
+
+# ─── Semantic Convention Detection Helpers ─────────────────────
+
+def _detect_orm_patterns(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect ORM/database patterns in the codebase."""
+    scores = {
+        "prisma": 0,
+        "sqlalchemy": 0,
+        "typeorm": 0,
+        "mongoose": 0,
+        "drizzle": 0,
+        "knex": 0,
+    }
+
+    # Check for schema.prisma file existence
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build', '__pycache__', '.codelens', '.next', '.cache', 'venv', '.venv'} and not d.startswith('.')]
+        for fn in filenames:
+            if fn == 'schema.prisma':
+                scores["prisma"] += 5
+
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Prisma
+        if re.search(r"from\s+['\"]@prisma/client['\"]" , content):
+            scores["prisma"] += 3
+        if re.search(r'prisma\.', content):
+            scores["prisma"] += 2
+
+        # SQLAlchemy
+        if re.search(r'from\s+sqlalchemy', content):
+            scores["sqlalchemy"] += 3
+        if re.search(r'Base\s*=', content):
+            scores["sqlalchemy"] += 2
+        if re.search(r'Column\s*\(', content):
+            scores["sqlalchemy"] += 2
+
+        # TypeORM
+        if re.search(r'@Entity', content):
+            scores["typeorm"] += 3
+        if re.search(r'@Column', content):
+            scores["typeorm"] += 2
+        if re.search(r'Repository\s*<', content):
+            scores["typeorm"] += 2
+
+        # Mongoose
+        if re.search(r'mongoose\.model', content):
+            scores["mongoose"] += 3
+        if re.search(r'new\s+Schema', content):
+            scores["mongoose"] += 3
+
+        # Drizzle
+        if re.search(r"drizzle-orm", content):
+            scores["drizzle"] += 3
+        if re.search(r'pgTable\s*\(', content):
+            scores["drizzle"] += 3
+        if re.search(r'sqliteTable\s*\(', content):
+            scores["drizzle"] += 3
+
+        # Knex
+        if re.search(r'knex\s*\(', content):
+            scores["knex"] += 3
+        if re.search(r'\.table\s*\(', content):
+            scores["knex"] += 1
+        if re.search(r'\.raw\s*\(', content):
+            scores["knex"] += 1
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"orm": None, "confidence": "low", "style_hint": "No ORM patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    style_hints = {
+        "prisma": "Generate models using schema.prisma style",
+        "sqlalchemy": "Use SQLAlchemy declarative models with Base class",
+        "typeorm": "Use TypeORM entities with @Entity and @Column decorators",
+        "mongoose": "Use Mongoose schemas with new Schema() pattern",
+        "drizzle": "Use Drizzle table definitions with pgTable/sqliteTable",
+        "knex": "Use Knex migration and query builder patterns",
+    }
+
+    return {
+        "orm": best,
+        "confidence": confidence,
+        "style_hint": style_hints.get(best, f"Use {best} patterns"),
+    }
+
+
+def _detect_error_handling(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect error handling style in the codebase (semantic version)."""
+    styles = {
+        "try_catch": 0,
+        "result_type": 0,
+        "either": 0,
+        "custom_error_class": 0,
+        "exception_hierarchy": 0,
+    }
+
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # try-catch
+        if re.search(r'\btry\s*:', content):  # Python
+            styles["try_catch"] += 1
+        if re.search(r'\btry\s*\{', content):  # JS/TS
+            styles["try_catch"] += 1
+
+        # Result type
+        if re.search(r'Result\s*<', content):
+            styles["result_type"] += 2
+        if re.search(r'\bOk\s*\(', content):
+            styles["result_type"] += 1
+        if re.search(r'\bErr\s*\(', content):
+            styles["result_type"] += 1
+        if re.search(r'neverthrow', content):
+            styles["result_type"] += 3
+
+        # Either type
+        if re.search(r'Either\s*<', content):
+            styles["either"] += 2
+        if re.search(r'\bLeft\s*\(', content):
+            styles["either"] += 1
+        if re.search(r'\bRight\s*\(', content):
+            styles["either"] += 1
+
+        # Custom error classes
+        if re.search(r'class\s+\w+Error\s+extends', content):
+            styles["custom_error_class"] += 2
+        if re.search(r'class\s+\w+Error\s*\(', content):
+            styles["custom_error_class"] += 2
+
+        # Exception hierarchy
+        if re.search(r'class\s+\w+Exception\s+extends\s+\w+Exception', content):
+            styles["exception_hierarchy"] += 3
+
+    # Find dominant style
+    best = max(styles, key=styles.get)
+    best_score = styles[best]
+
+    if best_score == 0:
+        return {"style": None, "styles_found": [], "confidence": "low", "hint": "No error handling patterns detected"}
+
+    if best_score >= 4:
+        confidence = "high"
+    elif best_score >= 2:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    # Collect all styles that were found
+    styles_found = [s for s, count in styles.items() if count > 0]
+
+    hints = {
+        "try_catch": "Use try-catch blocks for error handling",
+        "result_type": "Use Result<T, E> pattern instead of throwing exceptions",
+        "either": "Use Either monad for error handling",
+        "custom_error_class": "Throw custom errors, don't use generic Error",
+        "exception_hierarchy": "Use exception hierarchy with custom base exception class",
+    }
+
+    return {
+        "style": best,
+        "styles_found": styles_found,
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} pattern for errors"),
+    }
+
+
+def _detect_api_response_pattern(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect API response format pattern in the codebase."""
+    scores = {
+        "envelope": 0,
+        "next_response": 0,
+        "express": 0,
+        "trpc": 0,
+    }
+
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Envelope pattern: {"success": true/false, "data": ..., "error": ...}
+        if re.search(r'"success"\s*:', content) or re.search(r"'success'\s*:", content):
+            scores["envelope"] += 2
+        if re.search(r'"data"\s*:', content) and re.search(r'"error"\s*:', content):
+            scores["envelope"] += 2
+        if re.search(r'\{.*success.*data.*error.*\}', content, re.IGNORECASE):
+            scores["envelope"] += 3
+
+        # Next.js style
+        if re.search(r'NextResponse\.json\s*\(', content):
+            scores["next_response"] += 3
+        if re.search(r'NextResponse', content):
+            scores["next_response"] += 1
+
+        # Express style
+        if re.search(r'res\.status\s*\(.*\)\.json', content):
+            scores["express"] += 3
+        if re.search(r'res\.json\s*\(', content):
+            scores["express"] += 1
+
+        # tRPC
+        if re.search(r't\.router', content):
+            scores["trpc"] += 3
+        if re.search(r'publicProcedure', content):
+            scores["trpc"] += 3
+        if re.search(r'protectedProcedure', content):
+            scores["trpc"] += 2
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"format": None, "confidence": "low", "hint": "No API response patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    hints = {
+        "envelope": "Always wrap in {success, data, error}",
+        "next_response": "Use NextResponse.json() for API responses",
+        "express": "Use res.status().json() pattern for responses",
+        "trpc": "Use tRPC procedures and routers for type-safe APIs",
+    }
+
+    return {
+        "format": best,
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} API response pattern"),
+    }
+
+
+def _detect_state_management(js_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect state management library in JavaScript/TypeScript codebase."""
+    scores = {
+        "zustand": 0,
+        "redux": 0,
+        "mobx": 0,
+        "recoil": 0,
+        "jotai": 0,
+        "pinia": 0,
+        "context_api": 0,
+    }
+
+    sample = js_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Zustand
+        if re.search(r"from\s+['\"]zustand['\"]", content):
+            scores["zustand"] += 3
+        if re.search(r'\bcreate\s*\(', content) and re.search(r'zustand', content, re.IGNORECASE):
+            scores["zustand"] += 2
+        if re.search(r'useStore', content):
+            scores["zustand"] += 1
+
+        # Redux
+        if re.search(r'createStore', content):
+            scores["redux"] += 2
+        if re.search(r'useSelector', content):
+            scores["redux"] += 2
+        if re.search(r'useDispatch', content):
+            scores["redux"] += 2
+        if re.search(r'createSlice', content):
+            scores["redux"] += 3
+
+        # MobX
+        if re.search(r'\bobservable\b', content):
+            scores["mobx"] += 2
+        if re.search(r'\baction\b', content) and re.search(r'mobx', content, re.IGNORECASE):
+            scores["mobx"] += 1
+        if re.search(r'makeAutoObservable', content):
+            scores["mobx"] += 3
+
+        # Recoil
+        if re.search(r'useRecoilState', content):
+            scores["recoil"] += 3
+        if re.search(r'\batom\s*\(', content) and re.search(r'recoil', content, re.IGNORECASE):
+            scores["recoil"] += 2
+        if re.search(r'\bselector\s*\(', content) and re.search(r'recoil', content, re.IGNORECASE):
+            scores["recoil"] += 2
+
+        # Jotai
+        if re.search(r"from\s+['\"]jotai['\"]", content):
+            scores["jotai"] += 3
+        if re.search(r'\batom\s*\(', content) and re.search(r'jotai', content, re.IGNORECASE):
+            scores["jotai"] += 2
+        if re.search(r'useAtom', content):
+            scores["jotai"] += 2
+
+        # Pinia
+        if re.search(r'defineStore', content):
+            scores["pinia"] += 3
+        if re.search(r'useStore', content) and re.search(r'pinia', content, re.IGNORECASE):
+            scores["pinia"] += 2
+
+        # Context API
+        if re.search(r'createContext', content):
+            scores["context_api"] += 2
+        if re.search(r'useContext', content):
+            scores["context_api"] += 1
+        if re.search(r'useReducer', content):
+            scores["context_api"] += 1
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"library": None, "confidence": "low", "hint": "No state management patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    hints = {
+        "zustand": "Use create() pattern for stores",
+        "redux": "Use createSlice with Redux Toolkit patterns",
+        "mobx": "Use makeAutoObservable for reactive stores",
+        "recoil": "Use atom/selector pattern for state",
+        "jotai": "Use atom() primitive for state management",
+        "pinia": "Use defineStore() for Vue stores",
+        "context_api": "Use React Context + useReducer for state",
+    }
+
+    return {
+        "library": best,
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} for state management"),
+    }
+
+
+def _detect_testing_framework(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect testing framework in the codebase."""
+    scores = {
+        "jest": 0,
+        "vitest": 0,
+        "pytest": 0,
+        "mocha": 0,
+        "playwright": 0,
+    }
+
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        ext = os.path.splitext(fpath)[1].lower()
+
+        # Jest
+        if re.search(r'\bdescribe\s*\(', content) and ext in {'.js', '.jsx', '.ts', '.tsx'}:
+            scores["jest"] += 1
+        if re.search(r'\bit\s*\(', content) and ext in {'.js', '.jsx', '.ts', '.tsx'}:
+            scores["jest"] += 1
+        if re.search(r'\btest\s*\(', content) and ext in {'.js', '.jsx', '.ts', '.tsx'}:
+            scores["jest"] += 1
+        if re.search(r'\bexpect\s*\(', content) and ext in {'.js', '.jsx', '.ts', '.tsx'}:
+            scores["jest"] += 1
+        if re.search(r'\bjest\s*\.', content):
+            scores["jest"] += 3
+
+        # Vitest
+        if re.search(r"from\s+['\"]vitest['\"]", content):
+            scores["vitest"] += 4
+        if re.search(r'\bdescribe\s*\(', content) and re.search(r'vitest', content, re.IGNORECASE):
+            scores["vitest"] += 2
+        if re.search(r'\bvi\s*\.', content):
+            scores["vitest"] += 3
+
+        # Pytest
+        if ext == '.py':
+            if re.search(r'def\s+test_', content):
+                scores["pytest"] += 3
+            if re.search(r'@pytest', content):
+                scores["pytest"] += 3
+            if re.search(r'\bassert\s+', content) and re.search(r'def\s+test_', content):
+                scores["pytest"] += 1
+
+        # Mocha
+        if re.search(r'\bdescribe\s*\(', content) and re.search(r'\bbeforeEach\s*\(', content):
+            scores["mocha"] += 2
+        if re.search(r"from\s+['\"]mocha['\"]", content):
+            scores["mocha"] += 4
+
+        # Playwright
+        if re.search(r'@test', content):
+            scores["playwright"] += 3
+        if re.search(r"from\s+['\"]@playwright/test['\"]", content):
+            scores["playwright"] += 4
+        if re.search(r'\bpage\.', content) and re.search(r'locator\s*\(', content):
+            scores["playwright"] += 2
+
+    # Deduct vitest score from jest (they share describe/it/expect patterns)
+    if scores["vitest"] > 0:
+        scores["jest"] = max(0, scores["jest"] - scores["vitest"])
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"framework": None, "style": None, "confidence": "low", "hint": "No testing patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    style_map = {
+        "jest": "describe/it",
+        "vitest": "describe/it",
+        "pytest": "def test_",
+        "mocha": "describe/it",
+        "playwright": "@test/page",
+    }
+
+    hints = {
+        "jest": "Use describe/it blocks with expect() assertions",
+        "vitest": "Use describe/it blocks with expect() from vitest",
+        "pytest": "Use test_ function prefix with assert statements",
+        "mocha": "Use describe/it blocks with beforeEach for setup",
+        "playwright": "Use @test decorators with page.locator() for E2E",
+    }
+
+    return {
+        "framework": best,
+        "style": style_map.get(best),
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} testing patterns"),
+    }
