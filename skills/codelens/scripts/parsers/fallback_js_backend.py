@@ -37,6 +37,22 @@ def parse_js_backend_fallback(content, file_path):
                               "line": line_num, "async": 'async' in line[:m.start()]})
                 fn_map[name] = node_id
 
+        # class declarations: class ClassName, class ClassName extends ..., class ClassName implements ...
+        for m in re.finditer(r'\bclass\s+([a-zA-Z_]\w*)\s', line):
+            name = m.group(1)
+            if name not in skip_names:
+                node_id = f"{file_path}:{line_num}"
+                is_component = name[0].isupper()
+                node_data = {"id": node_id, "fn": name, "file": file_path,
+                             "line": line_num, "async": False, "node_type": "class",
+                             "component": is_component}
+                # Extract heritage info (extends/implements)
+                heritage_match = re.search(r'\bclass\s+' + re.escape(name) + r'\s+(extends|implements)\s+([^{]+)', line)
+                if heritage_match:
+                    node_data["heritage"] = heritage_match.group(2).strip()
+                nodes.append(node_data)
+                fn_map[name] = node_id
+
         # const/let/var name = ( => arrow function
         for m in re.finditer(r'\b(?:const|let|var)\s+([a-zA-Z_]\w*)\s*=\s*(?:async\s*)?\(', line):
             name = m.group(1)

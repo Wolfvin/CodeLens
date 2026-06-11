@@ -2,14 +2,10 @@
 Search Engine for CodeLens
 Fast regex-based code search across the workspace (ripgrep-style).
 No tree-sitter dependency — pure Python re module for maximum compatibility.
-
-v5.8: Refactored search_workspace from 11 params to SearchConfig dataclass
-for better readability, maintainability, and forward-compatibility.
 """
 
 import os
 import re
-from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Set
 from utils import DEFAULT_IGNORE_DIRS
 
@@ -40,29 +36,6 @@ DEFAULT_IGNORE_FILES = {
 }
 
 
-@dataclass
-class SearchConfig:
-    """Configuration for workspace search — replaces 11 individual parameters.
-
-    Why a dataclass? The old search_workspace() had 11 positional parameters,
-    which is a code smell (many_params). Grouping them into a dataclass:
-    - Makes call sites self-documenting: SearchConfig(pattern='foo', case_sensitive=False)
-    - Allows easy extension without breaking existing callers
-    - Enables default values without long parameter lists
-    """
-    workspace: str = ""
-    pattern: str = ""
-    file_type: Optional[str] = None
-    file_filter: Optional[str] = None
-    max_results: int = 200
-    context_lines: int = 0
-    case_sensitive: bool = True
-    whole_word: bool = False
-    include_pattern: Optional[str] = None
-    exclude_pattern: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-
-
 def search_workspace(
     workspace: str,
     pattern: str,
@@ -78,9 +51,6 @@ def search_workspace(
 ) -> Dict[str, Any]:
     """
     Search for a regex pattern across all source files in the workspace.
-
-    Accepts individual parameters for backward compatibility with CLI commands.
-    Internally delegates to search_with_config() which uses SearchConfig dataclass.
 
     Args:
         workspace: Absolute path to workspace root
@@ -98,38 +68,14 @@ def search_workspace(
     Returns:
         Dict with matches, stats, and any errors
     """
-    cfg = SearchConfig(
-        workspace=workspace,
-        pattern=pattern,
-        file_type=file_type,
-        file_filter=file_filter,
-        max_results=max_results,
-        context_lines=context_lines,
-        case_sensitive=case_sensitive,
-        whole_word=whole_word,
-        include_pattern=include_pattern,
-        exclude_pattern=exclude_pattern,
-        config=config,
-    )
-    return search_with_config(cfg)
-
-
-def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
-    """
-    Search for a regex pattern across all source files using SearchConfig.
-
-    This is the canonical implementation. The legacy search_workspace() function
-    delegates here. New code should prefer calling this directly with a SearchConfig.
-    """
-    workspace = os.path.abspath(cfg.workspace)
+    workspace = os.path.abspath(workspace)
 
     # Compile the regex
     try:
-        flags = 0 if cfg.case_sensitive else re.IGNORECASE
-        search_pattern = cfg.pattern
-        if cfg.whole_word:
-            search_pattern = r'\b' + search_pattern + r'\b'
-        regex = re.compile(search_pattern, flags)
+        flags = 0 if case_sensitive else re.IGNORECASE
+        if whole_word:
+            pattern = r'\b' + pattern + r'\b'
+        regex = re.compile(pattern, flags)
     except re.error as e:
         return {
             "status": "error",
@@ -139,22 +85,22 @@ def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
         }
 
     # Determine which extensions to search
-    if cfg.file_type and cfg.file_type in TYPE_EXTENSIONS:
-        target_extensions = TYPE_EXTENSIONS[cfg.file_type]
-    elif cfg.file_type == "all" or cfg.file_type is None:
+    if file_type and file_type in TYPE_EXTENSIONS:
+        target_extensions = TYPE_EXTENSIONS[file_type]
+    elif file_type == "all" or file_type is None:
         # All known source extensions
         target_extensions = set()
         for exts in TYPE_EXTENSIONS.values():
             target_extensions.update(exts)
     else:
         # Treat file_type as a custom extension
-        target_extensions = {cfg.file_type if cfg.file_type.startswith('.') else f'.{cfg.file_type}'}
+        target_extensions = {file_type if file_type.startswith('.') else f'.{file_type}'}
 
     # Build ignore set from config
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     ignore_files = set(DEFAULT_IGNORE_FILES)
-    if cfg.config:
-        for pattern_str in cfg.config.get("ignore", []):
+    if config:
+        for pattern_str in config.get("ignore", []):
             clean = pattern_str.rstrip("/")
             ignore_dirs.add(clean)
             ignore_files.add(clean)
@@ -197,16 +143,16 @@ def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
                     continue
 
             # File path filter
-            if cfg.file_filter and cfg.file_filter not in rel_path:
+            if file_filter and file_filter not in rel_path:
                 continue
 
             # Include/exclude patterns
-            if cfg.include_pattern:
-                inc_regex = re.compile(cfg.include_pattern)
+            if include_pattern:
+                inc_regex = re.compile(include_pattern)
                 if not inc_regex.search(rel_path):
                     continue
-            if cfg.exclude_pattern:
-                exc_regex = re.compile(cfg.exclude_pattern)
+            if exclude_pattern:
+                exc_regex = re.compile(exclude_pattern)
                 if exc_regex.search(rel_path):
                     continue
 
@@ -238,23 +184,23 @@ def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
                         }
 
                         # Add context lines
-                        if cfg.context_lines > 0:
+                        if context_lines > 0:
                             before = []
-                            for i in range(max(0, line_num - 1 - cfg.context_lines), line_num - 1):
+                            for i in range(max(0, line_num - 1 - context_lines), line_num - 1):
                                 before.append(lines[i].rstrip('\n\r').strip())
                             result_entry["before"] = before
 
                             after = []
-                            for i in range(line_num, min(len(lines), line_num + cfg.context_lines)):
+                            for i in range(line_num, min(len(lines), line_num + context_lines)):
                                 after.append(lines[i].rstrip('\n\r').strip())
                             result_entry["after"] = after
 
                         matches.append(result_entry)
 
-                        if len(matches) >= cfg.max_results:
+                        if len(matches) >= max_results:
                             return {
                                 "status": "ok",
-                                "pattern": cfg.pattern,
+                                "pattern": pattern,
                                 "workspace": workspace,
                                 "matches": matches,
                                 "stats": {
@@ -271,7 +217,7 @@ def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
 
     return {
         "status": "ok",
-        "pattern": cfg.pattern,
+        "pattern": pattern,
         "workspace": workspace,
         "matches": matches,
         "stats": {
