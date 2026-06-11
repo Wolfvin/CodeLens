@@ -34,23 +34,31 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--full", action="store_true",
+                        help="Force full rescan (ignore existing registry)")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
+    full = getattr(args, 'full', False)
     incremental = getattr(args, 'incremental', False)
+    # --full forces a complete rescan, ignoring any existing registry.
+    # This overrides --incremental if both are somehow specified.
+    if full:
+        incremental = False
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, force_full=full)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    If force_full=True, force a full rescan even if a registry exists.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -62,6 +70,17 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         recommended = get_recommended_config(workspace)
         config.update(recommended)
         save_config(workspace, config)
+
+    # If force_full, clear existing registry and mtimes cache to ensure a clean scan
+    if force_full:
+        codelens_dir = os.path.join(workspace, '.codelens')
+        for fname in ['backend.json', 'frontend.json', 'mtimes_cache.json']:
+            fpath = os.path.join(codelens_dir, fname)
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
 
     # Discover files
     files = discover_files(workspace, config)

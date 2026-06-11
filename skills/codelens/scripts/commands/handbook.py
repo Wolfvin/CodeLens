@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, Any
 
-from registry import load_config, ensure_codelens_dir
+from registry import load_config, ensure_codelens_dir, load_backend_registry, load_frontend_registry
 from framework_detect import detect_frameworks
 from smell_engine import detect_smells
 from entrypoints_engine import map_entrypoints
@@ -202,6 +202,38 @@ def cmd_handbook(workspace: str, quick_mode: bool = False) -> Dict[str, Any]:
     except Exception:
         logger.warning("Summary computation failed", exc_info=True)
         summary = {}
+
+    # Fallback: if summary shows zero files, the outline or scan_result was stale/empty.
+    # Reload from the persisted registries instead.
+    if summary.get("files", 0) == 0:
+        try:
+            backend = load_backend_registry(workspace)
+            frontend = load_frontend_registry(workspace)
+            be_nodes = len(backend.get("nodes", [])) if isinstance(backend.get("nodes"), list) else backend.get("nodes", 0)
+            be_edges = len(backend.get("edges", [])) if isinstance(backend.get("edges"), list) else backend.get("edges", 0)
+            fe_classes = len(frontend.get("classes", [])) if isinstance(frontend.get("classes"), list) else frontend.get("classes", 0)
+            fe_ids = len(frontend.get("ids", [])) if isinstance(frontend.get("ids"), list) else frontend.get("ids", 0)
+            summary.update({
+                "backend_nodes": be_nodes,
+                "backend_edges": be_edges,
+                "frontend_classes": fe_classes,
+                "frontend_ids": fe_ids,
+            })
+            # Count source files from the workspace directly if outline gave zero
+            if summary.get("files", 0) == 0:
+                file_count = 0
+                for root, dirs, filenames in os.walk(workspace):
+                    dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                    if '.codelens' in root:
+                        dirs.clear()
+                        continue
+                    for fn in filenames:
+                        ext = os.path.splitext(fn)[1].lower()
+                        if ext in {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rs', '.vue', '.svelte', '.css', '.html'}:
+                            file_count += 1
+                summary["files"] = file_count
+        except Exception:
+            logger.warning("Summary fallback from registries failed", exc_info=True)
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)

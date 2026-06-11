@@ -75,7 +75,7 @@ FRAMEWORK_SIGNATURES = {
     "flask": {
         "packages": ["flask"],
         "pip_packages": ["flask"],
-        "config_files": ["app.py", "wsgi.py"],
+        "config_files": ["wsgi.py"],
         "indicators": []
     },
     "django": {
@@ -421,6 +421,51 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     except IOError:
                         pass
             if detected["has_tailwind"]:
+                break
+
+    # 7. Source-level Python framework detection (Flask / FastAPI / Django)
+    #    Some frameworks (especially Flask) can be falsely detected via generic
+    #    config file names like "app.py".  To avoid false positives, we verify
+    #    by checking for actual import statements in Python source files.
+    python_framework_imports = {
+        "flask": [r'(?:from\s+flask\s+import|import\s+flask\b)'],
+        "fastapi": [r'(?:from\s+fastapi\s+import|import\s+fastapi\b)'],
+        "django": [r'(?:from\s+django\s+import|import\s+django\b)'],
+    }
+
+    for fw_name, patterns in python_framework_imports.items():
+        if fw_name in detected["frameworks"]:
+            continue  # Already detected via deps/config — that's sufficient
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            found = False
+            for f in files:
+                if not f.endswith('.py'):
+                    continue
+                try:
+                    fpath = os.path.join(root, f)
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                        content = fh.read(8192)  # Read first 8KB
+                    for pattern in patterns:
+                        if re.search(pattern, content):
+                            if fw_name not in detected["frameworks"]:
+                                detected["frameworks"].append(fw_name)
+                            if fw_name == "flask":
+                                detected["has_flask"] = True
+                            elif fw_name == "fastapi":
+                                detected["has_fastapi"] = True
+                            elif fw_name == "django":
+                                detected["has_django"] = True
+                            found = True
+                            break
+                    if found:
+                        break
+                except IOError:
+                    pass
+            if found:
                 break
 
     return detected

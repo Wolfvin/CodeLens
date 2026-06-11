@@ -217,6 +217,68 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── Binary Artifact Scanning ────────────────────────────────
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/compiled artifacts."""
+    workspace = os.path.abspath(workspace)
+    artifacts = []
+    total_size = 0
+    binary_extensions = {
+        '.so', '.dll', '.dylib', '.o', '.obj', '.a', '.lib',
+        '.exe', '.app', '.dmg', '.deb', '.rpm',
+        '.wasm', '.pyc', '.pyo', '.class', '.jar',
+        '.node', '.swiftmodule',
+    }
+
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in binary_extensions:
+                fpath = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(fpath)
+                    total_size += size
+                    rel = os.path.relpath(fpath, workspace)
+                    artifacts.append({
+                        "file": rel,
+                        "type": ext[1:],  # Remove the dot
+                        "size_bytes": size,
+                        "size_human": _human_size(size),
+                    })
+                except OSError:
+                    pass
+
+    by_type = {}
+    for a in artifacts:
+        t = a["type"]
+        by_type[t] = by_type.get(t, 0) + 1
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "total_artifacts": len(artifacts),
+        "total_size_bytes": total_size,
+        "total_size_human": _human_size(total_size),
+        "by_type": by_type,
+        "artifacts": artifacts[:200],  # Cap at 200
+        "truncated": len(artifacts) > 200,
+        "recommendations": [
+            "Add binary file patterns to .gitignore to prevent committing build artifacts." if artifacts else "No binary artifacts found in the workspace.",
+        ],
+    }
+
+
+def _human_size(size: int) -> str:
+    """Convert bytes to human-readable size."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"

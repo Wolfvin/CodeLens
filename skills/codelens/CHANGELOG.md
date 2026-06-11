@@ -5,6 +5,31 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] — 2026-06-12
+
+### Added
+
+- **Tauri IPC route detection in `api-map`**: Automatically detects `#[tauri::command]` annotated Rust functions as IPC routes. Also scans JS/TS files for `invoke("command_name")` calls and links them to Rust handlers. Routes appear with `method: "IPC"` and `type: "tauri_ipc"`.
+- **Indonesian colloquial triggers in `ask`**: Documented Indonesian phrases ("kok lama ya", "aneh nih", "bantu cek", "aman ga", etc.) now actually work in the `ask` command's keyword matching and pattern routing.
+- **`--full` flag for scan command**: Force full rescan even when a registry exists. Usage: `codelens scan --full`. Clears existing registry files before scanning.
+- **`scan_binary_artifacts()` utility**: New function in `utils.py` that scans workspaces for binary/compiled artifacts (`.so`, `.dll`, `.exe`, `.wasm`, `.pyc`, `.class`, etc.). Powers the `binary-scan` command.
+- **State-map deduplication**: Stores with the same `(name, framework)` key are now merged instead of appearing as duplicates. Additional definition sites are recorded in `also_defined_in`.
+
+### Fixed
+
+- **CRITICAL: `ask` command crash with NameError**: `search_symbols` was referenced in the fallback block but never imported, causing `NameError: name 'search_symbols' is not defined` when context lookup failed. Now uses a lazy import.
+- **CRITICAL: `binary-scan` command broken**: Referenced `scan_binary_artifacts` from `utils.py` but the function didn't exist. Added the implementation.
+- **HIGH: Handbook `quick_reference` all zeros**: When `compute_summary()` returned empty data, the handbook showed all zeros. Now falls back to loading registry files directly and counting source files from disk.
+- **MEDIUM: Flask false positive in framework detection**: Removed generic `app.py` from Flask config files. Added source-level verification that checks for actual `from flask import` statements before declaring Flask detected.
+- **MEDIUM: State-map duplicate entries**: Same store appearing multiple times across files. Now deduplicates by `(name, framework)` key, merging slices/actions/consumers.
+
+### Tested Against
+
+Real-world testing on 3 diverse open-source repositories:
+- **Tauri** (tauri-apps/tauri) — Rust + TypeScript monorepo with Svelte, Tauri IPC (4150 nodes, 99635 edges)
+- **FastAPI** (fastapi/fastapi) — Python + TypeScript hybrid (4649 nodes, 11588 edges)
+- **Nuxt** (nuxt/nuxt) — Vue SFC monorepo (1284 nodes, 18987 edges)
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

@@ -186,6 +186,12 @@ def map_state(
             stores.extend(svelte_stores)
             state_flow.extend(svelte_flow)
 
+    # ─── Deduplicate stores ────────────────────────────────────
+    # When the same store name appears in multiple files (e.g. a Python
+    # constant like SECRET_KEY defined in several modules), merge the
+    # entries instead of creating duplicates.
+    stores = _deduplicate_stores(stores)
+
     # ─── Post-processing: Resolve consumers ──────────────────
 
     # For each store, find files that import it
@@ -252,6 +258,74 @@ def map_state(
         "state_flow": state_flow[:200],  # Cap flow entries
         "recommendations": recommendations,
     }
+
+
+# ─── Deduplication ─────────────────────────────────────────────
+
+def _deduplicate_stores(stores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate stores that share the same name and framework.
+
+    When the same logical state (e.g. a Python constant like SECRET_KEY)
+    is defined in multiple files, the per-file extraction creates separate
+    store entries.  This function merges them by keeping the first
+    occurrence as the primary and recording additional definition sites in
+    ``also_defined_in``.
+
+    Args:
+        stores: Raw list of store dicts (may contain duplicates).
+
+    Returns:
+        Deduplicated list of store dicts.
+    """
+    # Key: (name, framework)  →  index in the output list
+    seen: Dict[tuple, int] = {}
+    deduped: List[Dict[str, Any]] = []
+
+    for store in stores:
+        name = store.get("name", "")
+        framework = store.get("framework", "")
+        key = (name, framework)
+
+        if key not in seen:
+            seen[key] = len(deduped)
+            deduped.append(store)
+        else:
+            # Merge into the existing entry
+            existing = deduped[seen[key]]
+            existing_file = existing.get("defined_in", "")
+            new_file = store.get("defined_in", "")
+
+            # Add the new definition site
+            if new_file and new_file != existing_file:
+                also = existing.setdefault("also_defined_in", [])
+                if new_file not in also:
+                    also.append(new_file)
+
+            # Merge slices
+            for sl in store.get("slices", []):
+                existing_slices = existing.setdefault("slices", [])
+                sl_name = sl.get("name", "")
+                if sl_name and not any(s.get("name") == sl_name for s in existing_slices):
+                    existing_slices.append(sl)
+
+            # Merge actions
+            for act in store.get("actions", []):
+                existing_actions = existing.setdefault("actions", [])
+                act_name = act.get("name", "") if isinstance(act, dict) else str(act)
+                if act_name and not any(
+                    (a.get("name", "") if isinstance(a, dict) else str(a)) == act_name
+                    for a in existing_actions
+                ):
+                    existing_actions.append(act)
+
+            # Merge consumers
+            for con in store.get("consumers", []):
+                existing_consumers = existing.setdefault("consumers", [])
+                con_file = con.get("file", "")
+                if con_file and not any(c.get("file") == con_file for c in existing_consumers):
+                    existing_consumers.append(con)
+
+    return deduped
 
 
 # ─── Redux ─────────────────────────────────────────────────────
