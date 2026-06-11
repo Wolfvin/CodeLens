@@ -35,15 +35,18 @@ def add_args(parser):
                         help="Max callers/callees to return (default: 20)")
     parser.add_argument("--all", action="store_true",
                         help="Return all callers/callees (no limit)")
+    parser.add_argument("--fuzzy", action="store_true",
+                        help="Enable fuzzy/substring matching (case-insensitive)")
 
 
 def execute(args, workspace):
     limit = None if getattr(args, 'all', False) else getattr(args, 'limit', 20)
-    return cmd_query(args.name, workspace, args.domain, args.file, limit=limit)
+    fuzzy = getattr(args, 'fuzzy', False)
+    return cmd_query(args.name, workspace, args.domain, args.file, limit=limit, fuzzy=fuzzy)
 
 
 def cmd_query(query_name: str, workspace: str, domain: str = None,
-               file_filter: str = None, limit: int = None) -> Dict[str, Any]:
+               file_filter: str = None, limit: int = None, fuzzy: bool = False) -> Dict[str, Any]:
     """Query a specific class/id/function from the registry.
 
     Args:
@@ -52,6 +55,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         domain: 'frontend' or 'backend' or None (both)
         file_filter: Filter by file path substring
         limit: Max callers/callees to return (None=default=20, 0=no limit)
+        fuzzy: Enable fuzzy/substring matching (case-insensitive) for backend functions
     """
     workspace = os.path.abspath(workspace)
     if limit is None:
@@ -142,6 +146,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     if domain in (None, "backend"):
         backend = load_backend_registry(workspace)
 
+        # Exact match search
         for node in backend.get("nodes", []):
             if node["fn"] == query_name:
                 if file_filter and file_filter not in node.get("file", ""):
@@ -198,6 +203,39 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     result["node"]["duplicate_define"] = True
 
                 return result
+
+        # Fuzzy/substring match in backend (always try when exact match fails)
+        query_lower = query_name.lower()
+        fuzzy_matches = []
+        for node in backend.get("nodes", []):
+            fn_lower = node.get("fn", "").lower()
+            # Case-insensitive contains match
+            if query_lower in fn_lower and fn_lower != query_lower:
+                if file_filter and file_filter not in node.get("file", ""):
+                    continue
+                fuzzy_matches.append({
+                    "id": node["id"],
+                    "fn": node["fn"],
+                    "file": node.get("file", ""),
+                    "line": node.get("line", 0),
+                    "status": node.get("status", "active"),
+                    "async": node.get("async", False),
+                    "ref_count": node.get("ref_count", 0),
+                })
+
+        if fuzzy_matches:
+            # Return fuzzy matches as a list (not a single result)
+            return {
+                "found": True,
+                "type": "function_fuzzy",
+                "domain": "backend",
+                "query": query_name,
+                "match_type": "fuzzy",
+                "matches": fuzzy_matches[:limit] if limit else fuzzy_matches,
+                "total_matches": len(fuzzy_matches),
+                "action": "LIST_FIRST",
+                "action_reason": f"No exact match for '{query_name}', but {len(fuzzy_matches)} similar function(s) found. Use exact name for full details."
+            }
 
     return {
         "status": "ok",
