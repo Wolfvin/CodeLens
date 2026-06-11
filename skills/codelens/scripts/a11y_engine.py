@@ -226,6 +226,10 @@ def audit_accessibility(
             if ext not in TEMPLATE_EXTENSIONS:
                 continue
 
+            # Skip TypeScript declaration files
+            if filename.endswith('.d.ts'):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 

@@ -493,18 +493,57 @@ def _md_dead_code(data: Dict, lines: list) -> None:
 
 def _md_circular(data: Dict, lines: list) -> None:
     """Markdown for circular command."""
-    chains = data.get("chains", [])
+    cycles = data.get("cycles", {})
+    total = data.get("total_cycles", 0)
     lines.append("## Circular Dependencies")
     lines.append("")
-    lines.append(f"**Found:** {len(chains)} circular chain(s)")
+    lines.append(f"**Found:** {total} circular chain(s)")
     lines.append("")
-    for chain in chains[:10]:
-        path = chain.get("path", chain) if isinstance(chain, dict) else chain
-        if isinstance(path, list):
-            lines.append(f"- {' → '.join(str(p) for p in path)}")
-        else:
-            lines.append(f"- {path}")
-    lines.append("")
+
+    # Summary per category
+    summary = data.get("summary", {})
+    if summary:
+        parts = []
+        fc = summary.get("function_call_cycles", 0)
+        if fc:
+            parts.append(f"{fc} function call(s)")
+        ic = summary.get("import_chain_cycles", 0)
+        if ic:
+            parts.append(f"{ic} import chain(s)")
+        cc = summary.get("css_import_cycles", 0)
+        if cc:
+            parts.append(f"{cc} CSS import(s)")
+        if parts:
+            lines.append("**Breakdown:** " + " | ".join(parts))
+            lines.append("")
+
+    # Show cycles from each category (up to 10 total)
+    shown = 0
+    max_show = 10
+    for category in ("function_calls", "import_chains", "css_imports"):
+        cat_cycles = cycles.get(category, [])
+        if not cat_cycles:
+            continue
+        lines.append(f"### {category.replace('_', ' ').title()}")
+        lines.append("")
+        for cycle in cat_cycles:
+            if shown >= max_show:
+                break
+            cycle_str = cycle.get("cycle", "")
+            severity = cycle.get("severity", "")
+            msg = cycle.get("message", cycle_str)
+            if severity:
+                lines.append(f"- [{severity}] {msg}")
+            else:
+                lines.append(f"- {msg}")
+            shown += 1
+        if shown >= max_show:
+            break
+        lines.append("")
+
+    if total > max_show:
+        lines.append(f"_... and {total - max_show} more cycle(s)_")
+        lines.append("")
 
 
 def _md_handbook(data: Dict, lines: list) -> None:
@@ -707,7 +746,8 @@ def _md_symbols(data: Dict, lines: list) -> None:
             file = r.get("file", "")
             line = r.get("line", "")
             status = r.get("status", "")
-            lines.append(f"- `{name}` ({rtype}) — `{file}:{line}` [{status}]")
+            loc = r.get("location", f"{file}:{line}" if file or line else "")
+            lines.append(f"- `{name}` ({rtype}) — `{loc}` [{status}]")
         if len(results) > 20:
             lines.append(f"- ... and {len(results) - 20} more")
     lines.append("")
