@@ -161,63 +161,74 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["electron-builder.yml", "electron-builder.json"],
         "indicators": []
     },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan"],
+        "indicators": ["blade.php"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle", "symfony/symfony"],
+        "config_files": ["symfony.lock"],
+        "indicators": []
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php", "wp-settings.php"],
+        "indicators": []
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core"],
+        "config_files": ["drush.services.yml"],
+        "indicators": []
+    },
+    "codeigniter": {
+        "packages": [],
+        "composer_packages": ["codeigniter4/framework", "codeigniter/framework"],
+        "config_files": [],
+        "indicators": []
+    },
     # Go frameworks
     "gin": {
+        "packages": [],
         "go_modules": ["github.com/gin-gonic/gin"],
         "config_files": [],
         "indicators": []
     },
     "echo": {
+        "packages": [],
         "go_modules": ["github.com/labstack/echo"],
         "config_files": [],
         "indicators": []
     },
     "fiber": {
+        "packages": [],
         "go_modules": ["github.com/gofiber/fiber"],
         "config_files": [],
         "indicators": []
     },
     "chi": {
+        "packages": [],
         "go_modules": ["github.com/go-chi/chi"],
         "config_files": [],
         "indicators": []
     },
-    "cobra": {
-        "go_modules": ["github.com/spf13/cobra"],
+    "mux": {
+        "packages": [],
+        "go_modules": ["github.com/gorilla/mux"],
         "config_files": [],
         "indicators": []
     },
-    # PHP frameworks
-    "laravel": {
-        "composer_packages": ["laravel/framework", "laravel/laravel"],
-        "config_files": ["artisan", "bootstrap/app.php"],
-        "indicators": []
-    },
-    "symfony": {
-        "composer_packages": ["symfony/framework-bundle", "symfony/symfony"],
-        "config_files": ["symfony.lock", "config/bundles.php"],
-        "indicators": []
-    },
-    "flarum": {
-        "composer_packages": ["flarum/core", "flarum/framework"],
+    "beego": {
+        "packages": [],
+        "go_modules": ["github.com/beego/beego"],
         "config_files": [],
         "indicators": []
     },
-    "wordpress": {
-        "composer_packages": ["johnpbloch/wordpress"],
-        "config_files": ["wp-config.php", "wp-config-sample.php"],
-        "indicators": []
-    },
-    "drupal": {
-        "composer_packages": ["drupal/core", "drupal/drupal"],
-        "config_files": [],
-        "indicators": []
-    },
-    "slim": {
-        "composer_packages": ["slim/slim"],
-        "config_files": [],
-        "indicators": []
-    }
 }
 
 
@@ -274,8 +285,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_rust_backend": False,
+        "has_laravel": False,
         "has_go_backend": False,
-        "has_php_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -300,6 +311,50 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
+
+    # 1b. Better module system detection — check multiple signals
+    if detected["module_system"] is None or detected["module_system"] == "cjs":
+        # Check if any sub-package.json has "type": "module"
+        for pkg_path in pkg_files:
+            try:
+                with open(pkg_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                if pkg.get("type") == "module":
+                    detected["module_system"] = "esm"
+                    break
+            except (json.JSONDecodeError, IOError):
+                pass
+        # Check for .mjs files as ESM indicator
+        if detected["module_system"] != "esm":
+            mjs_count = 0
+            cjs_count = 0
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for fn in filenames:
+                    if fn.endswith('.mjs'):
+                        mjs_count += 1
+                    elif fn.endswith('.cjs'):
+                        cjs_count += 1
+                if mjs_count + cjs_count > 20:
+                    break
+            if mjs_count > cjs_count:
+                detected["module_system"] = "esm"
+            elif mjs_count > 0 and cjs_count == 0:
+                detected["module_system"] = "esm"
+        # Check for pnpm-workspace.yaml (monorepos often use ESM)
+        if detected["module_system"] == "cjs" and os.path.isfile(os.path.join(workspace, "pnpm-workspace.yaml")):
+            # Check if .mjs files exist
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                if any(fn.endswith('.mjs') for fn in filenames):
+                    detected["module_system"] = "esm"
+                    break
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -452,6 +507,21 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 cargo_content = f.read()
+            # Parse [package] section — extract package name (for repos that ARE the framework)
+            in_package = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[package]':
+                    in_package = True
+                    continue
+                if stripped.startswith('[') and in_package:
+                    in_package = False
+                    continue
+                if in_package and stripped.startswith('name'):
+                    pkg_name_match = re.match(r'name\s*=\s*["\']?([^"\'\s]+)', stripped)
+                    if pkg_name_match:
+                        pkg_name = pkg_name_match.group(1).lower()
+                        cargo_deps.add(pkg_name)
             # Parse [dependencies] section — extract crate names
             in_deps = False
             for line in cargo_content.split('\n'):
@@ -465,6 +535,41 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     crate_name = stripped.split('=')[0].strip().lower()
                     if crate_name:
                         cargo_deps.add(crate_name)
+            # Also check [workspace.dependencies] for monorepos
+            in_workspace_deps = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[workspace.dependencies]':
+                    in_workspace_deps = True
+                    continue
+                if stripped.startswith('[') and in_workspace_deps:
+                    break
+                if in_workspace_deps and '=' in stripped:
+                    crate_name = stripped.split('=')[0].strip().lower()
+                    if crate_name:
+                        cargo_deps.add(crate_name)
+            # Parse [workspace] section — extract members (for workspace repos)
+            in_workspace = False
+            in_members = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[workspace]':
+                    in_workspace = True
+                    continue
+                if stripped.startswith('[') and in_workspace:
+                    in_workspace = False
+                    continue
+                if in_workspace:
+                    # Parse members = [...] list
+                    if stripped.startswith('members'):
+                        in_members = True
+                    if in_members:
+                        # Extract member names (may span multiple lines)
+                        for member_match in re.finditer(r'"([^"]+)"', stripped):
+                            member_name = member_match.group(1).lower()
+                            cargo_deps.add(member_name)
+                        if ']' in stripped:
+                            in_members = False
         except IOError:
             logger.debug("Failed to parse Cargo.toml", exc_info=True)
 
@@ -486,35 +591,77 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if crate in cargo_deps and fw_name not in detected["frameworks"]:
                 detected["frameworks"].append(fw_name)
 
-    # 4. Parse go.mod for Go framework detection
+    # 4. Check composer.json for PHP framework dependencies
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            # Extract from "require" and "require-dev"
+            for section in ("require", "require-dev"):
+                deps = composer_data.get(section, {})
+                for pkg_name in deps:
+                    composer_deps.add(pkg_name.lower())
+        except (json.JSONDecodeError, IOError):
+            _logger.debug("Failed to parse composer.json", exc_info=True)
+
+    if composer_deps:
+        # Check PHP framework signatures against composer deps
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name.lower() in composer_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    break
+
+    # 5. Check go.mod for Go framework dependencies
     go_deps = set()
+    go_module = ""
     go_mod_path = os.path.join(workspace, "go.mod")
     if os.path.exists(go_mod_path):
+        detected["has_go_backend"] = True
         try:
             with open(go_mod_path, 'r', encoding='utf-8') as f:
                 go_mod_content = f.read()
-            # Parse require() block — extract module paths
+            # Parse module line: module github.com/gin-gonic/gin
+            module_match = re.search(r'^module\s+(\S+)', go_mod_content, re.MULTILINE)
+            if module_match:
+                go_module = module_match.group(1).lower()
+                go_deps.add(go_module)
+                # Also add just the package name (last segment)
+                parts = go_module.split('/')
+                if len(parts) >= 3:
+                    go_deps.add(parts[-1])
+            # Parse require block: require ( ... ) or require pkg vN
             in_require = False
             for line in go_mod_content.split('\n'):
                 stripped = line.strip()
-                if stripped.startswith('require (') or stripped.startswith('require('):
+                if stripped.startswith('require ('):
                     in_require = True
                     continue
                 if stripped == ')' and in_require:
                     in_require = False
                     continue
                 if in_require or stripped.startswith('require '):
-                    # Extract module path (first token before version)
-                    parts = stripped.split()
-                    if parts:
-                        mod_path = parts[0].lower()
+                    # Extract module path: "github.com/gin-gonic/gin v1.9.1"
+                    match = re.match(r'(?:require\s+)?(\S+)', stripped)
+                    if match:
+                        mod_path = match.group(1).lower()
                         go_deps.add(mod_path)
+                        # Also add just the package name for matching
+                        parts = mod_path.split('/')
+                        if len(parts) >= 3:
+                            go_deps.add(parts[-1])  # e.g., "gin"
         except IOError:
             _logger.debug("Failed to parse go.mod", exc_info=True)
 
     if go_deps:
-        detected["has_go_backend"] = True
-        # Detect Go frameworks from go.mod dependencies
+        # Check Go framework signatures against go.mod deps
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
             if fw_name in detected["frameworks"]:
                 continue
@@ -524,49 +671,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append(fw_name)
                     break
 
-    # 5. Parse composer.json for PHP framework detection
-    composer_path = os.path.join(workspace, "composer.json")
-    composer_deps = set()
-    # Also check subdirectory composer.json files for monorepos
-    for cp in [composer_path] + _find_subdir_composer_jsons(workspace):
-        if not os.path.exists(cp):
-            continue
-        try:
-            with open(cp, 'r', encoding='utf-8') as f:
-                composer_data = json.load(f)
-            composer_deps.update(composer_data.get("require", {}).keys())
-            composer_deps.update(composer_data.get("require-dev", {}).keys())
-        except (json.JSONDecodeError, IOError):
-            _logger.debug(f"Failed to parse {cp}", exc_info=True)
-
-    if composer_deps:
-        detected["has_php_backend"] = True
-        # Detect PHP frameworks from composer dependencies
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            composer_pkgs = sig.get("composer_packages", [])
-            for pkg_name in composer_pkgs:
-                if pkg_name.lower() in {d.lower() for d in composer_deps}:
-                    detected["frameworks"].append(fw_name)
-                    break
-
-        # Also check PHP config file patterns
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            for cfg_file in sig.get("config_files", []):
-                if os.path.exists(os.path.join(workspace, cfg_file)):
-                    detected["frameworks"].append(fw_name)
-                    break
-
     # 6. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
-    # NOTE: Skip test/benchmark/vendor directories to avoid false positives
-    _TEST_DIRS = frozenset({
-        'tests', 'test', '__tests__', 'testdata', 'test_data',
-        'benchmarks', 'benchmark', 'fixture', 'fixtures',
-        'examples', 'vendor', 'samples',
-    })
     need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
     if need_file_scan:
         for root, dirs, files in os.walk(workspace):
@@ -578,13 +683,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     skip = True
                     break
             if skip:
-                continue
-
-            # Skip test/benchmark directories for framework detection
-            # to avoid false positives (e.g., .vue test fixtures in a Rust project)
-            rel_root = os.path.relpath(root, workspace).replace('\\', '/')
-            path_parts = rel_root.split('/')
-            if any(part in _TEST_DIRS for part in path_parts if part != '.'):
                 continue
 
             # Check Vue/Svelte file patterns
@@ -621,24 +719,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     return detected
-
-
-def _find_subdir_composer_jsons(workspace: str, max_depth: int = 2) -> List[str]:
-    """Find composer.json files in subdirectories for PHP monorepos."""
-    results = []
-    for subdir in ('packages', 'extensions', 'modules', 'plugins'):
-        subdir_path = os.path.join(workspace, subdir)
-        if not os.path.isdir(subdir_path):
-            continue
-        try:
-            for entry in os.listdir(subdir_path):
-                entry_path = os.path.join(subdir_path, entry)
-                composer_path = os.path.join(entry_path, "composer.json")
-                if os.path.isfile(composer_path):
-                    results.append(composer_path)
-        except OSError:
-            pass
-    return results
 
 
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
@@ -699,26 +779,16 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         config["frontend_paths"].extend(["src/", "www/"])
         config["backend_paths"].extend(["android/", "ios/"])
 
-    # Go project paths
+    # Laravel-specific paths
+    if fw.get("has_laravel"):
+        config["frontend_paths"].extend(["resources/views/", "resources/js/", "resources/css/", "public/"])
+        config["backend_paths"].extend(["app/", "routes/", "app/Http/Controllers/", "app/Models/"])
+        config["ignore"].extend(["storage/", "bootstrap/cache/"])
+
+    # Go-specific paths
     if fw.get("has_go_backend"):
-        config["backend_paths"].extend(["cmd/", "internal/", "pkg/"])
-        # Remove generic src/ from backend if Go project uses cmd/ style
-        if any(os.path.isdir(os.path.join(workspace, d)) for d in ['cmd', 'internal']):
-            if "src/" in config["backend_paths"]:
-                config["backend_paths"].remove("src/")
-
-    # PHP project paths
-    if fw.get("has_php_backend"):
-        config["backend_paths"].extend(["app/", "src/", "routes/"])
-        config["frontend_paths"].extend(["resources/", "public/", "resources/views/"])
-
-    # Rust project (non-Tauri)
-    if fw.get("has_rust_backend") and not fw.get("has_tauri"):
-        config["backend_paths"].extend(["src/"])
-        # Pure Rust project — src/ is the primary source dir
-        if not fw.get("has_vue") and not fw.get("has_react") and not fw.get("has_svelte"):
-            # This is a pure Rust project, not a fullstack app
-            config["frontend_paths"] = []
+        config["backend_paths"].extend(["cmd/", "internal/", "pkg/", "api/"])
+        config["ignore"].extend(["vendor/"])
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

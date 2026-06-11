@@ -31,7 +31,7 @@ from utils import DEFAULT_IGNORE_DIRS, walk_source_files
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".php"
+    ".py", ".rs", ".vue", ".svelte", ".go", ".php"
 }
 
 # Performance caps
@@ -704,30 +704,14 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
             then_chain_depth = 0
 
     # Also detect nested callback patterns (function(err, result))
-    # Track indentation to avoid counting sequential (non-nested) callbacks.
-    # Sequential callbacks at the same indent level are NOT callback hell.
     callback_depth = 0
     cb_start_line = 0
-    cb_base_indent = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
-        current_indent = len(line) - len(stripped) if stripped else 0
-
-        # If we're tracking a callback chain and indentation returns to
-        # the base level, the previous callback has closed — reset depth.
-        if callback_depth > 0 and current_indent <= cb_base_indent and stripped:
-            callback_depth = 0
-
         if re.search(r'function\s*\(\s*(?:err|error)', stripped) or re.search(r'\(err(?:or)?\)', stripped):
             if callback_depth == 0:
                 cb_start_line = i + 1
-                cb_base_indent = current_indent
-            elif current_indent > cb_base_indent:
-                # Only increment if truly MORE nested
-                callback_depth += 1
-            # Same or less indent = sequential callback, don't increment
-            else:
-                callback_depth = 1  # Reset to this callback as new base
+            callback_depth += 1
 
         if callback_depth >= 3:
             smells.append({
@@ -864,125 +848,32 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
 
 
 def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Detect god objects (classes/modules with too many methods).
-
-    For JS/TS/TSX files, we use a structured approach:
-    - Parse class bodies separately from module-level code
-    - Only count actual method definitions (not function calls)
-    - For TSX, skip function components (they are not classes)
-    - For modules without classes, count top-level exported functions
-      as a "module god object" with a higher threshold
-    """
+    """Detect god objects (classes/modules with too many methods)."""
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        lines = content.split('\n')
+        # Count class methods
+        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
+        class_match = re.search(r'class\s+(\w+)', content)
 
-        # Find class declarations and their body boundaries
-        class_blocks = []  # (class_name, start_line, end_line)
-        brace_depth = 0
-        in_class = False
-        class_name = ""
-        class_start = -1
-
-        for i, line in enumerate(lines):
-            # Detect class declaration
-            class_match = re.match(r'.*?\bclass\s+(\w+)', line)
-            if class_match and not in_class:
-                class_name = class_match.group(1)
-                class_start = i
-                in_class = True
-                brace_depth = 0
-
-            if in_class:
-                brace_depth += line.count('{') - line.count('}')
-                if brace_depth <= 0 and i > class_start:
-                    class_blocks.append((class_name, class_start, i))
-                    in_class = False
-
-        # If we're still in a class at end of file, close it
-        if in_class:
-            class_blocks.append((class_name, class_start, len(lines) - 1))
-
-        # Analyze each class
-        for cls_name, start, end in class_blocks:
-            class_body = '\n'.join(lines[start:end + 1])
-
-            # Count actual method definitions (not function calls)
-            # Method definitions: inside a class body, a method looks like:
-            #   methodName(...) { ... }
-            #   async methodName(...) { ... }
-            #   private methodName(...) { ... }
-            #   static methodName(...) { ... }
-            #   get propertyName() { ... }
-            #   set propertyName(val) { ... }
-            # But NOT: function calls like obj.methodName(...)
-            method_defs = re.findall(
-                r'^\s*(?:(?:async|private|public|protected|static|abstract|override|readonly)\s+)*'
-                r'(?:get|set\s+)?'
-                r'(?:\#\w+|[a-zA-Z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*\{',
-                class_body,
-                re.MULTILINE
-            )
-            method_count = len(method_defs)
-
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": cls_name,
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{cls_name}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": cls_name,
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{cls_name}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                    "suggestion": "Consider extracting some methods into a separate class."
-                })
-
-        # Module-level god object detection (for files without classes)
-        # Count exported functions/consts as module members
-        if not class_blocks:
-            # Count top-level function declarations and const exports
-            top_level_fns = re.findall(
-                r'^\s*(?:export\s+)?(?:async\s+)?function\s+\w+',
-                content,
-                re.MULTILINE
-            )
-            top_level_consts = re.findall(
-                r'^\s*(?:export\s+)?const\s+\w+\s*=\s*(?:\([^)]*\)\s*=>|function)',
-                content,
-                re.MULTILINE
-            )
-            module_member_count = len(top_level_fns) + len(top_level_consts)
-
-            # Use a much higher threshold for modules (they naturally have more exports)
-            module_god_threshold = GOD_CLASS_METHODS_CRITICAL * 3  # 105
-            module_god_warning = GOD_CLASS_METHODS * 3  # 60
-
-            if module_member_count >= module_god_threshold:
-                smells.append({
-                    "file": rel_path,
-                    "class": "(module)",
-                    "method_count": module_member_count,
-                    "severity": "critical",
-                    "message": f"Module has {module_member_count} exported functions (critical threshold: {module_god_threshold})",
-                    "suggestion": "Split this module into smaller, focused modules."
-                })
-            elif module_member_count >= module_god_warning:
-                smells.append({
-                    "file": rel_path,
-                    "class": "(module)",
-                    "method_count": module_member_count,
-                    "severity": "warning",
-                    "message": f"Module has {module_member_count} exported functions (threshold: {module_god_warning})",
-                    "suggestion": "Consider splitting this module into smaller, focused modules."
-                })
+        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
+            smells.append({
+                "file": rel_path,
+                "class": class_match.group(1),
+                "method_count": method_count,
+                "severity": "critical",
+                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+            })
+        elif class_match and method_count >= GOD_CLASS_METHODS:
+            smells.append({
+                "file": rel_path,
+                "class": class_match.group(1),
+                "method_count": method_count,
+                "severity": "warning",
+                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
+                "suggestion": "Consider extracting some methods into a separate class."
+            })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping
