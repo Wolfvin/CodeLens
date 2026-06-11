@@ -5,11 +5,14 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { commandRunner } from '@/lib/commandRunner'
+import { commandRunner, sanitizeWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
-import { getCachedScan, setCachedScan } from '@/lib/scanCache'
+
+// ─── Health Result Cache ──────────────────────────────────────
+const healthCache = new Map<string, { data: any; timestamp: number }>()
+const CACHE_TTL_MS = 30_000 // 30 seconds
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,21 +27,24 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Try cache first to avoid re-scanning on every request
-    let scanOutput = getCachedScan(workspace)
-    if (!scanOutput) {
-      // Run the scan to get current graph state
-      scanOutput = await commandRunner.scan(workspace)
+    // Validate workspace path to prevent path traversal
+    const safeWorkspace = sanitizeWorkspace(workspace)
 
-      if (scanOutput.status === 'error') {
-        return NextResponse.json(
-          { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
-          { status: 500 }
-        )
-      }
+    // Check cache (include nodeId in cache key if present)
+    const cacheKey = nodeId ? `${safeWorkspace}:${nodeId}` : safeWorkspace
+    const cached = healthCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return NextResponse.json(cached.data)
+    }
 
-      // Cache the successful scan result
-      setCachedScan(workspace, scanOutput)
+    // Run the scan to get current graph state
+    const scanOutput = await commandRunner.scan(safeWorkspace)
+
+    if (scanOutput.status === 'error') {
+      return NextResponse.json(
+        { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
+        { status: 500 }
+      )
     }
 
     const graphEvent = normalizer.normalize('scan', scanOutput)
@@ -61,13 +67,18 @@ export async function GET(request: NextRequest) {
       impactRadius = computeImpactRadius(nodeId, nodes, edges)
     }
 
-    return NextResponse.json({
+    const responseData = {
       healthScore,
       coupling: coupling.slice(0, 50),
       heatmap: heatmap.slice(0, 100),
       impactRadius,
       timestamp: Date.now(),
-    })
+    }
+
+    // Cache the result
+    healthCache.set(cacheKey, { data: responseData, timestamp: Date.now() })
+
+    return NextResponse.json(responseData)
   } catch (err: any) {
     console.error('[/api/health] Error:', err)
     return NextResponse.json(

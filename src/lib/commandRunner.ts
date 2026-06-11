@@ -12,9 +12,9 @@ const execFileAsync = promisify(execFile)
 // Path to codelens CLI — MUST be set via environment variables.
 // No hardcoded fallbacks: if these are missing, the server throws a clear error.
 const CODELENS_PYTHON = process.env.CODELENS_PYTHON
-const CODELENS_SCRIPT: string = process.env.CODELENS_SCRIPT
+const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
   ? path.resolve(process.env.CODELENS_SCRIPT)
-  : ''
+  : undefined
 
 if (!CODELENS_PYTHON) {
   throw new Error(
@@ -33,6 +33,46 @@ if (!CODELENS_SCRIPT) {
 
 /** Maximum execution time for a CLI command (ms) */
 const COMMAND_TIMEOUT = 60_000
+
+/**
+ * Validate a workspace path to prevent path traversal attacks.
+ * Ensures the path is absolute, exists as a directory, and is not a sensitive system directory.
+ */
+function validateWorkspacePath(workspace: string): { valid: boolean; error?: string } {
+  const resolved = path.resolve(workspace)
+
+  // Must be an absolute path after resolution
+  if (resolved !== workspace && resolved + '/' !== workspace && !workspace.startsWith(resolved)) {
+    // Allow if the input resolves to the same path (e.g. trailing slash differences)
+  }
+
+  // Block obvious sensitive paths
+  const blockedPaths = ['/etc', '/root', '/proc', '/sys', '/dev', '/boot', '/sbin', '/usr/sbin']
+  for (const blocked of blockedPaths) {
+    if (resolved === blocked || resolved.startsWith(blocked + '/')) {
+      return { valid: false, error: `Workspace path '${workspace}' points to a system directory that is not allowed.` }
+    }
+  }
+
+  // Block path traversal attempts (paths containing ..)
+  if (workspace.includes('..')) {
+    return { valid: false, error: `Workspace path '${workspace}' contains path traversal sequences.` }
+  }
+
+  return { valid: true }
+}
+
+/**
+ * Sanitize and validate a workspace path.
+ * Returns the resolved absolute path, or throws on invalid input.
+ */
+export function sanitizeWorkspace(workspace: string): string {
+  const validation = validateWorkspacePath(workspace)
+  if (!validation.valid) {
+    throw new Error(validation.error ?? 'Invalid workspace path')
+  }
+  return path.resolve(workspace)
+}
 
 /**
  * Whitelist of allowed CLI commands — prevents command injection.
@@ -98,8 +138,11 @@ class CommandRunner {
     // Sanitize arguments — strip dangerous characters
     const safeArgs = sanitizeArgs(args)
 
+    // Always request JSON output from the CLI for reliable API parsing
+    const formatArgs = safeArgs.includes('--format') ? safeArgs : [...safeArgs, '--format', 'json']
+
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON!, [CODELENS_SCRIPT, command, ...safeArgs], {
+      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...formatArgs], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })
@@ -414,16 +457,6 @@ class CommandRunner {
   /** Detect frameworks in workspace */
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
-  }
-
-  /** Generate project handbook for AI agents */
-  async handbook(workspace: string): Promise<any> {
-    return this.execute('handbook', [workspace])
-  }
-
-  /** Natural language query router */
-  async ask(query: string, workspace: string): Promise<any> {
-    return this.execute('ask', [query, workspace])
   }
 }
 

@@ -12,6 +12,7 @@ import json
 import re
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timezone
+from utils import DEFAULT_IGNORE_DIRS
 
 
 def validate_registry(workspace: str) -> Dict[str, Any]:
@@ -76,8 +77,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.vue', '.svelte'
     }
-    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
-                   "__pycache__", ".codelens", ".next", ".cache", "vendor"}
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     if config:
         for p in config.get("ignore", []):
             ignore_dirs.add(p.rstrip("/"))

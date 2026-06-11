@@ -4,32 +4,26 @@ All notable changes to CodeLens are documented here.
 
 ## [5.8.0] — 2026-06-11
 
+### Fixed — Critical
+- **API whitelist missing `handbook` and `ask` commands** — these key AI-facing commands were rejected by the REST API (`commandRunner.ts`)
+- **Path traversal vulnerability** — API routes accepted arbitrary workspace paths without validation, allowing access to system directories (`/etc`, `/root`, etc.)
+- **No scan result caching** — `/api/graph` and `/api/health` re-scanned the entire workspace on every GET request (10+ seconds); added 30-second TTL cache
+- **Auto-incremental scan couldn't be disabled** — added `--full` flag to force clean re-scan when registry data is stale
+- **`fn_map` overwrite bug** — `fallback_python.py` silently overwrote function entries with the same name (e.g., methods in different classes), causing misattributed call edges
+
+### Fixed — High
+- **Inconsistent ignore directories** — `framework_detect.py`, `circular_engine.py`, and `validate_engine.py` used hardcoded ignore lists instead of centralized `DEFAULT_IGNORE_DIRS` from `utils.py`
+- **`--format json` not explicitly passed** — API calls could receive non-JSON output if user config changed default format; now always passes `--format json`
+
+### Fixed — Medium
+- **Secrets engine insufficient masking** — short secrets (< 8 chars) revealed the entire value with "first 4 + ***" strategy; now uses "first 2 + ***" for values under 8 chars
+- **`graphStore.loadFromJSON` silently swallows errors** — added logging for malformed JSON attempts
+- **EventLog truncation gap** — changed from 1000→500 (50% gap) to 1000→800 (20% gap) for less event history loss
+
 ### Added
-- **Frontend dashboard** (`src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`):
-  - Overview tab with quick start guide and API status
-  - Graph tab with node type breakdown, cluster view, and node table
-  - Commands tab with interactive command runner and quick command buttons
-  - Health tab with score visualization and recommendations
-  - Dark theme matching the Neural Workspace design system
-- **`handbook` and `ask` command support** in the REST API and WebSocket:
-  - Added to `ALLOWED_COMMANDS` whitelist in `commandRunner.ts`
-  - Added `handbook()` and `ask()` method wrappers to `CommandRunner` class
-  - Added to `CODELENS_COMMANDS` type definitions in `neural.ts`
-- **Normalizer handlers** for `handbook` and `ask` commands:
-  - `normalizeHandbook`: Creates project node + risk nodes from handbook output
-  - `normalizeAsk`: Delegates to scan normalizer for structured results, falls back to info node
-- **Informative API root** (`GET /api`): Returns name, version, status, endpoints, and command count
-
-### Changed
-- **analysisStore**: Removed hardcoded `/home/z/my-project` workspace default — now defaults to empty string
-- **tsconfig.json**: Added `_archive` to `exclude` list to prevent TypeScript from checking archived code
-- **commandRunner.ts**: Fixed `CODELENS_SCRIPT` type from `string | undefined` to `string` with empty-string fallback for type safety
-- **Security**: Removed `.env` from git tracking (was accidentally committed with credentials)
-
-### Fixed
-- `commandRunner.ts`: `CODELENS_SCRIPT` was `undefined` type, causing TypeScript overload resolution failure in `execFileAsync`
-- `page.tsx`: `unknown` type in JSX expression caused `TS2322` — fixed with explicit null check and `String()` wrapper
-- Root API route returned `{ message: "Hello, world!" }` instead of useful server information
+- `sanitizeWorkspace()` function in `commandRunner.ts` for workspace path validation
+- 30-second TTL scan result cache in `/api/graph` and `/api/health` routes
+- `--full` flag on `scan` command to force full re-scan
 
 ## [5.3.0] — 2026-06-11
 

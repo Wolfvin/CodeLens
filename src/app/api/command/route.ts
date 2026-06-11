@@ -5,7 +5,7 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { commandRunner } from '@/lib/commandRunner'
+import { commandRunner, sanitizeWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { invalidateScanCache } from '@/lib/scanCache'
 
@@ -33,6 +33,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Validate workspace path to prevent path traversal
+    const safeWorkspace = sanitizeWorkspace(workspace)
+
     const commandArgs: string[] = Array.isArray(args) ? args : []
 
     // Guard: watch command is not supported via REST API
@@ -48,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Execute the command via CLI
-    const rawOutput = await commandRunner.execute(command, [...commandArgs, workspace])
+    const rawOutput = await commandRunner.execute(command, [...commandArgs, safeWorkspace])
 
     // Check for CLI errors
     if (rawOutput.status === 'error') {

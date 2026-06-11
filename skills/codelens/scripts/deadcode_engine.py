@@ -203,7 +203,8 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
     items = []
 
     # Remove comments and strings for more accurate detection
-    clean_content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
+    # Use negative lookbehind to avoid stripping URLs (https://...)
+    clean_content = re.sub(r'(?<!:)//.*$', '', content, flags=re.MULTILINE)
     clean_content = re.sub(r'/\*.*?\*/', '', clean_content, flags=re.DOTALL)
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:

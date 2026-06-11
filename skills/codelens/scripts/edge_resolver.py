@@ -104,6 +104,9 @@ def resolve_edges(
         node["status"] = "dead" if node["ref_count"] == 0 else "active"
 
     # Check duplicate_define: same fn name in multiple files
+    # Clear any pre-existing duplicate_define flags first (for re-resolution correctness)
+    for node in all_nodes:
+        node.pop("duplicate_define", None)
     for fn_name, nodes in fn_name_to_nodes.items():
         if len(nodes) > 1:
             # Mark all but the first
