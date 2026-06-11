@@ -217,6 +217,176 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── Binary Artifact Scanning ──────────────────────────────
+
+BINARY_EXTENSIONS = frozenset({
+    '.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+    '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
+    '.dylib', '.bundle', '.ko', '.msi', '.dmg', '.pkg', '.deb', '.rpm',
+    '.nupkg', '.whl', '.egg', '.tar.gz', '.zip', '.7z',
+})
+
+BINARY_MIME_SIGNATURES = {
+    b'\x7fELF': 'elf_binary',
+    b'MZ': 'pe_binary',
+    b'\xfe\xed\xfa': 'macho_binary',
+    b'\xcf\xfa\xed\xfe': 'macho_binary',
+    b'\xce\xfa\xed\xfe': 'macho_binary',
+    b'PK\x03\x04': 'zip_archive',
+    b'\x1f\x8b': 'gzip_archive',
+    b'BZh': 'bzip2_archive',
+    b'\xfd7zXZ': 'xz_archive',
+    b'\x89PNG': 'png_image',
+    b'\xff\xd8\xff': 'jpeg_image',
+    b'GIF8': 'gif_image',
+    b'RIFF': 'riff_media',
+    b'\x00asm': 'wasm_binary',
+}
+
+MAX_BINARY_SCAN_SIZE = 64 * 1024  # Only read first 64KB for signature detection
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary and compiled artifacts.
+
+    Detects files by:
+    1. Known binary extensions (.exe, .dll, .so, .wasm, .pyc, etc.)
+    2. MIME signature detection (ELF, PE, Mach-O, etc.)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with stats, findings list, and recommendations.
+    """
+    workspace = os.path.abspath(workspace)
+    findings = []
+    files_scanned = 0
+    by_category: Dict[str, int] = {}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            file_path = os.path.join(root, filename)
+            ext = os.path.splitext(filename)[1].lower()
+            files_scanned += 1
+
+            finding = None
+
+            # Check by extension
+            if ext in BINARY_EXTENSIONS:
+                cat = _binary_category(ext)
+                rel_path = os.path.relpath(file_path, workspace)
+                try:
+                    fsize = os.path.getsize(file_path)
+                except OSError:
+                    fsize = 0
+                finding = {
+                    "path": rel_path,
+                    "category": cat,
+                    "extension": ext,
+                    "size_bytes": fsize,
+                    "detection_method": "extension",
+                }
+            else:
+                # Check by MIME signature for extensionless or unknown files
+                # Only check non-source files to avoid false positives
+                if ext not in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html',
+                               '.css', '.vue', '.svelte', '.json', '.md', '.yaml', '.yml',
+                               '.toml', '.cfg', '.ini', '.txt', '.sh', '.bash', '.zsh',
+                               '.gitignore', '.env', '.lock', '.map', '.d.ts'}:
+                    sig = _read_file_signature(file_path)
+                    if sig:
+                        sig_type = _identify_signature(sig)
+                        if sig_type:
+                            rel_path = os.path.relpath(file_path, workspace)
+                            try:
+                                fsize = os.path.getsize(file_path)
+                            except OSError:
+                                fsize = 0
+                            finding = {
+                                "path": rel_path,
+                                "category": sig_type,
+                                "extension": ext,
+                                "size_bytes": fsize,
+                                "detection_method": "signature",
+                            }
+
+            if finding:
+                findings.append(finding)
+                cat = finding["category"]
+                by_category[cat] = by_category.get(cat, 0) + 1
+
+    # Compute total size
+    total_size = sum(f.get("size_bytes", 0) for f in findings)
+
+    # Recommendations
+    recommendations = []
+    if by_category.get("compiled_binary", 0) > 0:
+        recommendations.append("Found compiled binaries in the workspace. Consider adding them to .gitignore and using a build pipeline instead.")
+    if by_category.get("python_bytecode", 0) > 0:
+        recommendations.append("Found Python bytecode files (.pyc/.pyo). Add '**/__pycache__/' and '*.pyc' to .gitignore.")
+    if by_category.get("archive", 0) > 5:
+        recommendations.append("Found many archive files. Consider storing large assets externally (S3, CDN) instead of in the repository.")
+    if by_category.get("image", 0) > 10:
+        recommendations.append("Found many image files. Consider optimizing or moving to an asset CDN to reduce repo size.")
+    if total_size > 50 * 1024 * 1024:
+        recommendations.append(f"Binary artifacts total {total_size / (1024*1024):.1f}MB. Consider using Git LFS for large files.")
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "stats": {
+            "files_scanned": files_scanned,
+            "total_artifacts": len(findings),
+            "total_size_bytes": total_size,
+            "by_category": by_category,
+        },
+        "findings": findings[:50],
+        "recommendations": recommendations,
+    }
+
+
+def _binary_category(ext: str) -> str:
+    """Map file extension to binary category."""
+    if ext in {'.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+               '.bundle', '.ko', '.wasm'}:
+        return "compiled_binary"
+    if ext in {'.pyc', '.pyo', '.class'}:
+        return "python_bytecode"
+    if ext in {'.jar', '.war', '.nupkg', '.whl', '.egg'}:
+        return "package_archive"
+    if ext in {'.tar.gz', '.zip', '.7z', '.gz', '.rpm', '.deb', '.msi', '.dmg', '.pkg'}:
+        return "archive"
+    if ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.bmp'}:
+        return "image"
+    return "other_binary"
+
+
+def _read_file_signature(file_path: str) -> Optional[bytes]:
+    """Read the first few bytes of a file for signature detection."""
+    try:
+        fsize = os.path.getsize(file_path)
+        if fsize == 0 or fsize > 100 * 1024 * 1024:  # Skip empty or >100MB
+            return None
+        with open(file_path, 'rb') as f:
+            return f.read(16)
+    except (IOError, OSError):
+        return None
+
+
+def _identify_signature(sig: bytes) -> Optional[str]:
+    """Identify file type from its binary signature."""
+    for magic, file_type in BINARY_MIME_SIGNATURES.items():
+        if sig.startswith(magic):
+            return file_type
+    return None
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.7.2"

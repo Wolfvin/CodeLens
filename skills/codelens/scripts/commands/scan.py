@@ -3,7 +3,7 @@
 import os
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from utils import logger
 from registry import (
@@ -56,9 +56,11 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
 
+    # Always detect frameworks for lang_note / unsupported_langs
+    fw = detect_frameworks(workspace)
+
     # Auto-detect frameworks if not configured
     if not config.get("frameworks"):
-        fw = detect_frameworks(workspace)
         recommended = get_recommended_config(workspace)
         config.update(recommended)
         save_config(workspace, config)
@@ -565,8 +567,30 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
+        "lang_note": _build_lang_note(fw) if fw else None,
     }
+
+
+def _build_lang_note(fw: Dict) -> Optional[str]:
+    """Build a note about unsupported languages detected in the workspace."""
+    unsupported = fw.get("unsupported_langs", [])
+    if not unsupported:
+        return None
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte"}
+    lang_names = {
+        "go": "Go",
+        "java": "Java",
+        "kotlin": "Kotlin",
+        "c": "C",
+        "cpp": "C++",
+        "csharp": "C#",
+        "swift": "Swift",
+        "ruby": "Ruby",
+    }
+    parts = [lang_names.get(l, l) for l in unsupported]
+    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:

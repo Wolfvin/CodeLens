@@ -204,6 +204,20 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── Tauri IPC (frontend invoke calls) ────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
+                tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
+
+            # ─── Tauri IPC (backend Rust commands) ────────────
+            if ext == ".rs":
+                tauri_cmd_routes = _extract_tauri_rust_commands(content, rel_path)
+                if tauri_cmd_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_cmd_routes)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -2144,3 +2158,82 @@ def _generate_recommendations(
         })
 
     return recommendations
+
+
+# ─── Tauri IPC ────────────────────────────────────────────────
+
+def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract Tauri IPC invoke() calls from frontend JS/TS/Svelte/Vue files.
+
+    Pattern: invoke('command_name', { args }) or invoke("command_name")
+    These map to Rust backend handlers decorated with #[tauri::command].
+    """
+    routes = []
+
+    # Check if this file imports from @tauri-apps/api
+    has_tauri_import = bool(re.search(
+        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api|invoke\s*\()',
+        content
+    ))
+    if not has_tauri_import:
+        return routes
+
+    # Match invoke('commandName') or invoke("commandName") with optional second arg
+    for m in re.finditer(
+        r'invoke\s*\(\s*[\'"](\w+)[\'"]\s*(?:,\s*\{[^}]*\})?\s*\)',
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "IPC",
+            "path": f"invoke://{command_name}",
+            "handler_name": command_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "tauri",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "ipc_call",
+            "response_type": None,
+        })
+
+    return routes
+
+
+def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict]:
+    """Extract Tauri command handlers from Rust backend files.
+
+    Pattern: #[tauri::command] followed by fn command_name(...)
+    These are the Rust-side handlers that receive IPC calls from the frontend.
+    """
+    routes = []
+
+    # Check if this file has tauri::command
+    if 'tauri::command' not in content and 'tauri::command' not in content:
+        return routes
+
+    # Match #[tauri::command] followed by fn name(
+    # Allow attributes between #[tauri::command] and fn
+    for m in re.finditer(
+        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?fn\s+(\w+)\s*\(',
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "IPC_HANDLER",
+            "path": f"invoke://{command_name}",
+            "handler_name": command_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "tauri",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "ipc_handler",
+            "response_type": None,
+        })
+
+    return routes

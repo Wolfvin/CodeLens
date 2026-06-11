@@ -36,6 +36,96 @@ SOURCE_EXTENSIONS = {
 
 STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store"}
 
+# ─── JS/TS Keywords & Built-ins (false-positive filter) ────────
+
+_JS_KEYWORDS = frozenset({
+    'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+    'try', 'catch', 'finally', 'throw', 'new', 'return', 'break',
+    'continue', 'typeof', 'instanceof', 'in', 'of', 'delete', 'void',
+    'yield', 'await', 'async', 'function', 'class', 'const', 'let',
+    'var', 'import', 'export', 'from', 'as', 'extends', 'super',
+    'this', 'constructor', 'static', 'get', 'set',
+})
+
+_JS_BUILTIN_METHODS = frozenset({
+    'push', 'pop', 'shift', 'unshift', 'splice', 'slice', 'concat',
+    'join', 'reverse', 'sort', 'filter', 'map', 'reduce', 'forEach',
+    'find', 'findIndex', 'some', 'every', 'includes', 'indexOf',
+    'lastIndexOf', 'flat', 'flatMap', 'fill', 'copyWithin', 'entries',
+    'keys', 'values', 'toString', 'valueOf', 'hasOwnProperty',
+    'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString',
+    'charAt', 'charCodeAt', 'codePointAt', 'startsWith', 'endsWith',
+    'repeat', 'trim', 'trimStart', 'trimEnd', 'padStart', 'padEnd',
+    'toUpperCase', 'toLowerCase', 'localeCompare', 'match', 'matchAll',
+    'replace', 'replaceAll', 'search', 'split', 'substring', 'substr',
+    'assign', 'create', 'defineProperty', 'defineProperties', 'freeze',
+    'getPrototypeOf', 'setPrototypeOf', 'keys', 'values', 'entries',
+    'parse', 'stringify', 'resolve', 'reject', 'then', 'catch',
+    'finally', 'all', 'race', 'allSettled', 'any',
+    'addEventListener', 'removeEventListener', 'querySelector',
+    'querySelectorAll', 'getElementById', 'getElementsByClassName',
+    'getElementsByTagName', 'createElement', 'appendChild',
+    'removeChild', 'insertBefore', 'replaceChild', 'cloneNode',
+    'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+    'requestAnimationFrame', 'cancelAnimationFrame',
+    'fetch', 'json', 'text', 'blob', 'arrayBuffer', 'formData',
+    'log', 'warn', 'error', 'info', 'debug', 'dir', 'table',
+    'assert', 'count', 'countReset', 'group', 'groupEnd', 'time',
+    'timeEnd', 'trace', 'clear',
+})
+
+
+def _is_js_keyword_or_builtin(name: str) -> bool:
+    """Check if a name is a JS/TS keyword or built-in method.
+
+    Used to filter false-positive action/getter detections in state
+    management extractors (Pinia, Vuex, etc.).
+    """
+    return name in _JS_KEYWORDS or name in _JS_BUILTIN_METHODS
+
+
+def _extract_section(body: str, section_name: str) -> Optional[str]:
+    """Extract a named section (actions, getters, mutations) from a store body.
+
+    Uses brace-matching to properly extract nested content, avoiding
+    the regex issues that caused false-positive detections.
+
+    Args:
+        body: The store definition body (after the opening brace).
+        section_name: The section to extract (e.g., 'actions', 'getters').
+
+    Returns:
+        The section body as a string, or None if not found.
+    """
+    pattern = re.compile(
+        rf'{section_name}\s*:\s*\{{',
+        re.MULTILINE
+    )
+    m = pattern.search(body)
+    if not m:
+        return None
+
+    # Find the matching closing brace
+    start = m.end()
+    depth = 1
+    pos = start
+    while pos < len(body) and depth > 0:
+        if body[pos] == '{':
+            depth += 1
+        elif body[pos] == '}':
+            depth -= 1
+        elif body[pos] in ('"', "'", '`'):
+            # Skip string literals to avoid counting braces inside strings
+            quote = body[pos]
+            pos += 1
+            while pos < len(body) and body[pos] != quote:
+                if body[pos] == '\\':
+                    pos += 1  # Skip escaped character
+                pos += 1
+        pos += 1
+
+    return body[start:pos - 1]
+
 
 def map_state(
     workspace: str,
@@ -318,14 +408,15 @@ def _extract_redux_state(content: str, rel_path: str) -> Dict[str, Any]:
         actions = []
         for rm in re.finditer(r'(\w+)\s*:', reducers_section):
             action_name = rm.group(1)
-            actions.append(action_name)
-            flow.append({
-                "from": "dispatcher",
-                "action": f"dispatch({slice_name}/{action_name})",
-                "to": slice_name,
-                "file": rel_path,
-                "type": "write",
-            })
+            if not _is_js_keyword_or_builtin(action_name):
+                actions.append(action_name)
+                flow.append({
+                    "from": "dispatcher",
+                    "action": f"dispatch({slice_name}/{action_name})",
+                    "to": slice_name,
+                    "file": rel_path,
+                    "type": "write",
+                })
 
         # Extract initialState
         initial_state = _extract_initial_state(content, m.start())
@@ -710,27 +801,30 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
                 if not prop_name.startswith('_'):
                     slices.append({"name": prop_name})
 
-        # Actions
+        # Actions — extract only top-level method definitions in the actions block
         actions = []
-        action_section = re.search(r'actions\s*:\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}', store_body, re.DOTALL)
+        action_section = _extract_section(store_body, 'actions')
         if action_section:
-            for action_m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', action_section.group(1)):
+            for action_m in re.finditer(r'(?:async\s+)?(\w+)\s*\s*\(', action_section):
                 action_name = action_m.group(1)
-                actions.append(action_name)
-                flow.append({
-                    "from": "component",
-                    "action": f"{store_name}/{action_name}()",
-                    "to": store_name,
-                    "file": rel_path,
-                    "type": "write",
-                })
+                if not _is_js_keyword_or_builtin(action_name):
+                    actions.append(action_name)
+                    flow.append({
+                        "from": "component",
+                        "action": f"{store_name}/{action_name}()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "write",
+                    })
 
         # Getters
         getters = []
-        getter_section = re.search(r'getters\s*:\s*\{([^}]+)\}', store_body, re.DOTALL)
+        getter_section = _extract_section(store_body, 'getters')
         if getter_section:
-            for getter_m in re.finditer(r'(\w+)\s*[:=]\s*\(', getter_section.group(1)):
-                getters.append(getter_m.group(1))
+            for getter_m in re.finditer(r'(\w+)\s*[:=]\s*\(', getter_section):
+                getter_name = getter_m.group(1)
+                if not _is_js_keyword_or_builtin(getter_name):
+                    getters.append(getter_name)
 
         stores.append({
             "name": store_name,
@@ -793,38 +887,44 @@ def _extract_vuex_state(content: str, rel_path: str) -> Dict[str, Any]:
 
         # Mutations
         mutations = []
-        mut_section = re.search(r'mutations\s*:\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}', store_body, re.DOTALL)
+        mut_section = _extract_section(store_body, 'mutations')
         if mut_section:
-            for mut_m in re.finditer(r'(\w+)\s*\(', mut_section.group(1)):
-                mutations.append(mut_m.group(1))
-                flow.append({
-                    "from": "component",
-                    "action": f"commit('{mut_m.group(1)}')",
-                    "to": "vuex_store",
-                    "file": rel_path,
-                    "type": "write",
-                })
+            for mut_m in re.finditer(r'(\w+)\s*\(', mut_section):
+                mut_name = mut_m.group(1)
+                if not _is_js_keyword_or_builtin(mut_name):
+                    mutations.append(mut_name)
+                    flow.append({
+                        "from": "component",
+                        "action": f"commit('{mut_name}')",
+                        "to": "vuex_store",
+                        "file": rel_path,
+                        "type": "write",
+                    })
 
         # Actions
         actions = []
-        act_section = re.search(r'actions\s*:\s*\{([^}]+(?:\{[^}]*\}[^}]*)*)\}', store_body, re.DOTALL)
+        act_section = _extract_section(store_body, 'actions')
         if act_section:
-            for act_m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', act_section.group(1)):
-                actions.append(act_m.group(1))
-                flow.append({
-                    "from": "component",
-                    "action": f"dispatch('{act_m.group(1)}')",
-                    "to": "vuex_store",
-                    "file": rel_path,
-                    "type": "write",
-                })
+            for act_m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', act_section):
+                act_name = act_m.group(1)
+                if not _is_js_keyword_or_builtin(act_name):
+                    actions.append(act_name)
+                    flow.append({
+                        "from": "component",
+                        "action": f"dispatch('{act_name}')",
+                        "to": "vuex_store",
+                        "file": rel_path,
+                        "type": "write",
+                    })
 
         # Getters
         getters = []
-        get_section = re.search(r'getters\s*:\s*\{([^}]+)\}', store_body, re.DOTALL)
+        get_section = _extract_section(store_body, 'getters')
         if get_section:
-            for get_m in re.finditer(r'(\w+)\s*[:=]\s*\(', get_section.group(1)):
-                getters.append(get_m.group(1))
+            for get_m in re.finditer(r'(\w+)\s*[:=]\s*\(', get_section):
+                getter_name = get_m.group(1)
+                if not _is_js_keyword_or_builtin(getter_name):
+                    getters.append(getter_name)
 
         stores.append({
             "name": "vuexStore",

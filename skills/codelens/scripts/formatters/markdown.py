@@ -120,6 +120,8 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_a11y(data, lines)
     elif command == "regex-audit":
         _md_regex_audit(data, lines)
+    elif command == "binary-scan":
+        _md_binary_scan(data, lines)
     elif command == "ask":
         _md_ask(data, lines)
     else:
@@ -170,6 +172,9 @@ def _md_scan(data: Dict, lines: list) -> None:
     outline_gen = data.get("outline_generated")
     if outline_gen is not None:
         lines.append(f"- **Outline generated:** {'Yes' if outline_gen else 'No'}")
+    lang_note = data.get("lang_note")
+    if lang_note:
+        lines.append(f"- **Note:** {lang_note}")
     lines.append("")
 
 
@@ -1546,11 +1551,15 @@ def _md_state_map(data: Dict, lines: list) -> None:
             slices = store.get("slices", [])
             if slices:
                 for s in slices[:3]:
-                    lines.append(f"  - slice: `{s.get('name', '')}`")
+                    # Slices can be dicts or strings depending on framework
+                    sname = s.get("name", "") if isinstance(s, dict) else str(s)
+                    lines.append(f"  - slice: `{sname}`")
             actions = store.get("actions", [])
             if actions:
                 for a in actions[:3]:
-                    lines.append(f"  - action: `{a.get('name', '')}`")
+                    # Actions can be dicts or strings depending on framework
+                    aname = a.get("name", "") if isinstance(a, dict) else str(a)
+                    lines.append(f"  - action: `{aname}`")
         if len(stores) > 15:
             lines.append(f"- ... and {len(stores) - 15} more")
         lines.append("")
@@ -1564,6 +1573,52 @@ def _md_state_map(data: Dict, lines: list) -> None:
             lines.append(f"- `{from_file}` → `{to_file}" + (f"` via `{via}" if via else "`"))
         if len(flow) > 10:
             lines.append(f"- ... and {len(flow) - 10} more")
+        lines.append("")
+
+
+def _md_binary_scan(data: Dict, lines: list) -> None:
+    """Markdown for binary-scan command."""
+    stats = data.get("stats", {})
+    lines.append("## Binary Artifact Scan")
+    lines.append("")
+    lines.append(f"- Files scanned: {stats.get('files_scanned', 0)}")
+    lines.append(f"- Total artifacts: {stats.get('total_artifacts', 0)}")
+    total_size = stats.get("total_size_bytes", 0)
+    if total_size > 0:
+        if total_size > 1024 * 1024:
+            lines.append(f"- Total size: {total_size / (1024*1024):.1f}MB")
+        elif total_size > 1024:
+            lines.append(f"- Total size: {total_size / 1024:.1f}KB")
+        else:
+            lines.append(f"- Total size: {total_size}B")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in sorted(by_cat.items(), key=lambda x: -x[1]) if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Findings")
+        for f in findings[:15]:
+            path = f.get("path", "")
+            cat = f.get("category", "")
+            ext = f.get("extension", "")
+            method = f.get("detection_method", "")
+            fsize = f.get("size_bytes", 0)
+            size_str = ""
+            if fsize > 1024 * 1024:
+                size_str = f" ({fsize / (1024*1024):.1f}MB)"
+            elif fsize > 1024:
+                size_str = f" ({fsize / 1024:.1f}KB)"
+            lines.append(f"- `{path}` — {cat}{size_str} [{method}]")
+        if len(findings) > 15:
+            lines.append(f"- ... and {len(findings) - 15} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
         lines.append("")
 
 
@@ -1845,6 +1900,7 @@ def _md_ask(data: Dict, lines: list) -> None:
         "env-check": _md_env_check,
         "debug-leak": _md_debug_leak,
         "state-map": _md_state_map,
+        "binary-scan": _md_binary_scan,
         "dependents": _md_dependents,
     }
 
