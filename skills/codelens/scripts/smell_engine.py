@@ -80,6 +80,7 @@ def detect_smells(
 
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
+    production_files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -104,6 +105,11 @@ def detect_smells(
             files_scanned += 1
             lines = content.split('\n')
             line_count = len(lines)
+
+            # Track if this is a docs/examples/test file for scoring
+            is_docs_or_example = _is_docs_or_example(rel_path)
+            if not is_docs_or_example:
+                production_files_scanned += 1
 
             # Large file detection
             if "large_file" in categories:
@@ -194,9 +200,25 @@ def detect_smells(
     # Problem: always returns 0 for medium+ projects.
     # New formula: density-based tiers + critical ratio adjustment
     # Weight info-level smells less so they don't inflate density
-    files_scanned_safe = max(files_scanned, 1)
-    weighted_smells = critical_count * 3 + warning_count * 1 + info_count * 0.1
-    density = weighted_smells / files_scanned_safe  # weighted smells per file
+    # Use production_files_scanned for health score (exclude docs/examples/tests)
+    # so that documentation code doesn't penalize the project health
+    score_files = max(production_files_scanned, 1)
+    # Count smells in production code only for health score
+    prod_smells = 0
+    prod_critical = 0
+    prod_warning = 0
+    for cat in all_smells.values():
+        for s in cat:
+            fpath = s.get("file", "")
+            if not _is_docs_or_example(fpath):
+                prod_smells += 1
+                if s.get("severity") == "critical":
+                    prod_critical += 1
+                elif s.get("severity") == "warning":
+                    prod_warning += 1
+    prod_info = prod_smells - prod_critical - prod_warning
+    weighted_smells = prod_critical * 3 + prod_warning * 1 + prod_info * 0.1
+    density = weighted_smells / score_files  # weighted smells per production file
 
     if density <= 0.5:
         base_score = 95
@@ -215,8 +237,8 @@ def detect_smells(
     else:
         base_score = 8
 
-    # Critical penalty: based on critical count per file (capped)
-    critical_per_file = critical_count / files_scanned_safe
+    # Critical penalty: based on critical count per production file (capped)
+    critical_per_file = prod_critical / score_files
     if critical_per_file <= 1:
         critical_penalty = 0
     elif critical_per_file <= 5:
@@ -229,7 +251,7 @@ def detect_smells(
         critical_penalty = min(25, int(critical_per_file * 0.5))
 
     # Critical ratio adjustment: fewer criticals relative to total = healthier
-    critical_ratio = critical_count / max(total_smells, 1)
+    critical_ratio = prod_critical / max(prod_smells, 1)
     if critical_ratio < 0.1:
         ratio_bonus = 5
     elif critical_ratio < 0.3:
@@ -982,3 +1004,40 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
         })
 
     return smells
+
+
+def _is_docs_or_example(rel_path: str) -> bool:
+    """Check if a file path is in a documentation, examples, or test directory.
+
+    These files are excluded from health score calculations since they
+    are not production code and typically have different quality standards.
+    Note: rel_path may start without a leading slash (e.g., "docs_src/foo.py"),
+    so we check both "/dir/" (middle of path) and "dir/" (start of path).
+    """
+    # Normalize to have leading slash for consistent matching
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    docs_indicators = [
+        '/docs/', '/doc/', '/documentation/',
+        '/examples/', '/example/', '/demos/', '/demo/',
+        '/docs_src/', '/snippets/',
+        '/tutorial/', '/tutorials/', '/guides/',
+        '/tests/', '/test/', '/__tests__/', '/spec/',
+        '/fixtures/', '/fixture/',
+        '/migrations/',
+    ]
+    # Also match paths that START with these directory names
+    # (no leading slash in rel_path, e.g., "tests/foo.py" or "docs_src/bar.py")
+    start_indicators = [
+        'docs/', 'doc/', 'documentation/',
+        'examples/', 'example/', 'demos/', 'demo/',
+        'docs_src/', 'snippets/',
+        'tutorial/', 'tutorials/', 'guides/',
+        'tests/', 'test/', '__tests__/', 'spec/',
+        'fixtures/', 'fixture/',
+        'migrations/',
+    ]
+    return (any(indicator in normalized for indicator in docs_indicators) or
+            any(rel_path.startswith(indicator) for indicator in start_indicators))
+
+# _is_docs_or_example is defined above. Note: paths like "docs_src/foo.py"
+# start without a leading slash, so we also match on path-starts-with.

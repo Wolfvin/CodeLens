@@ -77,16 +77,19 @@ def compute_summary(workspace, outline_data, scan_result):
     files_by_lang = {}
 
     for outline in outline_data.get('outlines', []):
-        lang = outline.get('language', 'unknown')
+        # Access the nested outline dict — get_file_outline returns
+        # {"status": "ok", "file": ..., "outline": {functions, classes, ...}}
+        inner = outline.get('outline', outline)
+        lang = inner.get('language', outline.get('language', 'unknown'))
         files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-        total_functions += len(outline.get('functions', []))
-        total_classes += len(outline.get('classes', []))
-        total_interfaces += len(outline.get('interfaces', []))
-        total_types += len(outline.get('types', []))
-        total_exports += len(outline.get('exports', []))
-        total_components += len(outline.get('components', []))
-        total_imports += len(outline.get('imports', []))
-        for cls in outline.get('classes', []):
+        total_functions += len(inner.get('functions', []))
+        total_classes += len(inner.get('classes', []))
+        total_interfaces += len(inner.get('interfaces', []))
+        total_types += len(inner.get('types', []))
+        total_exports += len(inner.get('exports', []))
+        total_components += len(inner.get('components', []))
+        total_imports += len(inner.get('imports', []))
+        for cls in inner.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)

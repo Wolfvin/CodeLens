@@ -5,8 +5,6 @@ Cross-validates the registry against actual files to find inconsistencies:
 - Source files not yet in registry
 - Stale references (file exists but line content changed)
 - Orphan registry entries
-
-Performance: Includes limits on checks to prevent timeout on large codebases.
 """
 
 import os
@@ -14,12 +12,6 @@ import json
 import re
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timezone
-from utils import DEFAULT_IGNORE_DIRS
-
-# Performance limits
-MAX_UNREGISTERED_FILES = 500   # Cap unregistered file reports
-MAX_STALE_CHECKS = 200         # Max stale reference checks
-MAX_ORPHAN_CHECKS = 500        # Max orphan entry checks
 
 
 def validate_registry(workspace: str) -> Dict[str, Any]:
@@ -84,7 +76,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.vue', '.svelte'
     }
-    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
+    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
+                   "__pycache__", ".codelens", ".next", ".cache", "vendor"}
     if config:
         for p in config.get("ignore", []):
             ignore_dirs.add(p.rstrip("/"))
@@ -103,10 +96,17 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
                 disk_files.add(rel_path)
 
     unregistered = disk_files - registry_files
-    unregistered_count = len(unregistered)
     for rel_path in sorted(unregistered):
-        if len(issues["unregistered_files"]) >= MAX_UNREGISTERED_FILES:
-            break
+        # Skip empty __init__.py files — they have no symbols to register
+        if rel_path.endswith('__init__.py'):
+            abs_init = os.path.join(workspace, rel_path)
+            try:
+                with open(abs_init, 'r', encoding='utf-8', errors='ignore') as f:
+                    init_content = f.read().strip()
+                if not init_content or init_content == '':
+                    continue  # Empty __init__.py — not an issue
+            except IOError:
+                pass
         issues["unregistered_files"].append({
             "file": rel_path,
             "ext": os.path.splitext(rel_path)[1],
@@ -116,7 +116,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
     # ─── Check 3: Stale references ─────────────────────
     # Sample check: verify that the first few line references actually contain
     # the expected symbol name
-    stale_limit = MAX_STALE_CHECKS  # Don't check everything for performance
+    stale_limit = 100  # Don't check everything for performance
     checked = 0
 
     for cls in frontend.get("classes", []):
@@ -156,10 +156,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
 
     # ─── Check 4: Orphan entries ───────────────────────
     # Frontend entries where ALL referenced files are missing
-    orphan_count = 0
     for cls in frontend.get("classes", []):
-        if orphan_count >= MAX_ORPHAN_CHECKS:
-            break
         all_refs = cls.get("css", []) + cls.get("js", [])
         if all_refs and all(
             not os.path.exists(os.path.join(workspace, r.get("path", "__nonexistent__")))
@@ -171,11 +168,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
                 "status": cls["status"],
                 "message": f"Class '{cls['name']}' has no valid file references (all files deleted)"
             })
-            orphan_count += 1
 
     for id_entry in frontend.get("ids", []):
-        if orphan_count >= MAX_ORPHAN_CHECKS:
-            break
         all_refs = (id_entry.get("defined_in_html", []) +
                     id_entry.get("css", []) +
                     id_entry.get("js", []))
@@ -189,11 +183,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
                 "status": id_entry["status"],
                 "message": f"ID '{id_entry['name']}' has no valid file references"
             })
-            orphan_count += 1
 
     for node in backend.get("nodes", []):
-        if orphan_count >= MAX_ORPHAN_CHECKS:
-            break
         if node.get("file"):
             if not os.path.exists(os.path.join(workspace, node["file"])):
                 issues["orphan_entries"].append({
@@ -203,7 +194,6 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
                     "status": node.get("status", "active"),
                     "message": f"Function '{node['fn']}' references deleted file '{node['file']}'"
                 })
-                orphan_count += 1
 
     # ─── Summary ────────────────────────────────────────
     total_issues = sum(len(v) for v in issues.values())
@@ -224,8 +214,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
         "issues": issues,
         "summary": {
             "missing_files": len(issues["missing_files"]),
-            "unregistered_files": unregistered_count,
-            "unregistered_files_shown": len(issues["unregistered_files"]),
+            "unregistered_files": len(issues["unregistered_files"]),
             "stale_references": len(issues["stale_references"]),
             "orphan_entries": len(issues["orphan_entries"])
         },

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CodeLens v5 Setup Script — Tree-sitter Edition
+# CodeLens v2 Setup Script — Tree-sitter Edition
 # Installs required Python dependencies including tree-sitter grammars
 
 set -e
@@ -46,14 +46,15 @@ python3 "$SCRIPT_DIR/scripts/codelens.py" --help
 
 # Test tree-sitter grammars
 echo "[CodeLens] Testing tree-sitter grammars..."
-(cd "$(dirname "$0")/scripts" && python3 -c "
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHONPATH="$SCRIPT_DIR/scripts:$PYTHONPATH" python3 -c "
 from grammar_loader import GrammarLoader
 loader = GrammarLoader()
 available = loader.available_languages()
 print(f'  Available grammars: {available}')
 if len(available) < 3:
     print('  WARNING: Some grammars failed to load.')
-")
+"
 
 echo ""
 echo "[CodeLens] Setup complete!"
@@ -65,6 +66,3 @@ echo "  python3 $SCRIPT_DIR/scripts/codelens.py init /path/to/workspace"
 echo "  python3 $SCRIPT_DIR/scripts/codelens.py scan /path/to/workspace"
 echo "  python3 $SCRIPT_DIR/scripts/codelens.py query 'btn-primary' /path/to/workspace"
 echo "  python3 $SCRIPT_DIR/scripts/codelens.py list /path/to/workspace --filter dead"
-echo ""
-echo "[CodeLens] NOTE: Workspace paths must be absolute and will be validated."
-echo "  Relative paths or non-existent directories will be rejected."

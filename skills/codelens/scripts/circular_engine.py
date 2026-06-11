@@ -127,6 +127,10 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
                 cycle_start = path.index(neighbor)
                 cycle_path = path[cycle_start:] + [neighbor]
 
+                # Skip self-loops (recursive calls) — these are not circular dependencies
+                if len(cycle_path) == 2 and cycle_path[0] == cycle_path[1]:
+                    continue
+
                 # Normalize cycle (start from smallest ID to deduplicate)
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:

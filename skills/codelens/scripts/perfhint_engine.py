@@ -509,6 +509,12 @@ def detect_perf_hints(
 
             # Skip test files (lower-severity scan)
             is_test = _is_test_file(rel_path)
+            is_template = _is_template_file(rel_path)
+
+            # Skip template files entirely — they contain pseudo-code
+            # (Jinja2 {% for %}, Django {{ var }}) that causes false positives
+            if is_template:
+                continue
 
             # Check file size for DOTALL pattern gating
             file_size = len(content)
@@ -865,6 +871,11 @@ def _detect_recursive_functions(
         definition_line = content[:line_end]
         body_after_def = content[line_end:chunk_end]
 
+        # Skip generators (yield) and async generators — they don't need memoization
+        # as they produce values lazily and aren't typical recursive computation
+        if re.search(r'\byield\b', func_body):
+            continue
+
         self_call_pattern = rf'\b{re.escape(func_name)}\s*\('
         if re.search(self_call_pattern, body_after_def):
             # Check if there's any caching/memoization
@@ -974,6 +985,27 @@ def _category_applies_to_file(category: str, ext: str) -> bool:
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory or is a test file."""
     return any(indicator in rel_path for indicator in TEST_INDICATORS)
+
+def _is_template_file(rel_path: str) -> bool:
+    """Check if a file is a template (Jinja2, Django, etc.) or docs/examples.
+
+    Template files contain pseudo-code that should not be analyzed
+    as real HTML/JS (e.g., {% for %} loops, {{ variables }}).
+    Docs/examples directories contain tutorial code with different quality
+    standards than production code.
+    """
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    template_indicators = [
+        '/templates/', '/template/', '/tmpl/',
+        '/migrations/',  # Django migrations
+        '/docs/', '/docs_src/', '/examples/',
+    ]
+    start_indicators = [
+        'docs/', 'docs_src/', 'examples/',
+        'templates/', 'template/',
+    ]
+    return (any(indicator in normalized for indicator in template_indicators) or
+            any(rel_path.startswith(indicator) for indicator in start_indicators))
 
 def _downgrade_severity(severity: str) -> str:
     """Downgrade severity by one level (for test files / dev-only code)."""
