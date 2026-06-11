@@ -43,12 +43,18 @@ LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 
+# Performance limits for large codebases
+MAX_FILES_PER_RUN = 3000
+MAX_RESULTS_PER_CATEGORY = 100
+
 
 def detect_smells(
     workspace: str,
     categories: Optional[List[str]] = None,
     severity_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN,
+    max_results_per_category: int = MAX_RESULTS_PER_CATEGORY
 ) -> Dict[str, Any]:
     """
     Detect code smells across the workspace.
@@ -81,6 +87,7 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -92,6 +99,11 @@ def detect_smells(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
+
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -166,6 +178,9 @@ def detect_smells(
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
 
+        if truncated:
+            break
+
     # Duplicate pattern detection (cross-file, only if requested)
     if "duplicate_pattern" in categories:
         dupes = _detect_duplicate_patterns(workspace)
@@ -175,6 +190,12 @@ def detect_smells(
     if "inconsistent" in categories:
         inconsistent = _detect_inconsistent_patterns(workspace)
         all_smells["inconsistent"] = inconsistent
+
+    # Cap results per category
+    for cat in all_smells:
+        if len(all_smells[cat]) > max_results_per_category:
+            all_smells[cat] = all_smells[cat][:max_results_per_category]
+            truncated = True
 
     # Apply severity filter
     if severity_filter:
@@ -285,7 +306,8 @@ def detect_smells(
             "critical": critical_count,
             "warning": warning_count,
             "info": info_count,
-            "health_score": health_score
+            "health_score": health_score,
+            "truncated": truncated
         },
         "by_category": {
             cat: smells for cat, smells in all_smells.items() if smells

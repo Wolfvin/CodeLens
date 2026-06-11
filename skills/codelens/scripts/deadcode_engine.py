@@ -152,6 +152,14 @@ def detect_dead_code(
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
 
+    # Compute removal safety and recommended action
+    removal_safety = "safe" if total == 0 else "caution"
+    recommended_action = "No dead code found." if total == 0 else (
+        f"Found {total} dead code item(s) across {len(by_category)} category(ies). "
+        f"Review and remove unreachable code, unused exports, and zombie CSS. "
+        f"Run with --format markdown for detailed removal guidance."
+    )
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -162,7 +170,9 @@ def detect_dead_code(
             "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
-        "categories_checked": list(categories)
+        "categories_checked": list(categories),
+        "removal_safety": removal_safety,
+        "recommended_action": recommended_action
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:

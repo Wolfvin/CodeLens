@@ -38,6 +38,9 @@ TEST_FILE_PATTERNS = {
     "test_", "spec_", "_test.py", "_test.rs",
 }
 
+# Performance limits for large codebases
+MAX_FILES_PER_RUN = 3000
+
 
 # ─── Category-specific Patterns ────────────────────────────────
 
@@ -141,7 +144,8 @@ DEV_ONLY_PATTERNS = [
 def detect_debug_leaks(
     workspace: str,
     category: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN
 ) -> Dict[str, Any]:
     """
     Detect leftover debug code that shouldn't be in production.
@@ -175,6 +179,7 @@ def detect_debug_leaks(
 
     leaks: List[Dict] = []
     files_scanned = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -186,6 +191,11 @@ def detect_debug_leaks(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
+
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -232,6 +242,9 @@ def detect_debug_leaks(
             if "dev_only" in categories:
                 _detect_dev_only(lines, rel_path, ext, is_test_file, leaks)
 
+        if truncated:
+            break
+
     # ─── Aggregate Stats ──────────────────────────────────
     by_category = defaultdict(int)
     by_severity = defaultdict(int)
@@ -257,6 +270,7 @@ def detect_debug_leaks(
             "files_scanned": files_scanned,
             "by_category": dict(by_category),
             "by_severity": dict(by_severity),
+            "truncated": truncated
         },
         "leaks": leaks,
         "cleanup_priority": cleanup_priority[:50],

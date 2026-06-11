@@ -11,14 +11,18 @@ def add_args(parser):
                         help="Categories: long_fn, deep_nesting, many_params, large_file, callback_hell, magic_values, god_object, complex_conditional, duplicate_pattern, inconsistent")
     parser.add_argument("--severity", choices=["info", "warning", "critical"], default=None,
                         help="Filter by severity level")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Max files to scan (default: 3000)")
 
 
 def execute(args, workspace):
-    result = detect_smells(
-        workspace,
-        categories=args.categories,
-        severity_filter=args.severity
-    )
+    kwargs = {
+        "categories": args.categories,
+        "severity_filter": args.severity
+    }
+    if args.max_files is not None:
+        kwargs["max_files"] = args.max_files
+    result = detect_smells(workspace, **kwargs)
     # Add actionable priority list
     if result.get("status") == "ok":
         top = result.get("top_priority", [])

@@ -41,14 +41,14 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
 
 # ─── Output File Generation ─────────────────────────────────
 
-def write_output_files(workspace: str, scan_result) -> dict:
+def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> dict:
     """After a scan, generate outline.json and summary.json into .codelens/."""
     try:
         from outline_engine import get_workspace_outline
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace)
+        outline_data = get_workspace_outline(workspace, max_files=max_files)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:

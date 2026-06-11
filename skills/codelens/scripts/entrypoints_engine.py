@@ -31,6 +31,9 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte",
 }
 
+# Performance limit for large codebases
+MAX_FILES_PER_RUN = 3000
+
 # ─── Entrypoint Pattern Definitions ───────────────────────────
 
 ENTRYPOINT_PATTERNS = {
@@ -75,6 +78,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "rust_main_fn",
+            },
+            # Rust async main: #[tokio::main]
+            {
+                "regex": r'#\[tokio::main\]',
+                "language": {".rs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "rust_tokio_main",
+            },
+            # Rust actix main: #[actix_web::main]
+            {
+                "regex": r'#\[actix_web::main\]',
+                "language": {".rs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "rust_actix_main",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -677,7 +696,8 @@ ENTRYPOINT_PATTERNS = {
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -690,6 +710,7 @@ def map_entrypoints(
         entry_type: Optional filter: "main", "http_handler", "event_handler",
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
+        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -708,6 +729,7 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
+    truncated = False
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -720,6 +742,11 @@ def map_entrypoints(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
+
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -755,6 +782,9 @@ def map_entrypoints(
                     )
                     entrypoints.extend(file_entrypoints)
 
+        if truncated:
+            break
+
     # ─── Phase 2: Deduplicate ─────────────────────────────────
     entrypoints = _deduplicate_entrypoints(entrypoints)
 
@@ -763,6 +793,7 @@ def map_entrypoints(
 
     # ─── Phase 4: Compute stats ───────────────────────────────
     stats = _compute_stats(entrypoints)
+    stats["truncated"] = truncated
 
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)
