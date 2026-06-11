@@ -65,7 +65,7 @@ def get_symbol_context(
                         "source": js_ref.get("source")
                     })
                 for css_ref in cls.get("css", []):
-                    context.setdefault("definitions", []).append({
+                    context["callees"].append({
                         "file": css_ref.get("path", ""),
                         "line": css_ref.get("line", 0),
                         "type": "css_definition"
@@ -109,10 +109,10 @@ def get_symbol_context(
                         "source": js_ref.get("source")
                     })
                 for css_ref in id_entry.get("css", []):
-                    context["callers"].append({
+                    context["callees"].append({
                         "file": css_ref.get("path", ""),
                         "line": css_ref.get("line", 0),
-                        "type": "css_usage"
+                        "type": "css_definition"
                     })
 
                 # Code snippet from HTML definition
