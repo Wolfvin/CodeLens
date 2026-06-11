@@ -121,6 +121,40 @@ def compute_summary(workspace, outline_data, scan_result):
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
+def should_ignore_dir(rel_path: str) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching: a pattern like 'node_modules' only
+    matches when it corresponds to a *complete* path segment, not when it
+    appears as a substring within a segment (e.g. 'test-target' should NOT
+    match 'target').
+
+    This is the shared utility used by framework_detect, tailwind_detector,
+    and other modules that walk the directory tree.
+
+    Args:
+        rel_path: Relative path from the workspace root (use '' for root).
+
+    Returns:
+        True if the path contains any ignored directory segment.
+    """
+    if not rel_path or rel_path == '.':
+        return False
+
+    # Normalize backslashes to forward slashes (Windows compat)
+    normalized = rel_path.replace('\\', '/')
+
+    # Split into path segments
+    segments = normalized.split('/')
+
+    # Check if any segment matches an ignored directory name
+    for segment in segments:
+        if segment in DEFAULT_IGNORE_DIRS:
+            return True
+
+    return False
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -157,7 +191,7 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.0"
+CODELENS_VERSION = "5.8.1"
 
 
 # ─── Safe File Reading ──────────────────────────────────────
