@@ -95,6 +95,28 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    # Functional / effect system libraries
+    "effect-ts": {
+        "packages": ["effect", "@effect/platform", "@effect/schema"],
+        "config_files": [],
+        "indicators": ["Effect.ts", "Layer.ts", "Managed.ts"]
+    },
+    # Build tools and monorepo managers
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.js", "vite.config.ts", "vite.config.mjs"],
+        "indicators": []
+    },
+    "vitest": {
+        "packages": ["vitest"],
+        "config_files": ["vitest.config.ts", "vitest.workspace.ts"],
+        "indicators": []
+    },
+    "turborepo": {
+        "packages": ["turbo"],
+        "config_files": ["turbo.json"],
+        "indicators": []
     }
 }
 
@@ -116,11 +138,38 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_effect_ts": False,
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "is_monorepo": False,
+        "monorepo_tool": None
     }
 
-    # 1. Check package.json
+    # 0. Detect monorepo structure (pnpm-workspace, lerna, turborepo, nx)
+    monorepo_markers = [
+        ("pnpm-workspace.yaml", "pnpm"),
+        ("lerna.json", "lerna"),
+        ("turbo.json", "turborepo"),
+        ("nx.json", "nx"),
+    ]
+    for marker_file, tool_name in monorepo_markers:
+        if os.path.exists(os.path.join(workspace, marker_file)):
+            detected["is_monorepo"] = True
+            detected["monorepo_tool"] = tool_name
+            if tool_name not in detected["frameworks"]:
+                detected["frameworks"].append(tool_name)
+            break
+    # Also detect monorepo by packages/ directory with package.json subdirs
+    packages_dir = os.path.join(workspace, "packages")
+    if not detected["is_monorepo"] and os.path.isdir(packages_dir):
+        pkg_count = sum(1 for d in os.listdir(packages_dir)
+                       if os.path.isdir(os.path.join(packages_dir, d))
+                       and os.path.exists(os.path.join(packages_dir, d, "package.json")))
+        if pkg_count >= 2:
+            detected["is_monorepo"] = True
+            detected["monorepo_tool"] = "generic"
+
+    # 1. Check package.json (root + monorepo packages)
     pkg_path = os.path.join(workspace, "package.json")
     if os.path.exists(pkg_path):
         try:
@@ -235,10 +284,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 4. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
+        # Skip ignored dirs using path-segment matching
+        rel_root = os.path.relpath(root, workspace)
         skip = False
         for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
+            if ignore in rel_root.split(os.sep) or ignore in rel_root.split('/'):
                 skip = True
                 break
         if skip:
@@ -259,8 +309,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
             skip = False
+            rel_root = os.path.relpath(root, workspace)
             for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
+                if ignore in rel_root.split(os.sep) or ignore in rel_root.split('/'):
                     skip = True
                     break
             if skip:
@@ -290,6 +341,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
     """
     Based on detected frameworks, recommend codelens config.
+    For monorepo projects, includes packages/*/src/ in scan paths.
     """
     fw = detect_frameworks(workspace)
 
@@ -304,8 +356,24 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "jsx_mode": False,
         "vue_mode": False,
         "svelte_mode": False,
-        "tailwind_mode": False
+        "tailwind_mode": False,
+        "is_monorepo": fw.get("is_monorepo", False),
+        "monorepo_tool": fw.get("monorepo_tool")
     }
+
+    # Monorepo: add packages/*/src/ to backend paths
+    if fw.get("is_monorepo"):
+        packages_dir = os.path.join(workspace, "packages")
+        if os.path.isdir(packages_dir):
+            for pkg_name in sorted(os.listdir(packages_dir)):
+                pkg_src = os.path.join(packages_dir, pkg_name, "src")
+                if os.path.isdir(pkg_src):
+                    rel_path = f"packages/{pkg_name}/src/"
+                    config["backend_paths"].append(rel_path)
+                    # Also add test paths
+                    pkg_test = os.path.join(packages_dir, pkg_name, "test")
+                    if os.path.isdir(pkg_test):
+                        config["backend_paths"].append(f"packages/{pkg_name}/test/")
 
     # Adjust paths based on framework
     if fw["has_nextjs"]:
