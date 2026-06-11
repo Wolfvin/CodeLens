@@ -42,8 +42,8 @@ LONG_FUNCTION_LINES = 50
 LONG_FUNCTION_LINES_CRITICAL = 100
 TOO_MANY_PARAMS = 5
 TOO_MANY_PARAMS_CRITICAL = 8
-DEEP_NESTING_LEVEL = 4
-DEEP_NESTING_CRITICAL = 6
+DEEP_NESTING_LEVEL = 5
+DEEP_NESTING_CRITICAL = 8
 LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
@@ -199,8 +199,10 @@ def detect_smells(
     # Old formula: max(0, 100 - (critical*10 + warning*3 + info))
     # Problem: always returns 0 for medium+ projects.
     # New formula: density-based tiers + critical ratio adjustment
+    # Weight info-level smells less so they don't inflate density
     files_scanned_safe = max(files_scanned, 1)
-    density = total_smells / files_scanned_safe  # smells per file
+    weighted_smells = critical_count * 3 + warning_count * 1 + info_count * 0.1
+    density = weighted_smells / files_scanned_safe  # weighted smells per file
 
     if density <= 0.5:
         base_score = 95
@@ -380,9 +382,25 @@ def _extract_fn_name_js(line: str) -> str:
 
 
 def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Detect deeply nested code blocks."""
+    """Detect deeply nested code blocks.
+    
+    Reports only the entry point of each deeply-nested block (where the
+    nesting first exceeds the threshold), not every line inside the block.
+    This avoids inflating the smell count with hundreds of duplicate findings.
+    """
     smells = []
+    
+    # Skip test/story/fixture files — deep nesting is expected there
+    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
+    if any(kw in rel_path for kw in skip_keywords):
+        return smells
+    
     lines = content.split('\n')
+    
+    prev_level = 0
+    in_deep_block = False
+    deep_block_level = 0
+    deep_block_start = 0
 
     for i, line in enumerate(lines):
         # Calculate indentation level
@@ -402,24 +420,43 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             # JS/TS: 2 spaces per level
             level = indent // 2
 
-        if level >= DEEP_NESTING_CRITICAL:
+        # Detect when we first enter a deep nesting block
+        if level >= DEEP_NESTING_LEVEL and not in_deep_block:
+            in_deep_block = True
+            deep_block_level = level
+            deep_block_start = i + 1
+        # Detect when we exit the deep nesting block (return to shallower level)
+        elif in_deep_block and level < DEEP_NESTING_LEVEL:
+            in_deep_block = False
+            severity = "critical" if deep_block_level >= DEEP_NESTING_CRITICAL else "warning"
+            threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
             smells.append({
                 "file": rel_path,
-                "line": i + 1,
-                "nesting_level": level,
-                "severity": "critical",
-                "message": f"Code is nested {level} levels deep (critical threshold: {DEEP_NESTING_CRITICAL})",
+                "line": deep_block_start,
+                "nesting_level": deep_block_level,
+                "severity": severity,
+                "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
                 "suggestion": "Extract inner logic into separate functions. Use early returns."
             })
-        elif level >= DEEP_NESTING_LEVEL:
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "nesting_level": level,
-                "severity": "warning",
-                "message": f"Code is nested {level} levels deep (threshold: {DEEP_NESTING_LEVEL})",
-                "suggestion": "Consider using early returns or guard clauses."
-            })
+        
+        # Track the deepest level within the block
+        if in_deep_block and level > deep_block_level:
+            deep_block_level = level
+
+        prev_level = level
+
+    # Handle case where file ends while still in a deep block
+    if in_deep_block:
+        severity = "critical" if deep_block_level >= DEEP_NESTING_CRITICAL else "warning"
+        threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+        smells.append({
+            "file": rel_path,
+            "line": deep_block_start,
+            "nesting_level": deep_block_level,
+            "severity": severity,
+            "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
+            "suggestion": "Extract inner logic into separate functions. Use early returns."
+        })
 
     return smells
 
@@ -580,8 +617,34 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
     lines = content.split('\n')
 
+    # Skip magic number detection entirely for config/framework config files
+    config_file_keywords = [
+        'config', 'eslint', 'prettier', 'vitest', 'jest',
+        'playwright', 'postcss', 'next.config', 'tsconfig',
+        '.fixture.', '.stories.', '.story.', '.test.', '.spec.',
+    ]
+    rel_lower = rel_path.lower()
+    if any(kw in rel_lower for kw in config_file_keywords):
+        return smells
+
     # Numbers that are likely magic (not 0, 1, -1, 2, or common HTTP codes)
-    common_numbers = {0, 1, -1, 2, 100, 200, 201, 204, 301, 302, 400, 401, 403, 404, 500, 502, 503}
+    common_numbers = {0, 1, -1, 2, 3, 10, 100, 256, 1000, 200, 201, 204, 301, 302, 400, 401, 403, 404, 500, 502, 503}
+
+    # Context patterns that indicate config-like lines (skip numbers on these)
+    config_context_patterns = [
+        '.config.', '.config(', 'eslint', 'prettier', 'vitest',
+        'jest', 'playwright', 'tailwind',
+    ]
+    
+    # JSX/TSX style prop patterns — numbers in style/CSS props are not magic values
+    jsx_style_patterns = [
+        r'width\s*[:=]', r'height\s*[:=]', r'padding\s*[:=]', r'margin\s*[:=]',
+        r'gap\s*[:=]', r'fontSize\s*[:=]', r'lineHeight\s*[:=]', r'borderRadius\s*[:=]',
+        r'top\s*[:=]', r'left\s*[:=]', r'right\s*[:=]', r'bottom\s*[:=]',
+        r'maxWidth\s*[:=]', r'minWidth\s*[:=]', r'maxHeight\s*[:=]',
+        r'zIndex\s*[:=]', r'opacity\s*[:=]', r'delay\s*[:=]', r'duration\s*[:=]',
+        r'timeout\s*[:=]', r'port\s*[:=]',
+    ]
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -591,6 +654,16 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             continue
         if 'console.' in stripped or 'print(' in stripped or 'log!' in stripped:
             continue
+
+        # Skip lines in config-like contexts
+        stripped_lower = stripped.lower()
+        if any(pat in stripped_lower for pat in config_context_patterns):
+            continue
+        
+        # Skip JSX style prop lines in TSX/JSX files
+        if ext in {'.tsx', '.jsx'}:
+            if any(re.search(pat, stripped) for pat in jsx_style_patterns):
+                continue
 
         # Check for magic numbers
         for m in re.finditer(r'(?<![.\w])(\d+)(?![.\w])', stripped):
@@ -610,17 +683,16 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             if stripped.startswith('[') or stripped.startswith('{'):
                 continue
 
-            if num not in {0, 1, 2, 3, 10, 100, 256, 1000}:
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "value": num,
-                    "type": "magic_number",
-                    "severity": "info",
-                    "message": f"Magic number {num} found without explanation",
-                    "suggestion": f"Extract into a named constant (e.g., MAX_RETRIES = {num})"
-                })
-                break  # One per line is enough
+            smells.append({
+                "file": rel_path,
+                "line": i + 1,
+                "value": num,
+                "type": "magic_number",
+                "severity": "info",
+                "message": f"Magic number {num} found without explanation",
+                "suggestion": f"Extract into a named constant (e.g., MAX_RETRIES = {num})"
+            })
+            break  # One per line is enough
 
     return smells
 

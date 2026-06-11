@@ -16,6 +16,7 @@ Framework Detection & Route Extraction:
 10. GraphQL   — type Query, type Mutation, resolvers
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
+13. oRPC      — procedure chains, router objects
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -188,6 +189,13 @@ def map_api_routes(
                 if trpc_routes:
                     frameworks_detected.add("trpc")
                     routes.extend(trpc_routes)
+
+            # ─── oRPC ─────────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                orpc_routes = _extract_orpc_routes(content, rel_path)
+                if orpc_routes:
+                    frameworks_detected.add("orpc")
+                    routes.extend(orpc_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -646,6 +654,7 @@ def _extract_nextjs_routes(
                 })
 
     # app/api/*/route.ts pattern — exported GET, POST, etc.
+    # Supports nested directories like app/api/auth/[...all]/route.ts
     if re.search(r'app[/\\]api[/\\].*[/\\]route\.(ts|js|mjs|cjs)$', rel_path):
         api_path = re.sub(r'^.*?app[/\\]api', '/api', rel_path)
         api_path = re.sub(r'/route\.(ts|js|mjs|cjs)$', '', api_path)
@@ -653,8 +662,52 @@ def _extract_nextjs_routes(
         api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
         api_path = re.sub(r':\.\.\.(\w+)', r':\1*', api_path)
 
+        # Pattern 1: export async function GET / POST / etc.
         for m in re.finditer(
             r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)',
+            content
+        ):
+            http_method = m.group(1).upper()
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(api_path),
+                "handler_name": m.group(1),
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nextjs",
+            })
+
+        # Pattern 2: export const { GET, POST } = handler() (destructured exports)
+        for m in re.finditer(
+            r'export\s+const\s*\{\s*([^\}]+)\}\s*=',
+            content
+        ):
+            destructure_list = m.group(1)
+            for method_name in re.findall(
+                r'(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
+                destructure_list
+            ):
+                http_method = method_name.upper()
+                line_num = content[:m.start()].count('\n') + 1
+                routes.append({
+                    "method": http_method,
+                    "path": _normalize_path(api_path),
+                    "handler_name": method_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "nextjs",
+                })
+
+        # Pattern 3: export const GET = ... / export const POST = ... (individual const exports)
+        for m in re.finditer(
+            r'export\s+const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*=',
             content
         ):
             http_method = m.group(1).upper()
@@ -1210,11 +1263,28 @@ def _extract_grpc_services(content: str, rel_path: str) -> List[Dict[str, Any]]:
 # ─── tRPC ──────────────────────────────────────────────────────
 
 def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract tRPC router definitions and procedure chains."""
+    """Extract tRPC router definitions and procedure chains.
+
+    Detects tRPC patterns including:
+    - .query('name', ...) / .mutation('name', ...)
+    - t.procedure / t.router
+    - publicProcedure / protectedProcedure chains
+    - router({ name: procedure }) definitions
+    """
     routes = []
 
-    # Detect tRPC import
-    if not re.search(r'(?:from\s+[\'"]@trpc|import\s+.*@trpc)', content):
+    # Detect tRPC or tRPC-like (procedure-based) imports / patterns
+    is_trpc = bool(re.search(
+        r'(?:from\s+[\'"]@trpc|import\s+.*@trpc|'
+        r't\.procedure|t\.router|'
+        r'\binitTRPC\b|'
+        r'createTRPC(?:Router|ProxyClient|Next|React)|'
+        r'\bpublicProcedure\b.*\.query\(|'
+        r'\bpublicProcedure\b.*\.mutation\()',
+        content
+    ))
+
+    if not is_trpc:
         return routes
 
     # tRPC procedure chains: publicProcedure.query('name', ...) or .mutation('name', ...)
@@ -1227,25 +1297,86 @@ def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
         proc_name = m.group(2)
         line_num = content[:m.start()].count('\n') + 1
 
+        # Detect if this is a protected procedure
+        mw_chain = []
+        before = content[max(0, m.start() - 300):m.start()]
+        if re.search(r'(?:protected|auth)Procedure', before):
+            mw_chain.append({
+                "name": "protectedProcedure",
+                "type": "auth",
+                "file": rel_path,
+                "line": line_num,
+            })
+
         routes.append({
             "method": proc_type,
             "path": proc_name,
             "handler_name": proc_name,
             "file": rel_path,
             "line": line_num,
-            "middleware_chain": [],
+            "middleware_chain": mw_chain,
             "request_type": None,
             "response_type": None,
             "framework": "trpc",
         })
 
     # Router definitions: const appRouter = router({ ... })
+    # Also: t.router({ ... })
     for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+Router)\s*=\s*\w*router\s*\(',
+        r'(?:const|let|var)\s+(\w+Router)\s*=\s*(?:\w+\.)?router\s*\(',
         content
     ):
         router_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
+
+        # Try to extract procedure keys from router({ ... })
+        router_body = content[m.end():m.end() + 5000]
+        # Find matching closing paren
+        depth = 1
+        pos = 0
+        while pos < len(router_body) and depth > 0:
+            if router_body[pos] == '(':
+                depth += 1
+            elif router_body[pos] == ')':
+                depth -= 1
+            pos += 1
+        router_body = router_body[:pos - 1]
+
+        # Extract procedure name: value pairs from router object
+        router_prefix = router_name.replace('Router', '')
+        for pair_m in re.finditer(r'(\w+)\s*:\s*(\w+)', router_body):
+            key = pair_m.group(1)
+            value = pair_m.group(2)
+            key_line = content[:m.end() + pair_m.start()].count('\n') + 1
+
+            # Detect if the value references a protected procedure
+            mw_chain = []
+            proc_def = re.search(
+                r'(?:const|let|var)\s+' + re.escape(value) +
+                r'\s*=\s*(?:protected|auth)Procedure',
+                content
+            )
+            if proc_def:
+                mw_chain.append({
+                    "name": "protectedProcedure",
+                    "type": "auth",
+                    "file": rel_path,
+                    "line": content[:proc_def.start()].count('\n') + 1,
+                })
+
+            routes.append({
+                "method": "PROCEDURE",
+                "path": f"{router_prefix}.{key}" if router_prefix else key,
+                "handler_name": value,
+                "file": rel_path,
+                "line": key_line,
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+                "framework": "trpc",
+            })
+
+        # Add the router itself
         routes.append({
             "method": "ROUTER",
             "path": router_name,
@@ -1270,10 +1401,40 @@ def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
         name_match = re.search(r'(\w+)\s*:\s*\w*Procedure$', before)
         handler_name = name_match.group(1) if name_match else f"anonymous_{proc_type.lower()}"
 
+        # Detect if protected
+        mw_chain = []
+        if re.search(r'(?:protected|auth)Procedure', before):
+            mw_chain.append({
+                "name": "protectedProcedure",
+                "type": "auth",
+                "file": rel_path,
+                "line": line_num,
+            })
+
         routes.append({
             "method": proc_type,
             "path": handler_name,
             "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": mw_chain,
+            "request_type": None,
+            "response_type": None,
+            "framework": "trpc",
+        })
+
+    # Detect t.procedure / t.router patterns (tRPC v10+)
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*t\.procedure',
+        content
+    ):
+        var_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "PROCEDURE",
+            "path": var_name,
+            "handler_name": var_name,
             "file": rel_path,
             "line": line_num,
             "middleware_chain": [],
@@ -1283,6 +1444,223 @@ def _extract_trpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
         })
 
     return routes
+
+
+# ─── oRPC ──────────────────────────────────────────────────────
+
+def _extract_orpc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract oRPC router definitions and procedure chains.
+
+    Detects oRPC patterns including:
+    - publicProcedure.input(...).output(...).handler(...)
+    - protectedProcedure.input(...).output(...).handler(...)
+    - adminProcedure chains
+    - export const xxxRouter = { key: procedure, ... }
+    - router({ name: procedure }) definitions
+    - os.$context<Context>() base definitions
+    """
+    routes = []
+
+    # Detect oRPC imports or patterns
+    is_orpc = bool(re.search(
+        r'(?:from\s+[\'"]@orpc|import\s+.*@orpc|'
+        r'\bos\s*=\s*os\.|\bos\.\$context|'
+        r'\bORPCError\b)',
+        content
+    ))
+
+    # Also detect files that import procedure variables from oRPC modules
+    has_procedures = bool(re.search(
+        r'(?:public|protected|admin)Procedure\b',
+        content
+    ))
+
+    if not is_orpc and not has_procedures:
+        return routes
+
+    # Track procedure variable names -> metadata
+    procedures: Dict[str, Dict] = {}
+
+    # Pattern 1: const varName = (public|protected|admin)Procedure
+    #            .input(Schema).output(Schema).handler(async ...)
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(public|protected|admin)Procedure',
+        content
+    ):
+        var_name = m.group(1)
+        proc_type = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Look for .input(), .output(), .handler() in the procedure chain
+        # Search forward up to 800 chars for the full chain
+        chain_text = content[m.start():m.start() + 800]
+        input_match = re.search(r'\.input\s*\(\s*(\w+)', chain_text)
+        output_match = re.search(r'\.output\s*\(\s*(\w+)', chain_text)
+        has_handler = bool(re.search(r'\.handler\s*\(', chain_text))
+
+        req_type = input_match.group(1) if input_match else None
+        resp_type = output_match.group(1) if output_match else None
+
+        is_auth = proc_type in ('protected', 'admin')
+        mw_chain = []
+        if is_auth:
+            mw_chain.append({
+                "name": f"{proc_type}Procedure",
+                "type": "auth",
+                "file": rel_path,
+                "line": line_num,
+            })
+
+        procedures[var_name] = {
+            "auth": is_auth,
+            "input_schema": req_type,
+            "output_schema": resp_type,
+            "line": line_num,
+        }
+
+        if has_handler:
+            routes.append({
+                "method": "PROCEDURE",
+                "path": var_name,
+                "handler_name": var_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": list(mw_chain),
+                "request_type": req_type,
+                "response_type": resp_type,
+                "framework": "orpc",
+            })
+
+    # Pattern 2: export const xxxRouter = { key: procedureVar, ... }
+    # Also handles: export const router = { name: xxxRouter, ... }
+    for m in re.finditer(
+        r'export\s+const\s+(\w+)\s*=\s*\{',
+        content
+    ):
+        router_name = m.group(1)
+        if not (router_name.endswith('Router') or router_name == 'router'):
+            continue
+
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Extract the object body
+        obj_start = m.end()
+        obj_body = content[obj_start:obj_start + 5000]
+        # Find matching closing brace
+        depth = 1
+        pos = 0
+        while pos < len(obj_body) and depth > 0:
+            if obj_body[pos] == '{':
+                depth += 1
+            elif obj_body[pos] == '}':
+                depth -= 1
+            pos += 1
+        obj_body = obj_body[:pos - 1]
+
+        # Derive router prefix from name (likeRouter -> like)
+        router_prefix = router_name.replace('Router', '') if router_name != 'router' else ''
+
+        # Extract key: value pairs (handles nested objects by recursing)
+        _extract_orpc_router_pairs(
+            obj_body, procedures, router_prefix, rel_path, line_num, routes
+        )
+
+    # Pattern 3: .procedure('name', ...) chains
+    for m in re.finditer(
+        r'\.procedure\s*\(\s*[\'"](\w+)[\'"]',
+        content
+    ):
+        proc_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "PROCEDURE",
+            "path": proc_name,
+            "handler_name": proc_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "orpc",
+        })
+
+    # Pattern 4: Detect base procedure definitions (os.$context<Context>())
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*\w+\.\$context',
+        content
+    ):
+        var_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "BASE",
+            "path": var_name,
+            "handler_name": var_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "orpc",
+        })
+
+    return routes
+
+
+def _extract_orpc_router_pairs(
+    obj_body: str,
+    procedures: Dict[str, Dict],
+    prefix: str,
+    rel_path: str,
+    base_line: int,
+    routes: List[Dict[str, Any]]
+) -> None:
+    """Extract procedure key:value pairs from an oRPC router object body,
+    handling nested objects recursively."""
+    # Match key: value pairs where value is a word (procedure reference or sub-router)
+    for pair_m in re.finditer(r'(\w+)\s*:\s*(\w+)', obj_body):
+        key = pair_m.group(1)
+        value = pair_m.group(2)
+
+        if value in procedures:
+            # Value is a known procedure variable
+            proc = procedures[value]
+            route_path = f"{prefix}.{key}" if prefix else key
+
+            mw_chain = []
+            if proc["auth"]:
+                mw_chain.append({
+                    "name": "protectedProcedure",
+                    "type": "auth",
+                    "file": rel_path,
+                    "line": proc["line"],
+                })
+
+            routes.append({
+                "method": "PROCEDURE",
+                "path": route_path,
+                "handler_name": value,
+                "file": rel_path,
+                "line": base_line,
+                "middleware_chain": mw_chain,
+                "request_type": proc.get("input_schema"),
+                "response_type": proc.get("output_schema"),
+                "framework": "orpc",
+            })
+        elif value.endswith('Router'):
+            # Value is a router reference - record as a router group
+            route_path = f"{prefix}.{key}" if prefix else key
+            routes.append({
+                "method": "ROUTER",
+                "path": route_path,
+                "handler_name": value,
+                "file": rel_path,
+                "line": base_line,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "orpc",
+            })
 
 
 # ─── Helpers ───────────────────────────────────────────────────

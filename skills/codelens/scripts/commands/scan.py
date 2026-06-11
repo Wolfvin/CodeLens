@@ -38,6 +38,11 @@ def add_args(parser):
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    # Auto-enable incremental mode if registry already exists
+    if not incremental:
+        registry_path = os.path.join(workspace, '.codelens', 'backend.json')
+        if os.path.exists(registry_path):
+            incremental = True
     return cmd_scan(workspace, incremental)
 
 

@@ -2,11 +2,45 @@
 
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from registry import load_frontend_registry, load_backend_registry
 from edge_resolver import get_callers, get_callees
 from commands import register_command
+
+
+# Known file extensions used to detect file path queries
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+
+
+def _is_file_path(name: str) -> bool:
+    """Check if a name looks like a file path."""
+    if '/' in name:
+        return True
+    for ext in _FILE_PATH_EXTENSIONS:
+        if name.endswith(ext):
+            return True
+    return False
+
+
+def _deduplicate_callers(callers: List[Dict]) -> List[Dict]:
+    """Deduplicate callers by (file, line) tuple extracted from the 'from' field."""
+    seen = set()
+    unique = []
+    for c in callers:
+        from_id = c.get("from", "")
+        # Extract file and line from "file:line:fn" format
+        if ":" in from_id:
+            parts = from_id.rsplit(":", 2)
+            file_part = parts[0] if len(parts) >= 2 else from_id
+            line_part = parts[1] if len(parts) >= 2 else "0"
+            key = (file_part, line_part)
+        else:
+            key = (from_id, "0")
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
 
 
 def _get_query_action(status: str) -> tuple:
@@ -41,6 +75,40 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     """Query a specific class/id/function from the registry."""
     workspace = os.path.abspath(workspace)
 
+    # ─── File path lookup ─────────────────────────────
+    if _is_file_path(query_name) and domain in (None, "backend"):
+        backend = load_backend_registry(workspace)
+        matching_nodes = [n for n in backend.get("nodes", []) if n.get("file", "") == query_name]
+
+        if matching_nodes:
+            # Group results by file
+            file_groups: Dict[str, List[Dict]] = {}
+            for node in matching_nodes:
+                f = node.get("file", "")
+                if f not in file_groups:
+                    file_groups[f] = []
+                file_groups[f].append({
+                    "id": node["id"],
+                    "fn": node["fn"],
+                    "line": node.get("line", 0),
+                    "status": node.get("status", "active"),
+                    "async": node.get("async", False),
+                    "ref_count": node.get("ref_count", 0)
+                })
+
+            results_by_file = [
+                {"file": f, "symbols": syms}
+                for f, syms in file_groups.items()
+            ]
+            return {
+                "found": True,
+                "type": "file",
+                "domain": "backend",
+                "query": query_name,
+                "results_by_file": results_by_file
+            }
+
+    # ─── Normal name lookup ───────────────────────────
     if domain in (None, "frontend"):
         frontend = load_frontend_registry(workspace)
 
@@ -89,7 +157,9 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 if file_filter and file_filter not in node.get("file", ""):
                     continue
 
-                callers = get_callers(node["id"], backend.get("edges", []))
+                callers = _deduplicate_callers(
+                    get_callers(node["id"], backend.get("edges", []))
+                )
                 callees = get_callees(node["id"], backend.get("edges", []),
                                        backend.get("nodes", []))
 

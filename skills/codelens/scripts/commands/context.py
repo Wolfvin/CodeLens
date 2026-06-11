@@ -1,11 +1,40 @@
 """Context command — Get rich symbol context (code + callers + callees)."""
 
+import os
+from typing import Any, Dict, List
+
 from context_engine import get_symbol_context
 from complexity_engine import compute_complexity
 from sideeffect_engine import analyze_side_effects
 from smell_engine import detect_smells
 from testmap_engine import map_test_coverage
 from commands import register_command
+
+
+# Known file extensions used to detect file path queries
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+
+
+def _is_file_path(name: str) -> bool:
+    """Check if a name looks like a file path."""
+    if '/' in name:
+        return True
+    for ext in _FILE_PATH_EXTENSIONS:
+        if name.endswith(ext):
+            return True
+    return False
+
+
+def _deduplicate_callers(callers: List[Dict]) -> List[Dict]:
+    """Deduplicate callers by (file, line) tuple."""
+    seen = set()
+    unique = []
+    for c in callers:
+        key = (c.get("file", ""), c.get("line", 0))
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
 
 
 def add_args(parser):
@@ -20,12 +49,52 @@ def add_args(parser):
 
 
 def execute(args, workspace):
+    symbol = args.name
+
+    # ─── File path lookup ─────────────────────────────
+    if _is_file_path(symbol):
+        from registry import load_backend_registry
+        workspace_abs = os.path.abspath(workspace)
+        backend = load_backend_registry(workspace_abs)
+        matching_nodes = [n for n in backend.get("nodes", []) if n.get("file", "") == symbol]
+
+        if matching_nodes:
+            symbols = []
+            for node in matching_nodes:
+                symbols.append({
+                    "fn": node["fn"],
+                    "line": node.get("line", 0),
+                    "status": node.get("status", "active"),
+                    "async": node.get("async", False),
+                    "ref_count": node.get("ref_count", 0)
+                })
+            return {
+                "found": True,
+                "context": {
+                    "type": "file",
+                    "file": symbol,
+                    "symbols": symbols
+                }
+            }
+        else:
+            return {
+                "found": False,
+                "symbol": symbol,
+                "context": None
+            }
+
+    # ─── Normal symbol lookup ──────────────────────────
     result = get_symbol_context(
         args.name, workspace,
         domain=args.domain,
         context_lines=args.context_lines,
         include_code=not args.no_code
     )
+
+    # Deduplicate callers
+    if result.get("found") and result.get("context"):
+        result["context"]["callers"] = _deduplicate_callers(result["context"].get("callers", []))
+
     # Enrich with quality metrics
     if result.get("found") and result.get("context"):
         quality = {}

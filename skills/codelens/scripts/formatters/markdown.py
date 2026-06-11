@@ -584,8 +584,9 @@ def _md_secrets(data: Dict, lines: list) -> None:
     findings = data.get("findings", [])
     if findings:
         lines.append("### Findings")
-        for f in findings[:15]:
-            lines.append(f"- [{f.get('severity', '').upper()}] `{f.get('file', '')}:{f.get('line', '')}` — {f.get('type', '')}")
+        for finding in findings[:15]:
+            sev = finding.get("severity", "")
+            lines.append(f"- [{sev.upper()}] `{finding.get('file', '')}:{finding.get('line', '')}` — {finding.get('type', '')}")
         lines.append("")
 
 

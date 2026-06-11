@@ -46,7 +46,7 @@ DEFAULT_IGNORE_DIRS = {
 DEPENDENCY_FILE_PATTERNS = {
     "npm": {
         "manifest": ["package.json"],
-        "lockfile": ["package-lock.json", "npm-shrinkwrap.json"],
+        "lockfile": ["package-lock.json", "npm-shrinkwrap.json", "bun.lock"],
     },
     "rust": {
         "manifest": ["Cargo.toml"],
@@ -834,7 +834,10 @@ def _parse_lock_file(
         return findings
 
     if ecosystem == "npm":
-        packages = _parse_npm_lock(content)
+        if rel_path.endswith("bun.lock"):
+            packages = _parse_bun_lock(content)
+        else:
+            packages = _parse_npm_lock(content)
     elif ecosystem == "rust":
         packages = _parse_cargo_lock(content)
     elif ecosystem == "pip":
@@ -919,6 +922,55 @@ def _flatten_npm_deps(
         if nested:
             result.extend(_flatten_npm_deps(nested))
     return result
+
+
+def _parse_bun_lock(content: str) -> List[Tuple[str, str]]:
+    """Parse bun.lock (text-based JSON with trailing commas) for package names and versions.
+
+    bun.lock format (v1, text-based JSON):
+    - "workspaces"."".dependencies / devDependencies: { "name": "version" }
+    - "packages": { "name": ["name@version", "", {...}, "hash"] }
+
+    Note: bun.lock uses trailing commas which are not valid JSON,
+    so we strip them before parsing.
+    """
+    packages = []
+
+    # Strip trailing commas (bun.lock uses JSON with trailing commas)
+    # Remove commas before } or ] at various nesting levels
+    cleaned = re.sub(r',\s*([}\]])', r'\1', content)
+
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return packages
+
+    # Extract from workspaces dependencies (top-level declared deps)
+    workspaces = data.get("workspaces", {})
+    for ws_name, ws_data in workspaces.items():
+        for dep_type in ("dependencies", "devDependencies"):
+            deps = ws_data.get(dep_type, {})
+            for name, version in deps.items():
+                if name and version:
+                    packages.append((name, version))
+
+    # Extract from packages (resolved packages with exact versions)
+    # Format: "pkg-name": ["pkg-name@version", "", {...}, "hash"]
+    pkgs = data.get("packages", {})
+    for pkg_name, pkg_info in pkgs.items():
+        if isinstance(pkg_info, list) and len(pkg_info) >= 1:
+            # First element is "name@version"
+            first = pkg_info[0]
+            if "@" in first:
+                # Handle scoped packages like @scope/name@version
+                # Split on the last @ to get version
+                at_idx = first.rfind("@")
+                name = first[:at_idx]
+                version = first[at_idx + 1:]
+                if name and version:
+                    packages.append((name, version))
+
+    return packages
 
 
 def _parse_cargo_lock(content: str) -> List[Tuple[str, str]]:
@@ -1109,7 +1161,7 @@ def _parse_manifest_file(
     except IOError:
         return findings
 
-    if ecosystem == "npm":
+    if ecosystem == "npm" or ecosystem == "bun":
         packages = _parse_package_json(content)
     elif ecosystem == "rust":
         packages = _parse_cargo_toml(content)
@@ -1124,24 +1176,30 @@ def _parse_manifest_file(
         return findings
 
     # Check each package against VULN_DB
+    # Bun uses npm packages, so also check npm ecosystem for bun
+    lookup_ecosystems = [ecosystem]
+    if ecosystem == "bun":
+        lookup_ecosystems.append("npm")
+
     for pkg_name, pkg_version in packages:
-        vuln_entries = _VULN_INDEX.get((ecosystem, pkg_name.lower()), [])
-        for entry in vuln_entries:
-            if _is_version_vulnerable(pkg_version, entry["vulnerable_range"]):
-                # Avoid duplicate if already found via lock file
-                findings.append({
-                    "type": "vulnerability",
-                    "ecosystem": ecosystem,
-                    "package": pkg_name,
-                    "installed_version": pkg_version,
-                    "vulnerable_range": entry["vulnerable_range"],
-                    "severity": entry["severity"],
-                    "cve": entry["cve"],
-                    "title": entry["title"],
-                    "fix_version": entry["fix_version"],
-                    "file": rel_path,
-                    "source": "manifest_db",
-                })
+        for eco in lookup_ecosystems:
+            vuln_entries = _VULN_INDEX.get((eco, pkg_name.lower()), [])
+            for entry in vuln_entries:
+                if _is_version_vulnerable(pkg_version, entry["vulnerable_range"]):
+                    # Avoid duplicate if already found via lock file
+                    findings.append({
+                        "type": "vulnerability",
+                        "ecosystem": ecosystem,
+                        "package": pkg_name,
+                        "installed_version": pkg_version,
+                        "vulnerable_range": entry["vulnerable_range"],
+                        "severity": entry["severity"],
+                        "cve": entry["cve"],
+                        "title": entry["title"],
+                        "fix_version": entry["fix_version"],
+                        "file": rel_path,
+                        "source": "manifest_db",
+                    })
 
     return findings
 
