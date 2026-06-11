@@ -396,16 +396,14 @@ def _md_trace(data: Dict, lines: list) -> None:
                     lines.append(f"### {dir_key.title()}")
                     for chain in dir_chains[:10]:
                         if isinstance(chain, dict):
-                            path = chain.get("path", "")
-                            if path and isinstance(path, str):
-                                lines.append(f"- {path}")
-                            elif path and isinstance(path, list):
+                            path = chain.get("path", [])
+                            if path:
                                 lines.append(f"- {' → '.join(str(p) for p in path)}")
                             else:
                                 fn = chain.get("fn", "")
                                 file = chain.get("file", "")
-                                depth = chain.get("depth", 0)
-                                lines.append(f"- `{'  ' * depth}{fn}` ({file})")
+                                depth = chain.get("depth", "")
+                                lines.append(f"- `{' → ' * depth}{fn}` ({file})")
                         elif isinstance(chain, list):
                             lines.append(f"- {' → '.join(str(p) for p in chain)}")
                         else:
@@ -414,15 +412,8 @@ def _md_trace(data: Dict, lines: list) -> None:
         elif isinstance(chains, list):
             for chain in chains[:10]:
                 if isinstance(chain, dict):
-                    path = chain.get("path", "")
-                    if path and isinstance(path, str):
-                        lines.append(f"- {path}")
-                    elif path and isinstance(path, list):
-                        lines.append(f"- {' → '.join(str(p) for p in path)}")
-                    else:
-                        fn = chain.get("fn", "")
-                        file = chain.get("file", "")
-                        lines.append(f"- `{fn}` ({file})")
+                    path = chain.get("path", [])
+                    lines.append(f"- {' → '.join(str(p) for p in path)}")
                 elif isinstance(chain, list):
                     lines.append(f"- {' → '.join(str(p) for p in chain)}")
                 else:
@@ -456,30 +447,47 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     stats = data.get("stats", {})
     lines.append("## Dead Code Analysis")
     lines.append("")
-    lines.append(f"- Total dead: {stats.get('total_dead_code', stats.get('total_dead', 0))}")
-    by_cat = stats.get('by_category', {})
-    lines.append(f"- Unreachable: {by_cat.get('unreachable', stats.get('unreachable', 0))} | Unused exports: {by_cat.get('unused_exports', stats.get('unused_exports', 0))} | Zombie CSS: {by_cat.get('zombie_css', stats.get('zombie_css', 0))}")
+    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
+    by_cat = stats.get("by_category", {})
+    parts = []
+    if by_cat.get("unreachable", 0):
+        parts.append(f"Unreachable: {by_cat['unreachable']}")
+    if by_cat.get("unused_exports", 0):
+        parts.append(f"Unused exports: {by_cat['unused_exports']}")
+    if by_cat.get("unused_vars", 0):
+        parts.append(f"Unused vars: {by_cat['unused_vars']}")
+    if by_cat.get("zombie_css", 0):
+        parts.append(f"Zombie CSS: {by_cat['zombie_css']}")
+    if by_cat.get("registry_dead", 0):
+        parts.append(f"Registry dead: {by_cat['registry_dead']}")
+    if parts:
+        lines.append("- " + " | ".join(parts))
     removal_safety = data.get("removal_safety", "")
     if removal_safety:
         lines.append(f"- **Removal safety:** {removal_safety}")
     lines.append("")
-    # Dead code results may be in 'results' (categorized dict) or 'items' (flat list)
-    results_dict = data.get("results", {})
-    if isinstance(results_dict, dict) and results_dict:
-        items = []
-        for cat_items in results_dict.values():
-            if isinstance(cat_items, list):
-                items.extend(cat_items)
-    else:
-        items = data.get("dead_items", data.get("items", []))
-    if items:
-        lines.append("### Items")
-        for item in items[:15]:
+
+    # Show items from each category
+    results = data.get("results", {})
+    shown = 0
+    max_show = 20
+
+    for cat_name, items in results.items():
+        if not items or shown >= max_show:
+            continue
+        lines.append(f"### {cat_name.replace('_', ' ').title()}")
+        lines.append("")
+        for item in items[:10]:
             file = item.get("file", "")
             line = item.get("line", "")
             dtype = item.get("type", item.get("category", ""))
             name = item.get("name", item.get("fn", ""))
-            lines.append(f"- `{file}:{line}` — {dtype}: {name}")
+            msg = item.get("message", "")
+            if msg:
+                lines.append(f"- `{file}:{line}` — {name}: {msg}")
+            else:
+                lines.append(f"- `{file}:{line}` — {dtype}: {name}")
+            shown += 1
         lines.append("")
 
 
@@ -574,19 +582,10 @@ def _md_entrypoints(data: Dict, lines: list) -> None:
         label = ep.get("label", "")
         extra = ""
         if etype == "http_handler":
-            method = ep.get("method", "")
-            path = ep.get("path", "")
-            handler = ep.get("handler", "")
-            extra = f" **{method}** `{path}`"
-            if handler and handler not in ("anonymous", "unknown"):
-                extra += f" → {handler}"
-        elif etype == "module_export":
-            handler = ep.get("handler", "")
-            if handler and handler not in ("anonymous", "unknown"):
-                extra = f" ({handler})"
-        # Use bold type to prevent ANSI escape interpretation
-        # (e.g., [module_export] → [m is interpreted as ESC[m reset sequence)
-        lines.append(f"- **{etype}** `{file}:{line}` — {label}{extra}")
+            extra = f" `{ep.get('method', '')} {ep.get('path', '')}`"
+        # Use angle brackets to avoid markdown link reference interpretation.
+        # [main] gets consumed as a markdown link ref, showing "ain]" instead.
+        lines.append(f"- <{etype}> `{file}:{line}` — {label}{extra}")
     lines.append("")
 
 
@@ -1807,12 +1806,6 @@ def _md_ask(data: Dict, lines: list) -> None:
         "debug-leak": _md_debug_leak,
         "state-map": _md_state_map,
         "dependents": _md_dependents,
-        "diff": _md_diff,
-        "detect": _md_detect,
-        "refactor-safe": _md_refactor_safe,
-        "css-deep": _md_css_deep,
-        "a11y": _md_a11y,
-        "regex-audit": _md_regex_audit,
     }
 
     formatter = formatter_map.get(sub_command)

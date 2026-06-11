@@ -1015,29 +1015,90 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
         return {"stores": [], "flow": []}
 
+    # v6: Expanded skip list for constants that are NOT mutable state.
+    # ALL_CAPS patterns are immutable constants, not state stores.
+    # PascalCase patterns that are React components or class instantiations
+    # are also not state.
+    CONSTANT_SKIP_PATTERNS = {
+        # Common environment/config constants
+        'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN',
+        'DEFAULT', 'NULL', 'UNDEFINED', 'TRUE', 'FALSE', 'PI',
+        # Common application constants that are not state
+        'LOGO', 'ICON', 'COLOR', 'COLOUR', 'THEME', 'NAME', 'TITLE',
+        'PATH', 'KEY', 'ID', 'TOKEN', 'SECRET', 'TYPE', 'STATUS',
+        'LABEL', 'TEXT', 'DESC', 'DESCRIPTION', 'VALUE', 'DATA',
+        'TIMEOUT', 'DELAY', 'INTERVAL', 'LIMIT', 'SIZE', 'LENGTH',
+        'WIDTH', 'HEIGHT', 'DEPTH', 'OFFSET', 'INDEX', 'COUNT',
+        'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
+        'PATTERN', 'REGEX', 'MASK', 'TEMPLATE', 'SCHEMA',
+    }
+
     lines = content.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
 
         # Module-level const/let/var with initial values (potential globals)
-        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*', stripped)
+        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
         if m:
             var_name = m.group(1)
-            # Skip common non-state constants
-            skip = {'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN',
-                    'DEFAULT', 'NULL', 'UNDEFINED', 'TRUE', 'FALSE', 'PI'}
-            if var_name in skip or len(var_name) <= 2:
+            value_part = m.group(2).strip() if m.group(2) else ""
+
+            # v6: Skip ALL_CAPS constants — they are immutable, not state.
+            # A name like MAX_FILES, FETCH_TIMEOUT_MS is a constant.
+            if var_name == var_name.upper() and '_' in var_name:
                 continue
+
+            # Skip common non-state constants
+            if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
+                continue
+
+            # v6: Skip React components — PascalCase + arrow function or function
+            # A line like "const Logo = () =>" or "const Button = function" is NOT state.
+            # Also handles: "const X: React.FC<Props> = () =>", "const X = forwardRef(...)",
+            # "const X = memo(...)", "const X = styled.div(...)", etc.
+            if value_part.startswith('((') or value_part.startswith('()') or value_part.startswith('function'):
+                continue
+            # Arrow functions with optional type annotation: "value =>", "() =>", "<T>(...) =>"
+            if '=>' in value_part and not value_part.startswith('{'):
+                continue
+            # Skip forwardRef, memo, styled, createStyled, etc.
+            if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
+                continue
+            # Skip JSX components: "const X = <SomeComponent"
+            if value_part.startswith('<'):
+                continue
+
+            # v6: Skip class instantiations of known non-state patterns
+            # "const x = createSomething()" is a factory, not necessarily state
+            # But "const x = createStore()" IS state
+            if re.match(r'create(?!Store|Context|Slice|Reducer|State)', value_part):
+                # Skip factories that are NOT state-related
+                pass
+
+            # Only classify as state if the value looks mutable
+            # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
+            is_mutable = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
+            # Immutable patterns: string, number, boolean, null, undefined, template literal
+            is_immutable = bool(re.match(r'^([\'"`\d]|true|false|null|undefined|`)', value_part))
+
+            if is_immutable:
+                continue
+
+            # For things that don't match either pattern, include them
+            # (could be function calls that return mutable objects)
+            store_type = "global"
+            framework = "module_level_js"
 
             stores.append({
                 "name": var_name,
-                "type": "global",
-                "framework": "module_level_js",
+                "type": store_type,
+                "framework": framework,
                 "defined_in": rel_path,
                 "line": i + 1,
                 "slices": [],
                 "actions": [],
                 "consumers": [],
+                "mutable": is_mutable,
             })
 
     # Singleton patterns: const instance = new ClassName()
@@ -1060,22 +1121,10 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
-    # module.exports = { stateful_obj }
-    for m in re.finditer(r'module\.exports\s*=\s*\{([^}]+)\}', content):
-        exports_body = m.group(1)
-        for em in re.finditer(r'(\w+)\s*:', exports_body):
-            line_num = content[:m.start()].count('\n') + 1
-            stores.append({
-                "name": em.group(1),
-                "type": "global",
-                "framework": "module_level_js",
-                "defined_in": rel_path,
-                "line": line_num,
-                "exported": True,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-            })
+    # v6: Skip module.exports scanning — it produces massive false positives.
+    # Every exported utility function gets classified as a "state store",
+    # which is incorrect. Module exports are API surfaces, not state.
+    # Only track stateful singletons (already handled above).
 
     return {"stores": stores, "flow": flow}
 

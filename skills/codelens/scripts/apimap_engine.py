@@ -332,6 +332,42 @@ def _extract_js_routes(
             })
 
     # Direct method calls: app.get('/path', ...), router.post('/path', ...)
+    # Expanded skip list: objects that are NOT web routers but have .get/.post/.delete methods
+    NON_ROUTER_OBJECTS = {
+        # Built-in / standard library
+        "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
+        "WeakMap", "WeakSet", "Date", "RegExp", "Error", "Symbol", "Proxy",
+        "Reflect", "Int8Array", "Uint8Array", "Float32Array", "Float64Array",
+        # Web API objects with .get/.set/.delete
+        "request", "response", "headers", "cache", "store", "session",
+        "localStorage", "sessionStorage", "indexedDB", "cookie", "cookies",
+        "formData", "searchParams", "params", "query", "body", "url", "URL",
+        "navigator", "document", "window", "history", "location",
+        # Node.js objects with .get/.set/.delete
+        "process", "env", "config", "options", "args", "argv",
+        # Common non-router patterns
+        "db", "database", "redis", "mongo", "postgres", "pool", "client",
+        "socket", "io", "transport", "adapter", "driver", "connection",
+        "emitter", "eventEmitter", "bus", "dispatcher", "broker",
+        "logger", "metrics", "tracer", "span",
+        "state", "ref", "snapshot", "observer", "subscription",
+        "map", "set", "weakMap", "weakSet", "dict", "registry",
+        "collection", "list", "queue", "stack", "heap",
+        "repo", "repository", "service", "manager", "controller",
+        "ctx", "context", "req", "res", "next",
+        # DOM / browser APIs
+        "element", "node", "attr", "style", "classList",
+    }
+
+    # Known router variable names — if the object matches one of these,
+    # the route is very likely legitimate even without a leading /
+    ROUTER_VAR_NAMES = {
+        "app", "router", "server", "fastify", "hono", "koa", "express",
+        "api", "routes", "endpoints", "apiRouter", "authRouter",
+        "publicRouter", "privateRouter", "adminRouter", "v1Router",
+        "v2Router", "apiV1", "apiV2", "restRouter", "graphqlRouter",
+    }
+
     for m in re.finditer(
         r'(\w+)\s*\.\s*(get|post|put|delete|patch|head|options)\s*\(\s*[\'"`]([^\'"`]*)[\'"`]',
         content
@@ -340,10 +376,17 @@ def _extract_js_routes(
         http_method = m.group(2).upper()
         route_path = m.group(3)
 
-        # Skip non-route method calls
-        if obj_name in {"console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math"}:
+        # Skip known non-router objects
+        if obj_name in NON_ROUTER_OBJECTS:
             continue
         if http_method.lower() not in HTTP_METHODS:
+            continue
+
+        # v6: Require route paths to start with '/' for non-router objects.
+        # This eliminates false positives from headers.get('user-agent'),
+        # cache.get('message'), map.delete('key'), etc.
+        is_known_router = obj_name in ROUTER_VAR_NAMES or obj_name in router_vars
+        if not is_known_router and not route_path.startswith('/'):
             continue
 
         line_num = content[:m.start()].count('\n') + 1

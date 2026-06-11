@@ -5,26 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.8.0] — 2026-06-12
+## [6.0.0] — 2026-06-12
 
 ### Added
+- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
+- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
+- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
+- **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
 
-- **SearchConfig dataclass** (`scripts/search_engine.py`): Introduced `SearchConfig` dataclass to replace the 11-parameter `search_workspace()` function. The old function is preserved for backward compatibility and now delegates to `search_with_config(cfg)`. This eliminates the `many_params` code smell (11 → 2 parameters) and makes call sites self-documenting.
-- **FrontendRegistryInput dataclass** (`scripts/registry.py`): Introduced `FrontendRegistryInput` dataclass to replace the 9-parameter `build_frontend_registry()` function. Legacy function preserved for backward compatibility, delegates to `build_frontend_registry_from_input(inp)`. Eliminates the `many_params` code smell (9 → 1 parameter).
-- **Package manager detection** (`scripts/framework_detect.py`): Added automatic detection of package managers from lock files: `bun.lock` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. Exposed as `detected.package_manager` in framework detection output.
-- **tRPC / oRPC framework detection** (`scripts/framework_detect.py`): Added `has_trpc` and `has_orpc` flags to framework detection by checking `@trpc/server`, `@trpc/client`, `@orpc/server`, `@orpc/client` in package dependencies.
-- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
-- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
-- **Missing logger import fix** (`scripts/framework_detect.py`): Added `logger` import from `utils` — the module was referencing `logger.debug()` without importing it, causing `NameError` at runtime when parsing requirements.txt/pyproject.toml failed.
-
-### Changed
-
-- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
-- **Version bump**: Updated from 5.7.1 to 5.8.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
-
-### Test Target Documentation
-
-- **trpc/trpc** (GitHub): Used as a test target for this release — a large TypeScript monorepo with 731 JS backend files, 257 TSX files, and 1081 backend nodes. The codelens scan completed successfully, detecting Vue + Tailwind frameworks and producing 4899 edges across the codebase. This validated framework detection, large-scale AST parsing, and edge resolution at scale.
+### Fixed
+- **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
+- **API route false positives**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
+- **CSS specificity false positives**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba()`, `var()`, gradient values as selectors.
+- **State map over-classification**: Skips ALL_CAPS constants, React components (arrow functions, forwardRef, memo, styled), and immutable values. Removed module.exports scanning.
+- **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
+- **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
+- **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
 
 ## [5.6.0] — 2026-06-11
 
