@@ -398,8 +398,9 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
     flow = []
 
     # createContext — named pattern: const FooContext = createContext()
+    # v6.2: Also handles generic type params: const FooContext = createContext<Type>(null)
     for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*\(',
+        r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
         content
     ):
         ctx_name = m.group(1)
@@ -425,8 +426,9 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
 
     # createContext — variable assignment without "Context" suffix
     # e.g., const ProxiesContext = createContext()
+    # v6.2: Also handles generic type params: const Foo = createContext<Type>(null)
     for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+)\s*=\s*createContext\s*\(',
+        r'(?:const|let|var)\s+(\w+)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
         content
     ):
         ctx_name = m.group(1)
@@ -1138,6 +1140,15 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             # Skip Svelte store creators — they are detected by _detect_svelte_stores()
             if re.match(r'^(writable|readable|derived)\s*\(', value_part):
+                continue
+
+            # v6.2: Skip React Context patterns — they are detected by _extract_react_context().
+            # Variables ending in "Context" that are assigned createContext() are
+            # React Context objects, not generic module-level state.
+            if var_name.endswith('Context'):
+                continue
+            # Also skip if value is createContext(...)
+            if re.match(r'^createContext\s*\(', value_part):
                 continue
 
             # v6: Skip class instantiations of known non-state patterns

@@ -5,6 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.0] — 2026-06-12
+
+### Added
+- **Tauri IPC invoke() extraction in TSX parser**: `TSXParser._parse_call()` now detects `invoke('commandName')` patterns and creates edges with `ipc_bridge` and `ipc_call` metadata, enabling direct resolution of TypeScript IPC calls to Rust `#[tauri::command]` handlers.
+- **Tauri IPC invoke() extraction in JS backend parser**: Same invoke() detection added to `JSBackendParser` for `.ts` service files.
+- **IPC-aware API map engine**: New `_extract_tauri_ipc_calls()` and `_extract_tauri_rust_commands()` functions detect `invoke()` call sites as `IPC_CALL` routes and `#[tauri::command]` as `IPC_HANDLER` routes. Tauri IPC is now detected as a `tauri_ipc` framework in the api-map output.
+- **Tauri IPC bridge section in handbook**: Handbook now includes a `tauri_ipc_bridge` section showing matched pairs between frontend `invoke()` calls and Rust command handlers, plus unmatched calls/handlers.
+- **IPC-aware ask command routing**: New keyword patterns for Tauri IPC queries ("tauri command", "ipc bridge", "invoke", "frontend backend", "cross-language", "rust command") route to `api-map` with high priority.
+- **Improved edge resolver for IPC edges**: New `_match_ipc_command()` function with 3-tier matching strategy (direct ipc_name, case conversion, fn_name). Processes `ipc_call=True` edges from TSX/JS parsers in Pass 1, then falls back to unresolved edge matching in Pass 2.
+
+### Fixed
+- **React hook dead-code false positives**: Variables matching `useXxx` pattern (React hooks) are no longer flagged as "declared but never used" when exported or defined as arrow functions, since they are always used cross-file via imports.
+- **Exported variable dead-code false positives**: Variables declared on lines containing the `export` keyword are now skipped in unused variable detection, as they are consumed by other files.
+- **React Context misclassified in state-map**: Variables ending in "Context" or assigned `createContext()` are now properly skipped by the module-level state detector, preventing double-detection as both "react_context" and "module_level_js".
+- **"how does" pattern lower priority**: The generic "how does" trace pattern now has `low` confidence instead of `medium`, preventing it from overriding more specific IPC/framework patterns.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

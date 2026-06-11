@@ -271,7 +271,10 @@ class JSBackendParser(BaseParser):
         return calls
 
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:
-        """Parse a call_expression node to extract the called function name."""
+        """Parse a call_expression node to extract the called function name.
+
+        Also detects Tauri IPC invoke() calls and marks them with ipc_bridge metadata.
+        """
         func_node = node.child_by_field_name('function')
         if not func_node:
             return None
@@ -283,6 +286,16 @@ class JSBackendParser(BaseParser):
             name = func_text
             if name in SKIP_NAMES:
                 return None
+
+            # ─── Tauri IPC invoke() detection ───────────────────
+            # Detect: invoke('commandName')
+            if name == 'invoke':
+                ipc_cmd_name = self._extract_invoke_command(node, source)
+                if ipc_cmd_name:
+                    return {"fn_name": ipc_cmd_name, "ipc_bridge": True, "ipc_call": True}
+                # invoke() without string literal — still mark as IPC
+                return {"fn_name": "invoke", "ipc_bridge": True}
+
             return {"fn_name": name}
 
         # Member expression: obj.method(args)
@@ -301,6 +314,13 @@ class JSBackendParser(BaseParser):
                                    'appendChild', 'removeChild', 'insertBefore'):
                     return None
 
+                # ─── Tauri IPC obj.invoke() detection ───────────
+                # Detect: somePlugin.invoke('cmd')
+                if method_name == 'invoke':
+                    ipc_cmd_name = self._extract_invoke_command(node, source)
+                    if ipc_cmd_name:
+                        return {"fn_name": ipc_cmd_name, "ipc_bridge": True, "ipc_call": True}
+
                 # Check if it's self.method()
                 if obj_node and self.get_text(obj_node, source) == 'self':
                     return {"fn_name": method_name, "via_self": True}
@@ -310,4 +330,21 @@ class JSBackendParser(BaseParser):
                 # But for edge resolution, use just the method name
                 return {"fn_name": method_name, "via_self": False}
 
+        return None
+
+    def _extract_invoke_command(self, call_node: Node, source: bytes) -> Optional[str]:
+        """Extract the command name from a Tauri invoke() call."""
+        args_node = call_node.child_by_field_name('arguments')
+        if not args_node:
+            return None
+        for child in args_node.children:
+            if child.type == 'string':
+                text = self.get_text(child, source)
+                # Strip quotes
+                if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
+                    return text[1:-1]
+            elif child.type == 'template_string':
+                text = self.get_text(child, source)
+                if '${' not in text:
+                    return text.strip('`')
         return None

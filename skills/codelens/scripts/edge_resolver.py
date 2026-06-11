@@ -288,32 +288,59 @@ def _resolve_tauri_ipc_edges(
     edge resolution cannot handle, since invoke('getProfiles') in TS
     and fn get_profiles() in Rust are in completely different files
     with different naming conventions.
+
+    v6.2 improvement: Also processes edges already marked with ipc_call=True
+    from the TSX parser (which extracts invoke('commandName') directly).
+    This makes IPC resolution more reliable because the TSX parser already
+    identified the command name string literal.
     """
     ipc_edges_added = 0
 
-    # Find all nodes that represent invoke() call sites.
-    # These are TS/JS functions that contain invoke('commandName') calls.
-    # We look at unresolved edges with to_fn matching invoke patterns,
-    # or we scan the API map data from the scan output.
-    #
-    # Strategy: For each TS/JS node, check if any of its outgoing
-    # unresolved edges look like Tauri invoke calls. Then resolve
-    # them against the ipc_name_to_nodes index.
+    # Build node lookup by id for fast access
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in all_nodes}
 
-    # Build a map of from_id → outgoing unresolved edges
+    # ─── Pass 1: Process edges with ipc_call=True from TSX parser ─────
+    # The TSX parser now extracts invoke('commandName') calls and creates
+    # edges with to_fn=commandName and ipc_call=True. We resolve these
+    # directly against the IPC name index.
+    for edge in resolved_edges:
+        if not edge.get("ipc_call"):
+            continue
+
+        to_fn = edge.get("to_fn", "")
+        if not to_fn or to_fn == "invoke":
+            # Dynamic invoke() without a string literal — try regex scan
+            continue
+
+        target_node = _match_ipc_command(to_fn, ipc_name_to_nodes, node_by_id)
+
+        if target_node:
+            edge["to"] = target_node["id"]
+            edge["resolved"] = True
+            edge["ipc_bridge"] = True
+            if "to_fn" in edge:
+                del edge["to_fn"]
+            ipc_edges_added += 1
+        else:
+            # IPC command not found in Rust — still mark as IPC bridge
+            # but keep as unresolved. This could indicate a dynamically
+            # registered command or a plugin command.
+            edge["ipc_bridge"] = True
+            edge["resolved"] = False
+            edge["unresolved_reason"] = "ipc_command_not_found_in_rust"
+
+    # ─── Pass 2: Try unresolved edges (legacy path) ────────────────
+    # For edges that weren't tagged by the TSX parser (e.g., JS backend files)
+    # we fall back to the original strategy of matching unresolved edges
+    # against IPC command names.
     from_id_to_unresolved: Dict[str, List[Dict]] = defaultdict(list)
     for edge in resolved_edges:
-        if edge.get("resolved") is False:
+        if edge.get("resolved") is False and not edge.get("ipc_call"):
             from_id_to_unresolved[edge["from"]].append(edge)
 
     # For each unresolved edge, try to match against IPC command names
     for from_id, unresolved in from_id_to_unresolved.items():
-        from_node = None
-        for n in all_nodes:
-            if n["id"] == from_id:
-                from_node = n
-                break
-
+        from_node = node_by_id.get(from_id)
         if not from_node:
             continue
 
@@ -328,21 +355,7 @@ def _resolve_tauri_ipc_edges(
             if not to_fn:
                 continue
 
-            # Try to match the unresolved function name against IPC command names
-            # The IPC name in invoke() is camelCase, matching ipc_name field
-            target_node = None
-
-            # Direct match on ipc_name
-            if to_fn in ipc_name_to_nodes:
-                candidates = ipc_name_to_nodes[to_fn]
-                target_node = candidates[0]
-
-            # Try snake_case version (in case parser extracted the Rust name)
-            if not target_node:
-                alt_key = _to_alternate_case(to_fn)
-                if alt_key in ipc_name_to_nodes:
-                    candidates = ipc_name_to_nodes[alt_key]
-                    target_node = candidates[0]
+            target_node = _match_ipc_command(to_fn, ipc_name_to_nodes, node_by_id)
 
             if target_node:
                 # Replace the unresolved edge with a resolved IPC edge
@@ -352,13 +365,42 @@ def _resolve_tauri_ipc_edges(
                 del edge["to_fn"]
                 ipc_edges_added += 1
 
-    # Also scan for invoke() calls by examining the API map data
-    # which has already extracted invoke('commandName') patterns.
-    # We look for the api-map in the workspace .codelens directory.
-    # This is done by the scan command, not here — but we add edges
-    # for any invoke patterns found in the TS parser's raw output.
-
     return resolved_edges
+
+
+def _match_ipc_command(
+    name: str,
+    ipc_name_to_nodes: Dict[str, List[Dict]],
+    node_by_id: Dict[str, Dict]
+) -> Optional[Dict]:
+    """Try to match a name against Tauri IPC command nodes.
+
+    Matching strategy (in order of priority):
+    1. Direct match on ipc_name (camelCase, e.g., 'getProfiles')
+    2. Case conversion: snake_case ↔ camelCase
+    3. Direct match on fn_name (for Rust snake_case names passed directly)
+
+    Returns the best matching node, or None if no match found.
+    """
+    # 1. Direct match on ipc_name (camelCase)
+    if name in ipc_name_to_nodes:
+        candidates = ipc_name_to_nodes[name]
+        return candidates[0]
+
+    # 2. Case conversion: try alternate case
+    alt_key = _to_alternate_case(name)
+    if alt_key in ipc_name_to_nodes:
+        candidates = ipc_name_to_nodes[alt_key]
+        return candidates[0]
+
+    # 3. Try matching against Rust fn names directly
+    # This handles cases where the TSX parser extracted the snake_case name
+    for ipc_name, candidates in ipc_name_to_nodes.items():
+        for candidate in candidates:
+            if candidate.get("fn") == name or candidate.get("fn") == alt_key:
+                return candidate
+
+    return None
 
 
 def resolve_tauri_ipc_from_apimap(

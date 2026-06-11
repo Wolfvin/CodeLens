@@ -4,7 +4,7 @@ import os
 import json
 import re
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from registry import load_config, ensure_codelens_dir
 from framework_detect import detect_frameworks
@@ -133,10 +133,13 @@ def cmd_handbook(workspace: str, quick_mode: bool = False) -> Dict[str, Any]:
             {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
             for r in api_result.get("routes", [])[:50]
         ]
+        # v6.2: Extract Tauri IPC bridge information
+        tauri_ipc_bridge = _extract_tauri_ipc_bridge(api_result)
         engines_ok.append("api-map")
     except Exception:
         logger.warning("API route mapping failed", exc_info=True)
         api_routes = []
+        tauri_ipc_bridge = None
         engines_failed.append("api-map")
 
     # 8. State management
@@ -224,7 +227,8 @@ def cmd_handbook(workspace: str, quick_mode: bool = False) -> Dict[str, Any]:
             "directory_map": directory_map,
             "entrypoints": entrypoints,
             "api_routes": api_routes,
-            "state_management": state_stores
+            "state_management": state_stores,
+            **({"tauri_ipc_bridge": tauri_ipc_bridge} if tauri_ipc_bridge else {}),
         },
         "health": health,
         "conventions": conventions,
@@ -520,6 +524,103 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
     except Exception:
         logger.warning("Directory map building failed", exc_info=True)
     return dir_map
+
+
+def _extract_tauri_ipc_bridge(api_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Extract Tauri IPC bridge information from the API map result.
+
+    Returns a dict with:
+    - ipc_calls: List of invoke() calls from the frontend
+    - ipc_handlers: List of #[tauri::command] handlers from Rust
+    - matched_pairs: invoke() calls matched to their Rust handlers
+    - unmatched_calls: Frontend invoke() calls with no matching Rust handler
+    - unmatched_handlers: Rust commands with no matching invoke() call
+
+    Returns None if no Tauri IPC routes were detected.
+    """
+    routes = api_result.get("routes", [])
+    frameworks = api_result.get("frameworks_detected", [])
+
+    # Check if Tauri IPC was detected
+    is_tauri_ipc = any(
+        f == "tauri_ipc" or (isinstance(f, str) and "tauri" in f.lower())
+        for f in (frameworks if isinstance(frameworks, (list, set)) else [])
+    )
+
+    ipc_calls = [r for r in routes if r.get("method") == "IPC_CALL"]
+    ipc_handlers = [r for r in routes if r.get("method") == "IPC_HANDLER"]
+
+    # Also check for IPC patterns in regular routes (legacy path)
+    if not ipc_calls and not ipc_handlers:
+        return None
+
+    # Match IPC calls to handlers
+    # Handles both standard Tauri naming (camelCase invoke → camelCase ipc_name)
+    # and non-standard naming (snake_case invoke → matches Rust fn_name directly)
+    matched_pairs = []
+    matched_call_files = set()
+    matched_handler_files = set()
+    matched_handler_indices = set()
+
+    def _snake_to_camel(name):
+        """Convert snake_case to camelCase."""
+        if '_' not in name:
+            return name
+        parts = name.split('_')
+        return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
+
+    for call in ipc_calls:
+        call_name = call.get("handler_name_ipc", call.get("handler_name", ""))
+        matched_handler = None
+
+        for idx, handler in enumerate(ipc_handlers):
+            if idx in matched_handler_indices:
+                continue
+
+            handler_ipc_name = handler.get("handler_name_ipc", handler.get("handler_name", ""))
+            handler_fn_name = handler.get("rust_fn_name", handler.get("handler_name", ""))
+
+            # Try multiple matching strategies
+            if (call_name == handler_ipc_name or              # Direct match
+                call_name == handler_fn_name or                # snake_case match
+                _snake_to_camel(call_name) == handler_ipc_name or  # snake→camel match
+                call_name == handler_fn_name.replace('_', '')):    # Fuzzy match
+                matched_handler = handler
+                matched_handler_indices.add(idx)
+                break
+
+        if matched_handler:
+            matched_pairs.append({
+                "ipc_name": call_name,
+                "frontend_call": {"file": call.get("file"), "line": call.get("line")},
+                "rust_handler": {"file": matched_handler.get("file"), "line": matched_handler.get("line"), "fn": matched_handler.get("rust_fn_name", matched_handler.get("handler_name", ""))},
+            })
+            matched_call_files.add(call.get("file", ""))
+            matched_handler_files.add(matched_handler.get("file", ""))
+
+    # Find unmatched
+    matched_call_names = {p["ipc_name"] for p in matched_pairs}
+    matched_handler_names = {h.get("handler_name_ipc", h.get("handler_name", "")) for idx, h in enumerate(ipc_handlers) if idx in matched_handler_indices}
+    unmatched_calls = [
+        {"ipc_name": c.get("handler_name_ipc", c.get("handler_name", "")), "file": c.get("file"), "line": c.get("line")}
+        for c in ipc_calls
+        if c.get("handler_name_ipc", c.get("handler_name", "")) not in matched_call_names
+    ]
+    unmatched_handlers = [
+        {"ipc_name": h.get("handler_name_ipc", h.get("handler_name", "")), "rust_fn": h.get("rust_fn_name", h.get("handler_name", "")), "file": h.get("file"), "line": h.get("line")}
+        for idx, h in enumerate(ipc_handlers)
+        if idx not in matched_handler_indices
+    ]
+
+    return {
+        "total_ipc_calls": len(ipc_calls),
+        "total_ipc_handlers": len(ipc_handlers),
+        "matched_pairs": matched_pairs[:50],
+        "unmatched_calls": unmatched_calls[:20],
+        "unmatched_handlers": unmatched_handlers[:20],
+        "call_source_files": sorted(matched_call_files),
+        "handler_source_files": sorted(matched_handler_files),
+    }
 
 
 def _detect_conventions(workspace: str) -> Dict[str, Any]:

@@ -370,7 +370,11 @@ class TSXParser(BaseParser):
 
     def _parse_call(self, node: Node, source: bytes,
                      fn_declarations: List[Dict]) -> Optional[Dict]:
-        """Parse a call expression and return an edge if it's within a known function."""
+        """Parse a call expression and return an edge if it's within a known function.
+
+        Also detects Tauri IPC invoke() calls and marks them with ipc_bridge metadata
+        so the edge resolver can connect them to the corresponding Rust #[tauri::command].
+        """
         func_node = node.child_by_field_name('function')
         if not func_node:
             return None
@@ -392,6 +396,23 @@ class TSXParser(BaseParser):
         if not caller_id:
             return None
 
+        # ─── Tauri IPC invoke() detection ───────────────────────
+        # Detect: invoke('commandName') or invoke<string>('commandName')
+        # These are Tauri IPC calls from TypeScript frontend to Rust backend.
+        # We extract the command name and create an edge with ipc_bridge metadata
+        # so the edge resolver can match it to the Rust #[tauri::command] handler.
+        if func_text == 'invoke':
+            ipc_cmd_name = self._extract_invoke_command(node, source)
+            if ipc_cmd_name:
+                return {
+                    "from": caller_id,
+                    "to_fn": ipc_cmd_name,
+                    "ipc_bridge": True,
+                    "ipc_call": True
+                }
+            # invoke() without a string literal arg — still track as IPC call
+            return {"from": caller_id, "to_fn": "invoke", "ipc_bridge": True}
+
         # Determine called function name
         if func_node.type == 'identifier':
             name = func_text
@@ -405,8 +426,47 @@ class TSXParser(BaseParser):
                 method_name = self.get_text(prop_node, source)
                 if method_name in self.SKIP_NAMES:
                     return None
+                # Detect: somePlugin.invoke('cmd') or api.invoke('cmd')
+                if method_name == 'invoke':
+                    ipc_cmd_name = self._extract_invoke_command(node, source)
+                    if ipc_cmd_name:
+                        return {
+                            "from": caller_id,
+                            "to_fn": ipc_cmd_name,
+                            "ipc_bridge": True,
+                            "ipc_call": True
+                        }
                 return {"from": caller_id, "to_fn": method_name}
 
+        return None
+
+    def _extract_invoke_command(self, call_node: Node, source: bytes) -> Optional[str]:
+        """Extract the command name string from a Tauri invoke() call.
+
+        Handles:
+        - invoke('getProfiles')
+        - invoke<string>('getProfiles')
+        - invoke("getProfiles")
+        - invoke(`getProfiles`)  — template literal with no interpolation
+
+        Returns the command name as a string, or None if not found.
+        """
+        args_node = call_node.child_by_field_name('arguments')
+        if not args_node:
+            return None
+
+        # The first argument should be a string literal with the command name
+        for child in args_node.children:
+            if child.type == 'string':
+                value = self._get_string_value(child, source)
+                if value:
+                    return value
+            elif child.type == 'template_string':
+                # Template literal: `commandName` with no ${} interpolation
+                text = self.get_text(child, source)
+                if '${' not in text:
+                    # Strip backticks
+                    return text.strip('`')
         return None
 
     def _get_string_value(self, node: Node, source: bytes) -> Optional[str]:
