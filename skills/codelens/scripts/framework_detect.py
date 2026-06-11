@@ -82,7 +82,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["django"],
         "pip_packages": ["django"],
         "config_files": ["manage.py"],
-        "indicators": []
+        "indicators": ["django/__init__.py", "django/apps/", "django/conf/", "django/contrib/", "django/core/"]
     },
     "celery": {
         "packages": ["celery"],
@@ -374,6 +374,24 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "svelte" not in detected["frameworks"]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
+
+    # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
+    # Some frameworks have distinctive directory structures even when they're the
+    # framework source itself (not a project using the framework).
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for indicator in sig.get("indicators", []):
+            indicator_path = os.path.join(workspace, indicator)
+            if os.path.exists(indicator_path):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "django":
+                    detected["has_django"] = True
+                elif fw_name == "fastapi":
+                    detected["has_fastapi"] = True
+                elif fw_name == "flask":
+                    detected["has_flask"] = True
+                break
 
     # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
