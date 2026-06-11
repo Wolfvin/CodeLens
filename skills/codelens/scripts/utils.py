@@ -185,6 +185,66 @@ def is_file_path(name: str) -> bool:
     return False
 
 
+# ─── Generated File Detection ───────────────────────────────────
+
+_GENERATED_FILE_PATTERNS = frozenset({
+    # Lock files
+    'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'uv.lock',
+    'go.sum', 'composer.lock', 'pipfile.lock',
+    # Generated/config artifacts
+    '.DS_Store', 'Thumbs.db', 'desktop.ini',
+})
+
+_GENERATED_FILE_PREFIXES = (
+    # Auto-generated files
+    '.min.',  # minified JS/CSS
+)
+
+_GENERATED_FILE_SUFFIXES = frozenset({
+    '.map',       # source maps
+    '.d.ts',      # TypeScript declarations
+    '.bundle.js',
+    '.chunk.js',
+})
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped for analysis.
+
+    Detects:
+    1. Lock files (package-lock.json, Cargo.lock, etc.)
+    2. Minified files (.min.js, .min.css)
+    3. Source maps (.map)
+    4. TypeScript declaration files (.d.ts)
+    5. OS artifacts (.DS_Store, Thumbs.db)
+    6. Bundled/chunked output (.bundle.js, .chunk.js)
+
+    Args:
+        filename: Just the file name (not the full path).
+
+    Returns:
+        True if the file is auto-generated and should be skipped.
+    """
+    basename = filename.lower()
+
+    # Exact match against known generated file names
+    if basename in _GENERATED_FILE_PATTERNS:
+        return True
+
+    # Prefix patterns (e.g., .min.js, .min.css)
+    for prefix in _GENERATED_FILE_PREFIXES:
+        if prefix in basename:
+            return True
+
+    # Suffix patterns (e.g., .map, .d.ts, .bundle.js)
+    for suffix in _GENERATED_FILE_SUFFIXES:
+        if basename.endswith(suffix):
+            return True
+
+    return False
+
+
 def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     """Deduplicate callers by (file, line) tuple."""
     seen = set()

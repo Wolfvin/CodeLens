@@ -162,11 +162,36 @@ def check_env_vars(
         )
 
     # Step 3: Determine is_required for each var
-    for var_info in env_vars.values():
+    # Heuristic: env vars referenced only in CI/release scripts (scripts/,
+    # .github/, Makefile, etc.) are considered optional for the application
+    # itself — they are deployment infrastructure, not runtime requirements.
+    _CI_SCRIPT_DIRS = frozenset({'scripts', 'scripts-workflow', '.github', '.ci', 'ci'})
+    _CI_FILE_PATTERNS = frozenset({'Makefile', 'makefile', 'Jenkinsfile', '.gitlab-ci.yml'})
+
+    for var_name_key, var_info in env_vars.items():
         has_env_file = bool(var_info["defined_in_env_file"])
         has_fallback = var_info["has_fallback"]
+
+        # Check if this var is only referenced in CI/script files
+        refs = var_info.get("referenced_in", [])
+        all_refs_in_ci = bool(refs) and all(
+            any(ci_dir in ref.get("file", "") for ci_dir in _CI_SCRIPT_DIRS)
+            or any(ci_pat == os.path.basename(ref.get("file", "")) for ci_pat in _CI_FILE_PATTERNS)
+            for ref in refs
+        )
+
         # Required if no fallback AND not defined in any .env file
-        var_info["is_required"] = not has_fallback and not has_env_file
+        # AND not only referenced in CI/release scripts
+        var_info["is_required"] = (
+            not has_fallback
+            and not has_env_file
+            and not all_refs_in_ci
+        )
+        # Mark CI-only vars for clarity in output
+        if all_refs_in_ci and not has_fallback and not has_env_file:
+            var_info["is_ci_only"] = True
+        else:
+            var_info["is_ci_only"] = False
 
     # Step 4: Apply filter
     if var_name:
