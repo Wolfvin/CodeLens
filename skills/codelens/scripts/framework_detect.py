@@ -154,7 +154,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 4. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
-        tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
+        tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
             skip = False
             for ignore in ['node_modules', '.git', 'dist', 'build', 'target', '__pycache__']:

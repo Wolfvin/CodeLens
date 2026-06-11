@@ -267,9 +267,23 @@ ENV_SECRET_PATTERNS = [
 
 # ─── Entropy thresholds ───────────────────────────────────────
 
-ENTROPY_THRESHOLD = 4.0
+ENTROPY_THRESHOLD = 4.5
 MIN_SECRET_LENGTH = 12
 MAX_SECRET_LENGTH = 256
+
+# Entropy scan exclusions — strings matching these patterns are not secrets
+ENTROPY_EXCLUSION_PATTERNS = [
+    re.compile(r'^data:(?:image|application|audio|video)/'),  # Data URIs
+    re.compile(r'^https?://'),                                # URLs
+    re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+'),       # Email-like
+    re.compile(r'^\d+(\.\d+){1,3}$'),                       # IP-like / version
+    re.compile(r'^[A-Z][a-z]+[A-Z]'),                         # PascalCase (class names)
+    re.compile(r'^(?:const|let|var|import|export|from|require)'), # JS keywords
+    re.compile(r'^\.{0,2}/'),                                 # Relative paths
+    re.compile(r'^[a-f0-9]{7,40}$', re.IGNORECASE),           # Short git hashes
+    re.compile(r'^\$\{'),                                     # Template literals
+    re.compile(r'^[A-Za-z0-9+/]+=*$'),                        # Pure base64 (likely encoded data, not secret)
+]
 
 def detect_secrets(
     workspace: str,
@@ -430,8 +444,23 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, 
 
     all_candidates = set(quoted_strings + assignments)
 
+    # Cap candidates per file to avoid processing thousands from minified files
+    if len(all_candidates) > 200:
+        # Prioritize assignment-style values (more likely to be secrets)
+        priority = set(assignments)
+        remaining = all_candidates - priority
+        all_candidates = priority | set(list(remaining)[:200 - len(priority)])
+
     for candidate in all_candidates:
         if _is_safe_value(candidate):
+            continue
+
+        # Skip candidates matching entropy exclusion patterns
+        if any(pat.match(candidate) for pat in ENTROPY_EXCLUSION_PATTERNS):
+            continue
+
+        # Skip candidates in test/fixture files
+        if _is_test_file(rel_path):
             continue
 
         # Calculate Shannon entropy

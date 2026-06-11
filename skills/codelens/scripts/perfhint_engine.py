@@ -25,6 +25,7 @@ developers toward the optimal fix.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
@@ -42,12 +43,52 @@ FRONTEND_EXTENSIONS = {".jsx", ".tsx", ".vue", ".svelte", ".html"}
 BACKEND_EXTENSIONS = {".py", ".rs", ".go"}
 JS_TS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
 
+# ─── Performance Safeguards ────────────────────────────────────
+MAX_FILE_SIZE = 200 * 1024       # Skip DOTALL patterns for files > 200KB
+MAX_MATCHES_PER_PATTERN = 10     # Max matches per pattern per file
+MAX_FILE_TIME_SECONDS = 2        # Skip remaining patterns if file scan exceeds this
+
 # Test directory / file indicators
 TEST_INDICATORS = [
     '.test.', '.spec.', '__tests__', 'test/', 'tests/',
     'spec/', 'specs/', 'fixtures/', '__mocks__',
     '.stories.', '.story.',
 ]
+
+# Pre-filter keywords for each category — files must contain at least one
+# of these keywords to warrant a full regex scan for that category.
+PRE_FILTER_KEYWORDS: Dict[str, Set[str]] = {
+    "n_plus_one": {"find", "query", "execute", "forEach", "for", "while",
+                   "filter", "objects", "session", "cursor", "knex", "sequelize"},
+    "sync_blocking": {"readFileSync", "writeFileSync", "XMLHttpRequest", "subprocess",
+                      "open", "requests", "app.get", "app.post", "router"},
+    "memory_leak": {"addEventListener", "setInterval", "setTimeout", "on(",
+                    "addListener", "Buffer", "Uint8Array"},
+    "expensive_renders": {"render", "setState", "useEffect", "React", "memo"},
+    "large_bundle": {"import", "require", "export", "lodash", "moment"},
+    "inefficient_iteration": {".map", ".filter", ".reduce", "for", "while", "flatMap"},
+    "unoptimized_images": {"<img", "Image", "src="},
+    "cache_miss": {"fetch", "axios", "compute", "calculate", "process", "ETag",
+                   "cache", "filter", "objects"},
+}
+
+
+def _pre_filter_content(content: str, category: str) -> bool:
+    """Check if file content contains keywords relevant to a category.
+
+    Returns True if the content likely contains patterns for this category,
+    False if the content can be safely skipped for this category.
+    """
+    keywords = PRE_FILTER_KEYWORDS.get(category)
+    if not keywords:
+        return True  # No filter defined, always scan
+
+    for kw in keywords:
+        if kw in content:
+            return True
+
+    return False
+
 
 # ─── Performance Hint Pattern Definitions ──────────────────────
 
@@ -67,6 +108,7 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "Sequential DB query inside loop — potential N+1 query problem",
                 "fix_suggestion": "Use a batch query (e.g. .find({ _id: { $in: ids } })) or DataLoader to coalesce lookups.",
+                "line_scan": True,
             },
             # Python: ORM queries inside for/while (Django objects.filter/get, SQLAlchemy .query/.execute)
             {
@@ -83,6 +125,7 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "ORM query inside loop — potential N+1 query problem",
                 "fix_suggestion": "Use .filter(id__in=ids) or prefetch_related() / select_related() for batch loading.",
+                "line_scan": True,
             },
             # Knex / Sequelize / TypeORM in loops
             {
@@ -94,6 +137,7 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "Query builder call inside loop — potential N+1 query problem",
                 "fix_suggestion": "Move the query builder outside the loop, use IN-clause or a DataLoader pattern.",
+                "line_scan": True,
             },
         ],
     },
@@ -186,6 +230,7 @@ PERF_HINT_CATEGORIES = {
                     r'fs\.(?:readFileSync|writeFileSync|appendFileSync|unlinkSync|existsSync|'
                     r'readdirSync|statSync|mkdirSync|rmSync)'
                 ),
+                "line_scan": True,
                 "hint": "Synchronous filesystem call in route handler — blocks the event loop",
                 "fix_suggestion": "Use fs.promises.readFile / fs.readFile with callbacks, or use async/await with fs/promises.",
             },
@@ -202,6 +247,7 @@ PERF_HINT_CATEGORIES = {
                     r'[^}]{0,500}?'
                     r'subprocess\.(?:call|run|check_output|check_call)\s*\('
                 ),
+                "line_scan": True,
                 "hint": "Subprocess call inside request handler — blocks the worker thread",
                 "fix_suggestion": "Use asyncio.create_subprocess_exec() or move to a background task (Celery, RQ).",
             },
@@ -212,6 +258,7 @@ PERF_HINT_CATEGORIES = {
                     r'[^}]{0,500}?'
                     r'open\s*\([^)]+\)\.read\s*\(\s*\)'
                 ),
+                "line_scan": True,
                 "hint": "Synchronous file read in route handler — blocks the worker thread",
                 "fix_suggestion": "Use aiofiles for async file I/O or offload to a background task.",
             },
@@ -222,6 +269,7 @@ PERF_HINT_CATEGORIES = {
                     r'[^}]{0,500}?'
                     r'requests\.(?:get|post|put|delete|patch|head)\s*\('
                 ),
+                "line_scan": True,
                 "hint": "Blocking HTTP request (requests library) in route handler — stalls the worker",
                 "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP, or offload to a background task.",
             },
@@ -289,9 +337,10 @@ PERF_HINT_CATEGORIES = {
                 "hint": "Chained .filter().map() — iterates the array twice; can be single-pass",
                 "fix_suggestion": "Use a single .reduce() or .flatMap() to filter and transform in one pass.",
             },
-            # Nested for/while loops (O(n²) heuristic)
+            # Nested for/while loops (O(n²) heuristic) — line-scan to avoid DOTALL backtracking
             {
                 "regex": r'(?:for\s*\(|while\s*\()(?:[^{]*\{[^}]*){1,3}(?:for\s*\(|while\s*\()',
+                "line_scan_nested_loop": True,
                 "hint": "Nested loops detected — potential O(n²) complexity with large datasets",
                 "fix_suggestion": "Consider using a Map/Set for O(1) lookups, or restructure with a hash map to avoid the inner loop.",
             },
@@ -461,9 +510,13 @@ def detect_perf_hints(
             # Skip test files (lower-severity scan)
             is_test = _is_test_file(rel_path)
 
+            # Check file size for DOTALL pattern gating
+            file_size = len(content)
+
             # Scan for all categories relevant to this file type
             file_findings = _scan_file_hints(
-                content, rel_path, ext, is_test, categories_to_scan
+                content, rel_path, ext, is_test, categories_to_scan,
+                file_size=file_size
             )
             findings.extend(file_findings)
 
@@ -505,17 +558,31 @@ def _scan_file_hints(
     rel_path: str,
     ext: str,
     is_test: bool,
-    categories: Dict[str, Dict[str, Any]]
+    categories: Dict[str, Dict[str, Any]],
+    file_size: int = 0
 ) -> List[Dict[str, Any]]:
     """Scan a single file's content for performance anti-patterns."""
     findings: List[Dict[str, Any]] = []
+    scan_start = time.time()
 
     for cat_name, cat_def in categories.items():
+        # Per-file time limit check
+        if time.time() - scan_start > MAX_FILE_TIME_SECONDS:
+            break
+
         # Category-level extension gating
         if not _category_applies_to_file(cat_name, ext):
             continue
 
+        # Pre-filter: skip categories whose keywords are absent from content
+        if not _pre_filter_content(content, cat_name):
+            continue
+
         for pattern_def in cat_def["patterns"]:
+            # Per-file time limit check
+            if time.time() - scan_start > MAX_FILE_TIME_SECONDS:
+                break
+
             # Handle special pattern types
             if pattern_def.get("self_call_regex"):
                 # Recursive function detection: find function defs that call themselves
@@ -533,11 +600,36 @@ def _scan_file_hints(
                 findings.extend(sub_findings)
                 continue
 
+            # Handle line-scan patterns (avoid catastrophic DOTALL backtracking)
+            if pattern_def.get("line_scan"):
+                sub_findings = _scan_line_based_n_plus_one(
+                    content, rel_path, ext, is_test, cat_def, pattern_def
+                )
+                findings.extend(sub_findings)
+                continue
+
+            # Handle nested loop line-scan
+            if pattern_def.get("line_scan_nested_loop"):
+                sub_findings = _scan_nested_loops(
+                    content, rel_path, ext, is_test, cat_def, pattern_def
+                )
+                findings.extend(sub_findings)
+                continue
+
             regex = pattern_def["regex"]
             negative_regex = pattern_def.get("negative_regex")
 
+            # Skip DOTALL patterns on large files to prevent backtracking timeout
+            use_dotall = file_size <= MAX_FILE_SIZE
+
             try:
-                for match in re.finditer(regex, content, re.DOTALL):
+                match_count = 0
+                flags = re.DOTALL if use_dotall else 0
+                for match in re.finditer(regex, content, flags):
+                    match_count += 1
+                    if match_count > MAX_MATCHES_PER_PATTERN:
+                        break
+
                     line_num = content[:match.start()].count('\n') + 1
 
                     # Apply negative regex: if the negative pattern exists in the
@@ -554,7 +646,7 @@ def _scan_file_hints(
                         if match.lastindex and match.lastindex >= 1:
                             resolved_neg = negative_regex.replace(r'\1', re.escape(match.group(1)))
 
-                        if re.search(resolved_neg, context_window, re.DOTALL):
+                        if re.search(resolved_neg, context_window, re.DOTALL if use_dotall else 0):
                             continue
 
                     severity = cat_def["severity"]
@@ -581,6 +673,160 @@ def _scan_file_hints(
                 continue
 
     return findings
+
+def _scan_line_based_n_plus_one(
+    content: str,
+    rel_path: str,
+    ext: str,
+    is_test: bool,
+    cat_def: Dict[str, Any],
+    pattern_def: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Line-by-line detection to avoid catastrophic DOTALL backtracking.
+
+    Supports two pattern types based on category:
+    - n_plus_one: Finds loop keywords, then checks nearby lines for DB/query calls
+    - sync_blocking: Finds route handler keywords, then checks nearby lines for sync calls
+    """
+    findings: List[Dict[str, Any]] = []
+    lines = content.split('\n')
+    category = cat_def.get("category", "")
+
+    if category == "n_plus_one":
+        # Loop-start patterns
+        trigger_pattern = re.compile(
+            r'(?:for\s*\(|while\s*\(|\.forEach\s*\()'
+        )
+        # DB call patterns
+        target_patterns = [
+            re.compile(r'\.(?:find|findOne|findById|query|execute|raw|sql|createQuery)\s*\('),
+            re.compile(r'objects\.(?:filter|get|select_related|prefetch_related|all|exclude|annotate|aggregate)\s*\('),
+            re.compile(r'\.query\s*\.\s*(?:filter|get|all|join|filter_by)\s*\('),
+            re.compile(r'session\.(?:execute|query|run)\s*\('),
+            re.compile(r'db\.(?:execute|query|fetch|fetchone|fetchall)\s*\('),
+            re.compile(r'cursor\.(?:execute|fetchone|fetchall)\s*\('),
+            re.compile(r'(?:knex|sequelize|getRepository|createQueryBuilder|Model\.)'),
+        ]
+        # Python for..in loop pattern
+        py_trigger = re.compile(r'(?:for\s+\w+\s+in\s+|while\s+)')
+        proximity = 15
+    elif category == "sync_blocking":
+        # Route handler patterns
+        trigger_pattern = re.compile(
+            r'(?:app\.(?:get|post|put|delete|patch)|router\.(?:get|post|put|delete|patch)|'
+            r'server\.(?:get|post|put|delete|patch)|'
+            r'@(?:app|router|blueprint)\.(?:route|get|post|put|delete|patch))'
+        )
+        # Sync call patterns
+        target_patterns = [
+            re.compile(r'fs\.(?:readFileSync|writeFileSync|appendFileSync|unlinkSync|existsSync|readdirSync|statSync|mkdirSync|rmSync)'),
+            re.compile(r'subprocess\.(?:call|run|check_output|check_call)\s*\('),
+            re.compile(r'open\s*\([^)]+\)\.read\s*\(\s*\)'),
+            re.compile(r'requests\.(?:get|post|put|delete|patch|head)\s*\('),
+        ]
+        py_trigger = None
+        proximity = 25  # Route handlers can be longer
+    else:
+        return findings
+
+    for i, line in enumerate(lines):
+        # Skip comment lines
+        stripped = line.strip()
+        if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+            continue
+
+        is_trigger = bool(trigger_pattern.search(line))
+        if not is_trigger and py_trigger:
+            is_trigger = bool(py_trigger.search(line))
+        if not is_trigger:
+            continue
+
+        # Check next PROXIMITY lines for target patterns
+        for j in range(i, min(i + proximity, len(lines))):
+            j_stripped = lines[j].strip()
+            if j_stripped.startswith('//') or j_stripped.startswith('#'):
+                continue
+            for target_pat in target_patterns:
+                if target_pat.search(lines[j]):
+                    severity = cat_def["severity"]
+                    if is_test:
+                        severity = _downgrade_severity(severity)
+
+                    findings.append({
+                        "type": "performance_hint",
+                        "category": cat_def["category"],
+                        "severity": severity,
+                        "file": rel_path,
+                        "line": i + 1,
+                        "hint": pattern_def["hint"],
+                        "detail": (
+                            f"Trigger at line {i + 1} with target call at line {j + 1} in {rel_path}. "
+                            f"{cat_def['description']}."
+                        ),
+                        "fix_suggestion": pattern_def["fix_suggestion"],
+                    })
+                    break  # One target per trigger is enough
+            else:
+                continue
+            break  # Already found a target for this trigger
+
+    return findings
+
+
+def _scan_nested_loops(
+    content: str,
+    rel_path: str,
+    ext: str,
+    is_test: bool,
+    cat_def: Dict[str, Any],
+    pattern_def: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Line-by-line nested loop detection to avoid catastrophic DOTALL backtracking.
+
+    Finds lines containing loop keywords, then checks if another loop
+    keyword appears within a reasonable proximity (15 lines).
+    """
+    findings: List[Dict[str, Any]] = []
+    lines = content.split('\n')
+
+    loop_pattern = re.compile(r'(?:for\s*\(|while\s*\()')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+            continue
+
+        if not loop_pattern.search(line):
+            continue
+
+        # Check if there's another loop within next 15 lines (within same block)
+        # But skip if it's in a comment line
+        for j in range(i + 1, min(i + 15, len(lines))):
+            next_stripped = lines[j].strip()
+            if next_stripped.startswith('//') or next_stripped.startswith('#'):
+                continue
+            if loop_pattern.search(lines[j]):
+                severity = cat_def["severity"]
+                if is_test:
+                    severity = _downgrade_severity(severity)
+
+                findings.append({
+                    "type": "performance_hint",
+                    "category": cat_def["category"],
+                    "severity": severity,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "hint": pattern_def["hint"],
+                    "detail": (
+                        f"Outer loop at line {i + 1} with inner loop at line {j + 1} in {rel_path}. "
+                        f"{cat_def['description']}."
+                    ),
+                    "fix_suggestion": pattern_def["fix_suggestion"],
+                })
+                break  # One inner loop per outer loop is enough to flag
+
+    return findings
+
 
 def _detect_recursive_functions(
     content: str,

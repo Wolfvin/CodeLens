@@ -207,10 +207,27 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
     clean_content = re.sub(r'/\*.*?\*/', '', clean_content, flags=re.DOTALL)
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Find const/let/var declarations
+        # Find const/let/var declarations (including destructuring)
+        declared_vars = []
+
+        # Standard declarations: const/let/var x = ...
         for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=', clean_content):
-            var_name = m.group(1)
-            line_num = clean_content[:m.start()].count('\n') + 1
+            declared_vars.append((m.group(1), m.start()))
+
+        # Object destructuring: const { a, b, c } = ...
+        for m in re.finditer(r'(?:const|let|var)\s*\{\s*([^}]+)\}\s*=', clean_content):
+            names_str = m.group(1)
+            for name_match in re.finditer(r'(\w+)(?:\s*:\s*\w+)?', names_str):
+                declared_vars.append((name_match.group(1), m.start()))
+
+        # Array destructuring: const [a, b, c] = ...
+        for m in re.finditer(r'(?:const|let|var)\s*\[\s*([^\]]+)\]\s*=', clean_content):
+            names_str = m.group(1)
+            for name_match in re.finditer(r'(\w+)', names_str):
+                declared_vars.append((name_match.group(1), m.start()))
+
+        for var_name, start_pos in declared_vars:
+            line_num = clean_content[:start_pos].count('\n') + 1
 
             # Skip common patterns that are used indirectly
             skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module'}

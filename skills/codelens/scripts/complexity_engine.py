@@ -66,7 +66,9 @@ def compute_complexity(
     function_name: Optional[str] = None,
     file_filter: Optional[str] = None,
     threshold: Optional[int] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    sort_by: Optional[str] = None,
+    limit: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Compute cyclomatic and cognitive complexity for all functions in the workspace.
@@ -77,6 +79,8 @@ def compute_complexity(
         file_filter: Optional file path glob filter
         threshold: Optional minimum cyclomatic complexity to report
         config: CodeLens configuration dict
+        sort_by: Sort results by 'complexity' (cyclomatic desc), 'cognitive', 'loc', or None (file order)
+        limit: Max number of functions to return in the 'functions' list
 
     Returns:
         Dict with status, stats, function list, hotspots, and recommendations
@@ -195,6 +199,17 @@ def compute_complexity(
     for f in function_results:
         by_level[f["complexity_level"]] += 1
 
+    # ─── Sort results if requested ────────────────────────
+    if sort_by == "complexity":
+        function_results.sort(key=lambda x: (-x["cyclomatic"], -x["cognitive"]))
+    elif sort_by == "cognitive":
+        function_results.sort(key=lambda x: (-x["cognitive"], -x["cyclomatic"]))
+    elif sort_by == "loc":
+        function_results.sort(key=lambda x: -x["loc"])
+
+    # ─── Apply limit ─────────────────────────────────────
+    displayed_functions = function_results[:limit] if limit else function_results
+
     # ─── Hotspots (top 10 by cyclomatic, then cognitive) ──
     hotspots = sorted(
         function_results,
@@ -217,7 +232,7 @@ def compute_complexity(
             "high_complexity": high_complexity,
             "by_complexity_level": dict(by_level),
         },
-        "functions": function_results,
+        "functions": displayed_functions,
         "hotspots": hotspots,
         "recommendations": recommendations,
     }
