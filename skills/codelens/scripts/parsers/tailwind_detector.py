@@ -132,6 +132,26 @@ def load_tailwind_config(workspace: str) -> Optional[Dict]:
     return None
 
 
+def _has_tailwind_config(workspace: str) -> bool:
+    """Check if Tailwind is configured in the project."""
+    # Check for tailwind config files
+    for name in ['tailwind.config.js', 'tailwind.config.ts', 'tailwind.config.mjs']:
+        if os.path.exists(os.path.join(workspace, name)):
+            return True
+    # Check package.json
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path) as f:
+                pkg = json.load(f)
+            deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
+            if 'tailwindcss' in deps:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def analyze_tailwind_usage(
     workspace: str,
     class_entries: List[Dict]
@@ -148,6 +168,16 @@ def analyze_tailwind_usage(
             "config": {...}|null
         }
     """
+    # Skip Tailwind detection if no Tailwind configuration exists
+    if not _has_tailwind_config(workspace):
+        return {
+            "tailwind_classes": [],
+            "dynamic_classes": [],
+            "custom_utilities": [],
+            "tailwind_found": False,
+            "config": None
+        }
+
     config = load_tailwind_config(workspace)
 
     tailwind_classes = []

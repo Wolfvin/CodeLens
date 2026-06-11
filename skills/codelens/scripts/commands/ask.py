@@ -4,28 +4,7 @@ import os
 import re
 from typing import Dict, Any, List, Tuple
 
-from context_engine import get_symbol_context
-from search_engine import search_symbols
-from deadcode_engine import detect_dead_code
-from secrets_engine import detect_secrets
-from circular_engine import detect_circular
-from apimap_engine import map_api_routes
-from entrypoints_engine import map_entrypoints
-from smell_engine import detect_smells
-from complexity_engine import compute_complexity
-from impact_engine import analyze_impact
-from trace_engine import trace_symbol
-from testmap_engine import map_test_coverage
-from perfhint_engine import detect_perf_hints
-from vulnscan_engine import scan_vulnerabilities
-from outline_engine import get_workspace_outline
-from envcheck_engine import check_env_vars
-from debugleak_engine import detect_debug_leaks
-from statemap_engine import map_state
-from dependents_engine import get_dependency_graph
 from commands import register_command
-from commands.scan import cmd_scan
-from commands.handbook import cmd_handbook
 
 # ─── Keyword Weight Definitions ──────────────────────────────────
 # Technical/specific terms get weight 3, action words get weight 1,
@@ -67,6 +46,11 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "what is": 1, "what's": 1, "how does": 1, "how is": 1,
     "who imports": 1, "who uses": 1, "who depends": 1,
     "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
+
+    # Indonesian colloquial keywords (weight 3) — high specificity
+    "lama": 3, "aneh": 3, "cek": 3, "bersihkan": 3,
+    "aman": 3, "lambat": 3, "rapikan": 3, "cari": 3,
+    "aman ga": 3, "aman tidak": 3, "kok lama": 3, "aneh nih": 3,
 
     # Generic words (weight 0) — ignored for scoring
     "the": 0, "a": 0, "an": 0, "me": 0, "my": 0,
@@ -285,6 +269,40 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         # Handbook
         (["overview", "handbook", "project brief", "tell me about", "summarize", "summary of"],
          "handbook", {}, "high"),
+
+        # ─── Indonesian colloquial patterns ───────────
+
+        # "kok lama ya" — slow performance complaint
+        (["kok lama", "lama ya"],
+         "perf-hint", {}, "high"),
+
+        # "aneh nih" — something's weird
+        (["aneh nih", "aneh"],
+         "search", {}, "medium"),
+
+        # "bantu cek" / "cek" — help me check
+        (["cek", "bantu cek"],
+         "smell", {}, "medium"),
+
+        # "bersihkan" — clean up
+        (["bersihkan"],
+         "debug-leak", {}, "medium"),
+
+        # "aman ga" / "aman tidak" — is this safe?
+        (["aman ga", "aman tidak", "aman"],
+         "secrets", {}, "high"),
+
+        # "lambat" — slow
+        (["lambat"],
+         "perf-hint", {}, "high"),
+
+        # "rapikan" — clean up / tidy
+        (["rapikan"],
+         "smell", {}, "medium"),
+
+        # "cari" — search/find
+        (["cari"],
+         "symbols", {"name": _extract_symbol_name}, "medium"),
     ]
 
     # ─── Score each pattern ────────────────────────────────
@@ -395,46 +413,67 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
     """Execute the determined command with the given args."""
     if command == "context":
+        from context_engine import get_symbol_context
         return get_symbol_context(args.get("name", ""), workspace)
     elif command == "symbols":
+        from search_engine import search_symbols
         return search_symbols(workspace, args.get("name", ""), domain="all", fuzzy=True)
     elif command == "dead-code":
+        from deadcode_engine import detect_dead_code
         return detect_dead_code(workspace)
     elif command == "secrets":
+        from secrets_engine import detect_secrets
         return detect_secrets(workspace)
     elif command == "circular":
+        from circular_engine import detect_circular
         return detect_circular(workspace)
     elif command == "api-map":
+        from apimap_engine import map_api_routes
         return map_api_routes(workspace)
     elif command == "entrypoints":
+        from entrypoints_engine import map_entrypoints
         return map_entrypoints(workspace)
     elif command == "smell":
+        from smell_engine import detect_smells
         return detect_smells(workspace)
     elif command == "complexity":
+        from complexity_engine import compute_complexity
         return compute_complexity(workspace)
     elif command == "impact":
+        from impact_engine import analyze_impact
         return analyze_impact(args.get("name", ""), workspace, action=args.get("action", "modify"))
     elif command == "trace":
+        from trace_engine import trace_symbol
         return trace_symbol(args.get("name", ""), workspace, direction=args.get("direction", "both"))
     elif command == "test-map":
+        from testmap_engine import map_test_coverage
         return map_test_coverage(workspace)
     elif command == "perf-hint":
+        from perfhint_engine import detect_perf_hints
         return detect_perf_hints(workspace)
     elif command == "vuln-scan":
+        from vulnscan_engine import scan_vulnerabilities
         return scan_vulnerabilities(workspace)
     elif command == "outline":
+        from outline_engine import get_workspace_outline
         return get_workspace_outline(workspace)
     elif command == "env-check":
+        from envcheck_engine import check_env_vars
         return check_env_vars(workspace)
     elif command == "debug-leak":
+        from debugleak_engine import detect_debug_leaks
         return detect_debug_leaks(workspace)
     elif command == "state-map":
+        from statemap_engine import map_state
         return map_state(workspace)
     elif command == "scan":
+        from commands.scan import cmd_scan
         return cmd_scan(workspace)
     elif command == "handbook":
+        from commands.handbook import cmd_handbook
         return cmd_handbook(workspace)
     elif command == "dependents":
+        from dependents_engine import get_dependency_graph
         return get_dependency_graph(workspace)
     elif command == "css-deep":
         from cssdeep_engine import analyze_css_deep

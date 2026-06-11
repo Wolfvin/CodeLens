@@ -36,12 +36,12 @@ def parse_svelte_component(content: str, file_path: str) -> Dict[str, Any]:
     markup = content
     markup = re.sub(r'<style[^>]*>.*?</style>', '', markup, flags=re.DOTALL)
     # Keep script for potential DOM queries
-    script_match = re.search(r'<script[^>]*>(.*?)</script>', markup, re.DOTALL)
+    script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
     script_content = script_match.group(1) if script_match else ""
     markup = re.sub(r'<script[^>]*>.*?</script>', '', markup, flags=re.DOTALL)
 
-    # Parse markup for class and id
-    _parse_svelte_markup(markup, file_path, classes, ids)
+    # Parse markup for class and id — search original content for correct line numbers
+    _parse_svelte_markup(content, file_path, classes, ids)
 
     # Parse script for DOM selector references
     if script_content:
@@ -55,13 +55,17 @@ def parse_svelte_component(content: str, file_path: str) -> Dict[str, Any]:
     }
 
 
-def _parse_svelte_markup(markup: str, file_path: str,
+def _parse_svelte_markup(content: str, file_path: str,
                            classes: List[Dict], ids: List[Dict]):
-    """Parse Svelte markup for class/id attributes and directives."""
+    """Parse Svelte markup for class/id attributes and directives.
+
+    Searches the original content directly so that line numbers are
+    correct (not shifted by stripped <style>/<script> sections).
+    """
     # Static class: class="xxx"
-    for match in re.finditer(r'\bclass\s*=\s*["\']([^"\']+)["\']', markup):
+    for match in re.finditer(r'\bclass\s*=\s*["\']([^"\']+)["\']', content):
         value = match.group(1)
-        line_num = markup[:match.start()].count('\n') + 1
+        line_num = content[:match.start()].count('\n') + 1
         for cls in value.split():
             cls = cls.strip()
             if cls:
@@ -74,9 +78,9 @@ def _parse_svelte_markup(markup: str, file_path: str,
                 })
 
     # Svelte class directive: class:active={isActive} or class:active
-    for match in re.finditer(r'\bclass:([a-zA-Z_][\w-]*)', markup):
+    for match in re.finditer(r'\bclass:([a-zA-Z_][\w-]*)', content):
         cls_name = match.group(1)
-        line_num = markup[:match.start()].count('\n') + 1
+        line_num = content[:match.start()].count('\n') + 1
         classes.append({
             "name": cls_name,
             "line": line_num,
@@ -86,9 +90,9 @@ def _parse_svelte_markup(markup: str, file_path: str,
         })
 
     # id attribute: id="xxx"
-    for match in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', markup):
+    for match in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', content):
         value = match.group(1)
-        line_num = markup[:match.start()].count('\n') + 1
+        line_num = content[:match.start()].count('\n') + 1
         ids.append({
             "name": value.strip(),
             "line": line_num,

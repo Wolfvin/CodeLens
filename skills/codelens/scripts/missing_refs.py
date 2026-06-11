@@ -7,10 +7,14 @@ Cross-validates frontend registry entries to find mismatches:
 - Possible typos (similar names that differ by 1-2 chars)
 """
 
+import json
+import logging
 import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 
 def detect_missing_refs(workspace: str) -> Dict[str, Any]:
@@ -27,7 +31,11 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
     workspace = os.path.abspath(workspace)
 
     from registry import load_frontend_registry
-    frontend = load_frontend_registry(workspace)
+    try:
+        frontend = load_frontend_registry(workspace)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        frontend = {"classes": [], "ids": []}
+        logger.warning(f"Could not load frontend registry: {e}")
 
     issues = {
         "css_no_html": [],      # CSS class defined, no HTML usage

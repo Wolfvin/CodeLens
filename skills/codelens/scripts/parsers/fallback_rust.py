@@ -21,12 +21,27 @@ def parse_rust_fallback(content, file_path):
     }
 
     current_impl = None
+    brace_depth = 0
+    impl_brace_depth = None  # brace depth when impl block was entered
 
     for line_num, line in enumerate(content.split('\n'), 1):
+        # Track brace depth
+        open_braces = line.count('{')
+        close_braces = line.count('}')
+
         # Track impl blocks
         impl_match = re.search(r'\bimpl\s+(?:\w+\s+for\s+)?(\w+)', line)
         if impl_match:
             current_impl = impl_match.group(1)
+            impl_brace_depth = brace_depth + open_braces - close_braces if '{' in line else brace_depth
+
+        # Update brace depth after processing the line
+        brace_depth += open_braces - close_braces
+
+        # Reset impl context when we've closed all braces opened inside the impl block
+        if current_impl and impl_brace_depth is not None and brace_depth < impl_brace_depth:
+            current_impl = None
+            impl_brace_depth = None
 
         # fn name(
         for m in re.finditer(r'\b(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_]\w*)\s*[\(<]', line):

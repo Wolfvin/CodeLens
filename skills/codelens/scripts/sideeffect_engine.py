@@ -26,6 +26,71 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
 
+
+def _strip_strings_and_comments(code: str) -> str:
+    """Remove string literals and comments from code for safe brace counting.
+
+    Strips:
+    - Single-line comments (// ...)
+    - Multi-line comments (/* ... */)
+    - String literals (single/double quoted, including template literals)
+    """
+    result = []
+    i = 0
+    while i < len(code):
+        # Single-line comment
+        if code[i:i+2] == '//':
+            # Skip to end of line
+            while i < len(code) and code[i] != '\n':
+                i += 1
+            continue
+        # Multi-line comment
+        if code[i:i+2] == '/*':
+            i += 2
+            while i < len(code) - 1 and code[i-1:i+1] != '*/':
+                i += 1
+            i += 1
+            continue
+        # Template literal (backtick)
+        if code[i] == '`':
+            i += 1
+            while i < len(code):
+                if code[i] == '\\' and i + 1 < len(code):
+                    i += 2
+                    continue
+                if code[i] == '`':
+                    i += 1
+                    break
+                i += 1
+            continue
+        # Double-quoted string
+        if code[i] == '"':
+            i += 1
+            while i < len(code):
+                if code[i] == '\\' and i + 1 < len(code):
+                    i += 2
+                    continue
+                if code[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        # Single-quoted string
+        if code[i] == "'":
+            i += 1
+            while i < len(code):
+                if code[i] == '\\' and i + 1 < len(code):
+                    i += 2
+                    continue
+                if code[i] == "'":
+                    i += 1
+                    break
+                i += 1
+            continue
+        result.append(code[i])
+        i += 1
+    return ''.join(result)
+
 # ─── Side-Effect Signatures ───────────────────────────────────
 
 SIDE_EFFECT_PATTERNS = {
@@ -298,7 +363,8 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
         started = False
         for i in range(fn_line - 1, min(fn_line + 200, len(lines))):
             line = lines[i]
-            for ch in line:
+            cleaned_line = _strip_strings_and_comments(line)
+            for ch in cleaned_line:
                 if ch == '{':
                     brace_count += 1
                     started = True
@@ -313,8 +379,9 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
 
     fn_body = '\n'.join(fn_body_lines)
 
-    # Detect effects
-    effects = _detect_effects(fn_body, ext)
+    # Detect effects (strip strings/comments from body to avoid false positives)
+    cleaned_body = _strip_strings_and_comments(fn_body)
+    effects = _detect_effects(cleaned_body, ext)
     classification = "pure" if not effects else "impure"
 
     return {
@@ -441,7 +508,8 @@ def _get_function_body(content: str, fn_info: Dict, ext: str) -> str:
         for i in range(start, min(start + 200, len(lines))):
             line = lines[i]
             body_lines.append(line)
-            for ch in line:
+            cleaned_line = _strip_strings_and_comments(line)
+            for ch in cleaned_line:
                 if ch == '{':
                     brace_count += 1
                     started = True

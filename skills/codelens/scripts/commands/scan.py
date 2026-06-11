@@ -3,6 +3,7 @@
 import os
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Any
 
 from utils import logger
@@ -34,13 +35,16 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--full", action="store_true",
+                        help="Force full rescan (ignore existing registry)")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    # Auto-enable incremental mode if registry already exists
-    if not incremental:
+    force_full = getattr(args, 'full', False)
+    # Auto-enable incremental mode if registry already exists (unless --full is set)
+    if not incremental and not force_full:
         registry_path = os.path.join(workspace, '.codelens', 'backend.json')
         if os.path.exists(registry_path):
             incremental = True
@@ -120,8 +124,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 # Clean edges that reference deleted nodes
                 remaining_ids = {n["id"] for n in existing_backend["nodes"] if "id" in n}
                 existing_backend["edges"] = [e for e in existing_backend.get("edges", [])
-                                              if e.get("from", "") in remaining_ids or e.get("to", "") in remaining_ids
-                                              or e.get("from_fn", "") or e.get("to_fn", "")]
+                                              if e.get("from", "") in remaining_ids or e.get("to", "") in remaining_ids]
                 save_backend_registry(workspace, existing_backend)
 
             # Clean frontend data — remove entries whose only refs are from deleted files
@@ -129,15 +132,16 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             if isinstance(fe_classes, list):
                 cleaned_classes = []
                 for c in fe_classes:
-                    # Filter out CSS/JS refs that originated from deleted files
+                    # Filter out refs that originated from deleted files
+                    c["defined_in_html"] = [r for r in c.get("defined_in_html", []) if r.get("path", "") not in del_set]
                     c["css"] = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
                     c["js"] = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
                     # Recompute ref_count and status
                     from registry import compute_frontend_status
                     ref_count = len(c["css"]) + len(c["js"])
                     c["ref_count"] = ref_count
-                    c["status"] = compute_frontend_status(c["name"], "class", [], c["css"], c["js"])
-                    if ref_count > 0:
+                    c["status"] = compute_frontend_status(c["name"], "class", c["defined_in_html"], c["css"], c["js"])
+                    if ref_count > 0 or len(c.get("defined_in_html", [])) > 0:
                         cleaned_classes.append(c)
                 existing_frontend["classes"] = cleaned_classes
 
@@ -616,9 +620,11 @@ def is_backend_file(file_path: str, config: Dict) -> bool:
 
 
 def should_ignore(file_path: str, config: Dict) -> bool:
-    """Check if a file should be ignored."""
+    """Check if file_path should be ignored using path-segment matching."""
+    parts = Path(file_path).parts
     for pattern in config.get("ignore", []):
-        if pattern in file_path:
+        pattern = pattern.rstrip('/')
+        if pattern in parts:
             return True
     return False
 

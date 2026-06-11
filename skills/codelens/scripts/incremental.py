@@ -119,27 +119,22 @@ def _strip_refs_from_changed(refs: List[Dict], changed_rel_paths: Set[str]) -> L
     return [r for r in refs if r.get("path", "") not in changed_rel_paths]
 
 
-def _recompute_class_status(entry: Dict) -> None:
-    """Recompute ref_count and status for a class entry in-place."""
+def _recompute_entry_status(entry: Dict, entry_type: str) -> None:
+    """Recompute ref_count and status for a frontend entry in-place.
+
+    Args:
+        entry: The class or id entry dict.
+        entry_type: "class" or "id" — determines whether multiple HTML refs
+                    produce "duplicate_ref" (class) or "collision" (id),
+                    matching registry.py's compute_frontend_status logic.
+    """
     from registry import compute_frontend_status
     html_refs = entry.get("defined_in_html", [])
     css_refs = entry.get("css", [])
     js_refs = entry.get("js", [])
     entry["ref_count"] = len(css_refs) + len(js_refs)
     entry["status"] = compute_frontend_status(
-        entry["name"], "class", html_refs, css_refs, js_refs
-    )
-
-
-def _recompute_id_status(entry: Dict) -> None:
-    """Recompute ref_count and status for an id entry in-place."""
-    from registry import compute_frontend_status
-    html_refs = entry.get("defined_in_html", [])
-    css_refs = entry.get("css", [])
-    js_refs = entry.get("js", [])
-    entry["ref_count"] = len(css_refs) + len(js_refs)
-    entry["status"] = compute_frontend_status(
-        entry["name"], "id", html_refs, css_refs, js_refs
+        entry["name"], entry_type, html_refs, css_refs, js_refs
     )
 
 
@@ -200,7 +195,7 @@ def merge_frontend_data(
         entry["defined_in_html"] = _strip_refs_from_changed(entry.get("defined_in_html", []), changed_rel_paths)
         entry["css"] = _strip_refs_from_changed(entry.get("css", []), changed_rel_paths)
         entry["js"] = _strip_refs_from_changed(entry.get("js", []), changed_rel_paths)
-        _recompute_class_status(entry)
+        _recompute_entry_status(entry, "class")
         # Keep entry if it still has any refs (including from HTML side)
         if entry["ref_count"] > 0 or len(entry.get("defined_in_html", [])) > 0:
             stripped_classes.append(entry)
@@ -212,7 +207,7 @@ def merge_frontend_data(
         )
         entry["css"] = _strip_refs_from_changed(entry.get("css", []), changed_rel_paths)
         entry["js"] = _strip_refs_from_changed(entry.get("js", []), changed_rel_paths)
-        _recompute_id_status(entry)
+        _recompute_entry_status(entry, "id")
         # Keep entry if it still has any refs at all
         if entry["ref_count"] > 0 or len(entry.get("defined_in_html", [])) > 0:
             stripped_ids.append(entry)
@@ -237,7 +232,7 @@ def merge_frontend_data(
             existing["defined_in_html"].extend(new_entry.get("defined_in_html", []))
             existing["css"].extend(new_entry.get("css", []))
             existing["js"].extend(new_entry.get("js", []))
-            _recompute_class_status(existing)
+            _recompute_entry_status(existing, "class")
             _recompute_duplicate_define(existing)
         else:
             existing_class_map[name] = new_entry
@@ -250,7 +245,7 @@ def merge_frontend_data(
             existing["defined_in_html"].extend(new_entry.get("defined_in_html", []))
             existing["css"].extend(new_entry.get("css", []))
             existing["js"].extend(new_entry.get("js", []))
-            _recompute_id_status(existing)
+            _recompute_entry_status(existing, "id")
         else:
             existing_id_map[name] = new_entry
             stripped_ids.append(new_entry)

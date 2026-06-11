@@ -159,14 +159,59 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                     content = f.read()
                 # Simple TOML parsing for dependencies
                 in_deps = False
+                in_deps_array = False  # Tracking multi-line array for [project] dependencies = [...]
                 for line in content.split('\n'):
                     stripped = line.strip()
-                    if 'dependencies' in stripped.lower() and '=' in stripped:
-                        in_deps = True
-                        continue
-                    elif stripped.startswith('['):
+                    # Detect section headers
+                    if stripped.startswith('['):
                         in_deps = False
+                        in_deps_array = False
+                        # Poetry format: [tool.poetry.dependencies]
+                        if stripped.lower() == '[tool.poetry.dependencies]':
+                            in_deps = True
                         continue
+
+                    if in_deps_array:
+                        # Inside a multi-line array like dependencies = [
+                        if ']' in stripped:
+                            in_deps_array = False
+                            stripped = stripped[:stripped.index(']')]
+                        # Extract package name from array entry like "requests>=2.0" or "flask"
+                        dep_match = re.match(r'["\']?([a-zA-Z0-9_.-]+)', stripped)
+                        if dep_match:
+                            name = dep_match.group(1)
+                            declared["dependencies"][name] = stripped
+                        continue
+
+                    if in_deps:
+                        # Poetry format: package = "^2.0" or package = {version = "^2.0", ...}
+                        dep_match = re.match(r'([a-zA-Z0-9_.-]+)\s*=\s*(.+)', stripped)
+                        if dep_match:
+                            name = dep_match.group(1)
+                            # Skip python version constraint
+                            if name.lower() != 'python':
+                                declared["dependencies"][name] = stripped
+                    elif 'dependencies' in stripped.lower() and '=' in stripped:
+                        # PEP 621 format: dependencies = [...]  or  dependencies = ["pkg"]
+                        in_deps = True
+                        # Check if there are deps on the same line
+                        after_eq = stripped.split('=', 1)[1].strip()
+                        if after_eq.startswith('['):
+                            in_deps = True
+                            in_deps_array = True
+                            # Parse same-line entries
+                            inner = after_eq[1:]
+                            if ']' in inner:
+                                in_deps_array = False
+                                inner = inner[:inner.index(']')]
+                            for entry in inner.split(','):
+                                entry = entry.strip()
+                                if not entry:
+                                    continue
+                                dep_match = re.match(r'["\']?([a-zA-Z0-9_.-]+)', entry)
+                                if dep_match:
+                                    name = dep_match.group(1)
+                                    declared["dependencies"][name] = entry
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
 

@@ -7,24 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.8.0] — 2026-06-11
 
+### Added
+
+- **`--full` flag for scan command**: Force full rescan even when a registry exists (which would normally auto-enable incremental mode). Usage: `codelens scan --full`.
+- **Indonesian colloquial triggers in `ask`**: Documented Indonesian phrases ("kok lama ya", "aneh nih", "bantu cek", "aman ga", etc.) now actually work in the `ask` command's keyword matching.
+
 ### Fixed
 
-- **CRITICAL: Version mismatch in pyproject.toml**: Version was 5.1.0 while utils.py and skill.json said 5.7.0. Now aligned to 5.7.0.
-- **CRITICAL: Broken test imports**: 5 test files (`test_css_parser`, `test_html_parser`, `test_js_backend_parser`, `test_js_frontend_parser`, `test_rust_parser`) imported fallback parsers from the old monolithic `codelens.py` which no longer exports them. Updated to import from `parsers.fallback_*` modules.
-- **CRITICAL: Broken pip entry point**: Removed `codelens = "codelens:main"` from `pyproject.toml` — the scripts/ directory uses `sys.path`-based imports, not a proper Python package. Added a comment explaining what's needed to make it installable.
-- **CRITICAL: Non-standard build backend**: Changed `setuptools.backends._legacy:_Backend` to the standard `setuptools.build_meta`.
-- **HIGH: Frontend deletion cleanup was a no-op**: When files were deleted during incremental scan, frontend class/ID entries were never cleaned because they don't have a `"defined_in"` key. Now properly filters by `"path"` in the `css`/`js`/`defined_in_html` ref lists and recomputes status.
-- **HIGH: CSS parser `::` triggered SCSS fallback on standard CSS**: The `::` pattern in the SCSS/Less detection heuristic matched standard CSS3 pseudo-elements (`::before`, `::after`, `::placeholder`), causing duplicate class/id references. Removed `::` from the detection list.
-- **HIGH: Class collision detection was broken**: HTML class definitions were mapped to the `"css"` category instead of `"html"`, so classes lost their HTML definition info. Now classes get a `"defined_in_html"` field (like IDs), enabling proper collision detection when the same class appears in multiple HTML elements.
-- **HIGH: GrammarLoader was not thread-safe**: The singleton `__new__` method and dict mutations lacked locks, risking double-instantiation and data races in the watch command's threads. Added `threading.Lock` to `__new__` and a `dict_lock` for `get_language`/`get_parser`.
-- **HIGH: Watch command race condition lost file changes**: Changes arriving during a rescan were lost because the debounce timer wasn't running. After scan completes, the code now checks `_changed_files` under lock and schedules another rescan if non-empty.
-- **HIGH: Dead code in incremental edge processing**: `if not is_resolved and from_is_changed` in `incremental.py` was unreachable because `from_is_changed` was always False at that point (the True branch already `continue`s). Removed the dead code block.
-- **MEDIUM: O(n²) BFS in impact_engine**: `queue.pop(0)` on a list is O(n), making BFS O(n²) for large call graphs. Replaced with `collections.deque` and `popleft()` for O(1).
-- **MEDIUM: O(n) path.index() per back-edge in circular_engine**: Called on every cycle detection across 3 DFS functions. Added `path_index` dict for O(1) lookup.
-- **MEDIUM: Search engine recompiled regex per file**: `include_pattern` and `exclude_pattern` were compiled inside the per-file loop. Now compiled once before `os.walk`.
-- **MEDIUM: Dead-code command used wrong field name**: `result.get("dead_items", result.get("items", []))` didn't match the actual output key `"results"` from `deadcode_engine`. Now correctly iterates over all category lists in `results`.
-- **MEDIUM: state-map markdown formatter crashed on string actions**: The `actions` list in statemap results could contain strings, but the formatter called `.get()` on them. Now handles both dicts and strings.
-- **Command count updated**: pyproject.toml description now says "41 commands" (was "39").
+- **CRITICAL: Class collision semantics wrong**: Classes with multiple HTML references were incorrectly marked as `collision`. In HTML, multiple elements using the same CSS class is valid and normal. Now classes use `duplicate_ref` instead, and `collision` is reserved for IDs (where duplicate IDs are a spec violation).
+- **CRITICAL: Edge cleanup after file deletion kept dangling edges**: The `or e.get("from_fn", "") or e.get("to_fn", "")` conditions were always truthy, keeping edges that should have been removed. Simplified to only check if endpoints are in `remaining_ids`.
+- **CRITICAL: Frontend class deletion dropped HTML-only entries**: Classes defined only in HTML (no CSS/JS refs) were silently removed during incremental scan. Now matches the ID cleanup pattern with `len(defined_in_html) > 0` check.
+- **CRITICAL: Rust parser impl_for tracking never resets**: `current_impl_for` was set when entering an `impl_item` but never reset, causing ALL subsequent functions to be incorrectly tagged. Now uses a scope stack with `end_byte` tracking for proper scope exit detection.
+- **CRITICAL: TSX parser scope resolution bug**: Scope resolution always compared against `fn_declarations[0]` instead of finding the tightest enclosing scope, causing call edges to be attributed to the wrong function in nested function scenarios.
+- **HIGH: configdrift pyproject.toml parsing broken**: The `in_deps` flag was set but dependency names were never extracted. Now handles both PEP 621 array format and Poetry key-value format.
+- **HIGH: sideeffect engine brace counting ignored strings/comments**: Braces inside string literals and comments were counted, causing incorrect function body boundaries and wrong purity classification. Now strips strings/comments before brace counting.
+- **HIGH: stacktrace engine stopped at try/catch even if re-throw**: If a catch block re-throws the error, the engine incorrectly stopped tracing. Now detects re-throw patterns and continues tracing. Also fixed Rust `?` operator handling — it propagates errors, not handles them.
+- **HIGH: typeinfer Python regex matched keywords**: `class`, `def`, `return`, `if` etc. were matched as variable names, producing nonsense type inferences. Now filters against Python's keyword list.
+- **MEDIUM: should_ignore used substring matching**: Pattern `"src/"` would match `src/server/api/auth.ts` incorrectly. Now uses `pathlib.Path.parts` for exact path-segment matching.
+- **MEDIUM: Indonesian colloquial triggers not implemented**: Documented in SKILL.md but absent from `ask.py`. Now added with proper keyword weights.
+- **MEDIUM: ask.py module-level engine imports**: 20+ engines imported at module level — if any failed, the entire `ask` command broke. Now all engines are lazy-imported inside `_execute_ask_command()`.
+- **MEDIUM: Version mismatch**: `utils.py` and `pyproject.toml` said 5.7.0 but CHANGELOG already had 5.8.0 entry. Aligned to 5.8.0.
+- **MEDIUM: Duplicate _recompute_class_status/_recompute_id_status**: Identical functions in `incremental.py` merged into single `_recompute_entry_status(entry, entry_type)`.
+- **MEDIUM: HTML parser over-aggressive template filtering**: `'{' in attr_value` filtered out any attribute containing `{`. Now only skips JSX expressions (`{...}`) and Jinja/Vue templates (`{{...}}`).
+- **MEDIUM: Vue/Svelte parser line number miscalculation**: Line numbers were calculated against processed substrings (with style/script sections removed), resulting in incorrect offsets. Now properly accounts for template offsets.
+- **MEDIUM: Tailwind detector false positives**: Common CSS class names like `hidden`, `block`, `relative` were flagged as Tailwind even in non-Tailwind projects. Now only runs detection if Tailwind is configured in the project.
+- **MEDIUM: Registry loading error handling missing**: 5 engine files (impact, trace, context, missing_refs, validate) would crash if registry was unavailable. Now all have try/except with graceful fallbacks.
+- **MEDIUM: impact_engine BFS duplicated indirect callers**: `current_depth >= 1` was always True since depth starts at 1, duplicating direct callers in the indirect list. Changed to `current_depth > 1`.
+- **MEDIUM: deadcode unreachable code state machine**: Only tracked one global terminal state, missing unreachable code after second terminal statement. Now resets `found_terminal` after reporting, allowing detection of multiple unreachable blocks.
 
 ## [5.7.0] — 2026-06-11
 

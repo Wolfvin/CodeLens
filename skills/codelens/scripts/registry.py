@@ -129,16 +129,20 @@ def compute_frontend_status(
     Compute status for a frontend entry.
 
     Priority:
-    1. collision (IDs: same id in >1 HTML element; classes: same class in >1 HTML element)
-    2. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
-    3. duplicate_ref (referenced from 2+ different files)
+    1. collision (IDs only: same id in >1 HTML element — invalid HTML)
+    2. duplicate_ref (classes: same class in >1 HTML element — normal; or referenced from 2+ different CSS/JS files)
+    3. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
     4. active (default, has CSS or JS references)
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Collision: ID/class appears in >1 HTML element
-    if len(html_refs) > 1:
+    # Collision: ID appears in >1 HTML element (invalid HTML, same ID used twice)
+    if entry_type == "id" and len(html_refs) > 1:
         return "collision"
+
+    # Classes with multiple HTML refs is normal behavior, mark as duplicate_ref
+    if entry_type == "class" and len(html_refs) > 1:
+        return "duplicate_ref"
 
     # Dead: no CSS or JS references (defined in HTML but not styled or used)
     if ref_count == 0:

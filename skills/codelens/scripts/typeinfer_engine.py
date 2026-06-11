@@ -17,11 +17,14 @@ Output: Best-effort type annotations for untyped code.
 
 import os
 import re
+import keyword
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py"}
+
+PYTHON_KEYWORDS = set(keyword.kwlist)
 
 # Known API return types
 KNOWN_RETURN_TYPES = {
@@ -316,6 +319,9 @@ def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
     for m in re.finditer(r'(\w+)\s*=\s*(.+?)(?:\n|$)', clean):
         name = m.group(1)
         value = m.group(2).strip()
+        # Skip Python keywords (class, def, return, if, etc.)
+        if name in PYTHON_KEYWORDS:
+            continue
         inferred = _infer_literal_type_py(value)
         if inferred and name not in types:
             types[name] = {

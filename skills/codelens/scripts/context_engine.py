@@ -5,6 +5,8 @@ callers, callees, imports, and file-level context.
 Gives AI everything needed to understand a symbol without reading the whole file.
 """
 
+import json
+import logging
 import os
 from typing import Dict, List, Any, Optional
 from utils import logger
@@ -46,7 +48,11 @@ def get_symbol_context(
     # ─── Frontend Context ───────────────────────────────
     if domain in ("frontend", "auto"):
         from registry import load_frontend_registry
-        frontend = load_frontend_registry(workspace)
+        try:
+            frontend = load_frontend_registry(workspace)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            frontend = {"classes": [], "ids": []}
+            logger.warning(f"Could not load frontend registry: {e}")
 
         for cls in frontend.get("classes", []):
             if cls["name"] == name:
@@ -135,7 +141,11 @@ def get_symbol_context(
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
         from edge_resolver import get_callers, get_callees
-        backend = load_backend_registry(workspace)
+        try:
+            backend = load_backend_registry(workspace)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            backend = {"nodes": [], "edges": []}
+            logger.warning(f"Could not load backend registry: {e}")
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 

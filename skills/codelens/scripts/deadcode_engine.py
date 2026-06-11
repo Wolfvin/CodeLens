@@ -161,8 +161,28 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
 
-        # Detect terminal statements
         if in_function:
+            # Check for unreachable code BEFORE terminal detection, so that
+            # consecutive terminal statements are handled correctly.
+            # Use i + 1 > terminal_line (compare 1-based line numbers) so the
+            # line immediately after a terminal is caught.
+            if found_terminal and (i + 1) > terminal_line and not stripped.startswith(('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#')):
+                items.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "after": terminal_type,
+                    "after_line": terminal_line,
+                    "severity": "warning",
+                    "message": f"Unreachable code after {terminal_type} on line {terminal_line}",
+                    "suggestion": f"Remove code after {terminal_type} or fix the control flow."
+                })
+                # Reset so that if this line is itself a terminal, the next
+                # unreachable block is also detected
+                found_terminal = False
+
+            # Detect terminal statements (after unreachable check so that a
+            # second return/break is first flagged as unreachable, then sets
+            # found_terminal for any code that follows it)
             if re.match(r'(?:return|throw|break|continue)\s', stripped):
                 found_terminal = True
                 terminal_line = i + 1
@@ -182,19 +202,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     in_function = False
                     found_terminal = False
                     continue
-
-            # If we found a terminal statement and this is the next real code
-            if found_terminal and i > terminal_line and not stripped.startswith(('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#')):
-                items.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "after": terminal_type,
-                    "after_line": terminal_line,
-                    "severity": "warning",
-                    "message": f"Unreachable code after {terminal_type} on line {terminal_line}",
-                    "suggestion": f"Remove code after {terminal_type} or fix the control flow."
-                })
-                found_terminal = False  # Only report first unreachable
 
     return items
 
