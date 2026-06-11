@@ -118,7 +118,35 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["electron"],
         "config_files": ["electron-builder.yml", "electron-builder.json"],
         "indicators": ["main.js", "BrowserWindow"]
-    }
+    },
+    # Go frameworks (detected by config files / source presence)
+    "golang": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": [".go"]
+    },
+    "gin": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": ["gin-gonic/gin"]
+    },
+    "echo": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": ["labstack/echo"]
+    },
+    # Java/Kotlin frameworks
+    "spring": {
+        "packages": [],
+        "config_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "indicators": ["spring-boot"]
+    },
+    # C/C++ frameworks
+    "cmake": {
+        "packages": [],
+        "config_files": ["CMakeLists.txt"],
+        "indicators": []
+    },
 }
 
 
@@ -169,7 +197,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_electron": False,
-        "has_rust_backend": False,
+        "has_golang": False,
+        "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
     }
@@ -216,6 +245,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tauri"] = True
                     elif fw_name == "electron":
                         detected["has_electron"] = True
+                    elif fw_name == "golang":
+                        detected["has_golang"] = True
                     break
 
         # Detect CSS preprocessor
@@ -244,6 +275,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "golang":
+                    detected["has_golang"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -376,24 +409,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
 
-    # 5a. Detect Rust project (Cargo.toml presence)
-    # Any workspace with a Cargo.toml has a Rust backend/component
-    for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
-            continue
-        if 'Cargo.toml' in files:
-            if not detected["has_rust_backend"]:
-                detected["has_rust_backend"] = True
-                # Add "rust" to frameworks if not already there
-                if "rust" not in detected["frameworks"]:
-                    detected["frameworks"].append("rust")
-            break  # One Cargo.toml is enough
-
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
     # framework source itself (not a project using the framework).
@@ -440,6 +455,28 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     except IOError:
                         pass
             if detected["has_tailwind"]:
+                break
+
+    # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
+    # These languages are detected but not parsed by tree-sitter.
+    UNSUPPORTED_MARKERS = {
+        "go": ["go.mod", "go.sum"],
+        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "kotlin": ["build.gradle.kts"],
+        "c": ["CMakeLists.txt", "Makefile"],
+        "cpp": ["CMakeLists.txt", "Makefile"],
+        "csharp": [".csproj", ".sln"],
+        "swift": ["Package.swift", "Package.resolved"],
+        "ruby": ["Gemfile", "Rakefile"],
+    }
+    for lang, markers in UNSUPPORTED_MARKERS.items():
+        for marker in markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if lang not in detected["unsupported_langs"]:
+                    detected["unsupported_langs"].append(lang)
+                if lang == "go" and "golang" not in detected["frameworks"]:
+                    detected["frameworks"].append("golang")
+                    detected["has_golang"] = True
                 break
 
     return detected

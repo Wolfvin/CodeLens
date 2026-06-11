@@ -5,47 +5,19 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.8.1] — 2026-06-12
-
-### Tested against elizaOS/eliza (5,363 TypeScript source files, AI agent framework)
-
-Real-world test on a large AI agent framework with 24,560 backend nodes and 145,317 edges.
-Confirmed: 39,510 smells (health score 60), 660 dead items, 67 secrets (23 critical),
-410 circular deps, 20,734 functions (467 high complexity), 7,598 debug leaks,
-300 entrypoints, 140 API routes, 1,493 state stores before filtering.
-
-### Added
-
-- **`safe_read_file` utility**: Added `safe_read_file()` to `utils.py` for safe file reading with encoding error handling. Returns `None` on any error instead of crashing.
-- **`--max-files` for `perf-hint` command**: New `--max-files` option (default: 5000) to prevent timeout on huge repos. Logs warning when limit is reached.
-- **`MAX_FILES_DEFAULT` constant** in `perfhint_engine.py`: Configurable default file scan cap.
+## [5.7.2] — 2026-06-12
 
 ### Fixed
-
-- **State map false-positive post-filter**: Even with v5.8's per-engine skip lists, items like `__dirname`, `CLI`, `ROOT`, `VERBOSE`, `CHECK`, `PRUNE` still leaked through from XState/MobX/module-level extraction. Added a comprehensive post-filter that:
-  - Removes known Node.js/browser globals and common CLI constants
-  - Filters ALL_CAPS names (both with and without underscores) as non-state constants
-  - Removes entries with empty `defined_in` (cross-file artifacts without a source)
-  - Result: state stores dropped from 1,493 false positives to meaningful entries only
-- **Import error on startup**: `a11y_engine.py` imported `safe_read_file` from `utils` but the function did not exist, causing a crash on `import commands`. Added the missing function to `utils.py`.
-
-## [5.8.0] — 2026-06-13
-
-### Tested against elizaOS/eliza (5000+ file TypeScript AI agent framework)
-
-Test results: 39,510 smells (60 health score), 660 dead items, 67 secrets, 410 circular deps,
-20,734 functions analyzed, 7,598 debug leaks, 300 entrypoints, 140 API routes, 1,493 state stores (many false positives).
+- **state-map markdown crash**: `_md_state_map()` called `.get('name')` on action/slice entries, but entries are strings in Pinia/Vuex/Redux/Zustand stores. Now handles both dict and string formats gracefully.
+- **binary-scan ImportError**: `scan_binary_artifacts` function was missing from `utils.py`. Now fully implemented with extension-based detection and binary signature scanning (ELF, PE, Mach-O, WASM, etc.).
+- **Pinia/Vuex/Redux false positive actions**: JS/TS keywords (`if`, `for`, `while`, etc.) and built-in methods (`push`, `includes`, `toUpperCase`, etc.) were being extracted as store actions. Added `_is_js_keyword_or_builtin()` filter with 80+ entries. Also improved section extraction using `_extract_section()` with proper brace-matching instead of fragile regex.
 
 ### Added
-
-- **`--max-files` option** for scan and handbook commands. Default: 5000 files. Prevents timeout on very large repos (5000+ files) by proportionally truncating each file category. Use `--max-files 0` to scan all files. Warning logged when truncation occurs.
-- **Debug leak `pattern` and `message` fields**: Each leak finding now includes `pattern` (the detected pattern name, e.g., "console.log"), `message` (human-readable description, e.g., "Debug console statement: console.log()"), and `content` (the matched line text). Markdown formatter uses `message` for clearer output.
-
-### Fixed
-
-- **State map false positives**: Global constants (__dirname, __filename, process, Buffer, ROOT, HOME, CLI, VERBOSE, CHECK, PRUNE, etc.) are no longer classified as state stores. Added Node.js global skip set (50+ built-ins), value-based filtering for path.resolve/path.join/process.env references, and import-like assignment detection (express.Router(), mongoose.connection). Python global filtering also improved with dunder attribute skipping, ALL_CAPS single-word constant filtering, and os.path/os.getenv reference detection.
-- **Entrypoints markdown rendering**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers and silently consumed (showing "odule_export" and "ain]"). Now uses backticks (`module_export`) for reliable rendering.
-- **Debug leak markdown output**: Category names were shown as raw keys without descriptive context. Now uses `message` field for human-readable descriptions.
+- **binary-scan command fully functional**: New `_md_binary_scan` markdown formatter. Scans for compiled binaries, archives, images, and Python bytecode with size reporting and recommendations.
+- **Tauri IPC route mapping in api-map**: Frontend `invoke('command')` calls and backend `#[tauri::command]` Rust handlers are now extracted as IPC routes. Shows full invoke:// endpoint paths.
+- **Unsupported language detection**: Framework detection now identifies Go, Java, Kotlin, C/C++, C#, Swift, and Ruby projects. Scan output shows a `lang_note` warning when unsupported languages are detected.
+- **Go framework signatures**: Added `golang`, `gin`, `echo` to framework detection signatures.
+- **`_extract_section()` helper**: New brace-matching helper for state management extractors that properly handles nested braces and string literals, replacing fragile regex patterns.
 
 ## [6.0.0] — 2026-06-12
 
@@ -54,6 +26,17 @@ Test results: 39,510 smells (60 health score), 660 dead items, 67 secrets, 410 c
 - **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
 - **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
 - **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
+- **`should_ignore_dir()` utility**: New shared utility in `utils.py` for path-segment-aware directory ignore checking. Replaces inline implementations across multiple engines.
+- **`safe_read_file()` utility**: New shared utility for safe file reading with size limits and encoding handling. Prevents out-of-memory on large files.
+- **`time_budget_expired()` utility**: New shared utility for checking global timeout budgets in engines. Prevents runaway scans on massive codebases.
+- **Performance safeguards in `utils.py`**: `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000), `GLOBAL_TIMEOUT_SEC` (120s) constants for all engines.
+- **`handbook --quick` mode**: New flag to skip expensive engines (secrets, vuln-scan, circular, dead-code) for faster results on large codebases.
+- **Engine status tracking in handbook**: Handbook now reports `engines_ok` and `engines_failed` lists in `meta`. Overall status is `ok`, `degraded`, or `error` based on engine results.
+- **Lazy imports in `ask` command**: All 17 engine imports moved from module-level to inside `_execute_ask_command()`. Reduces CLI startup time significantly.
+- **Thread-safe grammar loader**: `GrammarLoader` singleton now uses `threading.Lock()` for thread safety in watch command.
+- **Modern tree-sitter API support**: `GrammarLoader.get_parser()` now handles both legacy (`Parser(lang)`) and modern (`parser.language = lang`) tree-sitter APIs.
+- **Graceful command import**: `commands/__init__.py` now wraps each command module import in try/except, so one failing module doesn't prevent others from registering.
+- **`truncated` field in env-check output**: Indicates when file count or timeout limits were hit, so users know results are partial.
 
 ### Fixed
 - **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
@@ -63,6 +46,14 @@ Test results: 39,510 smells (60 health score), 660 dead items, 67 secrets, 410 c
 - **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
 - **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
 - **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
+- **`should_ignore_dir` ImportError in tailwind_detector.py**: Was importing a function that didn't exist in `utils.py`. Now uses shared implementation from `utils.py`.
+- **`safe_read_file` ImportError in a11y_engine.py**: Removed unused import of non-existent function. a11y_engine now uses the shared `safe_read_file` from `utils.py`.
+- **Silent exception swallowing in `context.py`**: `except Exception: pass` replaced with proper `logger.debug()` call.
+- **Silent exception swallowing in `handbook.py`**: `except Exception: pass` for sub-directory package.json replaced with `logger.debug()`.
+- **Handbook always reports `status: ok`**: Now reports `ok`, `degraded`, or `error` based on engine success/failure counts.
+- **env-check returns empty output on large repos**: Added `MAX_FILE_SIZE`, `MAX_FILES` (5000), and `GLOBAL_TIMEOUT_SEC` (90s) limits. Now uses `safe_read_file()` instead of raw `open()`.
+- **Version inconsistency**: SKILL.md said "v6" but code said "5.7.1". All version references now unified to "6.0.0".
+- **CLI version hardcoded**: `codelens.py` description now uses `CODELENS_VERSION` constant instead of hardcoded "v5".
 
 ## [5.6.0] — 2026-06-11
 

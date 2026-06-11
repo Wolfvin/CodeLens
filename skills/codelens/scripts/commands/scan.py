@@ -3,21 +3,21 @@
 import os
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from utils import logger
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
     load_backend_registry, save_backend_registry,
-    build_frontend_registry, compute_frontend_status
+    build_frontend_registry
 )
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import (
     find_changed_files, update_mtimes_cache, remove_from_mtimes_cache,
     merge_frontend_data, merge_backend_data
 )
-from edge_resolver import resolve_edges
+from edge_resolver import resolve_edges, resolve_tauri_ipc_from_apimap
 from parsers.fallback_html import parse_html_fallback
 from parsers.fallback_css import parse_css_fallback
 from parsers.fallback_js_frontend import parse_js_frontend_fallback
@@ -34,58 +34,39 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
-    parser.add_argument("--max-files", type=int, default=5000,
-                        help="Maximum number of files to scan (default: 5000). "
-                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    max_files = getattr(args, 'max_files', 5000)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, max_files=max_files)
+    return cmd_scan(workspace, incremental)
 
 
-def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
-    max_files caps the total number of files scanned to prevent timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
 
+    # Always detect frameworks for lang_note / unsupported_langs
+    fw = detect_frameworks(workspace)
+
     # Auto-detect frameworks if not configured
     if not config.get("frameworks"):
-        fw = detect_frameworks(workspace)
         recommended = get_recommended_config(workspace)
         config.update(recommended)
         save_config(workspace, config)
 
     # Discover files
     files = discover_files(workspace, config)
-
-    # v5.8: Enforce max-files limit to prevent timeout on huge repos
-    total_files = sum(len(v) for v in files.values())
-    files_truncated = False
-    if total_files > max_files:
-        files_truncated = True
-        logger.warning(
-            f"Found {total_files} source files, exceeding --max-files={max_files}. "
-            f"Truncating scan to {max_files} files. Use --max-files 0 to scan all."
-        )
-        # Proportionally truncate each category
-        if max_files > 0:
-            ratio = max_files / total_files
-            for key in files:
-                cap = max(1, int(len(files[key]) * ratio))
-                files[key] = files[key][:cap]
 
     # Check if incremental scan is possible
     changed_files = None
@@ -145,12 +126,40 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
                                                   and (e.get("to", "") in remaining_ids or not e.get("to", "")))]
                 save_backend_registry(workspace, existing_backend)
 
-            # Clean frontend data
+            # Clean frontend data — remove entries whose only references are in deleted files.
+            # Class schema: {name, ref_count, status, css: [{path, ...}], js: [{path, ...}]}
+            # ID schema: {name, ref_count, status, defined_in_html: [{path, ...}], css: [{path, ...}], js: [{path, ...}]}
             fe_classes = existing_frontend.get("classes", [])
             if isinstance(fe_classes, list):
-                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
+                cleaned_classes = []
+                for c in fe_classes:
+                    # Strip refs from deleted files, keep refs from surviving files
+                    surviving_css = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
+                    surviving_js = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
+                    if surviving_css or surviving_js:
+                        c["css"] = surviving_css
+                        c["js"] = surviving_js
+                        c["ref_count"] = len(surviving_css) + len(surviving_js)
+                        c["status"] = "active" if c["ref_count"] > 0 else "dead"
+                        cleaned_classes.append(c)
+                    # else: all refs were in deleted files → drop the entry
+                existing_frontend["classes"] = cleaned_classes
+
                 fe_ids = existing_frontend.get("ids", [])
-                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
+                cleaned_ids = []
+                for i in fe_ids:
+                    surviving_html = [r for r in i.get("defined_in_html", []) if r.get("path", "") not in del_set]
+                    surviving_css = [r for r in i.get("css", []) if r.get("path", "") not in del_set]
+                    surviving_js = [r for r in i.get("js", []) if r.get("path", "") not in del_set]
+                    if surviving_html or surviving_css or surviving_js:
+                        i["defined_in_html"] = surviving_html
+                        i["css"] = surviving_css
+                        i["js"] = surviving_js
+                        i["ref_count"] = len(surviving_css) + len(surviving_js)
+                        i["status"] = "active" if i["ref_count"] > 0 else ("dead" if not surviving_html else "active")
+                        cleaned_ids.append(i)
+                    # else: all refs were in deleted files → drop the entry
+                existing_frontend["ids"] = cleaned_ids
                 save_frontend_registry(workspace, existing_frontend)
 
             # Continue with incremental scan for changed/new files
@@ -488,6 +497,37 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
 
         resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
 
+        # ─── Tauri IPC cross-language edge resolution ─────────────
+        # After resolving same-language edges, add cross-language edges
+        # for Tauri IPC: TypeScript invoke('commandName') → Rust handler.
+        # This is critical for Tauri apps where frontend calls Rust backend
+        # via the IPC bridge. Without this, Rust #[tauri::command] handlers
+        # appear "dead" because no Rust code calls them directly.
+        if 'tauri' in config.get("frameworks", []):
+            try:
+                from apimap_engine import map_api_routes
+                api_result = map_api_routes(workspace)
+                api_routes = api_result.get("routes", [])
+                resolved_edges = resolve_tauri_ipc_from_apimap(
+                    resolved_nodes, resolved_edges, api_routes
+                )
+                # Recompute ref_counts with the new IPC edges
+                incoming_count = {}
+                for node in resolved_nodes:
+                    incoming_count[node["id"]] = 0
+                for edge in resolved_edges:
+                    to_id = edge.get("to")
+                    if to_id and to_id in incoming_count:
+                        incoming_count[to_id] += 1
+                for node in resolved_nodes:
+                    node["ref_count"] = incoming_count.get(node["id"], 0)
+                    if node.get("is_tauri_command") and node["ref_count"] == 0:
+                        node["status"] = "ipc_exposed"
+                    else:
+                        node["status"] = "dead" if node["ref_count"] == 0 else "active"
+            except Exception:
+                logger.warning("Failed to resolve Tauri IPC edges", exc_info=True)
+
         backend_registry = {
             "last_updated": datetime.now(timezone.utc).isoformat(),
             "workspace": workspace,
@@ -528,9 +568,29 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
         "changed_files_count": len(changed_files) if changed_files else 0,
-        "files_truncated": files_truncated,
-        "max_files_limit": max_files if max_files > 0 else None,
+        "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
+        "lang_note": _build_lang_note(fw) if fw else None,
     }
+
+
+def _build_lang_note(fw: Dict) -> Optional[str]:
+    """Build a note about unsupported languages detected in the workspace."""
+    unsupported = fw.get("unsupported_langs", [])
+    if not unsupported:
+        return None
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte"}
+    lang_names = {
+        "go": "Go",
+        "java": "Java",
+        "kotlin": "Kotlin",
+        "c": "C",
+        "cpp": "C++",
+        "csharp": "C#",
+        "swift": "Swift",
+        "ruby": "Ruby",
+    }
+    parts = [lang_names.get(l, l) for l in unsupported]
+    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:

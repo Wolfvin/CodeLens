@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -40,14 +41,14 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
 
 # ─── Output File Generation ─────────────────────────────────
 
-def write_output_files(workspace: str, scan_result) -> dict:
+def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> dict:
     """After a scan, generate outline.json and summary.json into .codelens/."""
     try:
         from outline_engine import get_workspace_outline
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace)
+        outline_data = get_workspace_outline(workspace, max_files=max_files)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -122,6 +123,66 @@ def compute_summary(workspace, outline_data, scan_result):
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
+# ─── Performance Safeguards ────────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024   # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000      # Max source files to scan per engine
+GLOBAL_TIMEOUT_SEC = 120      # Default global timeout per engine (seconds)
+
+
+def should_ignore_dir(rel_root: str) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching to avoid false positives
+    (e.g., workspace named 'test-dist' shouldn't match 'dist').
+
+    Args:
+        rel_root: Relative path from workspace root (e.g., 'src/node_modules/pkg')
+
+    Returns:
+        True if the directory should be skipped.
+    """
+    if rel_root == '.':
+        return False
+    parts = rel_root.replace('\\', '/').split('/')
+    return any(p in DEFAULT_IGNORE_DIRS for p in parts)
+
+
+def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
+    """Read a file safely with size limit and encoding handling.
+
+    Args:
+        file_path: Absolute path to the file.
+        max_size: Maximum file size in bytes. Files larger than this are skipped.
+
+    Returns:
+        File content as string, or None if the file cannot be read or is too large.
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
+def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SEC) -> bool:
+    """Check if a time budget has expired.
+
+    Useful for engines that walk many files and need a global timeout.
+
+    Args:
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
+
+    Returns:
+        True if the budget has expired.
+    """
+    return (time.time() - start_time) > budget_sec
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -156,65 +217,176 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
-# ─── File Reading Utilities ───────────────────────────────────
+# ─── Binary Artifact Scanning ──────────────────────────────
 
-def safe_read_file(path: str, max_size: int = 1024 * 1024, encoding: str = 'utf-8') -> Optional[str]:
-    """Safely read a file with size limit and encoding handling.
-    
-    Returns None if the file is binary, too large, or unreadable.
+BINARY_EXTENSIONS = frozenset({
+    '.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+    '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
+    '.dylib', '.bundle', '.ko', '.msi', '.dmg', '.pkg', '.deb', '.rpm',
+    '.nupkg', '.whl', '.egg', '.tar.gz', '.zip', '.7z',
+})
+
+BINARY_MIME_SIGNATURES = {
+    b'\x7fELF': 'elf_binary',
+    b'MZ': 'pe_binary',
+    b'\xfe\xed\xfa': 'macho_binary',
+    b'\xcf\xfa\xed\xfe': 'macho_binary',
+    b'\xce\xfa\xed\xfe': 'macho_binary',
+    b'PK\x03\x04': 'zip_archive',
+    b'\x1f\x8b': 'gzip_archive',
+    b'BZh': 'bzip2_archive',
+    b'\xfd7zXZ': 'xz_archive',
+    b'\x89PNG': 'png_image',
+    b'\xff\xd8\xff': 'jpeg_image',
+    b'GIF8': 'gif_image',
+    b'RIFF': 'riff_media',
+    b'\x00asm': 'wasm_binary',
+}
+
+MAX_BINARY_SCAN_SIZE = 64 * 1024  # Only read first 64KB for signature detection
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary and compiled artifacts.
+
+    Detects files by:
+    1. Known binary extensions (.exe, .dll, .so, .wasm, .pyc, etc.)
+    2. MIME signature detection (ELF, PE, Mach-O, etc.)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with stats, findings list, and recommendations.
     """
+    workspace = os.path.abspath(workspace)
+    findings = []
+    files_scanned = 0
+    by_category: Dict[str, int] = {}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            file_path = os.path.join(root, filename)
+            ext = os.path.splitext(filename)[1].lower()
+            files_scanned += 1
+
+            finding = None
+
+            # Check by extension
+            if ext in BINARY_EXTENSIONS:
+                cat = _binary_category(ext)
+                rel_path = os.path.relpath(file_path, workspace)
+                try:
+                    fsize = os.path.getsize(file_path)
+                except OSError:
+                    fsize = 0
+                finding = {
+                    "path": rel_path,
+                    "category": cat,
+                    "extension": ext,
+                    "size_bytes": fsize,
+                    "detection_method": "extension",
+                }
+            else:
+                # Check by MIME signature for extensionless or unknown files
+                # Only check non-source files to avoid false positives
+                if ext not in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html',
+                               '.css', '.vue', '.svelte', '.json', '.md', '.yaml', '.yml',
+                               '.toml', '.cfg', '.ini', '.txt', '.sh', '.bash', '.zsh',
+                               '.gitignore', '.env', '.lock', '.map', '.d.ts'}:
+                    sig = _read_file_signature(file_path)
+                    if sig:
+                        sig_type = _identify_signature(sig)
+                        if sig_type:
+                            rel_path = os.path.relpath(file_path, workspace)
+                            try:
+                                fsize = os.path.getsize(file_path)
+                            except OSError:
+                                fsize = 0
+                            finding = {
+                                "path": rel_path,
+                                "category": sig_type,
+                                "extension": ext,
+                                "size_bytes": fsize,
+                                "detection_method": "signature",
+                            }
+
+            if finding:
+                findings.append(finding)
+                cat = finding["category"]
+                by_category[cat] = by_category.get(cat, 0) + 1
+
+    # Compute total size
+    total_size = sum(f.get("size_bytes", 0) for f in findings)
+
+    # Recommendations
+    recommendations = []
+    if by_category.get("compiled_binary", 0) > 0:
+        recommendations.append("Found compiled binaries in the workspace. Consider adding them to .gitignore and using a build pipeline instead.")
+    if by_category.get("python_bytecode", 0) > 0:
+        recommendations.append("Found Python bytecode files (.pyc/.pyo). Add '**/__pycache__/' and '*.pyc' to .gitignore.")
+    if by_category.get("archive", 0) > 5:
+        recommendations.append("Found many archive files. Consider storing large assets externally (S3, CDN) instead of in the repository.")
+    if by_category.get("image", 0) > 10:
+        recommendations.append("Found many image files. Consider optimizing or moving to an asset CDN to reduce repo size.")
+    if total_size > 50 * 1024 * 1024:
+        recommendations.append(f"Binary artifacts total {total_size / (1024*1024):.1f}MB. Consider using Git LFS for large files.")
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "stats": {
+            "files_scanned": files_scanned,
+            "total_artifacts": len(findings),
+            "total_size_bytes": total_size,
+            "by_category": by_category,
+        },
+        "findings": findings[:50],
+        "recommendations": recommendations,
+    }
+
+
+def _binary_category(ext: str) -> str:
+    """Map file extension to binary category."""
+    if ext in {'.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+               '.bundle', '.ko', '.wasm'}:
+        return "compiled_binary"
+    if ext in {'.pyc', '.pyo', '.class'}:
+        return "python_bytecode"
+    if ext in {'.jar', '.war', '.nupkg', '.whl', '.egg'}:
+        return "package_archive"
+    if ext in {'.tar.gz', '.zip', '.7z', '.gz', '.rpm', '.deb', '.msi', '.dmg', '.pkg'}:
+        return "archive"
+    if ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.bmp'}:
+        return "image"
+    return "other_binary"
+
+
+def _read_file_signature(file_path: str) -> Optional[bytes]:
+    """Read the first few bytes of a file for signature detection."""
     try:
-        file_size = os.path.getsize(path)
-        if file_size > max_size:
+        fsize = os.path.getsize(file_path)
+        if fsize == 0 or fsize > 100 * 1024 * 1024:  # Skip empty or >100MB
             return None
-        
-        with open(path, 'rb') as f:
-            raw = f.read(min(file_size, 8192))
-            # Binary file detection: check for null bytes in the first 8KB
-            if b'\x00' in raw:
-                return None
-        
-        with open(path, 'r', encoding=encoding, errors='replace') as f:
-            return f.read()
-    except (IOError, OSError, UnicodeDecodeError):
+        with open(file_path, 'rb') as f:
+            return f.read(16)
+    except (IOError, OSError):
         return None
 
 
-def is_binary_file(path: str) -> bool:
-    """Check if a file appears to be binary by examining its first 8KB."""
-    try:
-        with open(path, 'rb') as f:
-            chunk = f.read(8192)
-            return b'\x00' in chunk
-    except (IOError, OSError):
-        return True
-
-
-BINARY_EXTENSIONS = frozenset({
-    '.wasm', '.so', '.dll', '.dylib', '.exe', '.pyc', '.pyd',
-    '.o', '.a', '.lib', '.gch', '.pch', '.class', '.jar',
-    '.nexe', '.obj', '.pdb', '.dSYM', '.ko',
-})
-
-ARTIFACT_EXTENSIONS = frozenset({
-    '.min.js', '.min.css', '.bundle.js', '.chunk.js',
-    '.map', '.js.map', '.css.map',
-})
+def _identify_signature(sig: bytes) -> Optional[str]:
+    """Identify file type from its binary signature."""
+    for magic, file_type in BINARY_MIME_SIGNATURES.items():
+        if sig.startswith(magic):
+            return file_type
+    return None
 
 
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"
-
-
-# ─── File Read Utility ──────────────────────────────────────
-
-def safe_read_file(filepath: str, encoding: str = 'utf-8') -> Optional[str]:
-    """Safely read a file, returning None on any error."""
-    try:
-        if not os.path.isfile(filepath):
-            return None
-        with open(filepath, 'r', encoding=encoding, errors='replace') as f:
-            return f.read()
-    except (OSError, IOError, UnicodeDecodeError):
-        return None
