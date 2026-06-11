@@ -583,12 +583,16 @@ function computeGini(values: number[]): number {
   const mean = values.reduce((s, v) => s + v, 0) / n
   if (mean === 0) return 0
 
-  let sumAbsDiff = 0
+  // O(n) Gini using sorted-array formula:
+  // G = (2 * sum(i * x_i)) / (n * sum(x_i)) - (n + 1) / n
+  // where x_i are sorted ascending
+  const sorted = [...values].sort((a, b) => a - b)
+  let weightedSum = 0
+  let totalSum = 0
   for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      sumAbsDiff += Math.abs(values[i] - values[j])
-    }
+    weightedSum += (i + 1) * sorted[i]
+    totalSum += sorted[i]
   }
-
-  return sumAbsDiff / (2 * n * n * mean)
+  if (totalSum === 0) return 0
+  return (2 * weightedSum) / (n * totalSum) - (n + 1) / n
 }

@@ -107,7 +107,7 @@ interface AnalysisState {
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Workspace
-  workspace: '/home/z/my-project',
+  workspace: '',
   isScanning: false,
   lastScanTime: null,
   frameworks: [],

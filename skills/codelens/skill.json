@@ -1,6 +1,6 @@
 {
   "name": "codelens",
-  "version": "5.7.0",
+  "version": "5.7.1",
   "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. oRPC/tRPC detection. bun.lock. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [

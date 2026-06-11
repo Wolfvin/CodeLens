@@ -72,6 +72,8 @@ class Normalizer {
       init: this.normalizeInit,
       detect: this.normalizeDetect,
       watch: this.normalizeWatch,
+      ask: this.normalizeAsk,
+      handbook: this.normalizeHandbook,
     }
     return map[name] ?? null
   }
@@ -2064,6 +2066,79 @@ class Normalizer {
     return this.makeEvent(
       'watch', [], [], 'pulse', [], 'low',
       'watch', 'Watch mode: Use the WebSocket interface for real-time updates, not the REST API.'
+    )
+  }
+
+  /** ask: Natural language query router — delegates to the matched command's normalizer */
+  private normalizeAsk(output: any): GraphEvent {
+    const interpretation = output?.query_interpretation
+    const interpretedCommand = interpretation?.interpreted_as ?? 'ask'
+    const confidence = interpretation?.confidence ?? 'low'
+
+    // If the ask command produced a sub-result that looks like a known command output,
+    // try to normalize it with the sub-command's normalizer
+    if (interpretedCommand && interpretedCommand !== 'ask') {
+      const subNormalizer = this.getNormalizer(interpretedCommand)
+      if (subNormalizer) {
+        const subEvent = subNormalizer.call(this, output)
+        // Add interpretation metadata
+        subEvent.metadata.summary = `[ask→${interpretedCommand}] ${subEvent.metadata.summary ?? output?.question ?? ''}`
+        return subEvent
+      }
+    }
+
+    return this.makeEvent(
+      'ask', [], [], 'pulse', [], confidence === 'low' ? 'medium' : 'low',
+      'ask', output?.suggestion ?? `Interpreted as: ${interpretedCommand} (confidence: ${confidence})`
+    )
+  }
+
+  /** handbook: Project handbook for AI agents */
+  private normalizeHandbook(output: any): GraphEvent {
+    const nodes: GraphNode[] = []
+    const targetIds: string[] = []
+
+    // Frameworks → package nodes
+    const frameworks = output?.frameworks ?? []
+    for (const fw of Array.isArray(frameworks) ? frameworks : []) {
+      const nodeId = this.makeNodeId('package', fw.name ?? fw)
+      nodes.push({
+        id: nodeId,
+        label: typeof fw === 'string' ? fw : fw.name ?? 'unknown',
+        type: 'package',
+        domain: 'backend',
+        status: 'active',
+        radius: 8,
+        color: NEURAL_COLORS.package,
+        data: typeof fw === 'object' ? fw : {},
+      })
+      targetIds.push(nodeId)
+    }
+
+    // Entrypoints → function nodes
+    const entrypoints = output?.entrypoints ?? []
+    for (const ep of Array.isArray(entrypoints) ? entrypoints : []) {
+      const nodeId = this.makeNodeId('function', ep.fn ?? ep.name ?? 'entry', ep.file, ep.line)
+      nodes.push({
+        id: nodeId,
+        label: ep.fn ?? ep.name ?? 'entrypoint',
+        type: 'function',
+        domain: 'backend',
+        status: 'active',
+        file: ep.file,
+        line: ep.line,
+        radius: 8,
+        color: NEURAL_COLORS.function,
+        data: ep,
+      })
+      targetIds.push(nodeId)
+    }
+
+    const riskLevel: RiskLevel = output?.security?.critical_count > 0 ? 'high' : 'low'
+
+    return this.makeEvent(
+      'handbook', nodes, [], 'ripple', targetIds, riskLevel,
+      'handbook', `Project handbook: ${frameworks.length} frameworks, ${entrypoints.length} entrypoints`
     )
   }
 
