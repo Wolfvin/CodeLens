@@ -1,10 +1,12 @@
 """
 Framework Detector for CodeLens
-Auto-detects frameworks from package.json, config files, and file patterns.
+Auto-detects frameworks from package.json, pyproject.toml, requirements.txt,
+config files, and file patterns.
 """
 
 import json
 import os
+import re
 from typing import Dict, List, Any, Optional
 from utils import logger
 
@@ -50,6 +52,49 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["@sveltejs/kit"],
         "config_files": ["svelte.config.js"],
         "indicators": []
+    },
+    # Python frameworks
+    "fastapi": {
+        "packages": ["fastapi"],
+        "pip_packages": ["fastapi"],
+        "config_files": [],
+        "indicators": []
+    },
+    "flask": {
+        "packages": ["flask"],
+        "pip_packages": ["flask"],
+        "config_files": ["app.py", "wsgi.py"],
+        "indicators": []
+    },
+    "django": {
+        "packages": ["django"],
+        "pip_packages": ["django"],
+        "config_files": ["manage.py"],
+        "indicators": []
+    },
+    "celery": {
+        "packages": ["celery"],
+        "pip_packages": ["celery"],
+        "config_files": ["celery.py", "celeryconfig.py"],
+        "indicators": []
+    },
+    "sqlalchemy": {
+        "packages": ["sqlalchemy"],
+        "pip_packages": ["sqlalchemy"],
+        "config_files": [],
+        "indicators": []
+    },
+    "starlette": {
+        "packages": ["starlette"],
+        "pip_packages": ["starlette"],
+        "config_files": [],
+        "indicators": []
+    },
+    "pydantic": {
+        "packages": ["pydantic"],
+        "pip_packages": ["pydantic"],
+        "config_files": [],
+        "indicators": []
     }
 }
 
@@ -68,6 +113,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tailwind": False,
         "has_nextjs": False,
         "has_angular": False,
+        "has_fastapi": False,
+        "has_flask": False,
+        "has_django": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -129,9 +177,63 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tailwind"] = True
                 elif fw_name == "next.js":
                     detected["has_nextjs"] = True
+                elif fw_name == "fastapi":
+                    detected["has_fastapi"] = True
+                elif fw_name == "flask":
+                    detected["has_flask"] = True
+                elif fw_name == "django":
+                    detected["has_django"] = True
                 break
 
-    # 3. Check file patterns (for Vue, Svelte)
+    # 3. Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)
+    pip_deps = set()
+
+    # 3a. requirements.txt
+    req_path = os.path.join(workspace, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            with open(req_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and not line.startswith('-'):
+                        pkg_name = re.split(r'[><=!~\[]', line)[0].strip().lower()
+                        if pkg_name:
+                            pip_deps.add(pkg_name)
+        except IOError:
+            logger.debug("Failed to parse requirements.txt", exc_info=True)
+
+    # 3b. pyproject.toml
+    pyproject_path = os.path.join(workspace, "pyproject.toml")
+    if os.path.exists(pyproject_path):
+        try:
+            with open(pyproject_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Find dependency lines in TOML: fastapi = "..." or "fastapi>=0.89"
+            for m in re.finditer(r'^\s*([a-zA-Z0-9_-]+)\s*[=<>~!]+\s*["\']', content, re.MULTILINE):
+                pip_deps.add(m.group(1).lower())
+            # Also find list-style deps: "fastapi>=0.89"
+            for m in re.finditer(r'["\']([a-zA-Z0-9_-]+)[><=!~]', content):
+                pip_deps.add(m.group(1).lower())
+        except IOError:
+            logger.debug("Failed to parse pyproject.toml", exc_info=True)
+
+    # 3c. Check pip deps against framework signatures
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        pip_pkgs = sig.get("pip_packages", sig.get("packages", []))
+        for pkg_name in pip_pkgs:
+            if pkg_name.lower() in pip_deps:
+                detected["frameworks"].append(fw_name)
+                if fw_name == "fastapi":
+                    detected["has_fastapi"] = True
+                elif fw_name == "flask":
+                    detected["has_flask"] = True
+                elif fw_name == "django":
+                    detected["has_django"] = True
+                break
+
+    # 4. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -152,7 +254,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
 
-    # 4. Detect Tailwind from CSS content
+    # 5. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
         for root, dirs, files in os.walk(workspace):

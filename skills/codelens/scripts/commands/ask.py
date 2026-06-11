@@ -132,6 +132,20 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
             "confidence": args.pop("_confidence", "medium")
         }
 
+    # Fallback: if context returned not_found, try symbol search instead
+    if (command == "context" and isinstance(result, dict)
+            and result.get("status") == "not_found"):
+        symbol = args.get("name", "")
+        if symbol:
+            search_result = search_symbols(workspace, symbol, domain="all", fuzzy=True)
+            if search_result.get("results"):
+                search_result["query_interpretation"] = {
+                    "question": question,
+                    "interpreted_as": "search (fallback from context)",
+                    "confidence": "low"
+                }
+                return search_result
+
     return result
 
 

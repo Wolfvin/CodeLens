@@ -47,8 +47,8 @@ DEPENDENCY_FILE_PATTERNS = {
         "lockfile": ["Cargo.lock"],
     },
     "pip": {
-        "manifest": ["requirements.txt", "Pipfile"],
-        "lockfile": ["Pipfile.lock", "poetry.lock"],
+        "manifest": ["requirements.txt", "Pipfile", "pyproject.toml"],
+        "lockfile": ["Pipfile.lock", "poetry.lock", "uv.lock"],
     },
     "go": {
         "manifest": ["go.mod"],
@@ -70,7 +70,7 @@ AUDIT_TOOLS = {
     "pip": {
         "command": ["pip-audit", "--format", "json", "--desc"],
         "parse": "_parse_pip_audit",
-        "required_file": "requirements.txt",
+        "required_file": "requirements.txt",  # Or pyproject.toml — checked dynamically
     },
     "go": {
         "command": ["govulncheck", "-json", "./..."],
@@ -603,9 +603,13 @@ def _run_audit_tool(
     parse_fn_name = tool_info["parse"]
     required_file = tool_info["required_file"]
 
-    # Check that the required dependency file exists
-    if not os.path.exists(os.path.join(workspace, required_file)):
-        return None
+    # Check that at least one dependency file exists for this ecosystem
+    dep_files = _discover_dependency_files(workspace)
+    ecosystem_files = dep_files.get(ecosystem, {})
+    if not ecosystem_files.get("all"):
+        # Fallback: check the required_file directly
+        if not os.path.exists(os.path.join(workspace, required_file)):
+            return None
 
     # Try running the audit tool
     try:
@@ -1144,6 +1148,8 @@ def _parse_manifest_file(
     elif ecosystem == "pip":
         if rel_path.endswith("Pipfile"):
             packages = _parse_pipfile(content)
+        elif rel_path.endswith("pyproject.toml"):
+            packages = _parse_pyproject_toml(content)
         else:
             packages = _parse_requirements_txt(content)
     elif ecosystem == "go":
@@ -1316,6 +1322,83 @@ def _parse_pipfile(content: str) -> List[Tuple[str, str]]:
             packages.append((m.group(1), "0.0.0"))
 
     return packages
+
+
+def _parse_pyproject_toml(content: str) -> List[Tuple[str, str]]:
+    """Parse pyproject.toml for package names and versions.
+
+    Handles both [project.dependencies] (PEP 621) and
+    [tool.poetry.dependencies] (Poetry) sections.
+    """
+    packages = []
+    in_project_deps = False
+    in_poetry_deps = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # PEP 621: [project.dependencies]
+        if re.match(r'^\[project\.dependencies\]$', stripped):
+            in_project_deps = True
+            in_poetry_deps = False
+            continue
+        elif re.match(r'^\[project\.optional-dependencies\.', stripped):
+            in_project_deps = True
+            in_poetry_deps = False
+            continue
+        # Poetry: [tool.poetry.dependencies]
+        elif re.match(r'^\[tool\.poetry\.dependencies\]$', stripped):
+            in_project_deps = False
+            in_poetry_deps = True
+            continue
+        elif re.match(r'^\[tool\.poetry\.group\..*\.dependencies\]$', stripped):
+            in_project_deps = False
+            in_poetry_deps = True
+            continue
+        elif stripped.startswith('[') and not stripped.startswith("[["):
+            in_project_deps = False
+            in_poetry_deps = False
+            continue
+
+        if not (in_project_deps or in_poetry_deps):
+            continue
+
+        # PEP 621 form: name = ">=1.2.3" or name = {version = ">=1.2.3"}
+        if in_project_deps:
+            # Simple string form: name = ">=1.2.3"
+            m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*"([^"]*)"', stripped)
+            if m:
+                name = m.group(1)
+                version = _extract_version_from_pip_spec(m.group(2))
+                packages.append((name, version))
+                continue
+
+            # Table form: name = {version = ">=1.2.3", ...}
+            m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*\{.*version\s*=\s*"([^"]*)".*\}', stripped)
+            if m:
+                name = m.group(1)
+                version = _extract_version_from_pip_spec(m.group(2))
+                packages.append((name, version))
+                continue
+
+        # Poetry form: same as Pipfile
+        if in_poetry_deps:
+            m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*"([^"]*)"', stripped)
+            if m:
+                name = m.group(1)
+                version = _extract_version_from_pip_spec(m.group(2))
+                packages.append((name, version))
+                continue
+
+            m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*\{.*version\s*=\s*"([^"]*)".*\}', stripped)
+            if m:
+                name = m.group(1)
+                version = _extract_version_from_pip_spec(m.group(2))
+                packages.append((name, version))
+                continue
+
+    return packages
+
 
 def _parse_go_mod(content: str) -> List[Tuple[str, str]]:
     """Parse go.mod for module names and versions."""

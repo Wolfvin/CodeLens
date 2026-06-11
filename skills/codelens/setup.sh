@@ -46,7 +46,8 @@ python3 "$SCRIPT_DIR/scripts/codelens.py" --help
 
 # Test tree-sitter grammars
 echo "[CodeLens] Testing tree-sitter grammars..."
-python3 -c "
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHONPATH="$SCRIPT_DIR/scripts:$PYTHONPATH" python3 -c "
 from grammar_loader import GrammarLoader
 loader = GrammarLoader()
 available = loader.available_languages()

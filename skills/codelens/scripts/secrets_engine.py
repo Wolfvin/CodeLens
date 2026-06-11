@@ -324,6 +324,10 @@ def detect_secrets(
             if _is_test_file(rel_path):
                 continue
 
+            # Skip documentation/example directories (contain fake credentials)
+            if _is_docs_or_example_file(rel_path):
+                continue
+
             # Scan for patterns
             file_findings = _scan_file_patterns(content, rel_path, ext)
             findings.extend(file_findings)
@@ -650,6 +654,45 @@ def _is_test_file(rel_path: str) -> bool:
         '.stories.', '.story.',
     ]
     return any(indicator in rel_path for indicator in test_indicators)
+
+def _is_docs_or_example_file(rel_path: str) -> bool:
+    """Check if a file is in a documentation or examples directory.
+
+    Documentation and example code often contains fake credentials
+    (e.g., `password = "secret"`) that are not actual security risks.
+    This includes tutorial code, security examples showing how to use
+    auth features, and snippet directories.
+    Note: rel_path may start without a leading slash (e.g., "docs_src/foo.py"),
+    so we check both "/dir/" (middle of path) and "dir/" (start of path).
+    """
+    # Normalize to have leading slash for consistent matching
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    docs_indicators = [
+        '/docs/', '/doc/', '/documentation/',
+        '/examples/', '/example/', '/demos/', '/demo/',
+        '/docs_src/', '/snippets/',
+        '/tutorial/', '/tutorials/', '/guides/',
+        '.mdx', '.rst',
+        # Security tutorial code — these contain fake keys/passwords by design
+        '/security/tutorial', '/auth/tutorial',
+        # Test fixture directories
+        '/fixtures/', '/fixture/',
+        # Changelog / release notes
+        '/changelog/', '/changes/', '/news/',
+        # Playwright snapshot directories (auto-generated screenshots)
+        '/playwright/',
+    ]
+    # Also match paths that START with these directory names
+    start_indicators = [
+        'docs/', 'doc/', 'documentation/',
+        'examples/', 'example/', 'demos/', 'demo/',
+        'docs_src/', 'snippets/',
+        'tutorial/', 'tutorials/', 'guides/',
+        'fixtures/', 'fixture/',
+        'changelog/', 'changes/', 'news/',
+    ]
+    return (any(indicator in normalized for indicator in docs_indicators) or
+            any(rel_path.startswith(indicator) for indicator in start_indicators))
 
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""

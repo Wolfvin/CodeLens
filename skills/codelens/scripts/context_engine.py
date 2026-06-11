@@ -139,81 +139,102 @@ def get_symbol_context(
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
+        # Exact match first
+        exact_node = None
         for node in nodes:
             if node["fn"] == name:
-                if context["definition"] is None:
-                    context["definition"] = {
-                        "type": "function",
-                        "name": node["fn"],
-                        "status": node.get("status", "active"),
-                        "ref_count": node.get("ref_count", 0),
-                        "file": node.get("file", ""),
-                        "line": node.get("line", 0),
-                        "async": node.get("async", False)
+                exact_node = node
+                break
+
+        # Fallback: substring/partial match (like trace does)
+        fuzzy_node = None
+        if exact_node is None:
+            partial_matches = [n for n in nodes if name in n.get("fn", "")]
+            if partial_matches:
+                # Prefer shorter function names (closer to exact match)
+                partial_matches.sort(key=lambda n: len(n.get("fn", "")))
+                fuzzy_node = partial_matches[0]
+
+        match_node = exact_node or fuzzy_node
+        match_type = "exact" if exact_node else "fuzzy"
+
+        if match_node is not None and context["definition"] is None:
+            node = match_node
+            context["definition"] = {
+                "type": "function",
+                "name": node["fn"],
+                "status": node.get("status", "active"),
+                "ref_count": node.get("ref_count", 0),
+                "file": node.get("file", ""),
+                "line": node.get("line", 0),
+                "async": node.get("async", False),
+                "match_type": match_type
+            }
+
+            if match_type == "fuzzy":
+                context["definition"]["query"] = name
+                context["definition"]["note"] = f"No exact match for '{name}'. Showing '{node['fn']}' (substring match)."
+
+            if node.get("impl_for"):
+                context["definition"]["impl_for"] = node["impl_for"]
+            if node.get("trait_name"):
+                context["definition"]["trait_name"] = node["trait_name"]
+            if node.get("component"):
+                context["definition"]["component"] = True
+
+            # Callers and callees
+            callers = get_callers(node["id"], edges)
+            callees = get_callees(node["id"], edges, nodes)
+
+            context["callers"] = [
+                {
+                    "id": c["from"],
+                    "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
+                    "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
+                }
+                for c in callers
+            ]
+
+            context["callees"] = [
+                {
+                    "fn": c.get("fn", c.get("to_fn", "unknown")),
+                    "resolved": c.get("resolved", True),
+                    "status": c.get("status", "unknown")
+                }
+                for c in callees
+            ]
+
+            # Code snippet
+            if include_code and node.get("file"):
+                snippet = _read_code_around(
+                    workspace, node["file"],
+                    node.get("line", 0), context_lines
+                )
+                if snippet:
+                    context["code_snippet"] = {
+                        "file": node["file"],
+                        "center_line": node.get("line", 0),
+                        "lines": snippet
                     }
 
-                    if node.get("impl_for"):
-                        context["definition"]["impl_for"] = node["impl_for"]
-                    if node.get("trait_name"):
-                        context["definition"]["trait_name"] = node["trait_name"]
-                    if node.get("component"):
-                        context["definition"]["component"] = True
+            # File outline
+            if node.get("file"):
+                context["file_outline"] = _get_minimal_outline(workspace, node["file"])
 
-                    # Callers and callees
-                    callers = get_callers(node["id"], edges)
-                    callees = get_callees(node["id"], edges, nodes)
+            # File imports
+            if node.get("file"):
+                context["imports"] = _get_file_imports(workspace, node["file"])
 
-                    context["callers"] = [
-                        {
-                            "id": c["from"],
-                            "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
-                            "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
-                        }
-                        for c in callers
-                    ]
-
-                    context["callees"] = [
-                        {
-                            "fn": c.get("fn", c.get("to_fn", "unknown")),
-                            "resolved": c.get("resolved", True),
-                            "status": c.get("status", "unknown")
-                        }
-                        for c in callees
-                    ]
-
-                    # Code snippet
-                    if include_code and node.get("file"):
-                        snippet = _read_code_around(
-                            workspace, node["file"],
-                            node.get("line", 0), context_lines
-                        )
-                        if snippet:
-                            context["code_snippet"] = {
-                                "file": node["file"],
-                                "center_line": node.get("line", 0),
-                                "lines": snippet
-                            }
-
-                    # File outline
-                    if node.get("file"):
-                        context["file_outline"] = _get_minimal_outline(workspace, node["file"])
-
-                    # File imports
-                    if node.get("file"):
-                        context["imports"] = _get_file_imports(workspace, node["file"])
-
-                    # Nearby symbols (other functions in same file)
-                    context["nearby_symbols"] = [
-                        {
-                            "fn": n["fn"],
-                            "line": n.get("line", 0),
-                            "status": n.get("status", "active")
-                        }
-                        for n in nodes
-                        if n.get("file") == node.get("file") and n["id"] != node["id"]
-                    ]
-
-                    break
+            # Nearby symbols (other functions in same file)
+            context["nearby_symbols"] = [
+                {
+                    "fn": n["fn"],
+                    "line": n.get("line", 0),
+                    "status": n.get("status", "active")
+                }
+                for n in nodes
+                if n.get("file") == node.get("file") and n["id"] != node["id"]
+            ]
 
     found = context["definition"] is not None
 

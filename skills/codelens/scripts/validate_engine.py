@@ -97,6 +97,16 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
 
     unregistered = disk_files - registry_files
     for rel_path in sorted(unregistered):
+        # Skip empty __init__.py files — they have no symbols to register
+        if rel_path.endswith('__init__.py'):
+            abs_init = os.path.join(workspace, rel_path)
+            try:
+                with open(abs_init, 'r', encoding='utf-8', errors='ignore') as f:
+                    init_content = f.read().strip()
+                if not init_content or init_content == '':
+                    continue  # Empty __init__.py — not an issue
+            except IOError:
+                pass
         issues["unregistered_files"].append({
             "file": rel_path,
             "ext": os.path.splitext(rel_path)[1],

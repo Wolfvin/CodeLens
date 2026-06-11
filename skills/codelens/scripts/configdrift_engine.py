@@ -157,16 +157,104 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
             try:
                 with open(pyproject_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                # Simple TOML parsing for dependencies
+                # Parse both [project.dependencies] (PEP 621) and
+                # [tool.poetry.dependencies] sections
                 in_deps = False
+                in_poetry_deps = False
+                in_project_section = False  # [project] section (PEP 621)
+                in_array_deps = False  # PEP 621 array form: dependencies = ["pkg>=1.0", ...]
                 for line in content.split('\n'):
                     stripped = line.strip()
-                    if 'dependencies' in stripped.lower() and '=' in stripped:
+                    # PEP 621: [project] or [project.dependencies]
+                    if re.match(r'^\[project\]$', stripped):
                         in_deps = True
+                        in_project_section = True
+                        in_poetry_deps = False
+                        in_array_deps = False
                         continue
-                    elif stripped.startswith('['):
+                    elif re.match(r'^\[project\.dependencies\]$', stripped):
+                        in_deps = True
+                        in_project_section = False
+                        in_poetry_deps = False
+                        in_array_deps = False
+                        continue
+                    elif re.match(r'^\[project\.optional-dependencies\.', stripped):
+                        in_deps = True
+                        in_project_section = False
+                        in_poetry_deps = False
+                        in_array_deps = False
+                        continue
+                    # Poetry: [tool.poetry.dependencies]
+                    elif re.match(r'^\[tool\.poetry\.dependencies\]$', stripped):
                         in_deps = False
+                        in_poetry_deps = True
+                        in_array_deps = False
                         continue
+                    elif re.match(r'^\[tool\.poetry\.group\..*\.dependencies\]$', stripped):
+                        in_deps = False
+                        in_poetry_deps = True
+                        in_array_deps = False
+                        continue
+                    elif stripped.startswith('[') and not stripped.startswith('[['):
+                        in_deps = False
+                        in_poetry_deps = False
+                        in_array_deps = False
+                        continue
+
+                    if in_deps:
+                        # PEP 621 array form detection: dependencies = [
+                        if re.match(r'^dependencies\s*=\s*\[', stripped):
+                            in_array_deps = True
+                            # Handle single-line array: dependencies = ["pkg>=1.0"]
+                            for m in re.finditer(r'"([A-Za-z0-9_.-]+[><=!~][^"]*)"', stripped):
+                                pkg_name = re.split(r'[><=!~\[]', m.group(1))[0].strip()
+                                declared["dependencies"][pkg_name] = m.group(1)
+                            for m in re.finditer(r"'([A-Za-z0-9_.-]+[><=!~][^']*)'", stripped):
+                                pkg_name = re.split(r'[><=!~\[]', m.group(1))[0].strip()
+                                declared["dependencies"][pkg_name] = m.group(1)
+                            # Check if array closes on same line
+                            if ']' in stripped:
+                                in_array_deps = False
+                            continue
+
+                        # Inside PEP 621 array: "pkg>=1.0",
+                        if in_array_deps:
+                            if ']' in stripped:
+                                in_array_deps = False
+                            # Match "pkg>=1.0" or 'pkg>=1.0'
+                            for m in re.finditer(r'"([A-Za-z0-9_.-]+[><=!~\[][^"]*)"', stripped):
+                                pkg_name = re.split(r'[><=!~\[]', m.group(1))[0].strip()
+                                declared["dependencies"][pkg_name] = m.group(1)
+                            for m in re.finditer(r"'([A-Za-z0-9_.-]+[><=!~\[][^']*)'", stripped):
+                                pkg_name = re.split(r'[><=!~\[]', m.group(1))[0].strip()
+                                declared["dependencies"][pkg_name] = m.group(1)
+                            continue
+
+                        # PEP 621 key-value form: name = ">=1.2.3" or name = {version = ">=1.2.3"}
+                        # In [project] section: only parse 'dependencies' key,
+                        # skip other keys like name, version, etc.
+                        if in_project_section:
+                            # Skip non-dependency keys in [project] section
+                            if not re.match(r'^dependencies\s*=', stripped):
+                                continue
+                        m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*["\']', stripped)
+                        if m:
+                            declared["dependencies"][m.group(1)] = stripped
+                            continue
+                        m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*\{', stripped)
+                        if m:
+                            declared["dependencies"][m.group(1)] = stripped
+                            continue
+
+                    if in_poetry_deps:
+                        m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*["\']', stripped)
+                        if m and m.group(1).lower() != 'python':
+                            declared["dependencies"][m.group(1)] = stripped
+                            continue
+                        m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*\{', stripped)
+                        if m and m.group(1).lower() != 'python':
+                            declared["dependencies"][m.group(1)] = stripped
+                            continue
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
 
@@ -233,14 +321,36 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
                         external.add(pkg_name)
 
             elif ext == ".py":
-                for m in re.finditer(r'(?:from\s+(\S+)\s+)?import\s+(\S+)', content):
-                    module = m.group(1) or m.group(2)
-                    if module.startswith('.'):
-                        relative.add(module)
-                    else:
-                        # Top-level module name
-                        pkg_name = module.split('.')[0]
-                        external.add(pkg_name)
+                # Parse Python imports more carefully
+                # Handle: from X import Y  →  X is the module
+                # Handle: import X  →  X is the module
+                # Do NOT capture Y (the imported names) as modules
+                for line in content.split('\n'):
+                    stripped = line.strip()
+                    # Skip comments
+                    if stripped.startswith('#'):
+                        continue
+                    # from X import ...
+                    m = re.match(r'from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import', stripped)
+                    if m:
+                        module = m.group(1)
+                        if module.startswith('.'):
+                            relative.add(module)
+                        else:
+                            pkg_name = module.split('.')[0]
+                            if pkg_name not in ('from', 'import', 'as', 'class', 'def', 'return', 'yield'):
+                                external.add(pkg_name)
+                        continue
+                    # import X (but not "from X import Y")
+                    m = re.match(r'import\s+([a-zA-Z_][a-zA-Z0-9_.]*)', stripped)
+                    if m:
+                        module = m.group(1)
+                        if module.startswith('.'):
+                            relative.add(module)
+                        else:
+                            pkg_name = module.split('.')[0]
+                            if pkg_name not in ('from', 'import', 'as', 'class', 'def', 'return', 'yield'):
+                                external.add(pkg_name)
 
             elif ext == ".rs":
                 for m in re.finditer(r'use\s+([^;]+);', content):
@@ -253,8 +363,23 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
     return {
         "external": external,
         "relative": relative,
-        "phantom": phantom
+        "phantom": phantom,
+        "local_packages": _detect_local_packages(workspace)
     }
+
+
+def _detect_local_packages(workspace: str) -> Set[str]:
+    """Detect local package names (directories with __init__.py) in the workspace.
+    These are not external dependencies — they're part of the project itself.
+    """
+    local = set()
+    for entry in os.listdir(workspace):
+        entry_path = os.path.join(workspace, entry)
+        if os.path.isdir(entry_path):
+            # Check if it's a Python package (has __init__.py)
+            if os.path.exists(os.path.join(entry_path, '__init__.py')):
+                local.add(entry)
+    return local
 
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
     """Check if a relative JS import resolves to an actual file."""
@@ -300,27 +425,70 @@ def _compute_drift(
     # Get all actual external imports
     actual_external = actual.get("external", set())
 
+    # Get local packages (not real external deps — they're part of the project)
+    local_packages = actual.get("local_packages", set())
+
     # Known built-in modules (not real dependencies)
     builtins = {
-        # Node.js
+        # ── Node.js built-ins ──
         'fs', 'path', 'http', 'https', 'url', 'util', 'os', 'crypto',
         'stream', 'buffer', 'events', 'child_process', 'net', 'tls',
         'assert', 'cluster', 'dgram', 'dns', 'domain', 'inspector',
         'perf_hooks', 'process', 'punycode', 'querystring', 'readline',
         'repl', 'timers', 'tty', 'v8', 'vm', 'worker_threads', 'zlib',
-        # Python
-        'os', 'sys', 'json', 're', 'datetime', 'collections', 'itertools',
-        'functools', 'typing', 'dataclasses', 'abc', 'io', 'logging',
-        'unittest', 'argparse', 'subprocess', 'threading', 'multiprocessing',
-        'asyncio', 'pathlib', 'hashlib', 'base64', 'struct', 'socket',
-        'email', 'html', 'xml', 'sqlite3', 'csv', 'configparser',
-        # Rust
+        'console', 'module', 'global', 'Buffer', 'Promise', 'Symbol',
+        'Proxy', 'Reflect', 'Set', 'Map', 'WeakMap', 'WeakSet',
+        # Node: protocol variants
+        'node:fs', 'node:path', 'node:http', 'node:https', 'node:url',
+        'node:util', 'node:os', 'node:crypto', 'node:stream', 'node:buffer',
+        'node:events', 'node:child_process', 'node:net', 'node:tls',
+        'node:assert', 'node:cluster', 'node:dgram', 'node:dns',
+        'node:perf_hooks', 'node:process', 'node:readline', 'node:repl',
+        'node:timers', 'node:worker_threads', 'node:zlib', 'node:test',
+        # ── Python stdlib (comprehensive, Python 3.8+) ──
+        '__future__', '_thread', '_io', 'abc', 'argparse', 'array', 'ast',
+        'asyncio', 'atexit', 'audioop', 'base64', 'binascii', 'binhex',
+        'bisect', 'builtins', 'bz2', 'calendar', 'cgi', 'cgitb', 'chunk',
+        'cmath', 'code', 'codecs', 'codeop', 'collections', 'colorsys',
+        'compileall', 'concurrent', 'configparser', 'contextlib', 'contextvars', 'copy',
+        'copyreg', 'cProfile', 'crypt', 'csv', 'ctypes', 'curses',
+        'dataclasses', 'datetime', 'dbm', 'decimal', 'difflib', 'dis',
+        'distutils', 'doctest', 'email', 'encodings', 'enum', 'errno',
+        'faulthandler', 'filecmp', 'fileinput', 'fnmatch', 'fractions',
+        'ftplib', 'functools', 'gc', 'getopt', 'getpass', 'gettext',
+        'glob', 'grp', 'gzip', 'hashlib', 'heapq', 'hmac', 'html',
+        'http', 'idlelib', 'imaplib', 'importlib', 'inspect', 'io',
+        'ipaddress', 'itertools', 'json', 'keyword', 'lib2to3', 'linecache',
+        'locale', 'logging', 'lzma', 'mailbox', 'mailcap', 'marshal',
+        'math', 'mimetypes', 'mmap', 'modulefinder', 'multiprocessing',
+        'netrc', 'nis', 'numbers', 'operator', 'optparse', 'os',
+        'ossaudiodev', 'parser', 'pathlib', 'pdb', 'pickle', 'pickletools',
+        'pipes', 'pkgutil', 'platform', 'plistlib', 'poplib', 'posix',
+        'posixpath', 'pprint', 'profile', 'pstats', 'pty', 'pwd',
+        'py_compile', 'pyclbr', 'pydoc', 'queue', 'quopri', 'random',
+        're', 'readline', 'reprlib', 'resource', 'rlcompleter', 'runpy',
+        'sched', 'secrets', 'select', 'selectors', 'shelve', 'shlex',
+        'shutil', 'signal', 'site', 'smtpd', 'smtplib', 'sndhdr',
+        'socket', 'socketserver', 'spwd', 'sqlite3', 'ssl', 'stat',
+        'statistics', 'string', 'stringprep', 'struct', 'subprocess',
+        'sunau', 'symtable', 'sys', 'sysconfig', 'syslog', 'tabnanny',
+        'tarfile', 'telnetlib', 'tempfile', 'termios', 'test', 'textwrap',
+        'threading', 'time', 'timeit', 'tkinter', 'token', 'tokenize',
+        'tomllib', 'trace', 'traceback', 'tracemalloc', 'tty', 'turtle',
+        'turtledemo', 'types', 'typing', 'unicodedata', 'unittest',
+        'urllib', 'uu', 'uuid', 'venv', 'warnings', 'wave', 'weakref',
+        'webbrowser', 'winreg', 'winsound', 'wsgiref', 'xdrlib',
+        'xml', 'xmlrpc', 'zipapp', 'zipfile', 'zipimport', 'zlib',
+        'zoneinfo',
+        # Common Python meta-packages
+        'setuptools', 'pip', 'pkg_resources', 'ensurepip',
+        # ── Rust built-ins ──
         'std', 'core', 'alloc',
     }
 
     # ─── Missing dependencies ───────────────────────────
     for pkg in actual_external:
-        if pkg in builtins:
+        if pkg in builtins or pkg in local_packages:
             continue
         normalized = _normalize_pkg_name(pkg, project_type)
         if normalized not in all_declared and pkg not in builtins:

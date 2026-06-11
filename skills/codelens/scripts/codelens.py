@@ -214,14 +214,44 @@ def main():
     for cmd_name, cmd_info in sorted(registry.items()):
         sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
         cmd_info["add_args"](sub)
+        # Add --format to each subparser so it works AFTER the subcommand
+        # e.g. "codelens.py scan -f markdown" works in addition to
+        # "codelens.py -f markdown scan"
+        sub.add_argument("--format", "-f", choices=["json", "markdown"], default=None,
+                         help="Output format (overrides global --format)")
 
-    # Global format option
+    # Global format option (works before subcommand)
     parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
                         help="Output format (default: json)")
 
     # ─── Parse and dispatch ─────────────────────────────
 
+    # Pre-parse to capture global --format before subparser overwrites it
+    # This handles: codelens -f markdown scan
+    global_format = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg in ('-f', '--format') and i + 1 < len(sys.argv):
+            next_arg = sys.argv[i + 1]
+            if next_arg in ('json', 'markdown'):
+                global_format = next_arg
+        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown'):
+            global_format = arg[3:]
+        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown'):
+            global_format = arg[9:]
+
     args = parser.parse_args()
+
+    # Resolve format: subparser --format overrides global --format
+    # When both are specified, the subparser one wins (more specific).
+    # When --format is placed after the subcommand, argparse sets both
+    # the global and subparser format attributes. We need to detect this.
+    # The subparser's --format has default=None so we can tell if it was set.
+    subparser_format = getattr(args, 'format', None)
+    if subparser_format is not None:
+        args.format = subparser_format
+    elif global_format is not None:
+        # Global --format was set before subcommand but subparser overwrote it
+        args.format = global_format
 
     if not args.command:
         parser.print_help()
