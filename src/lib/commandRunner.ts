@@ -45,7 +45,7 @@ const ALLOWED_COMMANDS = new Set([
   'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
   'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
   'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
-  'state-map', 'regex-audit',
+  'state-map', 'regex-audit', 'handbook', 'ask',
 ])
 
 /**
@@ -414,6 +414,16 @@ class CommandRunner {
   /** Detect frameworks in workspace */
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
+  }
+
+  /** Generate project handbook for AI agents */
+  async handbook(workspace: string): Promise<any> {
+    return this.execute('handbook', [workspace])
+  }
+
+  /** Ask a natural language question about the codebase */
+  async ask(question: string, workspace: string): Promise<any> {
+    return this.execute('ask', [question, workspace])
   }
 }
 

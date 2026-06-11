@@ -351,4 +351,7 @@ export const CODELENS_COMMANDS: CommandDef[] = [
   { name: 'state-map', description: 'Track global state management', category: 'P3', icon: '💾', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
   { name: 'regex-audit', description: 'Audit regex for ReDoS and issues', category: 'Security', icon: '🔐', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
   { name: 'watch', description: 'Start file watcher for live updates', category: 'Core', icon: '👁️', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  // Agent
+  { name: 'handbook', description: 'Generate project handbook for AI agents', category: 'Agent', icon: '📖', args: [{ name: 'workspace', required: true, description: 'Workspace path' }] },
+  { name: 'ask', description: 'Ask a natural language question about the codebase', category: 'Agent', icon: '🤖', args: [{ name: 'question', required: true, description: 'Natural language question' }, { name: 'workspace', required: false, description: 'Workspace path' }] },
 ]

@@ -9,6 +9,7 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
+import { getCachedScan, setCachedScan } from '@/lib/scanCache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,15 +23,22 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(workspace)
+    // Try cache first to avoid re-scanning on every request
+    let scanOutput = getCachedScan(workspace)
+    if (!scanOutput) {
+      // Run the scan command to build the registry and get all data
+      scanOutput = await commandRunner.scan(workspace)
 
-    // Check for CLI errors
-    if (scanOutput.status === 'error') {
-      return NextResponse.json(
-        { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
-        { status: 500 }
-      )
+      // Check for CLI errors
+      if (scanOutput.status === 'error') {
+        return NextResponse.json(
+          { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
+          { status: 500 }
+        )
+      }
+
+      // Cache the successful scan result
+      setCachedScan(workspace, scanOutput)
     }
 
     // Normalize the scan output directly (it already has frontend.classes, frontend.ids, backend.nodes, backend.edges)

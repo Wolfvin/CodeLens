@@ -9,6 +9,7 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
+import { getCachedScan, setCachedScan } from '@/lib/scanCache'
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,14 +24,21 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Run the scan to get current graph state
-    const scanOutput = await commandRunner.scan(workspace)
+    // Try cache first to avoid re-scanning on every request
+    let scanOutput = getCachedScan(workspace)
+    if (!scanOutput) {
+      // Run the scan to get current graph state
+      scanOutput = await commandRunner.scan(workspace)
 
-    if (scanOutput.status === 'error') {
-      return NextResponse.json(
-        { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
-        { status: 500 }
-      )
+      if (scanOutput.status === 'error') {
+        return NextResponse.json(
+          { error: `CLI error: ${scanOutput.error ?? 'Unknown error'}` },
+          { status: 500 }
+        )
+      }
+
+      // Cache the successful scan result
+      setCachedScan(workspace, scanOutput)
     }
 
     const graphEvent = normalizer.normalize('scan', scanOutput)

@@ -7,6 +7,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
+import { invalidateScanCache } from '@/lib/scanCache'
+
+// Commands that modify the registry and should invalidate the scan cache
+const REGISTRY_MUTATING_COMMANDS = new Set([
+  'init', 'scan',
+])
 
 export async function POST(request: NextRequest) {
   try {
@@ -54,6 +60,11 @@ export async function POST(request: NextRequest) {
 
     // Normalize the output into a GraphEvent
     const graphEvent = normalizer.normalize(command, rawOutput)
+
+    // Invalidate scan cache if the command mutates the registry
+    if (REGISTRY_MUTATING_COMMANDS.has(command)) {
+      invalidateScanCache()
+    }
 
     return NextResponse.json(graphEvent)
   } catch (err: any) {
