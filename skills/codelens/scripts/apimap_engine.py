@@ -1,6 +1,6 @@
 """
 API Map Engine for CodeLens — v3
-Maps REST/GraphQL/gRPC route → handler → middleware for web applications.
+Maps REST/GraphQL/gRPC/Tauri route → handler → middleware for web applications.
 Answers: "What endpoints exist? What handles POST /users?"
 
 Framework Detection & Route Extraction:
@@ -17,6 +17,7 @@ Framework Detection & Route Extraction:
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
+14. Tauri     — #[tauri::command] annotated functions
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -202,6 +203,13 @@ def map_api_routes(
                 if orpc_routes:
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
+
+            # ─── Tauri Commands ────────────────────────────────
+            if ext == ".rs":
+                tauri_routes = _extract_tauri_commands(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -1849,3 +1857,146 @@ def _generate_recommendations(
         })
 
     return recommendations
+
+
+# ─── Tauri Command Extraction ──────────────────────────────────
+
+def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC command definitions from Rust source files.
+
+    Tauri commands are Rust functions annotated with `#[tauri::command]`.
+    They serve as the IPC bridge between the frontend (web) and backend (Rust).
+
+    Detects:
+    - Standalone: #[tauri::command]\n fn name(...) -> Result<T, E>
+    - With rename: #[tauri::command(rename_all = "snake_case")]\n fn name(...)
+    - Async commands: #[tauri::command]\n async fn name(...)
+    - Macro-generated: channel_commands! macro expanded commands
+    - State parameter detection: fn cmd(state: State<AppState>)
+    - Auth-gated: commands that check permissions/authorization internally
+    """
+    routes = []
+
+    # Pattern 1: #[tauri::command] followed by function definition
+    # Handles: pub fn, pub async fn, fn, async fn
+    # Also handles attributes between #[tauri::command] and fn
+    for m in re.finditer(
+        r'#\[tauri::command(?:\([^)]*\))?\]'
+        r'(?:\s*\n\s*#\[.*?\])*'           # Optional other attributes
+        r'\s*\n\s*(?:(?:pub\s+)?(?:async\s+)?)?fn\s+(\w+)',
+        content
+    ):
+        fn_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Extract function signature for parameter analysis
+        sig_start = m.end()
+        sig_text = content[sig_start:sig_start + 500]
+
+        # Detect state parameters (State<T>)
+        has_state = bool(re.search(r'State\s*<', sig_text))
+        state_types = re.findall(r'State\s*<\s*(\w+)', sig_text)
+
+        # Detect Result return type
+        has_result = bool(re.search(r'->\s*.*Result', sig_text))
+
+        # Detect async
+        is_async = bool(re.search(r'async\s+fn\s+' + re.escape(fn_name), m.group(0)))
+
+        # Detect if the command checks permissions internally
+        # (common patterns: state.auth, require_auth, check_permission, etc.)
+        fn_body_start = sig_text.find('{')
+        fn_body = sig_text[fn_body_start:fn_body_start + 2000] if fn_body_start >= 0 else ""
+        is_auth_gated = bool(re.search(
+            r'(?:check_perm|require_auth|is_authenticated|verify_token|'
+            r'authorize|auth_check|state\.auth|\.is_admin|\.is_owner|'
+            r'owner_only|permission|unauthorized|forbidden)',
+            fn_body
+        ))
+
+        # Derive a path-like name for the command
+        # Tauri commands are invoked from JS as: invoke("command_name", { args })
+        # The command_name defaults to the Rust function name
+        command_path = f"tauri://{fn_name}"
+
+        mw_chain = []
+        if is_auth_gated:
+            mw_chain.append({
+                "name": "tauri_auth_check",
+                "type": "auth",
+                "file": rel_path,
+                "line": line_num,
+            })
+
+        route = {
+            "method": "INVOKE",
+            "path": command_path,
+            "handler_name": fn_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": mw_chain,
+            "request_type": None,
+            "response_type": "Result" if has_result else None,
+            "framework": "tauri",
+            "type": "tauri_command",
+            "async": is_async,
+            "has_state": has_state,
+        }
+
+        if state_types:
+            route["state_types"] = state_types
+        if is_auth_gated:
+            route["auth_protected"] = True
+
+        routes.append(route)
+
+    # Pattern 2: Macro-generated commands (channel_commands! macro)
+    # These create multiple Tauri commands from a macro invocation
+    for m in re.finditer(
+        r'channel_commands!\s*\{([^}]+)\}',
+        content,
+        re.DOTALL
+    ):
+        macro_body = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Extract individual command definitions from the macro body
+        for cmd_match in re.finditer(r'fn\s+(\w+)', macro_body):
+            cmd_name = cmd_match.group(1)
+            cmd_line = line_num + macro_body[:cmd_match.start()].count('\n')
+
+            routes.append({
+                "method": "INVOKE",
+                "path": f"tauri://{cmd_name}",
+                "handler_name": cmd_name,
+                "file": rel_path,
+                "line": cmd_line,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "tauri",
+                "type": "tauri_command",
+                "async": False,
+                "has_state": False,
+                "macro_generated": True,
+            })
+
+    # Pattern 3: .invoke_handler() registration blocks
+    # Detects: invoke_handler(tauri::generate_handler![cmd1, cmd2, ...])
+    # This reveals the full set of registered commands
+    for m in re.finditer(
+        r'tauri::generate_handler!\s*\[([^\]]+)\]',
+        content
+    ):
+        handler_list = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Extract command names from the handler list
+        registered_cmds = re.findall(r'(\w+)', handler_list)
+
+        # Mark existing routes as registered
+        for route in routes:
+            if route.get("handler_name") in registered_cmds:
+                route["registered"] = True
+
+    return routes

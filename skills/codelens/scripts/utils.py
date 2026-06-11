@@ -156,6 +156,54 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── File Reading Utility ──────────────────────────────────────
+
+def safe_read_file(path: str, max_size: int = 200 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file with size limit and error handling.
+
+    Args:
+        path: Absolute or relative file path.
+        max_size: Maximum file size in bytes to read (default 200KB).
+        encoding: File encoding (default utf-8).
+
+    Returns:
+        File content as string, or None if the file cannot be read
+        (missing, too large, encoding error, etc.).
+    """
+    try:
+        file_size = os.path.getsize(path)
+        if file_size > max_size:
+            logger.debug(f"Skipping large file ({file_size} bytes): {path}")
+            return None
+        with open(path, 'r', encoding=encoding, errors='ignore') as f:
+            return f.read()
+    except (OSError, IOError):
+        logger.debug(f"Failed to read file: {path}", exc_info=True)
+        return None
+
+
+# ─── Directory Ignore Utility ──────────────────────────────────
+
+def should_ignore_dir(rel_path: str) -> bool:
+    """Check if a relative path contains any segment from DEFAULT_IGNORE_DIRS.
+
+    Uses path-segment-aware matching so that a workspace named
+    "test-dist" does NOT match "dist".
+
+    Args:
+        rel_path: Relative path from workspace root (e.g., "src/components",
+                  "node_modules/react", ".git/hooks").
+
+    Returns:
+        True if any path segment is in DEFAULT_IGNORE_DIRS.
+    """
+    if rel_path == '.':
+        return False
+    # Normalize to forward slashes and split into segments
+    segments = rel_path.replace(os.sep, '/').split('/')
+    return any(seg in DEFAULT_IGNORE_DIRS for seg in segments)
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.0"

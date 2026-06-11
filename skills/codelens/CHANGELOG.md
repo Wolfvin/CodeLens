@@ -5,6 +5,28 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-12
+
+### Added
+- **Tauri framework detection**: Auto-detects Tauri apps via `src-tauri/tauri.conf.json`, `@tauri-apps/api` in package.json, and `tauri` crate in Cargo.toml. Sets `has_tauri` and `has_rust_backend` flags in framework detection output.
+- **Tauri command mapping (api-map)**: Extracts `#[tauri::command]` annotated Rust functions as IPC routes with method `INVOKE`, path `tauri://<fn_name>`. Detects async commands, State<T> parameters, auth-gated commands, macro-generated commands (channel_commands!), and `tauri::generate_handler![]` registration blocks. Tested with 320+ Tauri commands on OpenPawz.
+- **Rust framework signatures**: Added detection for axum, actix-web, rocket, warp, poem, salvo via Cargo.toml dependency scanning.
+- **Cargo.toml dependency scanning**: New `_find_cargo_tomls()` and `_parse_cargo_dependencies()` functions in `framework_detect.py` that scan root, `src-tauri/`, and `crates/*` Cargo.toml files for framework crate dependencies.
+- **Rust memory_leak patterns**: Added 4 Rust-specific performance hints — `Box::leak()`, nested `Rc/Arc` cycles, `mem::forget()`, and unbounded channels (`mpsc::channel` without `sync_channel`/`bounded`).
+- **Per-pattern extension gating**: Memory leak patterns now have `applies_to_ext` field to prevent JS-only patterns (addEventListener, setInterval, etc.) from false-positiving on Rust files. Pattern-level gating runs before regex matching.
+- **`safe_read_file()` utility**: Safe file reading with size limit and error handling (max 200KB default). Added to `utils.py` for use by a11y_engine and other modules.
+- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore check that prevents false matches (e.g., workspace named "test-dist" doesn't match "dist"). Added to `utils.py`.
+- **Tauri-aware recommended config**: When Tauri is detected, `get_recommended_config()` adds `src/` to frontend_paths, `src-tauri/src/` to backend_paths, removes `src/` from backend_paths, and adds `src-tauri/target/` and `src-tauri/gen/` to ignore list.
+
+### Fixed
+- **ImportError on startup**: `safe_read_file` and `should_ignore_dir` were imported by a11y_engine and tailwind_detector but not defined in `utils.py`. Both functions are now implemented.
+- **Framework detection crash**: `FRAMEWORK_SIGNATURES` entries without `packages` key (Rust-only frameworks) caused KeyError. Fixed with `.get("packages", [])`.
+- **dead-code recommended_action missing**: The `recommended_action` field was only added when `total_dead > 0`, missing the zero-dead-code case. Now always present.
+- **dead-code total_dead field mismatch**: Command used `stats.total_dead` but engine returns `stats.total_dead_code`. Fixed with fallback lookup.
+
+### Test Target
+- **OpenPawz** (https://github.com/OpenPawz/openpawz): Large Tauri v2 app with vanilla TypeScript frontend, 1088 files, 870+ source files, 320+ Tauri commands, 343 Rust files. Used to validate all Tauri-related improvements.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added
