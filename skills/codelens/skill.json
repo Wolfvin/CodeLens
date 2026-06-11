@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.7.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: SearchConfig/FrontendRegistryInput dataclasses (fixes many_params smell), O(n log n) Gini coefficient, bun.lock detection, trpc/orpc detection, improved normalizer coverage. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
+  "version": "5.8.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: Monorepo support (pnpm/npm/yarn workspaces, Turborepo, apps/ structure). Scans all sub-package.json files for framework detection — fixes React detection in monorepo Tauri apps. Deep Tauri config scan. Lockfile detection (bun/pnpm/yarn/npm). New framework signatures: trpc, orpc, zustand, redux, vite. Monorepo-aware init config. SearchConfig/FrontendRegistryInput dataclasses, O(n log n) Gini coefficient, improved normalizer coverage. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging. Registry freshness check. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -30,6 +30,9 @@
     "markdown-output", "format-markdown", "convention-detection", "agent-md",
     "decision-tree", "actionable-output", "quality-metrics", "project-brief",
     "colloquial-trigger", "negative-trigger", "fallback-chain", "error-recovery",
-    "parallel-execution", "edge-case", "streaming", "rest-api"
+    "parallel-execution", "edge-case", "streaming", "rest-api",
+    "monorepo", "pnpm-workspace", "npm-workspaces", "turborepo",
+    "trpc", "orpc", "zustand", "redux", "vite",
+    "lockfile-detection", "bun-lock", "deep-tauri-scan"
   ]
 }

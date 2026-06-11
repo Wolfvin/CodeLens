@@ -2,12 +2,16 @@
 Framework Detector for CodeLens
 Auto-detects frameworks from package.json, pyproject.toml, requirements.txt,
 config files, and file patterns.
+
+v5.8: Monorepo support — scans sub-package.json files (pnpm workspaces,
+npm workspaces, Lerna, Turborepo). Detects React in monorepo sub-packages.
+Also detects bun.lock/bun.lockb for lockfile-aware scanning.
 """
 
 import json
 import os
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir
 
 
@@ -120,14 +124,193 @@ FRAMEWORK_SIGNATURES = {
         "cargo_packages": ["rocket"],
         "config_files": [],
         "indicators": []
-    }
+    },
+    # RPC / API frameworks
+    "trpc": {
+        "packages": ["@trpc/server", "@trpc/client"],
+        "config_files": [],
+        "indicators": []
+    },
+    "orpc": {
+        "packages": ["@orpc/server", "@orpc/client"],
+        "config_files": [],
+        "indicators": []
+    },
+    # State management
+    "zustand": {
+        "packages": ["zustand"],
+        "config_files": [],
+        "indicators": []
+    },
+    "redux": {
+        "packages": ["@reduxjs/toolkit", "redux"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Build tools
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
+        "indicators": []
+    },
 }
+
+
+# ─── Monorepo Helpers ──────────────────────────────────────────
+
+def _discover_workspace_package_jsons(workspace: str) -> List[str]:
+    """
+    Discover all package.json files in a monorepo workspace.
+
+    Checks:
+    1. pnpm-workspace.yaml → parse packages globs
+    2. package.json workspaces field (npm/yarn/Lerna)
+    3. Fallback: walk first 2 levels for apps/ and packages/ dirs
+
+    Returns list of absolute paths to package.json files (including root).
+    """
+    workspace = os.path.abspath(workspace)
+    pkg_jsons = []
+
+    # Always include root
+    root_pkg = os.path.join(workspace, "package.json")
+    if os.path.exists(root_pkg):
+        pkg_jsons.append(root_pkg)
+
+    # 1. pnpm-workspace.yaml
+    pnpm_ws = os.path.join(workspace, "pnpm-workspace.yaml")
+    if os.path.exists(pnpm_ws):
+        try:
+            with open(pnpm_ws, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Extract packages list from YAML (simple regex — no yaml dep needed)
+            for m in re.finditer(r"^\s*-\s*['\"]?([^'\"\n]+)['\"]?", content, re.MULTILINE):
+                glob_pattern = m.group(1).strip()
+                pkg_jsons.extend(_glob_package_jsons(workspace, glob_pattern))
+        except IOError:
+            pass
+
+    # 2. npm/yarn workspaces in root package.json
+    if os.path.exists(root_pkg):
+        try:
+            with open(root_pkg, 'r', encoding='utf-8') as f:
+                root_data = json.load(f)
+            workspaces = root_data.get("workspaces", [])
+            if isinstance(workspaces, dict):
+                workspaces = workspaces.get("packages", [])
+            for glob_pattern in workspaces:
+                pkg_jsons.extend(_glob_package_jsons(workspace, glob_pattern))
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # 3. Fallback: look for apps/ and packages/ directories (common in Turborepo)
+    if len(pkg_jsons) <= 1:
+        for subdir in ("apps", "packages"):
+            dir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(dir_path):
+                for entry in os.listdir(dir_path):
+                    entry_path = os.path.join(dir_path, entry)
+                    pkg_path = os.path.join(entry_path, "package.json")
+                    if os.path.isfile(pkg_path) and pkg_path not in pkg_jsons:
+                        pkg_jsons.append(pkg_path)
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for p in pkg_jsons:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    return unique
+
+
+def _glob_package_jsons(workspace: str, glob_pattern: str) -> List[str]:
+    """
+    Resolve a workspace glob pattern like 'apps/*' or 'packages/*'
+    to a list of package.json paths.
+    """
+    results = []
+    # Strip trailing slash and /package.json if present
+    pattern = glob_pattern.rstrip('/')
+    if pattern.endswith('/package.json'):
+        pattern = pattern[:-len('/package.json')]
+
+    # Handle simple star glob: dir/*
+    if '*' in pattern:
+        base_dir = pattern.split('*')[0].rstrip('/')
+        base_path = os.path.join(workspace, base_dir)
+        if os.path.isdir(base_path):
+            for entry in sorted(os.listdir(base_path)):
+                entry_path = os.path.join(base_path, entry)
+                if os.path.isdir(entry_path):
+                    pkg_path = os.path.join(entry_path, "package.json")
+                    if os.path.isfile(pkg_path):
+                        results.append(pkg_path)
+    else:
+        # Direct path
+        dir_path = os.path.join(workspace, pattern)
+        pkg_path = os.path.join(dir_path, "package.json")
+        if os.path.isfile(pkg_path):
+            results.append(pkg_path)
+
+    return results
+
+
+def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any]:
+    """
+    Collect all dependencies from multiple package.json files.
+
+    Returns dict with:
+    - all_deps: merged dependency dict
+    - module_system: 'esm' if any package has type:module
+    - css_preprocessor: detected from any package
+    - is_monorepo: True if multiple package.json files found
+    """
+    all_deps = {}
+    module_system = "cjs"
+    css_preprocessor = None
+
+    for pkg_path in pkg_json_paths:
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            all_deps.update(pkg.get("dependencies", {}))
+            all_deps.update(pkg.get("devDependencies", {}))
+            all_deps.update(pkg.get("peerDependencies", {}))
+
+            # Module system — any ESM package counts
+            if pkg.get("type") == "module":
+                module_system = "esm"
+
+            # CSS preprocessor
+            deps = {}
+            deps.update(pkg.get("dependencies", {}))
+            deps.update(pkg.get("devDependencies", {}))
+            if "sass" in deps or "node-sass" in deps:
+                css_preprocessor = "scss"
+            elif "less" in deps and css_preprocessor is None:
+                css_preprocessor = "less"
+            elif ("stylus" in deps or "styl" in deps) and css_preprocessor is None:
+                css_preprocessor = "stylus"
+
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return {
+        "all_deps": all_deps,
+        "module_system": module_system,
+        "css_preprocessor": css_preprocessor,
+        "is_monorepo": len(pkg_json_paths) > 1,
+    }
 
 
 def detect_frameworks(workspace: str) -> Dict[str, Any]:
     """
     Detect frameworks used in a workspace.
     Returns dict with detected frameworks and their config.
+
+    v5.8: Now supports monorepo detection — scans all package.json files
+    in workspace packages (pnpm, npm, yarn workspaces, Turborepo).
     """
     workspace = os.path.abspath(workspace)
     detected = {
@@ -144,54 +327,51 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_rust_backend": False,
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "is_monorepo": False,
+        "lockfile": None,
     }
 
-    # 1. Check package.json
-    pkg_path = os.path.join(workspace, "package.json")
-    if os.path.exists(pkg_path):
-        try:
-            with open(pkg_path, 'r', encoding='utf-8') as f:
-                pkg = json.load(f)
-            all_deps = {}
-            all_deps.update(pkg.get("dependencies", {}))
-            all_deps.update(pkg.get("devDependencies", {}))
-            all_deps.update(pkg.get("peerDependencies", {}))
+    # Detect lockfile type
+    for lockfile, name in [
+        ("bun.lock", "bun"),
+        ("bun.lockb", "bun"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]:
+        if os.path.exists(os.path.join(workspace, lockfile)):
+            detected["lockfile"] = name
+            break
 
-            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-                for pkg_name in sig["packages"]:
-                    if pkg_name in all_deps:
-                        detected["frameworks"].append(fw_name)
-                        if fw_name == "react":
-                            detected["has_react"] = True
-                        elif fw_name == "next.js":
-                            detected["has_nextjs"] = True
-                        elif fw_name == "vue":
-                            detected["has_vue"] = True
-                        elif fw_name == "svelte":
-                            detected["has_svelte"] = True
-                        elif fw_name == "tailwind":
-                            detected["has_tailwind"] = True
-                        elif fw_name == "angular":
-                            detected["has_angular"] = True
-                        break
+    # 1. Discover all package.json files (monorepo-aware)
+    pkg_json_paths = _discover_workspace_package_jsons(workspace)
+    pkg_info = _collect_deps_from_package_jsons(pkg_json_paths)
+    all_deps = pkg_info["all_deps"]
+    detected["module_system"] = pkg_info["module_system"]
+    detected["css_preprocessor"] = pkg_info["css_preprocessor"]
+    detected["is_monorepo"] = pkg_info["is_monorepo"]
 
-            # Detect CSS preprocessor
-            if "sass" in all_deps or "node-sass" in all_deps:
-                detected["css_preprocessor"] = "scss"
-            elif "less" in all_deps:
-                detected["css_preprocessor"] = "less"
-            elif "stylus" in all_deps or "styl" in all_deps:
-                detected["css_preprocessor"] = "stylus"
-
-            # Detect module system
-            if "type" in pkg and pkg["type"] == "module":
-                detected["module_system"] = "esm"
-            else:
-                detected["module_system"] = "cjs"
-
-        except (json.JSONDecodeError, IOError):
-            pass
+    # Check all collected deps against framework signatures
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for pkg_name in sig["packages"]:
+            if pkg_name in all_deps:
+                detected["frameworks"].append(fw_name)
+                if fw_name == "react":
+                    detected["has_react"] = True
+                elif fw_name == "next.js":
+                    detected["has_nextjs"] = True
+                elif fw_name == "vue":
+                    detected["has_vue"] = True
+                elif fw_name == "svelte":
+                    detected["has_svelte"] = True
+                elif fw_name == "tailwind":
+                    detected["has_tailwind"] = True
+                elif fw_name == "angular":
+                    detected["has_angular"] = True
+                break
 
     # 2. Check config files
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -326,19 +506,40 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_rust_backend"] = True
                 break
 
-    # Also detect Tauri from config file presence
+    # Also detect Tauri from config file presence (deep scan for monorepo)
     if not detected["has_tauri"]:
+        # Check standard location first
         tauri_conf_paths = [
             os.path.join(workspace, "src-tauri", "tauri.conf.json"),
             os.path.join(workspace, "src-tauri", "tauri.conf.json5"),
         ]
+        found = False
         for tpath in tauri_conf_paths:
             if os.path.exists(tpath):
                 if "tauri" not in detected["frameworks"]:
                     detected["frameworks"].append("tauri")
                 detected["has_tauri"] = True
                 detected["has_rust_backend"] = True
+                found = True
                 break
+
+        # Deep scan: look for tauri.conf.json anywhere in workspace
+        if not found:
+            for root, dirs, files in os.walk(workspace):
+                rel_root = os.path.relpath(root, workspace)
+                if should_ignore_dir(rel_root):
+                    dirs.clear()
+                    continue
+                for f in files:
+                    if f == "tauri.conf.json" or f == "tauri.conf.json5":
+                        if "tauri" not in detected["frameworks"]:
+                            detected["frameworks"].append("tauri")
+                        detected["has_tauri"] = True
+                        detected["has_rust_backend"] = True
+                        found = True
+                        break
+                if found:
+                    break
 
     # Detect any Rust project (even without Tauri)
     if not detected["has_rust_backend"] and cargo_deps:
@@ -394,6 +595,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
     """
     Based on detected frameworks, recommend codelens config.
+
+    v5.8: Monorepo-aware — adjusts paths for pnpm/npm/yarn workspace
+    structures. Properly handles Tauri+React monorepo setups.
     """
     fw = detect_frameworks(workspace)
 
@@ -411,19 +615,53 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "tailwind_mode": False
     }
 
+    is_monorepo = fw.get("is_monorepo", False)
+
     # Adjust paths based on framework
     # Tauri: src/ is frontend, src-tauri/src/ is Rust backend
     if fw.get("has_tauri"):
         # For Tauri projects, src/ is the web frontend, not backend
         # Remove src/ from backend_paths to prevent misclassification
         config["backend_paths"] = [p for p in config["backend_paths"] if p != "src/"]
-        # Add Tauri-specific paths
-        config["frontend_paths"].extend(["src/", "src/components/", "src/pages/", "src/views/"])
-        config["backend_paths"].extend(["src-tauri/src/"])
+
+        if is_monorepo:
+            # Monorepo Tauri: apps/<name>/src/ is frontend, apps/<name>/src-tauri/src/ is backend
+            # Auto-discover the app directory structure
+            apps_dir = os.path.join(workspace, "apps")
+            if os.path.isdir(apps_dir):
+                for entry in sorted(os.listdir(apps_dir)):
+                    entry_path = os.path.join(apps_dir, entry)
+                    if os.path.isdir(entry_path):
+                        # Check if this is the Tauri app
+                        if os.path.exists(os.path.join(entry_path, "src-tauri")):
+                            config["frontend_paths"].extend([
+                                f"apps/{entry}/src/",
+                                f"apps/{entry}/src/components/",
+                                f"apps/{entry}/src/pages/",
+                                f"apps/{entry}/src/views/",
+                            ])
+                            config["backend_paths"].extend([
+                                f"apps/{entry}/src-tauri/src/",
+                            ])
+                            if f"apps/{entry}/src-tauri/target/" not in config.get("ignore", []):
+                                config.setdefault("ignore", []).append(f"apps/{entry}/src-tauri/target/")
+                        else:
+                            # Non-Tauri app in monorepo (e.g., web-only package)
+                            config["frontend_paths"].extend([
+                                f"apps/{entry}/src/",
+                            ])
+        else:
+            # Standard Tauri project
+            config["frontend_paths"].extend(["src/", "src/components/", "src/pages/", "src/views/"])
+            config["backend_paths"].extend(["src-tauri/src/"])
+            if "src-tauri/target/" not in config.get("ignore", []):
+                config.setdefault("ignore", []).append("src-tauri/target/")
+
+        # Enable JSX mode if React is also present
+        if fw.get("has_react"):
+            config["jsx_mode"] = True
+        # Always enable JSX for .tsx files in Tauri
         config["jsx_mode"] = True
-        # Add src-tauri/target to ignore (Rust build artifacts)
-        if "src-tauri/target/" not in config.get("ignore", []):
-            config.setdefault("ignore", []).append("src-tauri/target/")
 
     if fw["has_nextjs"]:
         config["frontend_paths"].extend(["app/", "src/app/", "pages/", "src/pages/"])
@@ -435,6 +673,27 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_react"] and not fw.get("has_tauri"):
         config["jsx_mode"] = True
         config["frontend_paths"].extend(["src/components/", "src/views/"])
+        # Monorepo React app
+        if is_monorepo:
+            apps_dir = os.path.join(workspace, "apps")
+            if os.path.isdir(apps_dir):
+                for entry in sorted(os.listdir(apps_dir)):
+                    entry_path = os.path.join(apps_dir, entry)
+                    pkg_path = os.path.join(entry_path, "package.json")
+                    if os.path.isfile(pkg_path):
+                        try:
+                            with open(pkg_path, 'r', encoding='utf-8') as f:
+                                pkg = json.load(f)
+                            deps = {}
+                            deps.update(pkg.get("dependencies", {}))
+                            deps.update(pkg.get("devDependencies", {}))
+                            if "react" in deps and "tauri" not in deps:
+                                config["frontend_paths"].extend([
+                                    f"apps/{entry}/src/",
+                                    f"apps/{entry}/src/components/",
+                                ])
+                        except (json.JSONDecodeError, IOError):
+                            pass
 
     if fw["has_vue"]:
         config["vue_mode"] = True
@@ -450,5 +709,9 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
     config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
+
+    # Store monorepo info
+    config["is_monorepo"] = is_monorepo
+    config["lockfile"] = fw.get("lockfile")
 
     return config
