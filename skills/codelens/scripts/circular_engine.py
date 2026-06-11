@@ -5,6 +5,9 @@ Detects circular references in:
 2. Import/require chains (JS/TS)
 3. CSS @import chains
 Uses DFS with coloring (white/gray/black) for efficient cycle detection.
+
+Performance: Includes max_cycles limit to prevent timeout on very large
+codebases with many cycles (e.g., 65K+ nodes, 320K+ edges).
 """
 
 import os
@@ -13,14 +16,18 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import logger
 
+# Performance limit: max cycles to report per detection run
+MAX_CYCLES_PER_TYPE = 100
 
-def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
+
+def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_CYCLES_PER_TYPE) -> Dict[str, Any]:
     """
     Detect all circular dependencies in the workspace.
 
     Args:
         workspace: Absolute path to workspace
         domain: "backend" (function calls), "imports" (import chains), "css" (@import), or "all"
+        max_cycles: Max cycles to report per type (default 100)
 
     Returns:
         Dict with cycles found, categorized by type
@@ -34,15 +41,15 @@ def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
 
     # ─── Function Call Cycles ───────────────────────────
     if domain in ("backend", "all"):
-        cycles["function_calls"] = _detect_function_cycles(workspace)
+        cycles["function_calls"] = _detect_function_cycles(workspace, max_cycles)
 
     # ─── Import Chain Cycles ────────────────────────────
     if domain in ("imports", "all"):
-        cycles["import_chains"] = _detect_import_cycles(workspace)
+        cycles["import_chains"] = _detect_import_cycles(workspace, max_cycles)
 
     # ─── CSS @import Cycles ─────────────────────────────
     if domain in ("css", "all"):
-        cycles["css_imports"] = _detect_css_import_cycles(workspace)
+        cycles["css_imports"] = _detect_css_import_cycles(workspace, max_cycles)
 
     total_cycles = sum(len(v) for v in cycles.values())
 
@@ -62,7 +69,7 @@ def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
 
 # ─── Function Call Cycle Detection ──────────────────────
 
-def _detect_function_cycles(workspace: str) -> List[Dict]:
+def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
     """Detect circular function call chains using backend registry."""
     try:
         from registry import load_backend_registry
@@ -104,6 +111,9 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
         path.append(node_id)
 
         for neighbor in adj[node_id]:
+            if len(cycles_found) >= max_cycles:
+                return True  # Early exit
+
             if color[neighbor] == GRAY:
                 # Found a cycle — extract it using pre-computed index
                 cycle_start = path_index[neighbor]
@@ -126,6 +136,8 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
         return False
 
     for nid in node_by_id:
+        if len(cycles_found) >= max_cycles:
+            break
         if color[nid] == WHITE:
             dfs_cycle(nid, [])
 
@@ -160,7 +172,7 @@ def _format_function_cycle(cycle_path: List[str], node_by_id: Dict) -> Dict:
 
 # ─── Import Chain Cycle Detection ───────────────────────
 
-def _detect_import_cycles(workspace: str) -> List[Dict]:
+def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
     """Detect circular import/require chains by parsing import statements."""
     import_graph: Dict[str, Set[str]] = defaultdict(set)
     file_map: Dict[str, str] = {}  # module name → file path
@@ -229,6 +241,8 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
                         "severity": "critical" if len(cycle_path) <= 2 else "warning",
                         "message": f"Circular import: {' → '.join(cycle_path)}"
                     })
+                    if len(cycles_found) >= max_cycles:
+                        return
             elif color[neighbor] == WHITE:
                 dfs_import(neighbor, path)
 
@@ -287,7 +301,7 @@ def _resolve_import_path(raw_import: str, from_dir: str, workspace: str) -> Opti
 
 # ─── CSS @import Cycle Detection ────────────────────────
 
-def _detect_css_import_cycles(workspace: str) -> List[Dict]:
+def _detect_css_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
     """Detect circular CSS @import chains."""
     import_graph: Dict[str, Set[str]] = defaultdict(set)
 
@@ -355,6 +369,8 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
                         "severity": "warning",
                         "message": f"Circular CSS @import: {' → '.join(cycle_path)}"
                     })
+                    if len(cycles_found) >= max_cycles:
+                        return
             elif color[neighbor] == WHITE:
                 dfs_css(neighbor, path)
 

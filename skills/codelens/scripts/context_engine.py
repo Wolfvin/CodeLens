@@ -7,6 +7,7 @@ Gives AI everything needed to understand a symbol without reading the whole file
 
 import os
 from typing import Dict, List, Any, Optional
+from collections import defaultdict
 from utils import logger
 
 
@@ -15,7 +16,9 @@ def get_symbol_context(
     workspace: str,
     domain: str = "auto",
     context_lines: int = 5,
-    include_code: bool = True
+    include_code: bool = True,
+    max_callers: int = 50,
+    max_callees: int = 50
 ) -> Dict[str, Any]:
     """
     Get rich context for a symbol.
@@ -26,6 +29,8 @@ def get_symbol_context(
         domain: "frontend", "backend", or "auto"
         context_lines: Lines of context around the symbol definition
         include_code: Whether to include actual source code
+        max_callers: Max callers to include in output (default 50)
+        max_callees: Max callees to include in output (default 50)
 
     Returns:
         Dict with definition, context, callers, callees, and file outline
@@ -139,6 +144,15 @@ def get_symbol_context(
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
+        # Build a file→nodes index for O(1) nearby_symbols lookup
+        _file_nodes_index: Dict[str, List[Dict]] = {}
+        for n in nodes:
+            f = n.get("file", "")
+            if f:
+                if f not in _file_nodes_index:
+                    _file_nodes_index[f] = []
+                _file_nodes_index[f].append(n)
+
         for node in nodes:
             if node["fn"] == name:
                 if context["definition"] is None:
@@ -159,7 +173,7 @@ def get_symbol_context(
                     if node.get("component"):
                         context["definition"]["component"] = True
 
-                    # Callers and callees
+                    # Callers and callees (now O(1) via indexed edge_resolver)
                     callers = get_callers(node["id"], edges)
                     callees = get_callees(node["id"], edges, nodes)
 
@@ -169,7 +183,7 @@ def get_symbol_context(
                             "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
                             "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
                         }
-                        for c in callers
+                        for c in callers[:max_callers]
                     ]
 
                     context["callees"] = [
@@ -178,7 +192,7 @@ def get_symbol_context(
                             "resolved": c.get("resolved", True),
                             "status": c.get("status", "unknown")
                         }
-                        for c in callees
+                        for c in callees[:max_callees]
                     ]
 
                     # Code snippet
@@ -202,16 +216,18 @@ def get_symbol_context(
                     if node.get("file"):
                         context["imports"] = _get_file_imports(workspace, node["file"])
 
-                    # Nearby symbols (other functions in same file)
-                    context["nearby_symbols"] = [
-                        {
-                            "fn": n["fn"],
-                            "line": n.get("line", 0),
-                            "status": n.get("status", "active")
-                        }
-                        for n in nodes
-                        if n.get("file") == node.get("file") and n["id"] != node["id"]
-                    ]
+                    # Nearby symbols (other functions in same file) — O(1) via index
+                    node_file = node.get("file", "")
+                    if node_file and node_file in _file_nodes_index:
+                        context["nearby_symbols"] = [
+                            {
+                                "fn": n["fn"],
+                                "line": n.get("line", 0),
+                                "status": n.get("status", "active")
+                            }
+                            for n in _file_nodes_index[node_file]
+                            if n["id"] != node["id"]
+                        ]
 
                     break
 
@@ -261,11 +277,23 @@ def _read_code_around(
 
 
 def _get_minimal_outline(workspace: str, rel_path: str) -> Optional[Dict]:
-    """Get a minimal outline of the file containing the symbol."""
+    """Get a minimal outline of the file containing the symbol.
+    
+    Skips outline generation for very large files (>5000 lines) to prevent
+    timeout on huge codebases.
+    """
     file_path = os.path.join(workspace, rel_path)
 
     if not os.path.exists(file_path):
         return None
+
+    # Skip outline for very large files to prevent timeout
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > 100_000:  # ~100KB ≈ 3000+ lines — skip outline
+            return {"note": "Outline skipped for large file", "file": rel_path}
+    except OSError:
+        pass
 
     try:
         from outline_engine import get_file_outline

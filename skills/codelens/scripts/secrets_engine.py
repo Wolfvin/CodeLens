@@ -274,7 +274,9 @@ MAX_SECRET_LENGTH = 256
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_results: int = 200,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -286,6 +288,8 @@ def detect_secrets(
         workspace: Absolute path to workspace
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
+        max_results: Max findings to return (default 200)
+        max_files: Max files to scan (default 5000)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -296,6 +300,7 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
+    truncated = False
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -308,6 +313,11 @@ def detect_secrets(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
+
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -324,14 +334,19 @@ def detect_secrets(
             if _is_test_file(rel_path):
                 continue
 
-            # Scan for patterns
-            file_findings = _scan_file_patterns(content, rel_path, ext)
-            findings.extend(file_findings)
+            # Early exit if we already have enough findings
+            if len(findings) < max_results:
+                # Scan for patterns
+                file_findings = _scan_file_patterns(content, rel_path, ext)
+                findings.extend(file_findings)
 
-            # Entropy-based scanning for code files
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                entropy_findings = _scan_file_entropy(content, rel_path, ext)
-                findings.extend(entropy_findings)
+                # Entropy-based scanning for code files
+                if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+                    entropy_findings = _scan_file_entropy(content, rel_path, ext)
+                    findings.extend(entropy_findings)
+
+        if truncated:
+            break
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -363,9 +378,10 @@ def detect_secrets(
         "severity_filter": severity,
         "stats": stats,
         "risk": risk,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "findings": findings[:max_results],
         "env_exposed": env_exposed,
         "recommendations": recommendations,
+        "truncated": truncated or len(findings) > max_results,
     }
 
 # ─── Pattern-based Scanner ─────────────────────────────────────

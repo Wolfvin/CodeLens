@@ -97,8 +97,17 @@ def execute(args, workspace):
     if result.get("found") and result.get("context"):
         result["context"]["callers"] = deduplicate_callers(result["context"].get("callers", []))
 
-    # Enrich with quality metrics
-    if result.get("found") and result.get("context"):
+    # Enrich with quality metrics — skip on large codebases (>10K nodes) to prevent timeout
+    _LARGE_CODEBASE_THRESHOLD = 10000
+    is_large = False
+    try:
+        from registry import load_backend_registry
+        backend = load_backend_registry(workspace)
+        is_large = len(backend.get("nodes", [])) > _LARGE_CODEBASE_THRESHOLD
+    except Exception:
+        pass
+
+    if result.get("found") and result.get("context") and not is_large:
         quality = {}
         try:
             comp = compute_complexity(workspace, function_name=args.name)

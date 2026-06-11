@@ -205,23 +205,36 @@ def main():
     parser = argparse.ArgumentParser(
         description="CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
+
+    # Global format option — must be BEFORE subcommand for argparse to work
+    parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
+                        help="Output format (default: json)")
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Import and register all command modules
     registry = get_all_commands()
 
     # Build subparsers from the command registry
+    # Also add per-subcommand --format flag as an alias for convenience
     for cmd_name, cmd_info in sorted(registry.items()):
         sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
         cmd_info["add_args"](sub)
-
-    # Global format option
-    parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
-                        help="Output format (default: json)")
+        # Allow --format after subcommand too (e.g. "codelens scan --format markdown")
+        sub.add_argument("--format", "-f", choices=["json", "markdown"], default=None,
+                         help="Output format (overrides global --format)")
 
     # ─── Parse and dispatch ─────────────────────────────
 
     args = parser.parse_args()
+
+    # Merge global and per-command format flags (per-command takes precedence)
+    # The subparser's --format default is None (not set), while the global default is "json"
+    # We store the global default in a separate attribute before parsing
+    subcmd_format = getattr(args, 'format', None)
+    # If subcommand --format was not specified, fall back to global parser default
+    if subcmd_format is None:
+        args.format = parser.get_default('format') or 'json'
 
     if not args.command:
         parser.print_help()

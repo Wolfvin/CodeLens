@@ -7,6 +7,9 @@ Goes beyond the basic 0-ref_count check to find:
 4. Dead event listeners (listeners on elements that don't exist)
 5. Unused variables (declared but never read)
 6. Unreachable catch blocks (catch for error type that can't be thrown)
+
+Performance: Includes --max-results cap and file-count limits to prevent
+timeout on very large codebases (100k+ files).
 """
 
 import os
@@ -20,10 +23,17 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
 }
 
+# Performance limits for large codebases
+MAX_FILES_PER_CATEGORY = 5000    # Max files to scan per category
+MAX_RESULTS_PER_CATEGORY = 200   # Max results to return per category
+
+
 def detect_dead_code(
     workspace: str,
     categories: Optional[List[str]] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_results: int = MAX_RESULTS_PER_CATEGORY,
+    max_files: int = MAX_FILES_PER_CATEGORY
 ) -> Dict[str, Any]:
     """
     Enhanced dead code detection beyond basic ref_count==0.
@@ -33,6 +43,8 @@ def detect_dead_code(
         categories: Optional list of categories to check
                    (unreachable, unused_exports, zombie_css, unused_vars, dead_listeners)
         config: CodeLens config
+        max_results: Max results per category (default 200)
+        max_files: Max files to scan per category (default 5000)
 
     Returns:
         Dict with all detected dead code, categorized and prioritized
@@ -51,6 +63,7 @@ def detect_dead_code(
 
     results: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
+    truncated = False
 
     # Collect all exports and imports for cross-file analysis
     all_exports: Dict[str, List[Dict]] = defaultdict(list)   # file → exports
@@ -67,6 +80,11 @@ def detect_dead_code(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
@@ -81,13 +99,15 @@ def detect_dead_code(
 
             # ─── Unreachable Code ────────────────────────
             if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                unreachable = _detect_unreachable_code(content, ext, rel_path)
-                results["unreachable"].extend(unreachable)
+                if len(results["unreachable"]) < max_results:
+                    unreachable = _detect_unreachable_code(content, ext, rel_path)
+                    results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
             if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                unused = _detect_unused_variables(content, ext, rel_path)
-                results["unused_vars"].extend(unused)
+                if len(results["unused_vars"]) < max_results:
+                    unused = _detect_unused_variables(content, ext, rel_path)
+                    results["unused_vars"].extend(unused)
 
             # ─── Collect exports/imports ─────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -96,20 +116,29 @@ def detect_dead_code(
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
 
+        if truncated:
+            break
+
     # ─── Unused Exports ──────────────────────────────────
     if "unused_exports" in categories:
         unused_exps = _detect_unused_exports(all_exports, all_imports, workspace)
-        results["unused_exports"] = unused_exps
+        results["unused_exports"] = unused_exps[:max_results]
 
     # ─── Zombie CSS ──────────────────────────────────────
     if "zombie_css" in categories:
         zombie = _detect_zombie_css(workspace)
-        results["zombie_css"] = zombie
+        results["zombie_css"] = zombie[:max_results]
 
     # ─── Dead Event Listeners ────────────────────────────
     if "dead_listeners" in categories:
         dead = _detect_dead_listeners(workspace)
-        results["dead_listeners"] = dead
+        results["dead_listeners"] = dead[:max_results]
+
+    # Truncate any remaining categories
+    for cat in results:
+        if len(results[cat]) > max_results:
+            results[cat] = results[cat][:max_results]
+            truncated = True
 
     # Compute totals
     total = sum(len(v) for v in results.values())
@@ -121,7 +150,8 @@ def detect_dead_code(
         "stats": {
             "files_scanned": files_scanned,
             "total_dead_code": total,
-            "by_category": by_category
+            "by_category": by_category,
+            "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
         "categories_checked": list(categories)
