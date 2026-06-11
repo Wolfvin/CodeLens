@@ -313,98 +313,78 @@ def _to_alternate_case(name: str) -> str:
     return leading + name
 
 
-# ─── Tauri IPC Cross-Language Edge Resolution ──────────────────
+# ─── Tauri IPC Cross-Language Edge Resolution ────────────────
 
 def resolve_tauri_ipc_from_apimap(
     nodes: List[Dict],
     edges: List[Dict],
     api_routes: List[Dict]
 ) -> List[Dict]:
-    """Resolve cross-language Tauri IPC edges from API map data.
+    """Resolve Tauri IPC edges from API map data.
 
-    In Tauri apps, the frontend calls Rust backend functions via the invoke()
-    IPC bridge: invoke('commandName') → Rust #[tauri::command] handler.
-    This function creates edges connecting TypeScript invoke() calls to their
-    Rust command handlers, which would otherwise appear "dead" since no
-    Rust code calls them directly.
+    In Tauri apps, the TypeScript frontend calls Rust backend functions
+    via the invoke() IPC bridge:
+      TypeScript: await invoke('command_name', { args })
+      Rust:       #[tauri::command] fn command_name(args) -> Result
+
+    This function creates cross-language edges between:
+    - Frontend invoke('xxx') calls → Rust #[tauri::command] handlers
 
     Args:
-        nodes: Resolved node list (already processed by resolve_edges).
-        edges: Resolved edge list (already processed by resolve_edges).
-        api_routes: API routes from apimap_engine, each with handler_name etc.
+        nodes: Current resolved nodes list.
+        edges: Current resolved edges list.
+        api_routes: API route data from apimap_engine (may contain
+                    tauri_ipc entries with 'tauri_command' field).
 
     Returns:
-        Updated edges list with new IPC cross-language edges appended.
+        Updated edges list with new IPC edges appended.
     """
     if not api_routes:
         return edges
 
-    # Build lookup: fn_name → node (for Rust handlers and TS invoke sites)
-    fn_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+    # Build lookup: Rust tauri_command nodes by command name
+    rust_tauri_nodes: Dict[str, Dict] = {}
     for node in nodes:
-        fn_to_nodes[node["fn"]].append(node)
+        if node.get("is_tauri_command"):
+            # tauri_command is stored in the node's fn or metadata
+            cmd_name = node.get("fn", "")
+            if cmd_name:
+                rust_tauri_nodes[cmd_name] = node
 
-    # Also build alternate-case index for snake_case ↔ camelCase
-    alt_index: Dict[str, List[Dict]] = defaultdict(list)
-    for node in nodes:
-        alt_key = _to_alternate_case(node["fn"])
-        if alt_key != node["fn"]:
-            alt_index[alt_key].append(node)
-
-    new_edges = []
+    # Build lookup: Frontend invoke('xxx') calls
+    # These appear as backend nodes with type "tauri_invoke" or
+    # as edges with to_fn matching a tauri command name.
+    new_edges = list(edges)
 
     for route in api_routes:
-        handler_name = route.get("handler_name", "")
-        route_file = route.get("file", "")
-        route_line = route.get("line", 0)
-
-        if not handler_name:
+        tauri_cmd = route.get("tauri_command", "")
+        if not tauri_cmd:
             continue
 
-        # Find Rust handler node (snake_case: process_order)
-        rust_candidates = fn_to_nodes.get(handler_name, [])
-        if not rust_candidates:
-            # Try alternate case (camelCase → snake_case)
-            alt_key = _to_alternate_case(handler_name)
-            rust_candidates = fn_to_nodes.get(alt_key, []) + alt_index.get(handler_name, [])
+        # Find the Rust handler node
+        rust_node = rust_tauri_nodes.get(tauri_cmd)
+        if not rust_node:
+            # Also try snake_case ↔ camelCase matching
+            alt_key = _to_alternate_case(tauri_cmd)
+            rust_node = rust_tauri_nodes.get(alt_key)
+        if not rust_node:
+            continue
 
-        # Find TS invoke site node (camelCase: processOrder)
-        ts_candidates = fn_to_nodes.get(handler_name, [])
-        if not ts_candidates:
-            alt_key = _to_alternate_case(handler_name)
-            ts_candidates = fn_to_nodes.get(alt_key, []) + alt_index.get(handler_name, [])
+        # Find frontend invoke() calls that reference this command
+        # These are nodes with type "tauri_invoke" matching this command
+        for node in nodes:
+            if node.get("type") == "tauri_invoke" and node.get("fn", "").endswith(tauri_cmd):
+                new_edge = {
+                    "from": node["id"],
+                    "to": rust_node["id"],
+                    "type": "tauri_ipc",
+                }
+                # Avoid duplicate edges
+                already_exists = any(
+                    e.get("from") == new_edge["from"] and e.get("to") == new_edge["to"]
+                    for e in new_edges
+                )
+                if not already_exists:
+                    new_edges.append(new_edge)
 
-        # If we found a route but no handler node, create a synthetic edge
-        # from the route file to the best-matching Rust handler
-        for rust_node in rust_candidates:
-            # Skip if same-language (both Rust) — not an IPC edge
-            rust_file = rust_node.get("file", "")
-            if route_file and route_file != rust_file:
-                # This is a cross-language edge
-                route_node_id = f"{route_file}:{route_line}" if route_file else ""
-                if route_node_id and route_node_id != rust_node["id"]:
-                    edge = {
-                        "from": route_node_id,
-                        "to": rust_node["id"],
-                        "ipc": "tauri"
-                    }
-                    new_edges.append(edge)
-                    # Mark the Rust node as IPC-exposed
-                    rust_node["is_tauri_command"] = True
-
-    # Deduplicate edges
-    seen = set()
-    for edge in edges:
-        key = (edge.get("from", ""), edge.get("to", ""), edge.get("ipc", ""))
-        seen.add(key)
-
-    for edge in new_edges:
-        key = (edge.get("from", ""), edge.get("to", ""), edge.get("ipc", ""))
-        if key not in seen:
-            edges.append(edge)
-            seen.add(key)
-
-    # Invalidate edge cache since we modified the edges list
-    _edge_cache["fingerprint"] = None
-
-    return edges
+    return new_edges

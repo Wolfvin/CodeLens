@@ -159,6 +159,50 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     total_matches = len(frontend_matches) + len(backend_matches)
 
     if total_matches == 0:
+        # No exact matches — try fuzzy matching before returning "not found"
+        if domain in (None, "backend") and not fuzzy:
+            # Auto-fuzzy: try case-insensitive substring match
+            if 'backend' not in dir():
+                backend = load_backend_registry(workspace)
+            query_lower = query_name.lower()
+            fuzzy_matches = []
+            for node in backend.get("nodes", []):
+                fn_lower = node.get("fn", "").lower()
+                # Case-insensitive contains match (exclude exact CI match since we already checked)
+                if query_lower in fn_lower and fn_lower != query_lower:
+                    if file_filter and file_filter not in node.get("file", ""):
+                        continue
+                    fuzzy_matches.append({
+                        "id": node["id"],
+                        "fn": node["fn"],
+                        "file": node.get("file", ""),
+                        "line": node.get("line", 0),
+                        "status": node.get("status", "active"),
+                        "async": node.get("async", False),
+                        "ref_count": node.get("ref_count", 0),
+                    })
+
+            if fuzzy_matches:
+                def _fuzzy_sort_key(match):
+                    fn = match.get("fn", "")
+                    is_exact_ci = 0 if fn.lower() == query_lower else 1
+                    ref_count = match.get("ref_count", 0)
+                    is_dead = 0 if match.get("status") != "dead" else 1
+                    return (is_exact_ci, is_dead, -ref_count, fn.lower())
+
+                fuzzy_matches.sort(key=_fuzzy_sort_key)
+                return {
+                    "found": True,
+                    "type": "function_fuzzy",
+                    "domain": "backend",
+                    "query": query_name,
+                    "match_type": "fuzzy_auto",
+                    "matches": fuzzy_matches[:limit] if limit else fuzzy_matches,
+                    "total_matches": len(fuzzy_matches),
+                    "action": "LIST_FIRST",
+                    "action_reason": f"No exact match for '{query_name}', but {len(fuzzy_matches)} similar function(s) found. Use exact name for full details."
+                }
+
         return {
             "status": "ok",
             "found": False,
@@ -307,59 +351,6 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             worst_action = "ASK"
         if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
             worst_action = "LIST_FIRST"
-
-    # Fuzzy/substring match in backend (only try when no exact matches found)
-    # This avoids discarding exact multi-match results when fuzzy matches exist
-    if total_matches == 0 and domain in (None, "backend"):
-        # backend is guaranteed to be loaded at this point because
-        # the same domain condition at line ~144 loaded it earlier
-        query_lower = query_name.lower()
-        fuzzy_matches = []
-        for node in backend.get("nodes", []):
-            fn_lower = node.get("fn", "").lower()
-            # Case-insensitive contains match
-            if query_lower in fn_lower and fn_lower != query_lower:
-                if file_filter and file_filter not in node.get("file", ""):
-                    continue
-                fuzzy_matches.append({
-                    "id": node["id"],
-                    "fn": node["fn"],
-                    "file": node.get("file", ""),
-                    "line": node.get("line", 0),
-                    "status": node.get("status", "active"),
-                    "async": node.get("async", False),
-                    "ref_count": node.get("ref_count", 0),
-                })
-
-        if fuzzy_matches:
-            # Sort fuzzy matches: prioritize by relevance
-            # 1. Exact case-insensitive match first
-            # 2. Then by ref_count (most referenced = most important)
-            # 3. Then alphabetically by function name
-            def fuzzy_sort_key(match):
-                fn = match.get("fn", "")
-                # Exact case-insensitive match gets highest priority
-                is_exact_ci = 0 if fn.lower() == query_lower else 1
-                # Higher ref_count = more important (sort ascending, negate for descending)
-                ref_count = match.get("ref_count", 0)
-                # Active status before dead
-                is_dead = 0 if match.get("status") != "dead" else 1
-                return (is_exact_ci, is_dead, -ref_count, fn.lower())
-
-            fuzzy_matches.sort(key=fuzzy_sort_key)
-
-            # Return fuzzy matches as a list (not a single result)
-            return {
-                "found": True,
-                "type": "function_fuzzy",
-                "domain": "backend",
-                "query": query_name,
-                "match_type": "fuzzy",
-                "matches": fuzzy_matches[:limit] if limit else fuzzy_matches,
-                "total_matches": len(fuzzy_matches),
-                "action": "LIST_FIRST",
-                "action_reason": f"No exact match for '{query_name}', but {len(fuzzy_matches)} similar function(s) found. Use exact name for full details."
-            }
 
     return {
         "found": True,

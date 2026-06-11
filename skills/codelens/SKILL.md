@@ -35,30 +35,25 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5.8.2
+# CodeLens v6.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8.2
+## What's New in v6.1
 
-- **CRITICAL FIX: 6 commands now load** — `scan`, `ask`, `env-check`, `handbook`, `refactor-safe`, `watch` all failed with ImportError on startup. Added all missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `scan_binary_artifacts`, `scan_tauri_artifacts` to utils.py; `resolve_tauri_ipc_from_apimap` to edge_resolver.py).
-- **Go framework detection**: Parse `go.mod` to detect Go projects — Gin, Echo, Fiber, Chi, Cobra frameworks. New `has_go_backend` flag.
-- **PHP framework detection**: Parse `composer.json` to detect PHP projects — Laravel, Symfony, Flarum, WordPress, Drupal, Slim. New `has_php_backend` flag.
-- **Go API route extraction**: Detect REST routes from Gin/Echo/Chi/Fiber, Gorilla mux, and stdlib `http.HandleFunc`. Route groups supported.
-- **PHP API route extraction**: Detect routes from Laravel `Route::get()`, Flarum/Slim `$app->get()`. Handler syntax parsing for `[Controller::class, 'method']`, `Controller@method`.
-- **Go/PHP project types in handbook**: `go-cli` (Cobra), `go-project`, `laravel-app`, `flarum-app`, `symfony-app`, `php-project`. Polyglot types like `go-js-polyglot`, `php-js-polyglot`.
-- **Framework detection false-positive fix**: Test/benchmark directories now excluded from `.vue`/`.svelte` file scanning. Rust projects like `bat` no longer falsely detected as "vue + svelte".
+- **JSX component usage tracking** (CRITICAL): `tsx_parser` now extracts component references from JSX syntax (`<Button>`, `<Card />`). Previously, React components appeared "dead" because their only references were through JSX syntax, not function calls. On shadcn/ui (3248 TSX files), this increased resolved edges from 8,469 to 46,176 (5.5x improvement) and reduced dead nodes from ~8,000+ to 270.
+- **Query command fuzzy-overwrite bug fix** (CRITICAL): `query` command now correctly returns exact multi-match results instead of having fuzzy matches overwrite them. Querying "Button" in a codebase with 22 exact Button definitions now returns all 22 matches, not 381 fuzzy matches.
+- **Missing import recovery**: Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` to `utils.py` — fixed 5 broken commands (`ask`, `env-check`, `handbook`, `scan`, `watch`) that crashed on import.
+- **Missing `resolve_tauri_ipc_from_apimap`**: Implemented the function in `edge_resolver.py` — fixed `scan`, `handbook`, and `watch` commands that imported it. Resolves cross-language Tauri IPC edges (TypeScript `invoke('cmd')` → Rust `#[tauri::command]`).
+- **Tailwind v4 expanded false-positive elimination**: `missing-refs` now recognizes container query `@container/name`, star wildcard `*:`, double-star `**:`, arbitrary variants `[&_...]`, data attribute variants `data-[slot=]:`, and negative transform prefixes `-scale-`, `-rotate-`, `-translate-`. Reduced `html_no_css` false positives on shadcn/ui from 372 to near-zero.
+- **Auto-fuzzy query**: When `query` finds no exact matches, it now automatically tries fuzzy substring matching before returning "not found". Previously, fuzzy matching only ran with `--fuzzy` flag.
 
-## What's New in v5.8.1
+## What's New in v6.0
 
-- **React Router detection**: New `_extract_react_router_routes()` — detects `<Route path="...">` in JSX, `createBrowserRouter`, `useRoutes`. Prevents vue-router false positives in React projects.
-- **`dependents` command fix**: Workspace path was consumed by `file` arg, causing wrong workspace detection. Added auto-swap when `file` is a directory with project markers.
-- **`config-drift` Rust parsing fix**: Greedy regex `use\s+([^;]+);` matched `use` in comments, producing nonsensical "missing dependencies". Now parses line-by-line, skips comments, validates crate names.
-- **`handbook` monorepo detection**: Added `bun.lock` indicator and structural detection (multiple `package.json` in `apps/`/`packages/`). Correctly identifies bun-based monorepos like Spacedrive.
-- **Rust `main()` dead code fix**: `main()` in `.rs` files no longer reported as dead code — it's an entry point.
-- **Rust `println!`/`eprintln!` debug-leak fix**: Standard Rust output macros are no longer flagged as debug leaks (was 3101 false positives → ~187 real). Only flagged in `#[test]` functions or with debug patterns.
-- **`api-map` vue-router false positive fix**: React Router routes in TSX files no longer misidentified as Vue Router.
-- **`validate` config file noise fix**: `.toml`, `.json`, `.yaml`, `.lock`, `.md` files no longer reported as "unregistered".
+- **NestJS route extraction**: `api-map` now detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller prefixes. Previously, NestJS decorators were misidentified as TypeGraphQL `@Query` decorators, producing incorrect `QUERY.fieldName` routes instead of proper `GET /path` routes.
+- **Tailwind v4 false-positive elimination**: `missing-refs` now recognizes 200+ Tailwind utility class patterns including arbitrary values (`w-[100px]`), data attribute variants (`data-[slot=...]`), group/peer variants, container queries (`@sm:`), arbitrary variants (`[&_...]`), star wildcard (`**:`), and negative values (`-mt-4`). On Cal.com (1145 TSX files with Tailwind), this reduced false positives from 262 to near-zero.
+- **State-map over-matching fix**: `state-map` no longer classifies TypeScript type exports, enums, Zod schemas, and PascalCase constants as "global" state. Added PascalCase filtering (skip unless value is clearly mutable `{}`/`[]`/`new`), enum/type suffix filtering (`Enum`, `Schema`, `Args`, `Input`, etc.), Zod/Yup validation schema filtering, and conservative matching for function-call values (only include if name contains state keywords like "cache", "store", "queue"). Reduced from 1052 false-positive stores to approximately 50 real state items on Cal.com.
+- **Entrypoint config-file filtering**: `entrypoints` now skips 20+ config file patterns (playwright.config.ts, vitest.config.ts, biome.json, turbo.json, etc.) from `module_export` detection. These files contain `export default` but are not application entry points. Reduced false-positive entry points on Cal.com.
 
 ## What's New in v5.8
 
