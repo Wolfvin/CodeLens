@@ -5,29 +5,47 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.1.0] — 2026-06-12
+## [5.8.1] — 2026-06-12
+
+### Tested against elizaOS/eliza (5,363 TypeScript source files, AI agent framework)
+
+Real-world test on a large AI agent framework with 24,560 backend nodes and 145,317 edges.
+Confirmed: 39,510 smells (health score 60), 660 dead items, 67 secrets (23 critical),
+410 circular deps, 20,734 functions (467 high complexity), 7,598 debug leaks,
+300 entrypoints, 140 API routes, 1,493 state stores before filtering.
 
 ### Added
 
-- **`artifact-scan` command (P0)**: Dedicated reverse engineering command that discovers compiled/built artifacts — WASM binaries, shared libraries, minified JS/CSS, source maps, and built output directories. Reports file sizes, types, WASM header metadata (version, sections), source-to-artifact mapping, and actionable recommendations.
-- **`--reverse-engineering` / `--re` flag on `scan`**: When enabled, temporarily removes `dist/`, `build/`, `.next/`, `.nuxt/` from the ignore list, allowing CodeLens to scan and analyze built output alongside source code. Artifact metadata is saved to `.codelens/artifacts.json`.
-- **Binary artifact detection in `scan`**: `.wasm`, `.so`, `.dll`, `.dylib`, `.exe`, `.pyc`, `.o`, `.a` files are now categorized into an `artifacts` file category during discovery, with metadata extraction (type classification, WASM header parsing, size reporting).
-- **`safe_read_file()` utility**: Reads files with null-byte binary detection, size limiting, and graceful error handling. Returns `None` for binary/oversized/unreadable files instead of silently reading garbage.
-- **`is_binary_file()` utility**: Checks first 8KB of a file for null bytes to detect binary content.
-- **`BINARY_EXTENSIONS` / `ARTIFACT_EXTENSIONS` constants**: Centralized sets of binary and minified file extensions for consistent reference across all engines.
-- **`.mjs` / `.cjs` support in `discover_files`**: ES module and CommonJS module extensions are now properly discovered and parsed as JavaScript files.
-- **Vue/Svelte fallback parsers**: When the dedicated Vue or Svelte parser is unavailable, CodeLens now falls back to HTML fallback parsing instead of silently skipping those files.
-- **WASM framework detection**: `framework_detect` now detects `wasm-bindgen`, `wasm-pack`, and `emscripten` from both package.json dependencies and Cargo.toml references. Also detects `.wasm` binary files in the workspace.
-- **Reverse engineering ask patterns**: `ask` command now routes queries about "compiled", "binary", "artifact", "minified", "wasm", "reverse engineer" to the `artifact-scan` command with high confidence.
+- **`safe_read_file` utility**: Added `safe_read_file()` to `utils.py` for safe file reading with encoding error handling. Returns `None` on any error instead of crashing.
+- **`--max-files` for `perf-hint` command**: New `--max-files` option (default: 5000) to prevent timeout on huge repos. Logs warning when limit is reached.
+- **`MAX_FILES_DEFAULT` constant** in `perfhint_engine.py`: Configurable default file scan cap.
 
 ### Fixed
 
-- **`safe_read_file` missing import**: `a11y_engine.py` imported `safe_read_file` from `utils` but the function did not exist. Removed the dead import (the function was never called in the engine body).
-- **CSS `duplicate_props` same-line false positive**: Properties reported as duplicate on the same line (e.g., "lines 99 and 99") are now correctly skipped — same-line "duplicates" are a double-counting artifact from the regex engine.
-- **Binary file corruption in `smell_engine`**: Smell engine previously opened all files with `encoding='utf-8', errors='ignore'`, silently reading binary files as garbage text and producing nonsensical smell reports. Now uses `safe_read_file()` which detects and skips binary files.
-- **Minified file pollution in `smell_engine`**: `.min.js` and `.min.css` files are now skipped by the smell engine to avoid enormous line-count false positives and ReDoS-level regex performance on single-line files.
-- **File size cap in `smell_engine`**: Added 500KB limit to prevent reading extremely large generated files into memory.
-- **Version inconsistency**: Aligned `skill.json` (was 5.7.1), `pyproject.toml` (was 5.7.1), and `CODELENS_VERSION` constant (was 5.7.1) to 6.1.0. CHANGELOG 6.0.0 was already released.
+- **State map false-positive post-filter**: Even with v5.8's per-engine skip lists, items like `__dirname`, `CLI`, `ROOT`, `VERBOSE`, `CHECK`, `PRUNE` still leaked through from XState/MobX/module-level extraction. Added a comprehensive post-filter that:
+  - Removes known Node.js/browser globals and common CLI constants
+  - Filters ALL_CAPS names (both with and without underscores) as non-state constants
+  - Removes entries with empty `defined_in` (cross-file artifacts without a source)
+  - Result: state stores dropped from 1,493 false positives to meaningful entries only
+- **Import error on startup**: `a11y_engine.py` imported `safe_read_file` from `utils` but the function did not exist, causing a crash on `import commands`. Added the missing function to `utils.py`.
+
+## [5.8.0] — 2026-06-13
+
+### Tested against elizaOS/eliza (5000+ file TypeScript AI agent framework)
+
+Test results: 39,510 smells (60 health score), 660 dead items, 67 secrets, 410 circular deps,
+20,734 functions analyzed, 7,598 debug leaks, 300 entrypoints, 140 API routes, 1,493 state stores (many false positives).
+
+### Added
+
+- **`--max-files` option** for scan and handbook commands. Default: 5000 files. Prevents timeout on very large repos (5000+ files) by proportionally truncating each file category. Use `--max-files 0` to scan all files. Warning logged when truncation occurs.
+- **Debug leak `pattern` and `message` fields**: Each leak finding now includes `pattern` (the detected pattern name, e.g., "console.log"), `message` (human-readable description, e.g., "Debug console statement: console.log()"), and `content` (the matched line text). Markdown formatter uses `message` for clearer output.
+
+### Fixed
+
+- **State map false positives**: Global constants (__dirname, __filename, process, Buffer, ROOT, HOME, CLI, VERBOSE, CHECK, PRUNE, etc.) are no longer classified as state stores. Added Node.js global skip set (50+ built-ins), value-based filtering for path.resolve/path.join/process.env references, and import-like assignment detection (express.Router(), mongoose.connection). Python global filtering also improved with dunder attribute skipping, ALL_CAPS single-word constant filtering, and os.path/os.getenv reference detection.
+- **Entrypoints markdown rendering**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers and silently consumed (showing "odule_export" and "ain]"). Now uses backticks (`module_export`) for reliable rendering.
+- **Debug leak markdown output**: Category names were shown as raw keys without descriptive context. Now uses `message` field for human-readable descriptions.
 
 ## [6.0.0] — 2026-06-12
 

@@ -34,6 +34,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 # ─── Safety Limits ────────────────────────────────────────────
 
 MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this to avoid slow regex
+MAX_FILES_DEFAULT = 5000    # v5.8.1: Cap files scanned to prevent timeout on huge repos
 PER_REGEX_TIMEOUT_SEC = 2    # Max seconds per single regex.finditer call
 PER_FILE_TIMEOUT_SEC = 10   # Max seconds per file across all patterns
 MAX_MATCHES_PER_PATTERN = 50  # Cap matches per pattern per file to prevent runaway results
@@ -395,7 +396,8 @@ def detect_perf_hints(
     workspace: str,
     severity: Optional[str] = None,
     category: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 0
 ) -> Dict[str, Any]:
     """
     Detect performance anti-patterns and optimization opportunities in source code.
@@ -410,11 +412,13 @@ def detect_perf_hints(
                   "expensive_renders", "large_bundle", "inefficient_iteration",
                   "unoptimized_images", "cache_miss"
         config: CodeLens config dict (optional overrides)
+        max_files: v5.8.1 — Max files to scan (0=unlimited, default uses MAX_FILES_DEFAULT)
 
     Returns:
         Dict with findings, stats, risk level, and recommendations
     """
     workspace = os.path.abspath(workspace)
+    effective_max = max_files if max_files > 0 else MAX_FILES_DEFAULT
 
     # Merge config overrides
     ignore_dirs = DEFAULT_IGNORE_DIRS
@@ -452,6 +456,12 @@ def detect_perf_hints(
         if '.codelens' in root:
             dirs.clear()
             continue
+
+        # v5.8.1: Cap files scanned to prevent timeout on huge repos
+        if files_scanned >= effective_max:
+            logger.warning(f"perf-hint: Reached max_files limit ({effective_max}). "
+                         f"Use --max-files 0 to scan all files.")
+            break
 
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()

@@ -25,22 +25,22 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--quick", action="store_true",
-                        help="Skip slow analysis engines for faster results")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace, quick=getattr(args, 'quick', False))
+    max_files = getattr(args, 'max_files', 5000)
+    return cmd_handbook(workspace, max_files=max_files)
 
 
-def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
-
-    When quick=True, skips the slowest engines (secrets, smell, entrypoints, vuln-scan)
-    and applies per-engine timeouts.
+    max_files caps the scan file count to prevent timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -74,16 +74,13 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
-        scan_result = cmd_scan(workspace)
+        scan_result = cmd_scan(workspace, max_files=max_files)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
-        write_output_files(workspace, scan_result, max_files=2000)
+        write_output_files(workspace, scan_result)
     except Exception:
         logger.warning("Failed to write output files", exc_info=True)
-
-    # Collect risks from all engines (initialized early so timeout handlers can append)
-    risks = []
 
     # 4. Frameworks
     try:
@@ -94,30 +91,28 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
         frameworks = config.get("frameworks", [])
 
     # 5. Health (from smell engine)
-    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
-    if not quick:
-        try:
-            smell_result = detect_smells(workspace, max_files=500)
-            health = {
-                "score": smell_result.get("stats", {}).get("health_score", 0),
-                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-                "critical": smell_result.get("stats", {}).get("critical", 0),
-                "warning": smell_result.get("stats", {}).get("warning", 0),
-            }
-        except Exception:
-            logger.warning("Health detection failed", exc_info=True)
+    try:
+        smell_result = detect_smells(workspace)
+        health = {
+            "score": smell_result.get("stats", {}).get("health_score", 0),
+            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+            "critical": smell_result.get("stats", {}).get("critical", 0),
+            "warning": smell_result.get("stats", {}).get("warning", 0),
+        }
+    except Exception:
+        logger.warning("Health detection failed", exc_info=True)
+        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
     # 6. Entrypoints
-    entrypoints = []
-    if not quick:
-        try:
-            ep_result = map_entrypoints(workspace, max_files=500)
-            entrypoints = [
-                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-                for e in ep_result.get("entrypoints", [])[:30]
-            ]
-        except Exception:
-            logger.warning("Entrypoint mapping failed", exc_info=True)
+    try:
+        ep_result = map_entrypoints(workspace)
+        entrypoints = [
+            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+            for e in ep_result.get("entrypoints", [])[:30]
+        ]
+    except Exception:
+        logger.warning("Entrypoint mapping failed", exc_info=True)
+        entrypoints = []
 
     # 7. API Routes
     try:
@@ -141,43 +136,42 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
         logger.warning("State management mapping failed", exc_info=True)
         state_stores = []
 
-    # 9. Risks (circular deps, dead code, secrets) — risks list already initialized above
+    # 9. Risks (circular deps, dead code, secrets)
+    risks = []
     try:
-        circ_result = detect_circular(workspace, max_cycles=20)
+        circ_result = detect_circular(workspace)
         for chain in circ_result.get("chains", [])[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
     try:
-        dead_result = detect_dead_code(workspace, max_files=2000)
-        dead_count = dead_result.get("stats", {}).get("total_dead_code", 0)
+        dead_result = detect_dead_code(workspace)
+        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
         if dead_count > 0:
             risks.append({"type": "dead_code", "count": dead_count})
     except Exception:
         logger.warning("Dead code detection failed", exc_info=True)
-    if not quick:
-        try:
-            secrets_result = detect_secrets(workspace, max_files=500)
-            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-            if secrets_count > 0:
-                risks.append({"type": "secrets", "count": secrets_count})
-        except Exception:
-            logger.warning("Secrets detection failed", exc_info=True)
-        try:
-            vuln_result = scan_vulnerabilities(workspace)
-            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-            if vuln_count > 0:
-                risks.append({"type": "vulnerabilities", "count": vuln_count})
-        except Exception:
-            logger.warning("Vulnerability scan failed", exc_info=True)
+    try:
+        secrets_result = detect_secrets(workspace)
+        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+        if secrets_count > 0:
+            risks.append({"type": "secrets", "count": secrets_count})
+    except Exception:
+        logger.warning("Secrets detection failed", exc_info=True)
+    try:
+        vuln_result = scan_vulnerabilities(workspace)
+        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+        if vuln_count > 0:
+            risks.append({"type": "vulnerabilities", "count": vuln_count})
+    except Exception:
+        logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
     try:
-        outline_max = 1000 if quick else 2000
-        summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=outline_max), scan_result)
+        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
     except Exception:
         logger.warning("Summary computation failed", exc_info=True)
         summary = {}
@@ -199,8 +193,7 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
             "directory_map": directory_map,
             "entrypoints": entrypoints,
             "api_routes": api_routes,
-            "state_management": state_stores,
-            "tauri_ipc": _build_tauri_ipc_section(workspace, config),
+            "state_management": state_stores
         },
         "health": health,
         "conventions": conventions,
@@ -232,17 +225,46 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
 
 
 def _extract_project_identity(workspace: str) -> Dict[str, Any]:
-    """Extract project identity from package.json, pyproject.toml, or README."""
+    """Extract project identity from package.json, pyproject.toml, or README.
+
+    v6: Removed unknown-type guard on Cargo.toml, added combined/polyglot type
+    detection, sub-directory package.json scanning, and monorepo-specific types.
+    """
     identity = {
         "name": os.path.basename(workspace),
         "description": "",
         "version": "0.0.0",
-        "type": "unknown"
+        "type": "unknown",
+        # v6: monorepo & sub-dir info
+        "is_monorepo": False,
+        "monorepo_tools": [],
+        "subdir_frameworks": {},
     }
+
+    has_package_json = False
+    has_cargo_toml = False
+    has_pyproject = False
+    js_type = None  # v6: track JS-derived type separately for polyglot detection
+    python_type = None  # v6: track Python-derived type separately
+    rust_type = None  # v6: track Rust-derived type separately
+
+    # v6: Check monorepo indicators first
+    _MONOREPO_INDICATORS = {
+        "turbo.json": "turborepo",
+        "pnpm-workspace.yaml": "pnpm-workspace",
+        "lerna.json": "lerna",
+        "nx.json": "nx",
+    }
+    for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
+        if os.path.isfile(os.path.join(workspace, indicator_file)):
+            identity["is_monorepo"] = True
+            if tool_name not in identity["monorepo_tools"]:
+                identity["monorepo_tools"].append(tool_name)
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
+        has_package_json = True
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
@@ -251,19 +273,65 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             if "next" in deps:
-                identity["type"] = "fullstack-web-app"
+                js_type = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
-                identity["type"] = "backend-api"
+                js_type = "backend-api"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
-                identity["type"] = "frontend-app"
+                js_type = "frontend-app"
             else:
-                identity["type"] = "node-project"
+                js_type = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
 
+    # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
+    _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
+    for subdir in _MONOREPO_SUBDIRS:
+        subdir_path = os.path.join(workspace, subdir)
+        if not os.path.isdir(subdir_path):
+            continue
+        try:
+            for entry in sorted(os.listdir(subdir_path)):
+                entry_pkg = os.path.join(subdir_path, entry, "package.json")
+                if not os.path.isfile(entry_pkg):
+                    continue
+                try:
+                    with open(entry_pkg, 'r', encoding='utf-8') as f:
+                        pkg = json.load(f)
+                    sub_deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                    rel_subdir = os.path.join(subdir, entry)
+                    subdir_fws = []
+                    # v6: Detect frameworks from sub-directory deps
+                    if "next" in sub_deps:
+                        subdir_fws.append("next.js")
+                        if js_type is None:
+                            js_type = "fullstack-web-app"
+                    if "react" in sub_deps:
+                        subdir_fws.append("react")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "vue" in sub_deps:
+                        subdir_fws.append("vue")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "svelte" in sub_deps:
+                        subdir_fws.append("svelte")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "express" in sub_deps or "fastify" in sub_deps:
+                        subdir_fws.append("express")
+                        if js_type is None:
+                            js_type = "backend-api"
+                    if subdir_fws:
+                        identity["subdir_frameworks"][rel_subdir] = subdir_fws
+                except Exception:
+                    pass
+        except OSError:
+            pass
+
     # Try pyproject.toml
     pyproject_path = os.path.join(workspace, 'pyproject.toml')
-    if os.path.isfile(pyproject_path) and identity["type"] == "unknown":
+    if os.path.isfile(pyproject_path):
+        has_pyproject = True
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -274,17 +342,18 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if ver_match:
                 identity["version"] = ver_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
-                identity["type"] = "backend-api"
+                python_type = "backend-api"
             elif "pytest" in content:
-                identity["type"] = "python-library"
+                python_type = "python-library"
             else:
-                identity["type"] = "python-project"
+                python_type = "python-project"
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
 
-    # Try Cargo.toml
+    # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')
-    if os.path.isfile(cargo_path) and identity["type"] == "unknown":
+    if os.path.isfile(cargo_path):
+        has_cargo_toml = True
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -294,9 +363,42 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            identity["type"] = "rust-project"
+            rust_type = "rust-project"
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
+
+    # v6: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+
+    if len(active_types) >= 2:
+        # Polyglot project — build a combined type string
+        type_parts = []
+        if rust_type:
+            type_parts.append("rust")
+        if js_type:
+            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
+        if python_type:
+            type_parts.append("python")
+        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
+    elif len(active_types) == 1:
+        identity["type"] = active_types[0]
+        # v6: If monorepo indicators found, append -monorepo suffix
+        if identity["is_monorepo"]:
+            identity["type"] = active_types[0] + "-monorepo"
+    # If no type detected, remains "unknown"
+
+    # v6: When frameworks are found in subdirectory package.json files,
+    #     update the identity type if it's still generic
+    if identity["subdir_frameworks"] and identity["type"] in ("node-project", "unknown"):
+        all_fws = set()
+        for fws in identity["subdir_frameworks"].values():
+            all_fws.update(fws)
+        if "next.js" in all_fws:
+            identity["type"] = "fullstack-web-app"
+        elif "react" in all_fws or "vue" in all_fws or "svelte" in all_fws:
+            identity["type"] = "frontend-app"
+        if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
+            identity["type"] += "-monorepo"
 
     return identity
 
@@ -481,35 +583,6 @@ def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
             lines.append(f"- {r.get('method', 'GET')} `{r.get('path', '/')}` — {r.get('handler', '')} ({r.get('file', '')})")
         lines.append("")
 
-    # Tauri IPC Bridge
-    tauri_ipc = structure.get("tauri_ipc", {})
-    if tauri_ipc and tauri_ipc.get("commands"):
-        lines.append("## Tauri IPC Bridge")
-        ipc_desc = tauri_ipc.get("description", "")
-        if ipc_desc:
-            lines.append(ipc_desc)
-            lines.append("")
-        commands = tauri_ipc.get("commands", [])
-        if commands:
-            lines.append(f"**Total IPC Commands:** {tauri_ipc.get('total', len(commands))}")
-            lines.append(f"**Active (called from frontend):** {tauri_ipc.get('active', 0)}")
-            lines.append(f"**Exposed (available but not called):** {tauri_ipc.get('ipc_exposed', 0)}")
-            lines.append("")
-            lines.append("| Command | IPC Name | Status | Rust File | TS Callers |")
-            lines.append("|---------|----------|--------|-----------|------------|")
-            for cmd in commands[:30]:
-                fn = cmd.get("fn", "")
-                ipc_name = cmd.get("ipc_name", fn)
-                status = cmd.get("status", "")
-                file = cmd.get("file", "")
-                callers = cmd.get("frontend_callers", [])
-                caller_str = ", ".join(callers[:3]) if callers else "-"
-                lines.append(f"| {fn} | {ipc_name} | {status} | {file} | {caller_str} |")
-            if len(commands) > 30:
-                lines.append(f"| ... | ... | ... | ... | ... |")
-                lines.append(f"*({len(commands) - 30} more commands not shown)*")
-            lines.append("")
-
     # State Management
     state = structure.get("state_management", [])
     if state:
@@ -569,74 +642,6 @@ def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
     agent_md_path = os.path.join(codelens_dir, 'AGENT.md')
     with open(agent_md_path, 'w', encoding='utf-8') as f:
         f.write(content)
-
-
-def _build_tauri_ipc_section(workspace: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Build the Tauri IPC section for the handbook.
-
-    Reads the backend registry to find all #[tauri::command] nodes,
-    cross-references with IPC bridge edges to find frontend callers,
-    and produces a structured summary.
-    """
-    if 'tauri' not in config.get("frameworks", []):
-        return {}
-
-    from registry import load_backend_registry
-
-    backend = load_backend_registry(workspace)
-    nodes = backend.get("nodes", [])
-    edges = backend.get("edges", [])
-
-    # Find Tauri command nodes
-    tauri_cmds = [n for n in nodes if n.get("is_tauri_command")]
-
-    if not tauri_cmds:
-        return {}
-
-    # Build caller index: node_id → list of caller file:fn
-    node_id_to_fn = {n["id"]: n.get("fn", "") for n in nodes}
-    caller_index: Dict[str, list] = {}
-    for edge in edges:
-        to_id = edge.get("to", "")
-        from_id = edge.get("from", "")
-        if edge.get("ipc_bridge") and to_id:
-            if to_id not in caller_index:
-                caller_index[to_id] = []
-            caller_fn = node_id_to_fn.get(from_id, from_id.split(":")[0])
-            caller_file = from_id.rsplit(":", 1)[0] if ":" in from_id else ""
-            caller_index[to_id].append(f"{caller_file}::{caller_fn}")
-
-    # Build command list
-    commands = []
-    active_count = 0
-    ipc_exposed_count = 0
-    for cmd in tauri_cmds:
-        status = cmd.get("status", "unknown")
-        if status == "active":
-            active_count += 1
-        elif status == "ipc_exposed":
-            ipc_exposed_count += 1
-
-        callers = caller_index.get(cmd["id"], [])
-        commands.append({
-            "fn": cmd["fn"],
-            "ipc_name": cmd.get("ipc_name", cmd["fn"]),
-            "status": status,
-            "file": cmd.get("file", ""),
-            "line": cmd.get("line", 0),
-            "frontend_callers": callers,
-        })
-
-    # Sort: active first, then ipc_exposed, then by name
-    commands.sort(key=lambda c: (0 if c["status"] == "active" else 1, c["fn"]))
-
-    return {
-        "description": "Tauri IPC bridge: TypeScript invoke() calls ↔ Rust #[tauri::command] handlers",
-        "total": len(commands),
-        "active": active_count,
-        "ipc_exposed": ipc_exposed_count,
-        "commands": commands,
-    }
 
 
 register_command("handbook", "Generate project handbook for AI agents", add_args, execute)

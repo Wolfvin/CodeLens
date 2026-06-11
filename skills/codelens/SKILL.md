@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -31,35 +31,33 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
+  v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5.8.1
+# CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8.1
+## What's New in v5.8 — Tested on elizaOS/eliza (5000+ file TypeScript AI agent framework)
 
-- **React Router detection**: New `_extract_react_router_routes()` — detects `<Route path="...">` in JSX, `createBrowserRouter`, `useRoutes`. Prevents vue-router false positives in React projects.
-- **`dependents` command fix**: Workspace path was consumed by `file` arg, causing wrong workspace detection. Added auto-swap when `file` is a directory with project markers.
-- **`config-drift` Rust parsing fix**: Greedy regex `use\s+([^;]+);` matched `use` in comments, producing nonsensical "missing dependencies". Now parses line-by-line, skips comments, validates crate names.
-- **`handbook` monorepo detection**: Added `bun.lock` indicator and structural detection (multiple `package.json` in `apps/`/`packages/`). Correctly identifies bun-based monorepos like Spacedrive.
-- **Rust `main()` dead code fix**: `main()` in `.rs` files no longer reported as dead code — it's an entry point.
-- **Rust `println!`/`eprintln!` debug-leak fix**: Standard Rust output macros are no longer flagged as debug leaks (was 3101 false positives → ~187 real). Only flagged in `#[test]` functions or with debug patterns.
-- **`api-map` vue-router false positive fix**: React Router routes in TSX files no longer misidentified as Vue Router.
-- **`validate` config file noise fix**: `.toml`, `.json`, `.yaml`, `.lock`, `.md` files no longer reported as "unregistered".
+- **State map false positive reduction**: Expanded skip lists for Node.js globals (__dirname, __filename, process, Buffer, etc.), CLI argument constants, path aliases (ROOT, HOME, CWD), environment variable references, and import-like assignments. ALL_CAPS single-word constants (VERBOSE, CLI, CHECK, PRUNE) now correctly skipped. Python global filtering also improved with builtin/dunder/path skips. State stores dropped from ~1493 false positives to significantly fewer real ones.
+- **Entrypoints markdown fix (v2)**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers, silently consumed. Now uses backticks for reliable rendering: `module_export`, `main`.
+- **Performance: --max-files limit**: Scan and handbook commands now accept `--max-files` (default: 5000) to prevent timeout on very large repos. Proportionally truncates file categories with a warning. Use `--max-files 0` to scan all files.
+- **Debug leak output improvement**: Each leak item now includes `pattern` (the detected pattern name), `message` (human-readable description), and `content` (the matched line content). Markdown formatter shows descriptive messages like "Debug console statement: console.log()" instead of raw category names.
+- **Python global state filtering**: Skips ALL_CAPS constants, dunder attributes (__name__, __file__, __all__), and path/env references (os.path, Path, os.getenv). Reduces false positives in Python projects.
 
-## What's New in v5.8
+## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
 
-- **Critical bug fixes**: Fixed `should_ignore_dir` missing from utils.py (broke ALL 41 commands), frontend registry deletion cleanup (data never removed from incremental scans), 8 missing `ask` command handlers
-- **Rust parser impl_for fix**: `impl_for` context no longer leaks to sibling functions outside impl blocks
-- **Circular dependency `../` import detection**: Now catches parent-directory imports (`import X from '../utils'`)
-- **SearchConfig & FrontendRegistryInput dataclasses**: Eliminates `many_params` code smell
-- **Package manager detection**: bun, pnpm, yarn, npm from lock files
-- **tRPC / oRPC framework detection**
-- **Convention engine file limits**: `MAX_FILES_PER_CATEGORY = 500` to prevent slow scans on huge codebases
-- **12 engines now use shared logger**: No more silent error swallowing
+- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find Next.js, React, etc. in workspace packages, not just root. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
+- **Accurate god object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation). Rust impl blocks also properly scoped.
+- **API route false positive elimination**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects: request, headers, cache, store, etc.). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
+- **CSS specificity false positive fix**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba(0, 0, 0, 0.1)`, `var(--x)`, `from -160deg` as selectors. Specificity wars dropped from 31 false positives to 4 real ones.
+- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references. Skips main(), pub functions, and test fixtures. Found 200+ genuine dead items that the text-only scanner missed.
+- **State map constant/component filtering**: Skips ALL_CAPS constants (MAX_FILES, etc.), React components (arrow functions, forwardRef, memo, styled), and immutable values. State stores dropped from 825 false positives to ~150 real ones. Removed module.exports scanning that classified every exported function as a store.
+- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist. No longer defaults to `node-project` for Rust+TS monorepos.
+- **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses backticks instead (v5.8: angle brackets were still broken — `<main>` treated as HTML tag).
 
 ## What's New in v5
 

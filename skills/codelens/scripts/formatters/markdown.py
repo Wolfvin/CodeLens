@@ -837,9 +837,11 @@ def _md_entrypoints(data: Dict, lines: list) -> None:
         extra = ""
         if etype == "http_handler":
             extra = f" `{ep.get('method', '')} {ep.get('path', '')}`"
-        # Use angle brackets to avoid markdown link reference interpretation.
-        # [main] gets consumed as a markdown link ref, showing "ain]" instead.
-        lines.append(f"- <{etype}> `{file}:{line}` — {label}{extra}")
+        # v5.8: Use backticks instead of angle brackets for entrypoint type.
+        # Angle brackets like <module_export> or <main> get treated as HTML tags
+        # by markdown renderers and are silently consumed, showing "odule_export"
+        # instead of "module_export" and "ain]" instead of "main]".
+        lines.append(f"- `{etype}` `{file}:{line}` — {label}{extra}")
     lines.append("")
 
 
@@ -1596,8 +1598,14 @@ def _md_debug_leak(data: Dict, lines: list) -> None:
             line = leak.get("line", "")
             cat = leak.get("category", "")
             sev = leak.get("severity", "")
+            # v5.8: Use pattern and message for clearer output
+            pattern = leak.get("pattern", cat)
+            message = leak.get("message", "")
             content = leak.get("content", leak.get("match", ""))[:60]
-            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: `{content}`")
+            if message:
+                lines.append(f"- [{sev.upper()}] `{file}:{line}` — {message}: `{content}`")
+            else:
+                lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: `{content}`")
         if len(leaks) > 20:
             lines.append(f"- ... and {len(leaks) - 20} more")
         lines.append("")

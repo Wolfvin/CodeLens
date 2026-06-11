@@ -11,10 +11,14 @@ def add_args(parser):
                         help="Filter by severity")
     parser.add_argument("--category", default=None,
                         help="Filter by category (n_plus_one, sync_blocking, memory_leak, expensive_renders, large_bundle, inefficient_iteration, unoptimized_images, cache_miss)")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Use 0 for unlimited.")
 
 
 def execute(args, workspace):
-    return detect_perf_hints(workspace, severity=args.severity, category=args.category)
+    return detect_perf_hints(workspace, severity=args.severity, category=args.category,
+                             max_files=getattr(args, 'max_files', 5000))
 
 
 register_command("perf-hint", "Detect performance anti-patterns", add_args, execute)
