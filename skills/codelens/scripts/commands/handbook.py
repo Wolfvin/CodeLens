@@ -3,9 +3,8 @@
 import os
 import json
 import re
-import signal
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from registry import load_config, ensure_codelens_dir
 from framework_detect import detect_frameworks
@@ -23,56 +22,25 @@ from commands.scan import cmd_scan
 from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT_IGNORE_DIRS, logger
 
 
-# Timeout for individual engine calls (seconds)
-_ENGINE_TIMEOUT = 30
-
-
-class _TimeoutError(Exception):
-    pass
-
-
-def _run_with_timeout(fn, args, timeout=_ENGINE_TIMEOUT):
-    """Run a function with a timeout. Returns result or None on timeout/error."""
-    try:
-        # Simple approach: just run with exception handling
-        # (signal-based timeout is Unix-only and can be fragile)
-        import time
-        start = time.time()
-        result = fn(*args)
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            logger.warning(f"{fn.__name__} took {elapsed:.1f}s (slow)")
-        return result
-    except Exception as e:
-        logger.warning(f"{fn.__name__} failed: {e}", exc_info=True)
-        return None
-
-
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--quick", "-q", action="store_true",
-                        help="Quick mode: skip expensive engines (smell, dead-code, secrets, state-map)")
-    parser.add_argument("--timeout", type=int, default=30,
-                        help="Timeout per engine in seconds (default: 30)")
+    parser.add_argument("--quick", action="store_true",
+                        help="Skip slow analysis engines for faster results")
 
 
 def execute(args, workspace):
-    quick = getattr(args, 'quick', False)
-    timeout = getattr(args, 'timeout', 30)
-    return cmd_handbook(workspace, quick=quick, timeout=timeout)
+    return cmd_handbook(workspace, quick=getattr(args, 'quick', False))
 
 
-def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
 
-    Args:
-        workspace: Absolute path to workspace.
-        quick: If True, skip expensive engines (smell, dead-code, secrets, state-map).
-        timeout: Timeout per engine call in seconds.
+    When quick=True, skips the slowest engines (secrets, smell, entrypoints, vuln-scan)
+    and applies per-engine timeouts.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -108,12 +76,14 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
     if scan_result is None:
         scan_result = cmd_scan(workspace)
 
-    # 3. Generate output files (outline.json, summary.json) — skip in quick mode
-    if not quick:
-        try:
-            write_output_files(workspace, scan_result)
-        except Exception:
-            logger.warning("Failed to write output files", exc_info=True)
+    # 3. Generate output files (outline.json, summary.json)
+    try:
+        write_output_files(workspace, scan_result, max_files=2000)
+    except Exception:
+        logger.warning("Failed to write output files", exc_info=True)
+
+    # Collect risks from all engines (initialized early so timeout handlers can append)
+    risks = []
 
     # 4. Frameworks
     try:
@@ -123,11 +93,11 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
         logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
 
-    # 5. Health (from smell engine) — skip in quick mode
+    # 5. Health (from smell engine)
     health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
     if not quick:
         try:
-            smell_result = detect_smells(workspace)
+            smell_result = detect_smells(workspace, max_files=500)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -138,88 +108,85 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
             logger.warning("Health detection failed", exc_info=True)
 
     # 6. Entrypoints
+    entrypoints = []
+    if not quick:
+        try:
+            ep_result = map_entrypoints(workspace, max_files=500)
+            entrypoints = [
+                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+                for e in ep_result.get("entrypoints", [])[:30]
+            ]
+        except Exception:
+            logger.warning("Entrypoint mapping failed", exc_info=True)
+
+    # 7. API Routes
     try:
-        ep_result = map_entrypoints(workspace)
-        entrypoints = [
-            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-            for e in ep_result.get("entrypoints", [])[:30]
+        api_result = map_api_routes(workspace)
+        api_routes = [
+            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+            for r in api_result.get("routes", [])[:50]
         ]
     except Exception:
-        logger.warning("Entrypoint mapping failed", exc_info=True)
-        entrypoints = []
+        logger.warning("API route mapping failed", exc_info=True)
+        api_routes = []
 
-    # 7. API Routes — skip in quick mode (can be slow on large repos)
-    api_routes = []
-    if not quick:
-        try:
-            api_result = map_api_routes(workspace)
-            api_routes = [
-                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-                for r in api_result.get("routes", [])[:50]
-            ]
-        except Exception:
-            logger.warning("API route mapping failed", exc_info=True)
-
-    # 8. State management — skip in quick mode
-    state_stores = []
-    if not quick:
-        try:
-            state_result = map_state(workspace)
-            state_stores = [
-                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-                for s in state_result.get("stores", [])[:20]
-            ]
-        except Exception:
-            logger.warning("State management mapping failed", exc_info=True)
-
-    # 9. Risks (circular deps, dead code, secrets) — dead code & secrets skipped in quick mode
-    risks = []
+    # 8. State management
     try:
-        circ_result = detect_circular(workspace)
-        for chain in circ_result.get("chains", [])[:5]:
-            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+        state_result = map_state(workspace)
+        state_stores = [
+            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+            for s in state_result.get("stores", [])[:20]
+        ]
+    except Exception:
+        logger.warning("State management mapping failed", exc_info=True)
+        state_stores = []
+
+    # 9. Risks (circular deps, dead code, secrets) — risks list already initialized above
+    try:
+        circ_result = detect_circular(workspace, max_cycles=20)
+        # Aggregate cycles from all cycle types (function_calls, import_chains, css_imports)
+        all_cycles = []
+        for cycle_type in ("function_calls", "import_chains", "css_imports"):
+            for cycle in circ_result.get("cycles", {}).get(cycle_type, [])[:5]:
+                cycle_str = cycle.get("cycle", "")
+                severity = cycle.get("severity", "warning")
+                all_cycles.append({"type": "circular_dep", "description": cycle_str, "severity": severity})
+        risks.extend(all_cycles[:10])
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
+    try:
+        dead_result = detect_dead_code(workspace, max_files=2000)
+        dead_count = dead_result.get("stats", {}).get("total_dead_code", 0)
+        if dead_count > 0:
+            risks.append({"type": "dead_code", "count": dead_count})
+    except Exception:
+        logger.warning("Dead code detection failed", exc_info=True)
     if not quick:
         try:
-            dead_result = detect_dead_code(workspace)
-            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-            if dead_count > 0:
-                risks.append({"type": "dead_code", "count": dead_count})
-        except Exception:
-            logger.warning("Dead code detection failed", exc_info=True)
-        try:
-            secrets_result = detect_secrets(workspace)
+            secrets_result = detect_secrets(workspace, max_files=500)
             secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
             if secrets_count > 0:
                 risks.append({"type": "secrets", "count": secrets_count})
         except Exception:
             logger.warning("Secrets detection failed", exc_info=True)
-    try:
-        vuln_result = scan_vulnerabilities(workspace)
-        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-        if vuln_count > 0:
-            risks.append({"type": "vulnerabilities", "count": vuln_count})
-    except Exception:
-        logger.warning("Vulnerability scan failed", exc_info=True)
+        try:
+            vuln_result = scan_vulnerabilities(workspace)
+            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+            if vuln_count > 0:
+                risks.append({"type": "vulnerabilities", "count": vuln_count})
+        except Exception:
+            logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
-    # 11. Quick reference from summary — try cached summary.json first
-    summary = {}
-    summary_path = os.path.join(workspace, '.codelens', 'summary.json')
-    if os.path.exists(summary_path):
-        try:
-            with open(summary_path, 'r', encoding='utf-8') as f:
-                summary = json.load(f)
-        except Exception:
-            pass
-    if not summary:
-        try:
-            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
-        except Exception:
-            logger.warning("Summary computation failed", exc_info=True)
+    # 11. Quick reference from summary
+    try:
+        outline_max = 1000 if quick else 2000
+        summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=outline_max), scan_result)
+    except Exception:
+        logger.warning("Summary computation failed", exc_info=True)
+        summary = {}
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -230,8 +197,7 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "codelens_version": CODELENS_VERSION,
-            "quick_mode": quick
+            "codelens_version": CODELENS_VERSION
         },
         "identity": identity,
         "frameworks": frameworks,
@@ -271,68 +237,17 @@ def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict
 
 
 def _extract_project_identity(workspace: str) -> Dict[str, Any]:
-    """Extract project identity from package.json, pyproject.toml, or README.
-
-    v6: Removed unknown-type guard on Cargo.toml, added combined/polyglot type
-    detection, sub-directory package.json scanning, and monorepo-specific types.
-    """
+    """Extract project identity from package.json, pyproject.toml, or README."""
     identity = {
         "name": os.path.basename(workspace),
         "description": "",
         "version": "0.0.0",
-        "type": "unknown",
-        # v6: monorepo & sub-dir info
-        "is_monorepo": False,
-        "monorepo_tools": [],
-        "subdir_frameworks": {},
+        "type": "unknown"
     }
-
-    has_package_json = False
-    has_cargo_toml = False
-    has_pyproject = False
-    js_type = None  # v6: track JS-derived type separately for polyglot detection
-    python_type = None  # v6: track Python-derived type separately
-    rust_type = None  # v6: track Rust-derived type separately
-
-    # v6: Check monorepo indicators first
-    _MONOREPO_INDICATORS = {
-        "turbo.json": "turborepo",
-        "pnpm-workspace.yaml": "pnpm-workspace",
-        "lerna.json": "lerna",
-        "nx.json": "nx",
-        "bun.lock": "bun-workspace",
-    }
-    for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
-        if os.path.isfile(os.path.join(workspace, indicator_file)):
-            identity["is_monorepo"] = True
-            if tool_name not in identity["monorepo_tools"]:
-                identity["monorepo_tools"].append(tool_name)
-
-    # Also detect monorepo by structure: multiple package.json in apps/ or packages/
-    # This catches bun-based monorepos and plain npm workspaces that don't have
-    # an explicit monorepo config file (e.g., Spacedrive uses bun.lock + apps/*)
-    if not identity["is_monorepo"]:
-        for subdir in ("apps", "packages", "services"):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path):
-                try:
-                    pkg_count = sum(
-                        1 for entry in os.listdir(subdir_path)
-                        if os.path.isdir(os.path.join(subdir_path, entry))
-                        and os.path.isfile(os.path.join(subdir_path, entry, "package.json"))
-                    )
-                    if pkg_count >= 2:
-                        identity["is_monorepo"] = True
-                        if "npm-workspace" not in identity["monorepo_tools"]:
-                            identity["monorepo_tools"].append("npm-workspace")
-                        break
-                except OSError:
-                    pass
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
-        has_package_json = True
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
@@ -340,66 +255,28 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-            if "next" in deps:
-                js_type = "fullstack-web-app"
+            # Check for Tauri first (hybrid desktop app)
+            has_tauri_dep = any(k.startswith("@tauri-apps") for k in deps)
+            has_cargo = os.path.isfile(os.path.join(workspace, 'Cargo.toml'))
+            has_src_tauri = os.path.isdir(os.path.join(workspace, 'src-tauri'))
+            if has_tauri_dep or has_src_tauri:
+                identity["type"] = "tauri-desktop-app"
+            elif "next" in deps:
+                identity["type"] = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
-                js_type = "backend-api"
+                identity["type"] = "backend-api"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
-                js_type = "frontend-app"
+                identity["type"] = "frontend-app"
+            elif has_cargo:
+                identity["type"] = "rust-node-hybrid"
             else:
-                js_type = "node-project"
+                identity["type"] = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
 
-    # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
-    _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
-    for subdir in _MONOREPO_SUBDIRS:
-        subdir_path = os.path.join(workspace, subdir)
-        if not os.path.isdir(subdir_path):
-            continue
-        try:
-            for entry in sorted(os.listdir(subdir_path)):
-                entry_pkg = os.path.join(subdir_path, entry, "package.json")
-                if not os.path.isfile(entry_pkg):
-                    continue
-                try:
-                    with open(entry_pkg, 'r', encoding='utf-8') as f:
-                        pkg = json.load(f)
-                    sub_deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-                    rel_subdir = os.path.join(subdir, entry)
-                    subdir_fws = []
-                    # v6: Detect frameworks from sub-directory deps
-                    if "next" in sub_deps:
-                        subdir_fws.append("next.js")
-                        if js_type is None:
-                            js_type = "fullstack-web-app"
-                    if "react" in sub_deps:
-                        subdir_fws.append("react")
-                        if js_type is None:
-                            js_type = "frontend-app"
-                    if "vue" in sub_deps:
-                        subdir_fws.append("vue")
-                        if js_type is None:
-                            js_type = "frontend-app"
-                    if "svelte" in sub_deps:
-                        subdir_fws.append("svelte")
-                        if js_type is None:
-                            js_type = "frontend-app"
-                    if "express" in sub_deps or "fastify" in sub_deps:
-                        subdir_fws.append("express")
-                        if js_type is None:
-                            js_type = "backend-api"
-                    if subdir_fws:
-                        identity["subdir_frameworks"][rel_subdir] = subdir_fws
-                except Exception:
-                    pass
-        except OSError:
-            pass
-
     # Try pyproject.toml
     pyproject_path = os.path.join(workspace, 'pyproject.toml')
-    if os.path.isfile(pyproject_path):
-        has_pyproject = True
+    if os.path.isfile(pyproject_path) and identity["type"] == "unknown":
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -410,18 +287,17 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if ver_match:
                 identity["version"] = ver_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
-                python_type = "backend-api"
+                identity["type"] = "backend-api"
             elif "pytest" in content:
-                python_type = "python-library"
+                identity["type"] = "python-library"
             else:
-                python_type = "python-project"
+                identity["type"] = "python-project"
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
 
-    # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
+    # Try Cargo.toml
     cargo_path = os.path.join(workspace, 'Cargo.toml')
-    if os.path.isfile(cargo_path):
-        has_cargo_toml = True
+    if os.path.isfile(cargo_path) and identity["type"] == "unknown":
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -431,42 +307,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            rust_type = "rust-project"
+            identity["type"] = "rust-project"
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
-
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
-
-    if len(active_types) >= 2:
-        # Polyglot project — build a combined type string
-        type_parts = []
-        if rust_type:
-            type_parts.append("rust")
-        if js_type:
-            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type:
-            type_parts.append("python")
-        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
-    elif len(active_types) == 1:
-        identity["type"] = active_types[0]
-        # v6: If monorepo indicators found, append -monorepo suffix
-        if identity["is_monorepo"]:
-            identity["type"] = active_types[0] + "-monorepo"
-    # If no type detected, remains "unknown"
-
-    # v6: When frameworks are found in subdirectory package.json files,
-    #     update the identity type if it's still generic
-    if identity["subdir_frameworks"] and identity["type"] in ("node-project", "unknown"):
-        all_fws = set()
-        for fws in identity["subdir_frameworks"].values():
-            all_fws.update(fws)
-        if "next.js" in all_fws:
-            identity["type"] = "fullstack-web-app"
-        elif "react" in all_fws or "vue" in all_fws or "svelte" in all_fws:
-            identity["type"] = "frontend-app"
-        if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
-            identity["type"] += "-monorepo"
 
     return identity
 

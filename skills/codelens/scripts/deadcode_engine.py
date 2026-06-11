@@ -152,6 +152,14 @@ def detect_dead_code(
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
 
+    # Compute removal safety and recommended action
+    removal_safety = "safe" if total == 0 else "caution"
+    recommended_action = "No dead code found." if total == 0 else (
+        f"Found {total} dead code item(s) across {len(by_category)} category(ies). "
+        f"Review and remove unreachable code, unused exports, and zombie CSS. "
+        f"Run with --format markdown for detailed removal guidance."
+    )
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -162,7 +170,9 @@ def detect_dead_code(
             "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
-        "categories_checked": list(categories)
+        "categories_checked": list(categories),
+        "removal_safety": removal_safety,
+        "recommended_action": recommended_action
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -323,26 +333,11 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'self', 'cls', 'main', 'logger'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
-            # Skip ALL_CAPS names — they are module-level constants often imported elsewhere
+            # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
+            #     would be more accurate. Module-level constants are often imported
+            #     by other files — skipping avoids false positives.
+            #     TODO: Cross-file reference check for ALL_CAPS vars.
             if var_name.isupper():
-                continue
-
-            # Skip Python type aliases: names ending in "Types" or "Type" that are
-            # type alias definitions (e.g., URLTypes = ..., HeaderTypes = ...).
-            # These are used in type annotations, not as runtime variables.
-            line_text = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ''
-            if var_name.endswith('Types') or var_name.endswith('Type'):
-                # Check if RHS contains type-related patterns
-                rhs = line_text.split('=', 1)[1].strip() if '=' in line_text else ''
-                type_indicators = ['Union', 'Optional', 'List', 'Dict', 'Tuple', 'Set',
-                                   'Callable', 'Type', 'Sequence', 'Mapping', 'Iterable',
-                                   'AsyncIterator', 'Iterator', 'Any', 'Protocol',
-                                   'typing.', 'Annotated']
-                if any(ind in rhs for ind in type_indicators):
-                    continue
-
-            # Skip TypeAlias annotations: e.g., URLTypes: TypeAlias = ...
-            if ': TypeAlias' in line_text or ': typealias' in line_text.lower():
                 continue
 
             usage_pattern = r'\b' + re.escape(var_name) + r'\b'
@@ -454,11 +449,24 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
+        # Skip config files consumed by tools at runtime (not imported by app code)
+        # e.g., postcss.config.mjs, tailwind.config.ts, next.config.mjs, vite.config.ts
+        if any(x in file_path for x in ['.config.mjs', '.config.js', '.config.ts', '.config.cjs',
+                                          'jest.config', 'wdio.conf', 'playwright.config',
+                                          'vitest.config', 'webpack.config', 'rollup.config',
+                                          'tsconfig.json', 'biome.json']):
+            continue
+
+        # Skip middleware files — they're consumed by the framework, not imported
+        if 'middleware' in file_path.lower():
+            continue
+
         for export in exports:
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
+            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup',
+                        'config', 'middleware', 'withPWA', 'defineConfig', 'defineCloudflareConfig'}:
                 continue
 
             if name not in all_imported_names:
@@ -507,19 +515,16 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
         # v6: Report functions with ref_count == 0 and status == "dead"
         # But skip: main() functions (entry points), pub functions (public API),
-        # and functions in test files
+        # Tauri IPC commands (exposed to frontend), and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
-            # Handle both simple "main" and qualified names like "crate::main"
-            bare_name = name.split('::')[-1] if '::' in name else name
-            if bare_name == "main":
-                continue
-            # Also skip Rust #[tokio::main] and #[actix::main] entry point functions
-            # These are async entry points that appear as "main" in the registry
-            if file_path.endswith('.rs') and name == "main":
+            if name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
+                continue
+            # Skip Tauri IPC commands — they're called from the frontend via invoke()
+            if node.get("is_tauri_command") or status == "ipc_exposed":
                 continue
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
@@ -548,35 +553,65 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
         logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
-    # Load Tailwind detector to skip Tailwind utility classes
-    try:
-        from parsers.tailwind_detector import is_tailwind_class
-        has_tailwind_check = True
-    except ImportError:
-        has_tailwind_check = False
-
     zombie = []
 
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
-        name = cls["name"]
         if cls["status"] == "dead" and not cls.get("js"):
-            # Skip Tailwind utility classes — they're framework-defined, not user-defined
-            if has_tailwind_check and is_tailwind_class(name):
-                continue
-            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
-            if not re.match(r'^[a-zA-Z_]', name):
-                continue
+            # Try to get file and line from CSS references
+            css_refs = cls.get("css", [])
+            file_path = "unknown"
+            line_num = 0
+            if css_refs and isinstance(css_refs, list):
+                first_ref = css_refs[0]
+                if isinstance(first_ref, dict):
+                    p = first_ref.get("path", "")
+                    if p:
+                        file_path = p
+                    line_num = first_ref.get("line", 0)
+
+            # If no CSS ref found, try to infer from the class name
+            # by searching CSS files directly
+            if file_path == "unknown":
+                file_path, line_num = _find_css_class_in_files(workspace, cls["name"])
+
             zombie.append({
-                "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
-                "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": name,
+                "file": file_path,
+                "line": line_num,
+                "class": cls["name"],
                 "severity": "info",
-                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
+                "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
+                "suggestion": f"Remove unused CSS class '.{cls['name']}' or add to HTML/JSX."
             })
 
     return zombie[:50]
+
+
+def _find_css_class_in_files(workspace: str, class_name: str) -> tuple:
+    """Find the CSS file and line where a class is defined."""
+    # Sanitize class name for regex (handle special characters)
+    safe_name = re.escape(class_name)
+    pattern = re.compile(r'\.' + safe_name + r'\s*[{,:]')
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in {'.css', '.scss', '.less', '.sass'}:
+                continue
+            file_path = os.path.join(root, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                for m in pattern.finditer(content):
+                    line_num = content[:m.start()].count('\n') + 1
+                    rel_path = os.path.relpath(file_path, workspace)
+                    return rel_path, line_num
+            except IOError:
+                continue
+    return "unknown", 0
 
 def _detect_dead_listeners(workspace: str) -> List[Dict]:
     """Detect event listeners that listen for events on selectors that don't exist in HTML."""

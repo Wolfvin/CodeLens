@@ -1,22 +1,23 @@
 # CodeLens Changelog
 
-## v5.9.0 — 2026-06-12
+## v5.8.0 — 2026-06-12
 
-### New Features (4)
+### New Features (1)
 
-- **Tauri reverse engineering analysis** (`scan_tauri_artifacts()`): Deep security auditing of Tauri desktop applications. Detects IPC commands/handlers, capabilities/permissions, sidecar binaries, updater configuration, webview security (CSP, asset protocol), deep-link schemes, and build scripts. Produces a comprehensive security audit with severity ratings (critical/high/medium/info) and risk level classification.
-- **Enhanced `binary-scan` command**: Automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full findings including security audit, IPC command map, capabilities breakdown, and risk summary.
-- **Rust monorepo detection**: Detects Cargo workspace (`[workspace]` in Cargo.toml), `crates/` directory with multiple crates, `pnpm-workspace.yaml` presence (even without `packages:` list), and npm/yarn workspaces. Returns `monorepo_tools` list identifying which mechanisms were detected.
-- **Ask command Tauri/binary routing**: 17 new keyword patterns for binary/RE queries. "what Tauri commands are available" now correctly routes to `binary-scan`.
+- **Tauri IPC API-map detection** — `api-map` now detects `#[tauri::command]` annotated Rust functions as IPC routes with `invoke('commandName')` paths. Also detects `generate_handler![]` macro registrations. Routes include command name (auto-converted snake_case → camelCase), parameters, handler name, and framework metadata.
 
-### Bug Fixes (2)
+### Bug Fixes (4)
 
-- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (e.g., clash-verge-rev with `allowBuilds`) were incorrectly classified as non-monorepo. Now uses structural indicators in addition to package.json count.
-- **HIGH: Version mismatch** — `utils.py` had 5.7.1 while CHANGELOG said 5.8.0. Unified to 5.9.0.
+- **ASK "is this secure?" misroutes to context** — Added "secure", "is this secure", "hardcoded", "leaked credential" keywords to the security pattern in `ask.py`, ensuring security queries route to `secrets` command instead of `context` lookup. Also added "outdated dep", "dependency vulnerability" to vuln-scan patterns.
+- **Handbook circular deps always empty** — `handbook.py` used non-existent `chains` key from circular_engine output. Fixed to iterate `cycles.function_calls`, `cycles.import_chains`, `cycles.css_imports` with severity metadata.
+- **zombie_css shows `file="unknown"` and `line=0`** — Dead CSS class detection now properly extracts file path and line number from registry CSS references, and falls back to searching CSS files directly via `_find_css_class_in_files()`.
+- **Module system misdetected as "cjs"** — Enhanced module system detection in `framework_detect.py` to check sub-package.json files for `"type": "module"`, count `.mjs` vs `.cjs` files, and consider pnpm-workspace.yaml as ESM indicator.
 
-### Test Target
+### Improvements (3)
 
-- **clash-verge-rev/clash-verge-rev** (~125k stars): Most popular Tauri app on GitHub. VPN/proxy management with Rust+React. Found: 2 sidecars, missing CSP, wildcard asset protocol, shell:allow-execute/spawn, 2 deep-links, signed updater.
+- **Rust-idiomatic smell exclusions** — `_detect_duplicate_patterns()` now excludes language-idiomatic signatures that naturally appear in many files: `fn main()`, `fn fmt()`, `fn clone()`, `fn drop()`, `fn new()`, Python `__init__`, `__str__`, `__repr__`, etc. Reduces false positives from 47+ duplicate Rust standard signatures.
+- **Tauri/hybrid project identity detection** — `handbook.py` now correctly identifies Tauri desktop apps as `"tauri-desktop-app"` and Rust+Node hybrid projects as `"rust-node-hybrid"` instead of generic `"node-project"`.
+- **ASK keyword weight tuning** — Added filler words "from", "with", "by", "at", "be" with weight 0 to prevent them from skewing routing scores.
 
 ## v5.8.1 — 2026-06-12
 
