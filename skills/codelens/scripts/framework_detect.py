@@ -107,7 +107,38 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
-    }
+    },
+    # Python CLI / packaging tools
+    "click": {
+        "packages": ["click"],
+        "pip_packages": ["click"],
+        "config_files": [],
+        "indicators": []
+    },
+    "typer": {
+        "packages": ["typer"],
+        "pip_packages": ["typer"],
+        "config_files": [],
+        "indicators": []
+    },
+    "argparse": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": [],
+        "indicators": ["argparse"]
+    },
+    "rich": {
+        "packages": ["rich"],
+        "pip_packages": ["rich"],
+        "config_files": [],
+        "indicators": []
+    },
+    "textual": {
+        "packages": ["textual"],
+        "pip_packages": ["textual"],
+        "config_files": [],
+        "indicators": []
+    },
 }
 
 
@@ -156,6 +187,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_click": False,
+        "has_rich": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -198,6 +231,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "click":
+                        detected["has_click"] = True
+                    elif fw_name == "rich":
+                        detected["has_rich"] = True
                     break
 
         # Detect CSS preprocessor
@@ -299,6 +336,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "click":
+                    detected["has_click"] = True
+                elif fw_name == "rich":
+                    detected["has_rich"] = True
                 break
 
     # 4. Check file patterns (for Vue, Svelte)

@@ -251,9 +251,24 @@ def _get_registry_refs(name: str, workspace: str) -> List[Dict]:
 
 
 def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
-    """Find the symbol name inside string literals."""
+    """Find the symbol name inside string literals.
+
+    Uses word-boundary-aware matching to avoid false positives where
+    the symbol name is a substring of a longer word (e.g. "main"
+    inside "domain", "remain", "maintain").
+    """
     refs = []
     lines = content.split('\n')
+
+    # Build a pattern that requires the name to be a standalone token
+    # inside the string — not part of a larger camelCase/snake_case/word.
+    # Accepts: exact name, name at start/end of string, name adjacent to
+    # separators (space, /, -, _, ., :), but NOT embedded in a word.
+    name_pattern = (
+        r'(?:(?<=["\s/:._-])|(?<=["\']))'  # preceded by separator or quote
+        + re.escape(name)
+        + r'(?:(?=["\s/:._-])|(?=["\']))'  # followed by separator or quote
+    )
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -262,8 +277,8 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
         if stripped.startswith('import ') or stripped.startswith('export '):
             continue
 
-        # Look for name inside quotes
-        for m in re.finditer(r'["\']([^"\']*' + re.escape(name) + r'[^"\']*)["\']', stripped):
+        # Look for name inside quotes with word-boundary awareness
+        for m in re.finditer(r'["\']([^"\']*)["\']', stripped):
             string_content = m.group(1)
 
             # Skip if it's a normal import path
@@ -272,6 +287,10 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
 
             # Skip if it's a URL
             if string_content.startswith('http://') or string_content.startswith('https://'):
+                continue
+
+            # Check if the name appears as a standalone token in the string
+            if not re.search(name_pattern, string_content) and string_content != name:
                 continue
 
             # This is a string reference — potentially dangerous

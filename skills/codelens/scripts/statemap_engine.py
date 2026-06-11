@@ -13,7 +13,8 @@ State Management Frameworks Detected:
  7. Recoil        — atom, selector, useRecoilState
  8. Jotai         — atom, useAtom
  9. XState        — createMachine, StateMachine
-10. Module-level  — global variables, singletons, module.exports of stateful objects
+10. Svelte Stores — writable(), readable(), derived() from svelte/store
+11. Module-level  — global variables, singletons, module.exports of stateful objects
 
 Per-state-slice extraction: name, type (store/context/atom/global),
     defined_in, consumers, actions/mutations that modify it
@@ -33,7 +34,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store"}
 
 
 def map_state(
@@ -176,6 +177,14 @@ def map_state(
                     frameworks_detected.add("module_level_py")
                     stores.extend(py_global_results["stores"])
                     state_flow.extend(py_global_results["flow"])
+
+    # ─── Svelte Stores (workspace-level detection) ───────────
+    if _is_svelte_workspace(workspace):
+        svelte_stores, svelte_flow = _detect_svelte_stores(workspace, config)
+        if svelte_stores:
+            frameworks_detected.add("svelte_stores")
+            stores.extend(svelte_stores)
+            state_flow.extend(svelte_flow)
 
     # ─── Post-processing: Resolve consumers ──────────────────
 
@@ -1068,6 +1077,10 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if value_part.startswith('<'):
                 continue
 
+            # Skip Svelte store creators — they are detected by _detect_svelte_stores()
+            if re.match(r'^(writable|readable|derived)\s*\(', value_part):
+                continue
+
             # v6: Skip class instantiations of known non-state patterns
             # "const x = createSomething()" is a factory, not necessarily state
             # But "const x = createStore()" IS state
@@ -1186,6 +1199,267 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
+
+# ─── Svelte Stores ─────────────────────────────────────────────
+
+def _detect_svelte_stores(
+    workspace: str, config: Optional[Dict] = None
+) -> tuple:
+    """
+    Detect Svelte stores (writable, readable, derived) across the workspace.
+
+    Two-pass approach:
+      1. Scan all .svelte/.js/.ts files for store definitions
+         (writable(), readable(), derived() from 'svelte/store').
+      2. Scan for consumers — files that import a store and use
+         $storeName, storeName.subscribe(), storeName.set(), or
+         storeName.update().
+
+    Returns:
+        (stores_list, flow_list)
+    """
+    stores: List[Dict[str, Any]] = []
+    flow: List[Dict[str, Any]] = []
+
+    # ── Pass 1: find store definitions ──────────────────────────
+    # store_name -> { file, line, store_type }
+    store_defs: Dict[str, Dict[str, Any]] = {}
+
+    svelte_extensions = {".svelte", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in svelte_extensions:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            # Only process files that import from svelte/store
+            has_svelte_store = bool(re.search(
+                r'(?:from\s+[\'"]svelte/store[\'"]|import\s+.*svelte[\'"]\/store[\'"])',
+                content
+            ))
+            if not has_svelte_store:
+                continue
+
+            # Detect writable() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*writable\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "writable",
+                }
+
+            # Detect readable() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*readable\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "readable",
+                }
+
+            # Detect derived() calls
+            for m in re.finditer(
+                r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*derived\s*\(',
+                content
+            ):
+                store_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                store_defs[store_name] = {
+                    "file": rel_path,
+                    "line": line_num,
+                    "store_type": "derived",
+                }
+
+    # ── Build store dicts from definitions ──────────────────────
+    for store_name, info in store_defs.items():
+        is_derived = info["store_type"] == "derived"
+        store_type = "derived_store" if is_derived else "store"
+        actions = ["set", "update"] if info["store_type"] == "writable" else []
+
+        stores.append({
+            "name": store_name,
+            "type": store_type,
+            "framework": "svelte_stores",
+            "defined_in": info["file"],
+            "line": info["line"],
+            "store_type": info["store_type"],
+            "slices": [],
+            "actions": actions,
+            "consumers": [],
+        })
+
+        flow.append({
+            "from": info["file"],
+            "action": f"{info['store_type']}({store_name})",
+            "to": store_name,
+            "file": info["file"],
+            "type": "define",
+        })
+
+    # ── Pass 2: find consumers ──────────────────────────────────
+    # Consumers are files that import a store and then use it via:
+    #   $storeName            (Svelte auto-subscription, read)
+    #   storeName.subscribe() (manual subscription, read)
+    #   storeName.set()       (write)
+    #   storeName.update()    (write)
+    all_consumer_info: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in svelte_extensions:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            for store_name, info in store_defs.items():
+                # Skip the definition file for consumer detection
+                if info["file"] == rel_path:
+                    continue
+
+                # Check if this file imports the store name
+                imports_store = bool(re.search(
+                    r'import\s+(?:\{[^}]*\b' + re.escape(store_name) + r'\b[^}]*\}|\*\s+as\s+\w+)\s+from',
+                    content
+                )) or bool(re.search(
+                    r'(?:const|let|var)\s+\{[^}]*\b' + re.escape(store_name) + r'\b[^}]*\}\s*=\s*require\s*\(',
+                    content
+                ))
+
+                if not imports_store:
+                    continue
+
+                # Detect $storeName usage (Svelte auto-subscription)
+                dollar_pattern = r'\$' + re.escape(store_name) + r'\b'
+                if re.search(dollar_pattern, content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "read",
+                        "pattern": f"${store_name}",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"${store_name}",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "read",
+                    })
+
+                # Detect storeName.subscribe()
+                if re.search(re.escape(store_name) + r'\.subscribe\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "read",
+                        "pattern": f"{store_name}.subscribe",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.subscribe()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "read",
+                    })
+
+                # Detect storeName.set()
+                if re.search(re.escape(store_name) + r'\.set\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "write",
+                        "pattern": f"{store_name}.set",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.set()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "write",
+                    })
+
+                # Detect storeName.update()
+                if re.search(re.escape(store_name) + r'\.update\s*\(', content):
+                    all_consumer_info[store_name].append({
+                        "file": rel_path,
+                        "access": "write",
+                        "pattern": f"{store_name}.update",
+                    })
+                    flow.append({
+                        "from": rel_path,
+                        "action": f"{store_name}.update()",
+                        "to": store_name,
+                        "file": rel_path,
+                        "type": "write",
+                    })
+
+    # ── Merge consumers into stores ─────────────────────────────
+    for store in stores:
+        sname = store["name"]
+        if sname in all_consumer_info:
+            store["consumers"] = all_consumer_info[sname]
+
+    return stores, flow
+
+
+def _is_svelte_workspace(workspace: str) -> bool:
+    """Check whether the workspace uses Svelte/SvelteKit."""
+    # Check for any .svelte files
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            if filename.endswith('.svelte'):
+                return True
+
+    # Check package.json for svelte dependency
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8', errors='ignore') as f:
+                pkg = f.read()
+            if '"svelte"' in pkg:
+                return True
+        except IOError:
+            pass
+
+    return False
 
 
 # ─── Import/Export Collection ──────────────────────────────────
@@ -1346,6 +1620,22 @@ def _generate_state_recommendations(
             "severity": "info",
             "message": "Both Recoil and Jotai detected — choose one atomic state library",
             "suggestion": "Standardize on one atomic state management library for consistency.",
+        })
+
+    # Svelte stores with no $-prefix consumers
+    svelte_stores = [s for s in stores if s.get("framework") == "svelte_stores"]
+    svelte_no_auto_sub = [
+        s for s in svelte_stores
+        if not any(c.get("pattern", "").startswith("$") for c in s.get("consumers", []))
+    ]
+    if svelte_no_auto_sub:
+        recommendations.append({
+            "type": "pattern",
+            "severity": "info",
+            "message": f"{len(svelte_no_auto_sub)} Svelte store(s) not consumed via $ auto-subscription",
+            "affected": [s["name"] for s in svelte_no_auto_sub[:10]],
+            "suggestion": "Using the $storeName prefix in .svelte files enables reactive auto-subscription. "
+                          "Consider using it instead of manual .subscribe() calls for simpler code.",
         })
 
     return recommendations

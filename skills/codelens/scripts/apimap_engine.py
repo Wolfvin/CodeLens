@@ -17,6 +17,7 @@ Framework Detection & Route Extraction:
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
+14. SvelteKit — file-based routes (+page, +server, +layout, +error)
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -202,6 +203,12 @@ def map_api_routes(
                 if orpc_routes:
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
+
+    # ─── SvelteKit file-based routes ─────────────────────────
+    sveltekit_routes = _detect_sveltekit_routes(workspace, config)
+    if sveltekit_routes:
+        frameworks_detected.add("sveltekit")
+        routes.extend(sveltekit_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -804,6 +811,292 @@ def _extract_nuxt_routes(
                 "response_type": None,
                 "framework": "nuxt",
             })
+
+    return routes
+
+
+# ─── SvelteKit Routes ─────────────────────────────────────────
+
+def _detect_sveltekit_routes(
+    workspace: str, config: Optional[Dict] = None
+) -> List[Dict[str, Any]]:
+    """Detect SvelteKit file-based routes from the src/routes/ directory.
+
+    SvelteKit uses file-system routing:
+      +page.svelte        → page route (GET)
+      +page.ts            → page load function
+      +page.server.ts     → page server-side load / actions
+      +server.ts / +server.js → API endpoint (exports GET, POST, etc.)
+      +layout.svelte      → layout component
+      +layout.ts          → layout load function
+      +layout.server.ts   → layout server-side load
+      +error.svelte       → error page
+
+    Dynamic segments use [param] syntax, e.g.:
+      src/routes/blog/[slug]/+page.svelte → /blog/:slug
+    """
+    routes: List[Dict[str, Any]] = []
+    routes_dir = os.path.join(workspace, "src", "routes")
+
+    # Quick check: SvelteKit must have src/routes/ directory
+    if not os.path.isdir(routes_dir):
+        return routes
+
+    # Also check for svelte.config.js or vite.config with SvelteKit
+    has_sveltekit_config = os.path.isfile(os.path.join(workspace, "svelte.config.js")) \
+                        or os.path.isfile(os.path.join(workspace, "svelte.config.ts"))
+    # If no svelte.config but src/routes exists with SvelteKit files, still detect
+
+    # SvelteKit special filenames and their route types
+    SERVER_FILES = {"+server.ts", "+server.js", "+server.mjs", "+server.cjs"}
+    PAGE_FILES = {"+page.svelte", "+page.ts", "+page.js", "+page.server.ts", "+page.server.js"}
+    LAYOUT_FILES = {"+layout.svelte", "+layout.ts", "+layout.js", "+layout.server.ts", "+layout.server.js"}
+    ERROR_FILES = {"+error.svelte", "+error.ts", "+error.js"}
+
+    all_special_files = SERVER_FILES | PAGE_FILES | LAYOUT_FILES | ERROR_FILES
+    found_sveltekit_file = False
+
+    for root, dirs, filenames in os.walk(routes_dir):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+
+        for filename in filenames:
+            if filename not in all_special_files:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            # Convert directory path to route path
+            # e.g. src/routes/api/users/+server.ts → /api/users
+            route_dir = os.path.relpath(root, routes_dir)
+            if route_dir == '.':
+                route_path = '/'
+            else:
+                route_path = '/' + route_dir.replace(os.sep, '/')
+
+            # Handle SvelteKit dynamic segments: [param] → :param, [...param] → :param*
+            route_path = re.sub(r'\[\.\.\.(\w+)\]', r':\1*', route_path)
+            route_path = re.sub(r'\[([^\]]+)\]', r':\1', route_path)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                content = ""
+
+            # ─── +server.ts/js — API endpoints with HTTP method exports ───
+            if filename in SERVER_FILES:
+                found_sveltekit_file = True
+                methods_found = []
+
+                # Pattern 1: export async function GET / POST / etc.
+                for m in re.finditer(
+                    r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)',
+                    content
+                ):
+                    http_method = m.group(1).upper()
+                    line_num = content[:m.start()].count('\n') + 1
+                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
+
+                # Pattern 2: export const GET = ... / export const POST = ...
+                for m in re.finditer(
+                    r'export\s+const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*=',
+                    content
+                ):
+                    http_method = m.group(1).upper()
+                    line_num = content[:m.start()].count('\n') + 1
+                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
+
+                # Pattern 3: export { GET, POST } (re-exports)
+                for m in re.finditer(
+                    r'export\s+\{\s*([^\}]+)\}\s*',
+                    content
+                ):
+                    for method_name in re.findall(
+                        r'\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
+                        m.group(1)
+                    ):
+                        http_method = method_name.upper()
+                        line_num = content[:m.start()].count('\n') + 1
+                        methods_found.append({"method": http_method, "handler": method_name, "line": line_num})
+
+                if methods_found:
+                    for mf in methods_found:
+                        routes.append({
+                            "method": mf["method"],
+                            "path": _normalize_path(route_path),
+                            "handler_name": mf["handler"],
+                            "file": rel_path,
+                            "line": mf["line"],
+                            "middleware_chain": [],
+                            "request_type": None,
+                            "response_type": None,
+                            "framework": "sveltekit",
+                            "type": "api_endpoint",
+                        })
+                else:
+                    # No method exports found — still register as a generic endpoint
+                    routes.append({
+                        "method": "ALL",
+                        "path": _normalize_path(route_path),
+                        "handler_name": "+server",
+                        "file": rel_path,
+                        "line": 1,
+                        "middleware_chain": [],
+                        "request_type": None,
+                        "response_type": None,
+                        "framework": "sveltekit",
+                        "type": "api_endpoint",
+                    })
+
+            # ─── +page.svelte / +page.ts / +page.server.ts — page routes ───
+            elif filename in PAGE_FILES:
+                found_sveltekit_file = True
+
+                # Determine handler name from content
+                handler_name = "+page"
+                line_num = 1
+                if ".server." in filename:
+                    # Look for load function or actions export
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    actions_match = re.search(
+                        r'export\s+const\s+actions\s*=',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+                    elif actions_match:
+                        handler_name = "actions"
+                        line_num = content[:actions_match.start()].count('\n') + 1
+                elif filename.endswith(".ts") or filename.endswith(".js"):
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+
+                # +page.server.ts with actions → also emit POST for form actions
+                if ".server." in filename:
+                    actions_match = re.search(
+                        r'export\s+const\s+actions\s*=',
+                        content
+                    )
+                    if actions_match:
+                        actions_line = content[:actions_match.start()].count('\n') + 1
+                        # Find named actions (e.g. actions: { create, delete })
+                        named_actions = re.findall(
+                            r'actions\s*:\s*\{([^}]+)\}',
+                            content
+                        )
+                        action_names = []
+                        for block in named_actions:
+                            action_names.extend(re.findall(r'(\w+)\s*:', block))
+
+                        # Emit POST for default action
+                        routes.append({
+                            "method": "POST",
+                            "path": _normalize_path(route_path),
+                            "handler_name": "actions",
+                            "file": rel_path,
+                            "line": actions_line,
+                            "middleware_chain": [],
+                            "request_type": None,
+                            "response_type": None,
+                            "framework": "sveltekit",
+                            "type": "page",
+                        })
+
+                        # Emit POST for each named action
+                        for action_name in action_names:
+                            routes.append({
+                                "method": "POST",
+                                "path": _normalize_path(route_path),
+                                "handler_name": action_name,
+                                "file": rel_path,
+                                "line": actions_line,
+                                "middleware_chain": [],
+                                "request_type": None,
+                                "response_type": None,
+                                "framework": "sveltekit",
+                                "type": "page",
+                            })
+
+                routes.append({
+                    "method": "GET",
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "page",
+                })
+
+            # ─── +layout.svelte / +layout.ts / +layout.server.ts — layouts ───
+            elif filename in LAYOUT_FILES:
+                found_sveltekit_file = True
+
+                handler_name = "+layout"
+                line_num = 1
+                if ".server." in filename:
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+                elif filename.endswith(".ts") or filename.endswith(".js"):
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+
+                routes.append({
+                    "method": "ALL",
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "layout",
+                })
+
+            # ─── +error.svelte / +error.ts — error pages ───
+            elif filename in ERROR_FILES:
+                found_sveltekit_file = True
+
+                routes.append({
+                    "method": "ALL",
+                    "path": _normalize_path(route_path),
+                    "handler_name": "+error",
+                    "file": rel_path,
+                    "line": 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "error",
+                })
+
+    # Only return routes if we actually found SvelteKit files
+    # (a bare src/routes/ dir without +files is not a SvelteKit project)
+    if not found_sveltekit_file:
+        return []
 
     return routes
 

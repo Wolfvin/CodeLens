@@ -11,7 +11,7 @@ def add_args(parser):
                       "keyboard_nav", "semantic_html", "color_contrast", "heading_order",
                       "link_text", "focus_management"], default=None,
                       help="Filter by a11y category")
-    parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
+    parser.add_argument("--severity", choices=["high", "medium", "low"], default=None,
                       help="Filter by severity")
 
 

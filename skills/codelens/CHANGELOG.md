@@ -5,6 +5,25 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-12
+
+### Added
+- **SvelteKit file-based route detection**: `api-map` now detects `+server.ts/js`, `+page.svelte`, `+layout.svelte`, `+error.svelte` files and converts them to proper routes with HTTP method extraction and form action detection.
+- **Svelte store detection**: `state-map` now detects `writable()`, `readable()`, `derived()` stores from `svelte/store`, with consumer tracking (`$storeName`, `.subscribe()`, `.set()`, `.update()`).
+- **Framework-adaptive perf-hint recommendations**: `perf-hint` now detects the project's framework (React, Svelte, Vue, Angular) and provides framework-specific recommendations instead of always suggesting React fixes (e.g., Svelte: onDestroy, $: reactive; Vue: onUnmounted, computed; Angular: ngOnDestroy, OnPush).
+- **Python CLI tool detection**: `detect` and `init` now recognize Click, Typer, Rich, Textual, and argparse as frameworks.
+- **`safe_read_file()` utility**: Resilient file reading function (returns empty string on error, uses `errors='replace'`) now available in `utils.py`.
+- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore checker now available in `utils.py`.
+
+### Fixed
+- **ImportError crash on startup**: `a11y_engine.py` imported `safe_read_file` and `tailwind_detector.py` imported `should_ignore_dir` from `utils`, but these functions were missing. Added both to `utils.py`.
+- **Circular markdown formatter showed 0 cycles**: `_md_circular` read `data["chains"]` but engine outputs `data["cycles"]`. Fixed to read from correct key with category breakdown.
+- **Symbols markdown formatter showed empty locations**: `_md_symbols` used `file:line` fields that are empty in symbol results. Fixed to prefer the `location` field.
+- **Severity validation mismatch**: CLI allowed `--severity=critical` but engines only accept high/medium/low. Fixed `a11y`, `regex-audit`, and `css-deep` CLI choices to match engine validation.
+- **A11y false positives from .d.ts files**: TypeScript declaration files were scanned for a11y issues, producing false positives from type signatures referencing HTML elements. Now skipped.
+- **Refactor-safe overly broad string matching**: `refactor-safe` flagged substring matches (e.g., "main" inside "domain"). Fixed with word-boundary-aware matching.
+- **summary.json total_lines=0**: `outline_engine.py` did not compute total lines. Now counts lines during workspace outline generation.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added
