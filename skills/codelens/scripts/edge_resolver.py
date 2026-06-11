@@ -311,3 +311,98 @@ def _to_alternate_case(name: str) -> str:
 
     # No conversion needed
     return leading + name
+
+
+# ─── Tauri IPC Edge Resolution ───────────────────────────────
+
+def resolve_tauri_ipc_from_apimap(
+    nodes: List[Dict],
+    edges: List[Dict],
+    api_routes: List[Dict]
+) -> List[Dict]:
+    """Resolve cross-language Tauri IPC edges from API map data.
+
+    In Tauri apps, the frontend calls Rust backend functions via the IPC bridge:
+        TypeScript: invoke('commandName') → Rust: #[tauri::command] fn command_name()
+
+    This function creates resolved edges connecting the frontend invoke() call
+    to the corresponding Rust handler, making Tauri command handlers appear as
+    "active" (called) rather than "dead" in the codebase analysis.
+
+    Args:
+        nodes: List of all parsed nodes (both frontend and backend).
+        edges: List of existing resolved edges.
+        api_routes: API route data from apimap_engine, containing Tauri IPC routes
+                    with 'type' == 'tauri_ipc', 'handler' field with command name,
+                    and 'invoke_command' field with the invoked command name.
+
+    Returns:
+        Updated list of edges with new IPC edges appended.
+    """
+    if not api_routes:
+        return edges
+
+    # Build a lookup: Rust function name → node
+    rust_nodes: Dict[str, Dict] = {}
+    for node in nodes:
+        file_path = node.get("file", "")
+        if file_path.endswith('.rs'):
+            fn_name = node.get("fn", "")
+            # Index by both original name and snake_case version
+            rust_nodes[fn_name] = node
+            # Also index the camelCase version of the name for matching
+            alt = _to_alternate_case(fn_name)
+            if alt != fn_name:
+                rust_nodes[alt] = node
+
+    # Build a lookup: frontend invoke call → node
+    ts_nodes: Dict[str, Dict] = {}
+    for node in nodes:
+        file_path = node.get("file", "")
+        if not file_path.endswith('.rs'):
+            fn_name = node.get("fn", "")
+            if fn_name:
+                ts_nodes[fn_name] = node
+
+    # Find Tauri IPC routes and create edges
+    new_edges = []
+    for route in api_routes:
+        route_type = route.get("type", "")
+        if route_type != "tauri_ipc":
+            continue
+
+        invoke_cmd = route.get("invoke_command", "") or route.get("handler", "")
+        if not invoke_cmd:
+            continue
+
+        # Find the frontend node that calls invoke()
+        # The invoke call might be in a function like "greet" or "commandName"
+        frontend_node = ts_nodes.get(invoke_cmd)
+
+        # Find the Rust handler node
+        # Rust uses snake_case: greet → greet, commandName → command_name
+        rust_key = _to_alternate_case(invoke_cmd) if '_' not in invoke_cmd else invoke_cmd
+        backend_node = rust_nodes.get(invoke_cmd) or rust_nodes.get(rust_key)
+
+        if backend_node:
+            # Mark the Rust node as a Tauri command
+            backend_node["is_tauri_command"] = True
+
+            # Create an edge from the frontend to the backend
+            if frontend_node:
+                new_edge = {
+                    "from": frontend_node["id"],
+                    "to": backend_node["id"],
+                    "ipc": True,
+                }
+            else:
+                # No specific frontend function, but the Rust command is still exposed
+                # Mark it so it won't appear as dead code
+                new_edge = {
+                    "from": f"tauri_ipc:{invoke_cmd}",
+                    "to": backend_node["id"],
+                    "ipc": True,
+                }
+            new_edges.append(new_edge)
+
+    return edges + new_edges

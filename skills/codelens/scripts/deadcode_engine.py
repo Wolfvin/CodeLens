@@ -17,7 +17,7 @@ import re
 import json
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -89,10 +89,9 @@ def detect_dead_code(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+            # Use safe_read_file with size limit to avoid slow scans
+            content = safe_read_file(file_path, MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             files_scanned += 1
@@ -152,6 +151,28 @@ def detect_dead_code(
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
 
+    # Determine removal safety and recommended action based on findings
+    high_severity = sum(
+        1 for items in results.values()
+        for item in items
+        if item.get("severity") == "critical"
+    )
+    if high_severity > 0:
+        removal_safety = "dangerous"
+        recommended_action = "Review critical dead code before removal — some may be dynamically accessed"
+    elif total > 50:
+        removal_safety = "cautious"
+        recommended_action = "Large amount of dead code found — remove in batches with testing"
+    elif total > 10:
+        removal_safety = "mostly_safe"
+        recommended_action = "Moderate dead code found — review and remove with standard testing"
+    elif total > 0:
+        removal_safety = "safe"
+        recommended_action = "Small amount of dead code found — safe to remove"
+    else:
+        removal_safety = "clean"
+        recommended_action = "No dead code detected"
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -162,7 +183,9 @@ def detect_dead_code(
             "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
-        "categories_checked": list(categories)
+        "categories_checked": list(categories),
+        "removal_safety": removal_safety,
+        "recommended_action": recommended_action
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -607,10 +630,8 @@ def _detect_dead_listeners(workspace: str) -> List[Dict]:
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+            content = safe_read_file(file_path, MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             # Find addEventListener or .on() with selectors
