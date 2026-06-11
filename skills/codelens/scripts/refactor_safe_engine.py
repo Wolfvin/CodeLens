@@ -20,7 +20,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, is_generated_file, logger
 
 ALL_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -83,6 +83,10 @@ def check_refactor_safety(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
             ext = os.path.splitext(filename)[1].lower()
+
+            # Skip generated/lock files (Cargo.lock, package-lock.json, etc.)
+            if is_generated_file(filename):
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:

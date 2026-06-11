@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New framework signatures** (`scripts/framework_detect.py`): Added detection for **SolidJS** (`solid-js`), **Express**, **Fastify**, **Hono**, **Koa**, **NestJS** (`@nestjs/core`), **Webpack**, **Turborepo** (`turbo.json`). Also added Python library detection for **httpx**, **Starlite/Litestar**.
+- **Go module (go.mod) support** (`scripts/framework_detect.py`): Added `go.mod` parsing for Go dependency detection. Detects `has_go_backend` flag and Go framework dependencies (Gin, Echo). Added `go_packages` field to FRAMEWORK_SIGNATURES for Go crate matching.
+- **Generated file exclusion** (`scripts/utils.py`): Added `GENERATED_FILE_PATTERNS` frozenset containing lock files and generated files (Cargo.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, bun.lockb, go.sum, poetry.lock, uv.lock, Gemfile.lock, composer.lock). Added `is_generated_file()` helper function.
+- **refactor-safe excludes generated files** (`scripts/refactor_safe_engine.py`): String references from Cargo.lock, package-lock.json etc. are now excluded from refactoring safety checks, eliminating false positives from generated dependency files.
+- **Python type alias false positive fix** (`scripts/deadcode_engine.py`): Python type aliases (e.g., `URLTypes = Union[...]`, `HeaderTypes: TypeAlias = ...`) are no longer flagged as unused variables. Detection skips names ending in "Types"/"Type" when the RHS contains typing patterns, and skips `TypeAlias` annotations entirely.
+- **module_system now None for non-JS projects** (`scripts/framework_detect.py`): When no package.json is found, `module_system` is `None` instead of incorrectly defaulting to "cjs". This fixes Rust and Python projects showing misleading "cjs" module system.
+
+### Changed
+
+- **Version alignment**: Unified to 5.8.0 across `utils.py`, `skill.json`, and `pyproject.toml`.
+- **`has_go_backend` detection flag** (`scripts/framework_detect.py`): New flag added to `detect_frameworks()` output alongside existing `has_rust_backend`.
+
+### Test Target Documentation
+
+- **encode/httpx** (Python async HTTP client, 60 Python files, 1241 backend nodes, 3347 edges): Tested init, scan, detect, smell, dead-code, complexity, dataflow, env-check, handbook, ask. Found issues: type alias false positives (fixed), module_system incorrectly showing "cjs" (fixed), detect not recognizing httpx library (fixed).
+- **solidjs/solid** (SolidJS reactive framework, TS/JSX monorepo, 336 backend nodes): Tested init, scan, detect, entrypoints. Found issues: SolidJS not detected (fixed), module_system correctly shows "esm".
+- **actix/actix-web** (Rust async web framework, 312 Rust files, 3730 backend nodes, 20139 edges): Tested init, scan, detect, circular, refactor-safe, side-effect. Found issues: Cargo.lock scanned by refactor-safe (fixed), module_system incorrectly showing "cjs" (fixed).
+- **vuejs/pinia** (Vue state management, 36 Vue files, 111 TS files, 175 backend nodes): Tested init, scan, detect, api-map, secrets, css-deep, trace, incremental scan. All working correctly with vue_mode auto-enabled.
+
+### Added (from previous 5.8.0 release)
+
 - **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
 - **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.
 - **Monorepo-aware init config** (`scripts/framework_detect.py`): `get_recommended_config()` now generates correct `frontend_paths` and `backend_paths` for monorepo Tauri projects (e.g., `apps/readest-app/src/` for frontend, `apps/readest-app/src-tauri/src/` for backend).

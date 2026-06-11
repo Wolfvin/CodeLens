@@ -323,11 +323,26 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'self', 'cls', 'main', 'logger'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
-            # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
-            #     would be more accurate. Module-level constants are often imported
-            #     by other files — skipping avoids false positives.
-            #     TODO: Cross-file reference check for ALL_CAPS vars.
+            # Skip ALL_CAPS names — they are module-level constants often imported elsewhere
             if var_name.isupper():
+                continue
+
+            # Skip Python type aliases: names ending in "Types" or "Type" that are
+            # type alias definitions (e.g., URLTypes = ..., HeaderTypes = ...).
+            # These are used in type annotations, not as runtime variables.
+            line_text = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ''
+            if var_name.endswith('Types') or var_name.endswith('Type'):
+                # Check if RHS contains type-related patterns
+                rhs = line_text.split('=', 1)[1].strip() if '=' in line_text else ''
+                type_indicators = ['Union', 'Optional', 'List', 'Dict', 'Tuple', 'Set',
+                                   'Callable', 'Type', 'Sequence', 'Mapping', 'Iterable',
+                                   'AsyncIterator', 'Iterator', 'Any', 'Protocol',
+                                   'typing.', 'Annotated']
+                if any(ind in rhs for ind in type_indicators):
+                    continue
+
+            # Skip TypeAlias annotations: e.g., URLTypes: TypeAlias = ...
+            if ': TypeAlias' in line_text or ': typealias' in line_text.lower():
                 continue
 
             usage_pattern = r'\b' + re.escape(var_name) + r'\b'
