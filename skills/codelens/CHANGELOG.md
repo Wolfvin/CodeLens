@@ -5,6 +5,21 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.2] — 2026-06-12
+
+### Added
+
+- **Enhanced Tauri binary analysis** (`scripts/utils.py`): `scan_binary_artifacts()` now extracts PE/ELF/Mach-O/WASM header metadata (platform, architecture, sections count) from binary files. Detects Tauri and Electron framework signatures by scanning binary strings. Classifies artifacts by type (executable, shared_library, installer, etc.) with `artifacts_by_type` summary. Adds `size_human` for human-readable file sizes.
+- **Comprehensive Tauri project analysis** (`scripts/utils.py`): `scan_tauri_artifacts()` significantly enhanced with: full tauri.conf.json parsing (app identity with version and identifier, build configuration, external binaries), capabilities/permissions scanning with security category classification (filesystem, shell, http, window, notification, clipboard, global_shortcut), improved IPC command detection with snake_case → camelCase conversion and invoke() syntax generation, sidecar binary configuration extraction, updater security analysis (public key verification, endpoints), WebView security settings (CSP, dangerous flags), deep-link/custom protocol scheme detection, and a **security risk assessment** with categorized concerns and risk levels (low/medium/high).
+- **Binary header metadata extraction** (`scripts/utils.py`): New `_extract_binary_metadata()` parses PE (Windows), ELF (Linux), and Mach-O (macOS) binary headers to extract platform, architecture, and section information. Also handles WASM format detection.
+- **Binary framework detection** (`scripts/utils.py`): New `_detect_app_framework()` scans binary content for Tauri and Electron framework signatures.
+- **Permission classification** (`scripts/utils.py`): New `_classify_permissions()` categorizes Tauri capabilities into security-relevant categories for risk assessment.
+- **Security risk assessment** (`scripts/utils.py`): New `_compute_tauri_security_summary()` analyzes Tauri configuration for security concerns including shell access, filesystem permissions, CSP issues, updater security, and sidecar risks.
+
+### Test Target Documentation
+
+- **clash-verge-rev/clash-verge-rev** (GitHub): Used as a test target — a modern GUI proxy/VPN client built with Tauri v2 + React + Rust. 9.1k stars, multi-crate Rust backend (6 crates), sidecar binary management (verge-mihomo, verge-mihomo-alpha), system proxy integration. Test results: 82 IPC commands detected, 3 capability files with 90 total permissions, security risk HIGH (shell access, filesystem access, missing CSP), 2 sidecars detected, updater with public key, missing CSP flagged.
+
 ## [5.9.1] — 2026-06-12
 
 ### Fixed

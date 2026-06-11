@@ -3,6 +3,9 @@
 import os
 import json
 import logging
+import re
+import struct
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Set, Tuple
 
@@ -208,7 +211,7 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.2"
 
 # ─── Shared Limits ───────────────────────────────────────────
 
@@ -287,10 +290,13 @@ _TAURI_CONFIG_FILES = frozenset({
 
 
 def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
-    """Scan workspace for binary/compiled artifacts.
+    """Scan workspace for binary/compiled artifacts with RE analysis.
 
     Detects shared libraries, executables, WASM modules, and other
-    compiled files that should not be in source control.
+    compiled files. For each artifact, extracts:
+    - File size and type classification
+    - PE/Mach-O/ELF header info (platform, architecture)
+    - Whether it's likely a Tauri/Electron app based on binary signatures
 
     Args:
         workspace: Absolute path to workspace.
@@ -299,9 +305,10 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
         Dict with findings, stats, and recommendations.
     """
     workspace = os.path.abspath(workspace)
-    findings = []
+    artifacts = []
     total_size = 0
     electron_detected = False
+    artifacts_by_type: Dict[str, int] = {}
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -313,14 +320,38 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
             ext = os.path.splitext(fn)[1].lower()
             if ext in _BINARY_EXTENSIONS:
                 path = os.path.join(root, fn)
+                rel_path = os.path.relpath(path, workspace)
                 try:
                     size = os.path.getsize(path)
                     total_size += size
-                    findings.append({
-                        "file": os.path.relpath(path, workspace),
-                        "type": ext,
+
+                    # Classify artifact type
+                    artifact_type = _classify_binary(ext)
+                    artifacts_by_type[artifact_type] = artifacts_by_type.get(artifact_type, 0) + 1
+
+                    # Extract binary header metadata
+                    metadata = _extract_binary_metadata(path, ext)
+
+                    # Detect Tauri/Electron framework signatures
+                    app_framework = _detect_app_framework(path, ext, metadata)
+                    if app_framework == "electron":
+                        electron_detected = True
+
+                    artifact_info = {
+                        "file": rel_path,
+                        "type": artifact_type,
+                        "extension": ext,
                         "size_bytes": size,
-                    })
+                        "size_human": _human_readable_size(size),
+                        "platform": metadata.get("platform", "unknown"),
+                        "architecture": metadata.get("architecture", "unknown"),
+                        "app_framework": app_framework,
+                    }
+
+                    if metadata.get("sections"):
+                        artifact_info["sections_count"] = len(metadata["sections"])
+
+                    artifacts.append(artifact_info)
                 except OSError:
                     pass
 
@@ -331,22 +362,32 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
     return {
         "status": "ok",
         "workspace": workspace,
-        "binary_count": len(findings),
-        "total_binary_size_bytes": total_size,
-        "findings": findings[:100],  # Limit output
+        "total_artifacts": len(artifacts),
+        "total_size_bytes": total_size,
+        "total_size_human": _human_readable_size(total_size),
+        "artifacts_by_type": artifacts_by_type,
         "electron_detected": electron_detected,
+        "artifacts": artifacts[:200],
         "recommendation": (
             "Consider adding binary files to .gitignore to keep the repo clean."
-            if findings else "No binary artifacts found in source directories."
+            if artifacts else "No binary artifacts found in source directories."
         ),
     }
 
 
 def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
-    """Scan workspace for Tauri-specific configuration and artifacts.
+    """Scan workspace for Tauri-specific artifacts and configuration.
 
-    Detects Tauri project structure, IPC commands, capabilities,
-    and security configuration.
+    Detects and analyzes:
+    - tauri.conf.json configuration (app identity, window settings, security)
+    - Tauri capabilities/permissions (filesystem, shell, http, etc.)
+    - Tauri IPC command definitions (#[tauri::command] handlers)
+    - Sidecar binary configuration
+    - Updater configuration and security
+    - WebView security settings (CSP, asset protocol)
+    - Build configuration (targets, bundler settings)
+    - Deep-link/custom protocol schemes
+    - Security risk assessment
 
     Args:
         workspace: Absolute path to workspace.
@@ -356,19 +397,16 @@ def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
     """
     workspace = os.path.abspath(workspace)
 
-    # Check if this is a Tauri project
+    # Find all tauri config files
+    tauri_config_paths = []
     is_tauri = False
-    tauri_config_path = None
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for fn in filenames:
             if fn in _TAURI_CONFIG_FILES:
                 is_tauri = True
-                tauri_config_path = os.path.join(root, fn)
-                break
-        if is_tauri:
-            break
+                tauri_config_paths.append(os.path.join(root, fn))
 
     # Also check Cargo.toml for tauri dependency
     if not is_tauri:
@@ -386,55 +424,391 @@ def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
         return None
 
     result: Dict[str, Any] = {
-        "status": "ok",
         "is_tauri_project": True,
-        "tauri_config": None,
-        "ipc_commands": [],
+        "config_files": tauri_config_paths,
+        "app_identity": {},
         "capabilities": [],
+        "ipc_commands": [],
+        "sidecars": [],
+        "updater": {},
+        "webview_security": {},
+        "build_config": {},
+        "deep_links": [],
     }
 
-    # Parse tauri.conf.json if found
-    if tauri_config_path:
-        try:
-            with open(tauri_config_path, 'r', encoding='utf-8') as f:
-                import json as _json
-                config_data = _json.load(f)
-            result["tauri_config"] = {
-                "app_name": config_data.get("productName", config_data.get("name", "unknown")),
-                "window_count": len(config_data.get("app", {}).get("windows", [])),
-                "dev_url": config_data.get("build", {}).get("devUrl"),
-                "dist_dir": config_data.get("build", {}).get("distDir"),
-            }
-        except (IOError, ValueError):
-            pass
+    for conf_path in tauri_config_paths:
+        config_data = _parse_json_file(conf_path)
+        if config_data:
+            result["app_identity"] = _extract_tauri_identity(config_data)
+            result["build_config"] = _extract_tauri_build_config(config_data)
+            result["updater"] = _extract_tauri_updater(config_data)
+            result["webview_security"] = _extract_tauri_webview_security(config_data)
+            result["deep_links"] = _extract_tauri_deep_links(config_data)
+            result["sidecars"] = _extract_tauri_sidecars(config_data)
 
-    # Scan for #[tauri::command] in Rust files
-    ipc_commands = []
+    # Scan for capabilities
+    result["capabilities"] = _scan_tauri_capabilities(workspace)
+
+    # Scan for IPC command definitions in Rust source
+    result["ipc_commands"] = _scan_tauri_ipc_commands(workspace)
+
+    # Compute security summary
+    result["security_summary"] = _compute_tauri_security_summary(result)
+
+    return result
+
+
+# ─── Binary & Tauri Helper Functions ────────────────────────
+
+def _parse_json_file(path: str) -> Optional[Dict]:
+    """Parse a JSON file safely."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (IOError, json.JSONDecodeError):
+        return None
+
+
+def _classify_binary(ext: str) -> str:
+    """Classify a binary file by its extension."""
+    classification = {
+        '.exe': 'executable', '.dll': 'shared_library', '.so': 'shared_library',
+        '.dylib': 'shared_library', '.a': 'static_library', '.o': 'object_file',
+        '.obj': 'object_file', '.wasm': 'webassembly', '.pyc': 'python_compiled',
+        '.pyo': 'python_compiled', '.class': 'java_compiled', '.jar': 'java_archive',
+        '.war': 'java_archive', '.node': 'native_addon', '.efi': 'firmware',
+        '.app': 'application_bundle', '.dmg': 'installer', '.iso': 'disk_image',
+        '.msi': 'installer', '.nupkg': 'nuget_package', '.deb': 'package',
+        '.rpm': 'package', '.apk': 'android_package', '.aab': 'android_bundle',
+        '.bin': 'raw_binary',
+    }
+    return classification.get(ext, 'unknown_binary')
+
+
+def _extract_binary_metadata(file_path: str, ext: str) -> Dict[str, Any]:
+    """Extract metadata from binary file headers (PE, ELF, Mach-O, WASM)."""
+    metadata: Dict[str, Any] = {}
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(512)
+            if len(header) < 4:
+                return metadata
+
+            # PE format (Windows .exe, .dll)
+            if header[:2] == b'MZ':
+                metadata["platform"] = "windows"
+                metadata["format"] = "PE"
+                try:
+                    pe_offset = struct.unpack_from('<I', header, 0x3C)[0]
+                    if pe_offset < len(header) - 4 and header[pe_offset:pe_offset+4] == b'PE\x00\x00':
+                        machine = struct.unpack_from('<H', header, pe_offset + 4)[0]
+                        arch_map = {0x14c: "x86", 0x8664: "x86_64", 0xaa64: "arm64", 0x1c0: "arm"}
+                        metadata["architecture"] = arch_map.get(machine, f"unknown(0x{machine:x})")
+                        num_sections = struct.unpack_from('<H', header, pe_offset + 6)[0]
+                        metadata["sections"] = [{"index": i} for i in range(min(num_sections, 50))]
+                except (struct.error, IndexError):
+                    pass
+
+            # ELF format (Linux)
+            elif header[:4] == b'\x7fELF':
+                metadata["format"] = "ELF"
+                ei_class = header[4]
+                metadata["platform"] = "linux"
+                metadata["architecture"] = {1: "x86", 2: "x86_64"}.get(ei_class, "unknown")
+                if len(header) >= 20:
+                    e_machine = struct.unpack_from('<H', header, 18)[0]
+                    machine_map = {0x03: "x86", 0x3E: "x86_64", 0xB7: "arm64", 0x28: "arm", 0xF3: "riscv"}
+                    if e_machine in machine_map:
+                        metadata["architecture"] = machine_map[e_machine]
+
+            # Mach-O format (macOS)
+            elif header[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                                b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe'):
+                metadata["format"] = "Mach-O"
+                metadata["platform"] = "macos"
+                magic = struct.unpack_from('<I', header, 0)[0]
+                if magic in (0xfeedface, 0xcefaedfe):
+                    metadata["architecture"] = "x86"
+                elif magic in (0xfeedfacf, 0xcffaedfe):
+                    metadata["architecture"] = "x86_64"
+
+            # WASM
+            elif header[:4] == b'\x00asm':
+                metadata["format"] = "WASM"
+                metadata["platform"] = "web"
+                metadata["architecture"] = "wasm"
+
+    except (IOError, OSError):
+        pass
+    return metadata
+
+
+def _detect_app_framework(file_path: str, ext: str, metadata: Dict) -> Optional[str]:
+    """Detect if a binary is a Tauri or Electron application by scanning for signatures."""
+    if ext not in ('.exe', '.dll', '.so', '.dylib', '.app', '.bin'):
+        return None
+    try:
+        with open(file_path, 'rb') as f:
+            chunk_size = min(os.path.getsize(file_path), 2 * 1024 * 1024)
+            data = f.read(chunk_size)
+            text = data.decode('ascii', errors='ignore')
+            has_tauri = 'tauri' in text.lower()
+            has_webview2 = 'webview2' in text.lower() or 'WebView2' in text
+            has_electron = 'electron' in text.lower() or 'chrome.dll' in text.lower()
+            has_node = 'node.dll' in text.lower() or 'libnode' in text.lower()
+            if has_tauri:
+                return "tauri"
+            if has_electron or has_node:
+                return "electron"
+    except (IOError, OSError):
+        pass
+    return None
+
+
+def _human_readable_size(size_bytes: float) -> str:
+    """Convert bytes to human-readable size string."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def _extract_tauri_identity(conf: Dict) -> Dict[str, Any]:
+    """Extract app identity from Tauri configuration."""
+    return {
+        "name": conf.get("productName", conf.get("name", "unknown")),
+        "version": conf.get("version", "unknown"),
+        "identifier": conf.get("identifier", ""),
+    }
+
+
+def _extract_tauri_build_config(conf: Dict) -> Dict[str, Any]:
+    """Extract build configuration from Tauri configuration."""
+    build = conf.get("build", {})
+    bundle = conf.get("bundle", {})
+    return {
+        "dev_path": build.get("devPath", build.get("devUrl", "")),
+        "dist_dir": build.get("distDir", build.get("frontendDist", "")),
+        "before_dev_command": build.get("beforeDevCommand", ""),
+        "before_build_command": build.get("beforeBuildCommand", ""),
+        "targets": bundle.get("targets", []),
+        "external_bin": bundle.get("externalBin", []),
+    }
+
+
+def _extract_tauri_updater(conf: Dict) -> Dict[str, Any]:
+    """Extract updater configuration from Tauri configuration."""
+    updater = conf.get("updater", {})
+    if not updater:
+        plugins = conf.get("plugins", {})
+        updater = plugins.get("updater", {})
+    if not updater:
+        return {"enabled": False}
+    return {
+        "enabled": updater.get("active", updater.get("enabled", False)),
+        "endpoints": updater.get("endpoints", []),
+        "pubkey": bool(updater.get("pubkey", "")),
+    }
+
+
+def _extract_tauri_webview_security(conf: Dict) -> Dict[str, Any]:
+    """Extract WebView security settings from Tauri configuration."""
+    security = conf.get("security", {})
+    if not security:
+        app = conf.get("app", {})
+        security = app.get("security", {})
+    if not security:
+        tauri = conf.get("tauri", {})
+        security = tauri.get("security", {})
+    return {
+        "csp": security.get("csp", None),
+        "dangerous_disable_asset_csp_modification": security.get(
+            "dangerousDisableAssetCspModification",
+            security.get("dangerous_disable_asset_csp_modification", False)
+        ),
+    }
+
+
+def _extract_tauri_deep_links(conf: Dict) -> List[Dict[str, Any]]:
+    """Extract deep-link/custom protocol schemes from Tauri configuration."""
+    deep_links = []
+    plugins = conf.get("plugins", {})
+    deep_link_config = plugins.get("deep-link", {})
+    if deep_link_config:
+        for scheme in deep_link_config.get("schemes", []):
+            deep_links.append({
+                "scheme": scheme if isinstance(scheme, str) else scheme.get("scheme", ""),
+                "source": "plugins.deep-link",
+            })
+    tauri = conf.get("tauri", {})
+    protocol = tauri.get("bundle", {}).get("protocol", {})
+    if protocol:
+        scheme = protocol.get("scheme", "")
+        if scheme:
+            deep_links.append({"scheme": scheme, "source": "tauri.bundle.protocol"})
+    return deep_links
+
+
+def _extract_tauri_sidecars(conf: Dict) -> List[Dict[str, Any]]:
+    """Extract sidecar binary configurations from Tauri configuration."""
+    sidecars = []
+    tauri = conf.get("tauri", {})
+    external_bin = tauri.get("bundle", {}).get("externalBin", conf.get("bundle", {}).get("externalBin", []))
+    for sb in external_bin:
+        if isinstance(sb, str):
+            sidecars.append({"name": sb, "source": "bundle.externalBin"})
+    return sidecars
+
+
+def _scan_tauri_capabilities(workspace: str) -> List[Dict[str, Any]]:
+    """Scan for Tauri capability/permission definitions."""
+    capabilities = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if os.path.basename(root) == 'capabilities':
+            for filename in filenames:
+                if filename.endswith('.json'):
+                    file_path = os.path.join(root, filename)
+                    cap_data = _parse_json_file(file_path)
+                    if cap_data:
+                        permissions = cap_data.get("permissions", [])
+                        capabilities.append({
+                            "file": os.path.relpath(file_path, workspace),
+                            "identifier": cap_data.get("identifier", ""),
+                            "description": cap_data.get("description", ""),
+                            "windows": cap_data.get("windows", []),
+                            "permissions": permissions,
+                            "permission_count": len(permissions),
+                            "permission_categories": _classify_permissions(permissions),
+                        })
+    return capabilities
+
+
+def _classify_permissions(permissions: List) -> Dict[str, List[str]]:
+    """Classify Tauri permissions by security category."""
+    categories: Dict[str, List[str]] = {
+        "filesystem": [], "shell": [], "http": [], "window": [],
+        "notification": [], "clipboard": [], "global_shortcut": [], "other": [],
+    }
+    for perm in permissions:
+        if isinstance(perm, str):
+            perm_str = perm.lower()
+            if any(k in perm_str for k in ('fs', 'file', 'path', 'directory')):
+                categories["filesystem"].append(perm)
+            elif any(k in perm_str for k in ('shell', 'execute', 'process')):
+                categories["shell"].append(perm)
+            elif any(k in perm_str for k in ('http', 'request', 'fetch')):
+                categories["http"].append(perm)
+            elif any(k in perm_str for k in ('window', 'webview')):
+                categories["window"].append(perm)
+            elif 'notif' in perm_str:
+                categories["notification"].append(perm)
+            elif 'clip' in perm_str:
+                categories["clipboard"].append(perm)
+            elif any(k in perm_str for k in ('shortcut', 'global')):
+                categories["global_shortcut"].append(perm)
+            else:
+                categories["other"].append(perm)
+        elif isinstance(perm, dict):
+            categories["other"].append(perm.get("identifier", ""))
+    return {k: v for k, v in categories.items() if v}
+
+
+def _scan_tauri_ipc_commands(workspace: str) -> List[Dict[str, Any]]:
+    """Scan Rust source files for Tauri IPC command definitions."""
+    commands = []
+    tauri_cmd_pattern = re.compile(
+        r'#\[tauri::command\s*(?:\([^)]*\))?\s*\]'
+        r'(?:\s*#\[[^\]]*\])*'
+        r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)',
+        re.MULTILINE
+    )
+    invoke_handler_pattern = re.compile(
+        r'\.invoke_handler\s*\(\s*tauri::generate_handler\s*!\s*\[([^\]]+)\]',
+        re.DOTALL
+    )
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for fn in filenames:
             if not fn.endswith('.rs'):
                 continue
             path = os.path.join(root, fn)
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                # Find #[tauri::command] annotated functions
-                import re
-                for m in re.finditer(
-                    r'#\[tauri::command\]\s*(?:///.*\n\s*)*?\s*pub\s+(?:async\s+)?fn\s+(\w+)',
-                    content
-                ):
-                    ipc_commands.append({
-                        "name": m.group(1),
-                        "file": os.path.relpath(path, workspace),
-                    })
-            except IOError:
-                pass
+            content = safe_read_file(path)
+            if content is None:
+                continue
+            for m in tauri_cmd_pattern.finditer(content):
+                fn_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                parts = fn_name.split('_')
+                cmd_name = parts[0] + ''.join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else fn_name
+                commands.append({
+                    "rust_fn": fn_name,
+                    "ipc_command": cmd_name,
+                    "file": os.path.relpath(path, workspace),
+                    "line": line_num,
+                    "invoke_syntax": f"invoke('{cmd_name}')",
+                })
+            for m in invoke_handler_pattern.finditer(content):
+                for cmd_match in re.finditer(r'(\w+::)*(\w+)', m.group(1)):
+                    cmd_name = cmd_match.group(2)
+                    if cmd_name in ('tauri', 'generate_handler', 'Box', 'Fn'):
+                        continue
+                    if not any(c.get("rust_fn") == cmd_name for c in commands):
+                        parts = cmd_name.split('_')
+                        ipc_name = parts[0] + ''.join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else cmd_name
+                        commands.append({
+                            "rust_fn": cmd_name,
+                            "ipc_command": ipc_name,
+                            "file": os.path.relpath(path, workspace),
+                            "line": content[:m.start()].count('\n') + 1,
+                            "invoke_syntax": f"invoke('{ipc_name}')",
+                            "registered_in": "generate_handler!",
+                        })
+    return commands
 
-    result["ipc_commands"] = ipc_commands
 
-    return result
+def _compute_tauri_security_summary(analysis: Dict) -> Dict[str, Any]:
+    """Compute a security summary from Tauri analysis results."""
+    concerns: List[Dict[str, str]] = []
+    risk_level = "low"
+    for cap in analysis.get("capabilities", []):
+        categories = cap.get("permission_categories", {})
+        if categories.get("shell"):
+            concerns.append({
+                "category": "shell_access", "severity": "high",
+                "detail": f"Shell execution permission in {cap['file']}: {', '.join(categories['shell'][:5])}",
+            })
+            risk_level = "high"
+        if categories.get("filesystem"):
+            concerns.append({
+                "category": "filesystem_access", "severity": "medium",
+                "detail": f"Filesystem permission in {cap['file']}: {len(categories['filesystem'])} permissions",
+            })
+            if risk_level == "low":
+                risk_level = "medium"
+    webview = analysis.get("webview_security", {})
+    if webview.get("dangerous_disable_asset_csp_modification"):
+        concerns.append({"category": "csp_bypass", "severity": "high",
+                        "detail": "CSP modification is disabled — potential security risk"})
+        risk_level = "high"
+    if not webview.get("csp"):
+        concerns.append({"category": "missing_csp", "severity": "medium",
+                        "detail": "No Content Security Policy (CSP) configured"})
+        if risk_level == "low":
+            risk_level = "medium"
+    updater = analysis.get("updater", {})
+    if updater.get("enabled") and not updater.get("pubkey"):
+        concerns.append({"category": "insecure_updater", "severity": "high",
+                        "detail": "Updater is enabled without public key — susceptible to MITM attacks"})
+        risk_level = "high"
+    sidecars = analysis.get("sidecars", [])
+    if sidecars:
+        concerns.append({"category": "sidecar_binaries", "severity": "medium",
+                        "detail": f"{len(sidecars)} sidecar binary(ies) bundled — verify their security"})
+        if risk_level == "low":
+            risk_level = "medium"
+    return {"risk_level": risk_level, "concern_count": len(concerns), "concerns": concerns}
 
 
 # ─── File Cache (Single-Pass Workspace Scanner) ──────────────
