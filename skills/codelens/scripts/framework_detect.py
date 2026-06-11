@@ -107,6 +107,17 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    # Desktop app frameworks
+    "tauri": {
+        "packages": ["@tauri-apps/api", "@tauri-apps/cli"],
+        "config_files": ["tauri.conf.json", "Tauri.toml"],
+        "indicators": ["src-tauri"]
+    },
+    "electron": {
+        "packages": ["electron"],
+        "config_files": ["electron-builder.yml", "electron-builder.json"],
+        "indicators": ["main.js", "BrowserWindow"]
     }
 }
 
@@ -156,6 +167,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_tauri": False,
+        "has_electron": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -198,6 +211,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "tauri":
+                        detected["has_tauri"] = True
+                    elif fw_name == "electron":
+                        detected["has_electron"] = True
                     break
 
         # Detect CSS preprocessor
@@ -301,7 +318,43 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 4. Check file patterns (for Vue, Svelte)
+    # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
+    if not detected["has_tauri"]:
+        tauri_markers = ['tauri.conf.json', 'Tauri.toml']
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            for f in files:
+                if f in tauri_markers:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+            if detected["has_tauri"]:
+                break
+
+        # Also check for src-tauri directory
+        if not detected["has_tauri"]:
+            for root, dirs, files in os.walk(workspace):
+                skip = False
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
+                        skip = True
+                        break
+                if skip or '.codelens' in root:
+                    continue
+                if 'src-tauri' in dirs:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+
+    # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -322,7 +375,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
 
-    # 5. Detect Tailwind from CSS content
+    # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
@@ -397,6 +450,23 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # Tauri: add Rust backend paths and src-tauri
+    if fw.get("has_tauri"):
+        config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
+        config["frontend_paths"].append("src/")
+        # Find and add app-specific src-tauri paths
+        for app_dir in ('apps', 'packages'):
+            app_path = os.path.join(workspace, app_dir)
+            if os.path.isdir(app_path):
+                try:
+                    for entry in os.listdir(app_path):
+                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        if os.path.isdir(tauri_src):
+                            rel = os.path.relpath(tauri_src, workspace)
+                            config["backend_paths"].append(rel + "/")
+                except OSError:
+                    pass
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

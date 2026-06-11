@@ -635,7 +635,9 @@ def _extract_nextjs_routes(
     # pages/api/* pattern
     if 'pages/api/' in rel_path or 'pages\\api\\' in rel_path:
         # Convert file path to API route
-        api_path = re.sub(r'^pages[/\\]api', '/api', rel_path)
+        # In monorepos, the path might be "apps/readest-app/src/pages/api/..."
+        # We need to find "pages/api" anywhere in the path, not just at the start
+        api_path = re.sub(r'^.*?pages[/\\]api', '/api', rel_path)
         api_path = re.sub(r'\.(js|ts|mjs|cjs)$', '', api_path)
         api_path = api_path.replace('\\', '/')
         # Handle [param] → :param

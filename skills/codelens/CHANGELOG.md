@@ -5,6 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] — 2026-06-12
+
+### Added
+
+- **Tauri framework detection**: Detects `tauri.conf.json`, `Tauri.toml`, `src-tauri/` directory, and `@tauri-apps/api`/`@tauri-apps/cli` packages. Handbook identity includes `tauri` label (e.g., `rust-js-tauri-monorepo`). Init config adds `src-tauri/src/` to backend paths.
+- **Electron framework detection**: Detects `electron` package and `electron-builder.yml/json` config files.
+- **Ask command Tauri/Electron routing**: "is this a tauri app?", "is this an electron app?", "what kind of app?" now correctly route to `detect` instead of `context`.
+- **Stop word filtering in ask symbol extraction**: Common English words (is, are, this, app, project, etc.) are no longer treated as symbol names when routing natural language queries.
+- **Substring matching in symbols search**: `symbols "epub"` now finds `parse_epub_metadata`, `extract_epub_cover_bytes`, etc. without requiring `--fuzzy` flag. Results sorted by exact match first, then by ref_count.
+
+### Fixed
+
+- **a11y_engine import error**: Removed unused `safe_read_file` import from `a11y_engine.py` that caused `ImportError` on startup.
+- **God object false positives in JS/TS**: Previous regex counted ALL `word(` patterns as class methods (10-30x inflation). Now uses brace-depth tracking to scope method counting to actual class bodies. `Class 'on' has 76 methods` and `Class 'is' has 158 methods` false positives eliminated.
+- **State map React component false positives**: Components using destructured props `const X = ({` and `forwardRef<T>()` patterns are now correctly skipped. Radix UI primitives (`DropdownMenu`, etc.) and component aliases filtered out. Module-level check prevents indented local variables from being classified as global state. Stores dropped from 129 → 44 on test project.
+- **Dead code flags config exports as dead**: Config files (`postcss.config.mjs`, `tailwind.config.ts`, `next.config.mjs`, etc.) and middleware files are now skipped. Common framework entry-point exports (`config`, `middleware`, `withPWA`, `defineConfig`) added to skip list.
+- **API map full path for pages/api in monorepos**: Routes like `/apps/readest-app/src/pages/api/kosync` are now correctly shortened to `/api/kosync` in monorepo projects.
+- **Ask routing for "is this a X app?" questions**: Previously matched "is" as a symbol name and routed to `context`. Now routes to `detect` correctly.
+
+### Tested
+
+- Test target: [Readest](https://github.com/readest/readest) — open-source ebook reader built with Tauri v2 + React + Next.js (monorepo with 1243 source files, 3709 backend nodes, 26111 edges).
+- All 8 bugs identified and fixed. Re-tested on same project after fixes with clean scan.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

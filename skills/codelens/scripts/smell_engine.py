@@ -754,28 +754,94 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
-        class_match = re.search(r'class\s+(\w+)', content)
+        # Count class methods WITH proper brace-depth scoping.
+        # Previous regex counted ALL word( patterns as methods, causing 10-30x inflation
+        # on files that use jQuery-style chains (on(...), is(...), names(...), etc.)
+        lines = content.split('\n')
+        _in_string = False
+        _brace_depth = 0
+        _class_info = []  # list of (class_name, start_depth, method_count)
+        _current_classes = []  # stack of active class scopes
 
-        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-            })
-        elif class_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                "suggestion": "Consider extracting some methods into a separate class."
-            })
+        for line in lines:
+            stripped = line.strip()
+            # Skip single-line comments
+            if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('/*'):
+                continue
+
+            # Detect class declarations
+            class_m = re.search(r'\bclass\s+(\w+)', line)
+            if class_m:
+                _current_classes.append({
+                    'name': class_m.group(1),
+                    'brace_depth_at_decl': _brace_depth,
+                    'method_count': 0
+                })
+
+            # Track brace depth
+            for ch in line:
+                if ch == '{':
+                    _brace_depth += 1
+                elif ch == '}':
+                    _brace_depth -= 1
+                    # Check if any class scope ended
+                    for cls in _current_classes:
+                        if _brace_depth <= cls['brace_depth_at_decl']:
+                            # Class scope ended — record if threshold met
+                            if cls['method_count'] >= GOD_CLASS_METHODS:
+                                _class_info.append(cls)
+                            _current_classes.remove(cls)
+                            break
+
+            # Count methods only inside class bodies
+            # A method is: optional modifiers + name + ( ... ) — but only within class scope
+            for cls in _current_classes:
+                # Method patterns:
+                #  - methodName(params) { ... }
+                #  - async methodName(params) { ... }
+                #  - private/public/protected methodName(params)
+                #  - get/set propertyName()
+                #  - static methodName()
+                #  - arrow: methodName = (params) => or methodName = async (params) =>
+                method_m = re.search(
+                    r'^\s*(?:async\s+)?(?:private\s+|public\s+|protected\s+|static\s+|readonly\s+)*'
+                    r'(?:get\s+|set\s+)?'
+                    r'(?:readonly\s+)?'
+                    r'([a-zA-Z_$][\w$]*)\s*(?:\([^)]*\)|=\s*(?:async\s+)?\([^)]*\)\s*=>)',
+                    line
+                )
+                if method_m:
+                    method_name = method_m.group(1)
+                    # Skip constructor and type-only declarations
+                    if method_name not in ('constructor', 'new', 'function', 'if', 'for', 'while', 'switch', 'catch', 'class', 'return', 'throw', 'typeof', 'void', 'delete'):
+                        cls['method_count'] += 1
+
+        # Also handle classes that extend to end of file (brace not closed before EOF)
+        for cls in _current_classes:
+            if cls['method_count'] >= GOD_CLASS_METHODS:
+                _class_info.append(cls)
+
+        for cls_info in _class_info:
+            method_count = cls_info['method_count']
+            class_name = cls_info['name']
+            if method_count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "critical",
+                    "message": f"Class '{class_name}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+                })
+            elif method_count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "warning",
+                    "message": f"Class '{class_name}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class."
+                })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping
