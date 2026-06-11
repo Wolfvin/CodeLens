@@ -82,7 +82,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["django"],
         "pip_packages": ["django"],
         "config_files": ["manage.py"],
-        "indicators": []
+        "indicators": ["django/__init__.py", "django/apps/", "django/conf/", "django/contrib/", "django/core/"]
     },
     "celery": {
         "packages": ["celery"],
@@ -108,20 +108,16 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
-    "wasm-bindgen": {
-        "packages": ["wasm-bindgen"],
-        "config_files": [],
-        "indicators": ["wasm-bindgen", "wasm_bindgen"]
+    # Desktop app frameworks
+    "tauri": {
+        "packages": ["@tauri-apps/api", "@tauri-apps/cli"],
+        "config_files": ["tauri.conf.json", "Tauri.toml"],
+        "indicators": ["src-tauri"]
     },
-    "wasm-pack": {
-        "packages": ["wasm-pack"],
-        "config_files": [],
-        "indicators": []
-    },
-    "emscripten": {
-        "packages": [],
-        "config_files": ["CMakeLists.txt"],
-        "indicators": ["emscripten", "EMSCRIPTEN"]
+    "electron": {
+        "packages": ["electron"],
+        "config_files": ["electron-builder.yml", "electron-builder.json"],
+        "indicators": ["main.js", "BrowserWindow"]
     }
 }
 
@@ -171,6 +167,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_tauri": False,
+        "has_electron": False,
+        "has_rust_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -213,6 +212,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "tauri":
+                        detected["has_tauri"] = True
+                    elif fw_name == "electron":
+                        detected["has_electron"] = True
                     break
 
         # Detect CSS preprocessor
@@ -316,32 +319,43 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # Check for wasm-bindgen in Cargo.toml
-    cargo_toml = os.path.join(workspace, "Cargo.toml")
-    if os.path.exists(cargo_toml):
-        try:
-            with open(cargo_toml, 'r', encoding='utf-8') as f:
-                cargo_content = f.read()
-            if 'wasm-bindgen' in cargo_content or 'wasm_bindgen' in cargo_content:
-                if "wasm-bindgen" not in detected["frameworks"]:
-                    detected["frameworks"].append("wasm-bindgen")
-        except (IOError, UnicodeDecodeError):
-            pass
-
-    # Check for .wasm files
-    for root, dirs, fnames in os.walk(workspace):
-        # Skip hidden and common ignore dirs
-        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.codelens', 'target', '__pycache__'}]
-        for fn in fnames:
-            if fn.endswith('.wasm'):
-                if "wasm-bindgen" not in detected["frameworks"]:
-                    detected["frameworks"].append("wasm-binary")
+    # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
+    if not detected["has_tauri"]:
+        tauri_markers = ['tauri.conf.json', 'Tauri.toml']
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            for f in files:
+                if f in tauri_markers:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+            if detected["has_tauri"]:
                 break
-        else:
-            continue
-        break
 
-    # 4. Check file patterns (for Vue, Svelte)
+        # Also check for src-tauri directory
+        if not detected["has_tauri"]:
+            for root, dirs, files in os.walk(workspace):
+                skip = False
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
+                        skip = True
+                        break
+                if skip or '.codelens' in root:
+                    continue
+                if 'src-tauri' in dirs:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+
+    # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -362,7 +376,43 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
 
-    # 5. Detect Tailwind from CSS content
+    # 5a. Detect Rust project (Cargo.toml presence)
+    # Any workspace with a Cargo.toml has a Rust backend/component
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip:
+            continue
+        if 'Cargo.toml' in files:
+            if not detected["has_rust_backend"]:
+                detected["has_rust_backend"] = True
+                # Add "rust" to frameworks if not already there
+                if "rust" not in detected["frameworks"]:
+                    detected["frameworks"].append("rust")
+            break  # One Cargo.toml is enough
+
+    # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
+    # Some frameworks have distinctive directory structures even when they're the
+    # framework source itself (not a project using the framework).
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for indicator in sig.get("indicators", []):
+            indicator_path = os.path.join(workspace, indicator)
+            if os.path.exists(indicator_path):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "django":
+                    detected["has_django"] = True
+                elif fw_name == "fastapi":
+                    detected["has_fastapi"] = True
+                elif fw_name == "flask":
+                    detected["has_flask"] = True
+                break
+
+    # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
@@ -437,6 +487,23 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # Tauri: add Rust backend paths and src-tauri
+    if fw.get("has_tauri"):
+        config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
+        config["frontend_paths"].append("src/")
+        # Find and add app-specific src-tauri paths
+        for app_dir in ('apps', 'packages'):
+            app_path = os.path.join(workspace, app_dir)
+            if os.path.isdir(app_path):
+                try:
+                    for entry in os.listdir(app_path):
+                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        if os.path.isdir(tauri_src):
+                            rel = os.path.relpath(tauri_src, workspace)
+                            config["backend_paths"].append(rel + "/")
+                except OSError:
+                    pass
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
