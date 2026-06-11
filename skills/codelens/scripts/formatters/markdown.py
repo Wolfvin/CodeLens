@@ -556,8 +556,19 @@ def _md_entrypoints(data: Dict, lines: list) -> None:
         label = ep.get("label", "")
         extra = ""
         if etype == "http_handler":
-            extra = f" `{ep.get('method', '')} {ep.get('path', '')}`"
-        lines.append(f"- [{etype}] `{file}:{line}` — {label}{extra}")
+            method = ep.get("method", "")
+            path = ep.get("path", "")
+            handler = ep.get("handler", "")
+            extra = f" **{method}** `{path}`"
+            if handler and handler not in ("anonymous", "unknown"):
+                extra += f" → {handler}"
+        elif etype == "module_export":
+            handler = ep.get("handler", "")
+            if handler and handler not in ("anonymous", "unknown"):
+                extra = f" ({handler})"
+        # Use bold type to prevent ANSI escape interpretation
+        # (e.g., [module_export] → [m is interpreted as ESC[m reset sequence)
+        lines.append(f"- **{etype}** `{file}:{line}` — {label}{extra}")
     lines.append("")
 
 

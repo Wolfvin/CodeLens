@@ -8,9 +8,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { validateWorkspace } from '@/lib/constants'
+import { commandRateLimiter, scanRateLimiter, getClientIp } from '@/lib/rateLimiter'
+import { scanCache } from '@/lib/scanCache'
 
 export async function POST(request: NextRequest) {
   try {
+    // ─── Rate limiting ───────────────────────────────────
+    const clientIp = getClientIp(request)
+    const rateResult = commandRateLimiter.check(clientIp)
+    if (!rateResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded', retryAfterMs: rateResult.retryAfterMs },
+        { status: 429 }
+      )
+    }
+
     const body = await request.json()
     const { command, args, workspace } = body
 
@@ -29,11 +41,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate workspace path to prevent directory traversal
-    try {
-      validateWorkspace(workspace)
-    } catch (err: any) {
+    const validation = validateWorkspace(workspace)
+    if (!validation.valid) {
       return NextResponse.json(
-        { error: err.message },
+        { error: validation.error },
         { status: 400 }
       )
     }
@@ -52,8 +63,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Additional rate limit for expensive scan command
+    if (command === 'scan') {
+      const scanRateResult = scanRateLimiter.check(clientIp)
+      if (!scanRateResult.allowed) {
+        return NextResponse.json(
+          { error: 'Scan rate limit exceeded', retryAfterMs: scanRateResult.retryAfterMs },
+          { status: 429 }
+        )
+      }
+    }
+
     // Execute the command via CLI
-    const rawOutput = await commandRunner.execute(command, [...commandArgs, workspace])
+    const rawOutput = await commandRunner.execute(command, [...commandArgs, validation.resolved])
 
     // Check for CLI errors
     if (rawOutput.status === 'error') {
@@ -65,6 +87,11 @@ export async function POST(request: NextRequest) {
 
     // Normalize the output into a GraphEvent
     const graphEvent = normalizer.normalize(command, rawOutput)
+
+    // Invalidate scan cache after scan command so subsequent graph/health requests use fresh data
+    if (command === 'scan') {
+      scanCache.invalidate(validation.resolved)
+    }
 
     return NextResponse.json(graphEvent)
   } catch (err: any) {

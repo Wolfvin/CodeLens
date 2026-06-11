@@ -105,6 +105,76 @@ interface AnalysisState {
   loadDemoData: () => void
 }
 
+// ---- Data-Driven Command → State Mapping ----
+// Replaces the large switch statement with a declarative map.
+// Each entry maps a CLI command to the state category and field name.
+// Special commands (scan, init, detect, watch, handbook, ask, validate)
+// are handled separately with custom logic.
+
+interface CommandMapping {
+  category: keyof Pick<AnalysisState, 'securityResults' | 'qualityResults' | 'performanceResults' | 'cssResults' | 'p1Results' | 'p2p3Results' | 'refactoringResults'>
+  field: string
+}
+
+const COMMAND_TO_STATE: Record<string, CommandMapping> = {
+  // Security
+  secrets: { category: 'securityResults', field: 'secrets' },
+  'vuln-scan': { category: 'securityResults', field: 'vulnerabilities' },
+  dataflow: { category: 'securityResults', field: 'dataflow' },
+  'env-check': { category: 'securityResults', field: 'envCheck' },
+  'regex-audit': { category: 'securityResults', field: 'regexAudit' },
+  // Quality
+  smell: { category: 'qualityResults', field: 'smells' },
+  complexity: { category: 'qualityResults', field: 'complexity' },
+  'debug-leak': { category: 'qualityResults', field: 'debugLeaks' },
+  'dead-code': { category: 'qualityResults', field: 'deadCode' },
+  a11y: { category: 'qualityResults', field: 'a11y' },
+  // Performance
+  'perf-hint': { category: 'performanceResults', field: 'perfHints' },
+  circular: { category: 'performanceResults', field: 'circular' },
+  // CSS
+  'css-deep': { category: 'cssResults', field: 'cssDeep' },
+  'missing-refs': { category: 'cssResults', field: 'missingRefs' },
+  // P1: Search & Trace
+  search: { category: 'p1Results', field: 'search' },
+  symbols: { category: 'p1Results', field: 'symbols' },
+  trace: { category: 'p1Results', field: 'trace' },
+  impact: { category: 'p1Results', field: 'impact' },
+  dependents: { category: 'p1Results', field: 'dependents' },
+  'stack-trace': { category: 'p1Results', field: 'stackTrace' },
+  query: { category: 'p1Results', field: 'query' },
+  list: { category: 'p1Results', field: 'list' },
+  // P2/P3: Outline & Analysis
+  outline: { category: 'p2p3Results', field: 'outline' },
+  diff: { category: 'p2p3Results', field: 'diff' },
+  context: { category: 'p2p3Results', field: 'context' },
+  'test-map': { category: 'p2p3Results', field: 'testMap' },
+  'config-drift': { category: 'p2p3Results', field: 'configDrift' },
+  'type-infer': { category: 'p2p3Results', field: 'typeInfer' },
+  ownership: { category: 'p2p3Results', field: 'ownership' },
+  entrypoints: { category: 'p2p3Results', field: 'entrypoints' },
+  'api-map': { category: 'p2p3Results', field: 'apiMap' },
+  'state-map': { category: 'p2p3Results', field: 'stateMap' },
+  // Refactoring
+  'refactor-safe': { category: 'refactoringResults', field: 'refactorSafe' },
+  'side-effect': { category: 'refactoringResults', field: 'sideEffect' },
+}
+
+/**
+ * Apply a command result to the appropriate state category using the data-driven mapping.
+ * Returns a partial state update object, or null if the command has no mapped state field.
+ */
+function applyCommandToState(command: string, data: unknown, currentState: AnalysisState): Partial<AnalysisState> | null {
+  const mapping = COMMAND_TO_STATE[command]
+  if (!mapping) return null
+
+  const resultData = (data as Record<string, unknown>)?.raw ?? data
+  const category = currentState[mapping.category] as Record<string, unknown>
+  return {
+    [mapping.category]: { ...category, [mapping.field]: resultData },
+  } as Partial<AnalysisState>
+}
+
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Workspace
   workspace: '',
@@ -177,120 +247,17 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         content: data,
       }
 
-      // Update specific analysis result based on command
+      // Update specific analysis result based on command (data-driven)
       const updates: Partial<AnalysisState> = {}
 
+      // Use data-driven mapping for standard commands
+      const mappedUpdate = applyCommandToState(command, data, get())
+      if (mappedUpdate) {
+        Object.assign(updates, mappedUpdate)
+      }
+
+      // Handle special commands with custom logic
       switch (command) {
-        // Security
-        case 'secrets':
-          updates.securityResults = { ...get().securityResults, secrets: data.raw ?? data }
-          break
-        case 'vuln-scan':
-          updates.securityResults = { ...get().securityResults, vulnerabilities: data.raw ?? data }
-          break
-        case 'dataflow':
-          updates.securityResults = { ...get().securityResults, dataflow: data.raw ?? data }
-          break
-        case 'env-check':
-          updates.securityResults = { ...get().securityResults, envCheck: data.raw ?? data }
-          break
-        case 'regex-audit':
-          updates.securityResults = { ...get().securityResults, regexAudit: data.raw ?? data }
-          break
-        // Quality
-        case 'smell':
-          updates.qualityResults = { ...get().qualityResults, smells: data.raw ?? data }
-          break
-        case 'complexity':
-          updates.qualityResults = { ...get().qualityResults, complexity: data.raw ?? data }
-          break
-        case 'debug-leak':
-          updates.qualityResults = { ...get().qualityResults, debugLeaks: data.raw ?? data }
-          break
-        case 'dead-code':
-          updates.qualityResults = { ...get().qualityResults, deadCode: data.raw ?? data }
-          break
-        case 'a11y':
-          updates.qualityResults = { ...get().qualityResults, a11y: data.raw ?? data }
-          break
-        // Performance
-        case 'perf-hint':
-          updates.performanceResults = { ...get().performanceResults, perfHints: data.raw ?? data }
-          break
-        case 'circular':
-          updates.performanceResults = { ...get().performanceResults, circular: data.raw ?? data }
-          break
-        // CSS
-        case 'css-deep':
-          updates.cssResults = { ...get().cssResults, cssDeep: data.raw ?? data }
-          break
-        case 'missing-refs':
-          updates.cssResults = { ...get().cssResults, missingRefs: data.raw ?? data }
-          break
-        // P1: Search & Trace
-        case 'search':
-          updates.p1Results = { ...get().p1Results, search: data.raw ?? data }
-          break
-        case 'symbols':
-          updates.p1Results = { ...get().p1Results, symbols: data.raw ?? data }
-          break
-        case 'trace':
-          updates.p1Results = { ...get().p1Results, trace: data.raw ?? data }
-          break
-        case 'impact':
-          updates.p1Results = { ...get().p1Results, impact: data.raw ?? data }
-          break
-        case 'dependents':
-          updates.p1Results = { ...get().p1Results, dependents: data.raw ?? data }
-          break
-        case 'stack-trace':
-          updates.p1Results = { ...get().p1Results, stackTrace: data.raw ?? data }
-          break
-        case 'query':
-          updates.p1Results = { ...get().p1Results, query: data.raw ?? data }
-          break
-        case 'list':
-          updates.p1Results = { ...get().p1Results, list: data.raw ?? data }
-          break
-        // P2/P3: Outline & Analysis
-        case 'outline':
-          updates.p2p3Results = { ...get().p2p3Results, outline: data.raw ?? data }
-          break
-        case 'diff':
-          updates.p2p3Results = { ...get().p2p3Results, diff: data.raw ?? data }
-          break
-        case 'context':
-          updates.p2p3Results = { ...get().p2p3Results, context: data.raw ?? data }
-          break
-        case 'test-map':
-          updates.p2p3Results = { ...get().p2p3Results, testMap: data.raw ?? data }
-          break
-        case 'config-drift':
-          updates.p2p3Results = { ...get().p2p3Results, configDrift: data.raw ?? data }
-          break
-        case 'type-infer':
-          updates.p2p3Results = { ...get().p2p3Results, typeInfer: data.raw ?? data }
-          break
-        case 'ownership':
-          updates.p2p3Results = { ...get().p2p3Results, ownership: data.raw ?? data }
-          break
-        case 'entrypoints':
-          updates.p2p3Results = { ...get().p2p3Results, entrypoints: data.raw ?? data }
-          break
-        case 'api-map':
-          updates.p2p3Results = { ...get().p2p3Results, apiMap: data.raw ?? data }
-          break
-        case 'state-map':
-          updates.p2p3Results = { ...get().p2p3Results, stateMap: data.raw ?? data }
-          break
-        // Refactoring
-        case 'refactor-safe':
-          updates.refactoringResults = { ...get().refactoringResults, refactorSafe: data.raw ?? data }
-          break
-        case 'side-effect':
-          updates.refactoringResults = { ...get().refactoringResults, sideEffect: data.raw ?? data }
-          break
-        // Core
         case 'scan':
           updates.lastScanTime = Date.now()
           updates.isScanning = false
@@ -299,26 +266,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           updates.lastScanTime = Date.now()
           if (data?.config) updates.frameworks = data.config.frameworks ?? get().frameworks
           break
-        case 'validate':
-          // Validation results go to result panel
-          break
         case 'detect':
           if (data?.frameworks) updates.frameworks = data.frameworks
-          // Detect result is shown as a result tab (already handled above)
           break
-        // Watch
         case 'watch':
-          // Watch mode is handled via WebSocket, not REST API
-          // Just toggle the local flag for UI state
           updates.isWatchMode = !get().isWatchMode
           break
-        // Handbook & Ask
-        case 'handbook':
-          // Handbook results go to result panel
-          break
-        case 'ask':
-          // Ask results go to result panel
-          break
+        // validate, handbook, ask — results go to result panel only
       }
 
       set(state => ({

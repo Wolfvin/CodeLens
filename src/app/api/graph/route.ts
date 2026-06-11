@@ -11,10 +11,21 @@ import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
 import { scanCache } from '@/lib/scanCache'
 import { validateWorkspace, MAX_GRAPH_NODES, STATUS_PRIORITY } from '@/lib/constants'
+import { scanRateLimiter, getClientIp } from '@/lib/rateLimiter'
 import { GraphNode, GraphEdge, Cluster } from '@/types/neural'
 
 export async function GET(request: NextRequest) {
   try {
+    // ─── Rate limiting ───────────────────────────────────
+    const clientIp = getClientIp(request)
+    const rateResult = scanRateLimiter.check(clientIp)
+    if (!rateResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded', retryAfterMs: rateResult.retryAfterMs },
+        { status: 429 }
+      )
+    }
+
     const { searchParams } = new URL(request.url)
     const workspace = searchParams.get('workspace')
 
@@ -26,17 +37,18 @@ export async function GET(request: NextRequest) {
     }
 
     // Validate workspace path to prevent directory traversal
-    try {
-      validateWorkspace(workspace)
-    } catch (err: any) {
+    const validation = validateWorkspace(workspace)
+    if (!validation.valid) {
       return NextResponse.json(
-        { error: err.message },
+        { error: validation.error },
         { status: 400 }
       )
     }
 
+    const resolvedWorkspace = validation.resolved
+
     // Check scan cache first to avoid re-running the CLI
-    const cached = scanCache.getScan(workspace)
+    const cached = scanCache.getScan(resolvedWorkspace)
 
     let finalNodes: GraphNode[]
     let selectedEdges: GraphEdge[]
@@ -49,7 +61,7 @@ export async function GET(request: NextRequest) {
       clusters = cached.clusters
     } else {
       // Run the scan command to build the registry and get all data
-      const scanOutput = await commandRunner.scan(workspace)
+      const scanOutput = await commandRunner.scan(resolvedWorkspace)
 
       // Check for CLI errors
       if (scanOutput.status === 'error') {
@@ -102,7 +114,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Store in cache for subsequent requests
-      scanCache.setScan(workspace, finalNodes, selectedEdges, clusters)
+      scanCache.setScan(resolvedWorkspace, finalNodes, selectedEdges, clusters)
     }
 
     // Compute health score (inspired by Axon/Emerge)
