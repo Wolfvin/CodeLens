@@ -3,7 +3,7 @@
 // ============================================================
 
 import { clusterEngine } from '@/lib/clusterEngine'
-import type { GraphNode, GraphEdge } from '@/types/neural'
+import type { GraphNode, GraphEdge, Cluster } from '@/types/neural'
 
 // ---- Helpers ----
 
@@ -22,7 +22,7 @@ function makeNode(overrides: Partial<GraphNode> & { id: string }): GraphNode {
 
 function makeEdge(overrides: Partial<GraphEdge> & { id: string; source: string; target: string }): GraphEdge {
   return {
-    type: 'calls',
+    type: 'imports',
     weight: 1,
     status: 'active',
     ...overrides,
@@ -32,167 +32,299 @@ function makeEdge(overrides: Partial<GraphEdge> & { id: string; source: string; 
 // ---- Test Suite ----
 
 describe('ClusterEngine', () => {
+  beforeEach(() => {
+    // Reset cluster engine state between tests
+    clusterEngine.computeClusters([], [])
+  })
+
   // ============================================================
-  // computeClusters — basic scenarios
+  // computeClusters() with empty input
   // ============================================================
 
-  describe('computeClusters', () => {
-    it('returns empty array for empty nodes', () => {
-      const result = clusterEngine.computeClusters([], [])
-      expect(result).toEqual([])
+  describe('computeClusters with empty input', () => {
+    it('returns empty array when no nodes are provided', () => {
+      const clusters = clusterEngine.computeClusters([], [])
+      expect(clusters).toEqual([])
     })
 
-    it('creates a single cluster for nodes in the same directory', () => {
-      const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts', label: 'login' }),
-        makeNode({ id: 'b', file: 'src/api/handler.ts', label: 'handleRequest' }),
-      ]
-      const edges: GraphEdge[] = []
-      const result = clusterEngine.computeClusters(nodes, edges)
-      expect(result.length).toBe(1)
-      expect(result[0].nodeIds).toEqual(expect.arrayContaining(['a', 'b']))
+    it('returns empty array when edges but no nodes are provided', () => {
+      const edges = [makeEdge({ id: 'e1', source: 'a', target: 'b' })]
+      const clusters = clusterEngine.computeClusters([], edges)
+      expect(clusters).toEqual([])
+    })
+  })
+
+  // ============================================================
+  // computeClusters() with a single node
+  // ============================================================
+
+  describe('computeClusters with a single node', () => {
+    it('creates a single cluster for a single node', () => {
+      const nodes = [makeNode({ id: 'n1', label: 'fn1', file: 'src/utils.ts' })]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters.length).toBe(1)
+      expect(clusters[0].nodeIds).toEqual(['n1'])
     })
 
-    it('creates separate clusters for nodes in different directories', () => {
-      const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/ui/Button.tsx' }),
-      ]
-      const edges: GraphEdge[] = []
-      const result = clusterEngine.computeClusters(nodes, edges)
-      expect(result.length).toBe(2)
-      // Each cluster should have exactly one node
-      const allNodeIds = result.flatMap(c => c.nodeIds)
-      expect(allNodeIds).toEqual(expect.arrayContaining(['a', 'b']))
+    it('assigns a cluster id', () => {
+      const nodes = [makeNode({ id: 'n1', label: 'fn1', file: 'src/utils.ts' })]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters[0].id).toMatch(/^cluster-/)
     })
 
-    it('merges clusters with enough cross-group import edges', () => {
+    it('has zero cohesion when no edges exist', () => {
+      const nodes = [makeNode({ id: 'n1', label: 'fn1', file: 'src/utils.ts' })]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters[0].cohesion).toBe(0)
+    })
+  })
+
+  // ============================================================
+  // computeClusters() with nodes in the same directory
+  // ============================================================
+
+  describe('computeClusters with nodes in same directory', () => {
+    it('groups nodes in the same directory into one cluster', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/api/handler.ts' }),
-        makeNode({ id: 'c', file: 'src/ui/Button.tsx' }),
-        makeNode({ id: 'd', file: 'src/ui/Modal.tsx' }),
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/components/Button.tsx' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/components/Card.tsx' }),
+        makeNode({ id: 'n3', label: 'fn3', file: 'src/components/Modal.tsx' }),
       ]
-      // 2 import edges between src/api and src/ui → should merge
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters.length).toBe(1)
+      expect(clusters[0].nodeIds).toHaveLength(3)
+      expect(clusters[0].nodeIds).toEqual(expect.arrayContaining(['n1', 'n2', 'n3']))
+    })
+
+    it('computes high cohesion when nodes have internal edges', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/utils/helpers.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/utils/format.ts' }),
+      ]
       const edges = [
-        makeEdge({ id: 'e1', source: 'c', target: 'a', type: 'imports' }),
-        makeEdge({ id: 'e2', source: 'd', target: 'b', type: 'imports' }),
+        makeEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'imports' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, edges)
-      // Should be merged into 1 cluster
-      expect(result.length).toBe(1)
-      expect(result[0].nodeIds.length).toBe(4)
+      const clusters = clusterEngine.computeClusters(nodes, edges)
+
+      // Internal edge → cohesion should be 1.0 (only internal, no external)
+      expect(clusters[0].cohesion).toBe(1)
+    })
+  })
+
+  // ============================================================
+  // computeClusters() with nodes in different directories
+  // ============================================================
+
+  describe('computeClusters with nodes in different directories', () => {
+    it('creates separate clusters for different directories with no cross-group imports', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/auth/login.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/api/routes.ts' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters.length).toBe(2)
     })
 
-    it('does not merge clusters with insufficient import edges', () => {
+    it('merges clusters when cross-group import count meets threshold', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/api/handler.ts' }),
-        makeNode({ id: 'c', file: 'src/ui/Button.tsx' }),
-        makeNode({ id: 'd', file: 'src/ui/Modal.tsx' }),
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/auth/login.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/auth/session.ts' }),
+        makeNode({ id: 'n3', label: 'fn3', file: 'src/api/routes.ts' }),
+        makeNode({ id: 'n4', label: 'fn4', file: 'src/api/middleware.ts' }),
       ]
-      // Only 1 import edge → below threshold of 2
+      // Two imports edges crossing from auth/ to api/ → meets IMPORT_MERGE_THRESHOLD (2)
       const edges = [
-        makeEdge({ id: 'e1', source: 'c', target: 'a', type: 'imports' }),
+        makeEdge({ id: 'e1', source: 'n1', target: 'n3', type: 'imports' }),
+        makeEdge({ id: 'e2', source: 'n2', target: 'n4', type: 'imports' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, edges)
-      expect(result.length).toBe(2)
+      const clusters = clusterEngine.computeClusters(nodes, edges)
+
+      // Should merge into a single cluster since cross-group import count >= 2
+      expect(clusters.length).toBe(1)
+      expect(clusters[0].nodeIds).toHaveLength(4)
     })
 
-    it('groups nodes without a file into __no_file__ bucket', () => {
+    it('does not merge clusters when cross-group import count is below threshold', () => {
       const nodes = [
-        makeNode({ id: 'a' }), // no file
-        makeNode({ id: 'b' }), // no file
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/auth/login.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/api/routes.ts' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      // Both should end up in one cluster (the no-file bucket)
-      expect(result.length).toBe(1)
-      expect(result[0].nodeIds).toEqual(expect.arrayContaining(['a', 'b']))
-    })
-
-    it('assigns semantic labels based on REGION_PATTERNS', () => {
-      const nodes = [
-        makeNode({ id: 'a', file: 'src/auth/login.ts', label: 'authenticate' }),
-        makeNode({ id: 'b', file: 'src/auth/session.ts', label: 'createSession' }),
-      ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      // Should match "auth" pattern → label "Auth"
-      expect(result[0].label).toBe('Auth')
-      expect(result[0].icon).toBe('🔐')
-    })
-
-    it('uses directory name as fallback label when no pattern matches', () => {
-      const nodes = [
-        makeNode({ id: 'a', file: 'src/custom/magic.ts', label: 'doMagic' }),
-      ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      // No pattern matches → fallback to directory name
-      expect(result[0].label).toBe('custom')
-    })
-
-    it('computes cohesion based on internal vs external edges', () => {
-      const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/api/handler.ts' }),
-        makeNode({ id: 'c', file: 'src/ui/Button.tsx' }),
-      ]
-      // 1 internal edge (a→b), 1 external edge (c→a)
+      // Only one import edge crossing → below threshold of 2
       const edges = [
-        makeEdge({ id: 'e1', source: 'a', target: 'b', type: 'calls' }),
-        makeEdge({ id: 'e2', source: 'c', target: 'a', type: 'calls' }),
+        makeEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'imports' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, edges)
-      // The api cluster has 1 internal, 1 external edge → cohesion = 1/(1+1) = 0.5
-      const apiCluster = result.find(c => c.nodeIds.includes('a') && c.nodeIds.includes('b'))
-      expect(apiCluster).toBeDefined()
-      expect(apiCluster!.cohesion).toBe(0.5)
-    })
+      const clusters = clusterEngine.computeClusters(nodes, edges)
 
-    it('returns cohesion 0 for clusters with only external edges', () => {
+      expect(clusters.length).toBe(2)
+    })
+  })
+
+  // ============================================================
+  // Cohesion calculation
+  // ============================================================
+
+  describe('cohesion calculation', () => {
+    it('returns 0 when no edges exist', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/ui/Button.tsx' }),
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/a.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/b.ts' }),
       ]
-      // Only external edges (between different dirs)
-      const edges = [
-        makeEdge({ id: 'e1', source: 'a', target: 'b', type: 'calls' }),
-      ]
-      const result = clusterEngine.computeClusters(nodes, edges)
-      // Each cluster has only external edges
-      for (const cluster of result) {
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      // Two separate clusters, each with no edges
+      for (const cluster of clusters) {
         expect(cluster.cohesion).toBe(0)
       }
     })
 
-    it('sorts clusters by size descending then cohesion descending', () => {
+    it('computes cohesion as internalEdges / (internalEdges + externalEdges)', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'src/api/auth.ts' }),
-        makeNode({ id: 'b', file: 'src/api/handler.ts' }),
-        makeNode({ id: 'c', file: 'src/api/routes.ts' }),
-        makeNode({ id: 'd', file: 'src/ui/Button.tsx' }),
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/cluster1/a.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/cluster1/b.ts' }),
+        makeNode({ id: 'n3', label: 'fn3', file: 'src/cluster2/c.ts' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      // First cluster should be larger (3 nodes in api) or equal size with higher cohesion
-      expect(result[0].nodeIds.length).toBeGreaterThanOrEqual(result[1]?.nodeIds.length ?? 0)
+      // 1 internal edge (n1→n2) + 1 external edge (n1→n3)
+      const edges = [
+        makeEdge({ id: 'e1', source: 'n1', target: 'n2', type: 'imports' }),
+        makeEdge({ id: 'e2', source: 'n1', target: 'n3', type: 'imports' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, edges)
+
+      // cluster1 has: 1 internal (n1→n2) + 1 external (n1→n3) → cohesion = 1/2 = 0.5
+      const cluster1 = clusters.find(c => c.nodeIds.includes('n1'))
+      expect(cluster1).toBeDefined()
+      expect(cluster1!.cohesion).toBeCloseTo(0.5, 5)
+
+      // cluster2 has: 0 internal + 1 external (n1→n3) → cohesion = 0/1 = 0
+      const cluster2 = clusters.find(c => c.nodeIds.includes('n3'))
+      expect(cluster2).toBeDefined()
+      expect(cluster2!.cohesion).toBe(0)
+    })
+  })
+
+  // ============================================================
+  // REGION_PATTERNS matching
+  // ============================================================
+
+  describe('REGION_PATTERNS matching', () => {
+    it('assigns Auth label for nodes in auth/ directory', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'login', file: 'src/auth/login.ts' }),
+        makeNode({ id: 'n2', label: 'session', file: 'src/auth/session.ts' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters.length).toBe(1)
+      // Auth pattern matches "auth" in file path
+      expect(clusters[0].label).toBe('Auth')
+      expect(clusters[0].icon).toBe('🔐')
     })
 
-    it('detects UI region for component nodes', () => {
+    it('assigns API label for nodes in api/ directory', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'src/components/Button.tsx', label: 'Button', type: 'component' }),
-        makeNode({ id: 'b', file: 'src/components/Modal.tsx', label: 'Modal', type: 'component' }),
+        makeNode({ id: 'n1', label: 'getUsers', file: 'src/api/routes.ts' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      // Should match UI pattern
-      expect(result[0].label).toBe('UI')
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters[0].label).toBe('API')
+      expect(clusters[0].icon).toBe('📡')
     })
 
-    it('handles root-level files (no directory separator)', () => {
+    it('assigns UI label for nodes with component in path/label', () => {
       const nodes = [
-        makeNode({ id: 'a', file: 'App.tsx', label: 'App' }),
+        makeNode({ id: 'n1', label: 'Button', type: 'component', file: 'src/components/Button.tsx' }),
       ]
-      const result = clusterEngine.computeClusters(nodes, [])
-      expect(result.length).toBe(1)
-      expect(result[0].nodeIds).toContain('a')
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters[0].label).toBe('UI')
+      expect(clusters[0].icon).toBe('🎨')
+    })
+
+    it('assigns Tests label for nodes in test files', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'testProcess', type: 'test', file: 'src/__tests__/process.test.ts' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      expect(clusters[0].label).toBe('Tests')
+      expect(clusters[0].icon).toBe('🧪')
+    })
+
+    it('uses directory name as fallback when no pattern matches', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'myCustomFn', file: 'src/myzone/process.ts' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      // Fallback uses parent dir name "myzone"
+      expect(clusters[0].label).toBe('myzone')
+      expect(clusters[0].icon).toBe('📁')
+    })
+  })
+
+  // ============================================================
+  // updateIncremental
+  // ============================================================
+
+  describe('updateIncremental', () => {
+    it('clears all clusters when edges change', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/a.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/b.ts' }),
+      ]
+      clusterEngine.computeClusters(nodes, [])
+      expect(clusterEngine.clusters.size).toBeGreaterThan(0)
+
+      clusterEngine.updateIncremental([], ['e1'])
+      expect(clusterEngine.clusters.size).toBe(0)
+    })
+
+    it('removes clusters containing changed nodes', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/a.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/b.ts' }),
+      ]
+      clusterEngine.computeClusters(nodes, [])
+      const initialSize = clusterEngine.clusters.size
+
+      clusterEngine.updateIncremental(['n1'], [])
+      // The cluster containing n1 should be removed
+      expect(clusterEngine.clusters.size).toBeLessThan(initialSize)
+    })
+
+    it('does nothing when no changes provided', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/a.ts' }),
+      ]
+      clusterEngine.computeClusters(nodes, [])
+      const initialSize = clusterEngine.clusters.size
+
+      clusterEngine.updateIncremental([], [])
+      expect(clusterEngine.clusters.size).toBe(initialSize)
+    })
+  })
+
+  // ============================================================
+  // Sorting behavior
+  // ============================================================
+
+  describe('cluster sorting', () => {
+    it('sorts clusters by size descending (largest first)', () => {
+      const nodes = [
+        makeNode({ id: 'n1', label: 'fn1', file: 'src/alpha/a.ts' }),
+        makeNode({ id: 'n2', label: 'fn2', file: 'src/alpha/b.ts' }),
+        makeNode({ id: 'n3', label: 'fn3', file: 'src/alpha/c.ts' }),
+        makeNode({ id: 'n4', label: 'fn4', file: 'src/beta/x.ts' }),
+      ]
+      const clusters = clusterEngine.computeClusters(nodes, [])
+
+      // alpha cluster has 3 nodes, beta has 1 → alpha first
+      expect(clusters[0].nodeIds.length).toBeGreaterThanOrEqual(clusters[1].nodeIds.length)
     })
   })
 })

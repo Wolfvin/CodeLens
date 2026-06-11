@@ -9,6 +9,7 @@ const config = {
         esModuleInterop: true,
         strict: true,
         noImplicitAny: false,
+        rootDir: '.',
         paths: {
           '@/*': ['./src/*'],
         },

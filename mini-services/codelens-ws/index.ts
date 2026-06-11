@@ -8,163 +8,56 @@
 // ============================================================
 
 import { createServer } from 'http'
+import path from 'path'
 import { Server } from 'socket.io'
 
-// ─── Types (mirrored from src/types/neural.ts) ──────────────
+// ─── Shared Types (imported from shared/ — single source of truth) ──────
 
-type NodeType =
-  | 'class' | 'id' | 'function' | 'component' | 'store'
-  | 'file' | 'package' | 'route' | 'env_var' | 'variable'
-  | 'secret' | 'vulnerability' | 'test' | 'import' | 'css_var' | 'keyframe'
+import type {
+  NodeType, NodeStatus, Domain, GraphNode, GraphEdge,
+  EdgeType, EdgeStatus, Cluster, GraphAnimation, GraphEvent,
+  NodeDetail, RiskLevel, AnimationType, AnimationIntensity,
+} from '../../shared/types'
+import { NEURAL_COLORS, REGION_PATTERNS } from '../../shared/types'
 
-type NodeStatus =
-  | 'active' | 'dead' | 'vulnerable' | 'critical'
-  | 'safe' | 'orphan' | 'warning' | 'duplicate_define' | 'collision'
-  | 'impure' | 'untested' | 'unused'
+// ─── Security: Command Whitelist & Argument Sanitization ────────────
+// NOTE: These constants are duplicated from src/lib/constants.ts because
+// the WebSocket server runs as a standalone Bun process and cannot import
+// from the Next.js app. Keep them in sync when updating.
 
-type Domain = 'frontend' | 'backend'
+// Command whitelist — same as main app's commandRunner
+const ALLOWED_COMMANDS = new Set([
+  'init', 'scan', 'query', 'list', 'search', 'symbols', 'trace', 'impact',
+  'dependents', 'outline', 'missing-refs', 'diff', 'circular', 'context',
+  'validate', 'detect', 'secrets', 'vuln-scan', 'dataflow', 'env-check',
+  'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
+  'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
+  'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
+  'state-map', 'regex-audit', 'handbook', 'ask',
+])
 
-interface GraphNode {
-  id: string
-  label: string
-  type: NodeType
-  domain: Domain
-  status: NodeStatus
-  file?: string
-  line?: number
-  clusterId?: string
-  x?: number
-  y?: number
-  vx?: number
-  vy?: number
-  fx?: number | null
-  fy?: number | null
-  radius: number
-  color: string
-  data: Record<string, unknown>
+// Forbidden workspace paths
+const FORBIDDEN_PATHS = ['/etc', '/root', '/proc', '/sys', '/dev', '/boot']
+
+const MAX_ARG_LENGTH = 4096
+
+function sanitizeArgs(args: string[]): string[] {
+  return args.map(arg => {
+    let cleaned = arg.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    if (cleaned.length > MAX_ARG_LENGTH) cleaned = cleaned.substring(0, MAX_ARG_LENGTH)
+    return cleaned
+  })
 }
 
-type EdgeType =
-  | 'references' | 'calls' | 'imports' | 'defines' | 'depends_on'
-  | 'routes_to' | 'reads' | 'writes' | 'contains' | 'extends' | 'implements'
-  | 'taints' | 'sanitizes' | 'tests' | 'imports_from'
-
-type EdgeStatus = 'active' | 'dead' | 'warning' | 'danger'
-
-interface GraphEdge {
-  id: string
-  source: string
-  target: string
-  type: EdgeType
-  weight: number
-  status: EdgeStatus
-}
-
-interface Cluster {
-  id: string
-  label: string
-  icon: string
-  tint: string
-  nodeIds: string[]
-  cohesion: number
-  cx?: number
-  cy?: number
-}
-
-type AnimationType = 'pulse' | 'flow' | 'ripple' | 'flash' | 'death' | 'alarm'
-type AnimationIntensity = 'low' | 'medium' | 'high' | 'critical'
-
-interface GraphAnimation {
-  type: AnimationType
-  targetNodeIds: string[]
-  direction?: 'up' | 'down' | 'both'
-  speed?: number
-  intensity?: AnimationIntensity
-}
-
-type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical'
-
-interface GraphEvent {
-  sourceCommand: string
-  timestamp: number
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  animation: GraphAnimation
-  metadata: {
-    riskLevel?: RiskLevel
-    category?: string
-    summary?: string
+function validateWorkspace(workspace: string): void {
+  if (!workspace) return
+  const resolved = path.resolve(workspace)
+  for (const prefix of FORBIDDEN_PATHS) {
+    if (resolved.startsWith(prefix)) {
+      throw new Error(`Workspace path '${resolved}' is not allowed.`)
+    }
   }
 }
-
-interface NodeDetail {
-  node: GraphNode
-  code?: string
-  callers?: Array<{ fn: string; file: string; line: number }>
-  callees?: Array<{ fn: string; file: string; line: number }>
-  references?: Array<{ file: string; line: number; source: string }>
-  definedIn?: Array<{ file: string; line: number }>
-  tests?: Array<{ file: string; line: number }>
-  sideEffects?: string[]
-  complexity?: number
-  coverage?: boolean
-  purity?: number
-  issues?: Array<{ category: string; severity: string; message: string }>
-}
-
-// ─── Color Palette ──────────────────────────────────────────
-
-const NEURAL_COLORS = {
-  class: '#f6ad55',
-  id: '#fc8181',
-  function: '#63b3ed',
-  component: '#b794f4',
-  store: '#fbd38d',
-  file: '#4fd1c5',
-  package: '#f687b3',
-  route: '#63b3ed',
-  env_var: '#fbd38d',
-  variable: '#68d391',
-  secret: '#e53e3e',
-  vulnerability: '#fc8181',
-  test: '#68d391',
-  import: '#63b3ed',
-  css_var: '#f687b3',
-  keyframe: '#b794f4',
-  active: '#48bb78',
-  dead: '#718096',
-  vulnerable: '#ecc94b',
-  critical: '#e53e3e',
-  warning: '#ed8936',
-  safe: '#48bb78',
-  orphan: '#a0aec0',
-  duplicate_define: '#ed8936',
-  collision: '#e53e3e',
-  impure: '#ed8936',
-  untested: '#ecc94b',
-  unused: '#718096',
-} as const
-
-// ─── Region Auto-Detect ─────────────────────────────────────
-
-const REGION_PATTERNS: Array<{
-  pattern: RegExp
-  icon: string
-  label: string
-  tint: string
-}> = [
-  { pattern: /(auth|login|security|passport|jwt|token|session)/i, icon: '🔐', label: 'Auth', tint: '#f6ad55' },
-  { pattern: /(component|ui|views|widget|modal|dialog|button|card|form|input|nav|header|footer|sidebar)/i, icon: '🎨', label: 'UI', tint: '#b794f4' },
-  { pattern: /(api|route|handler|controller|endpoint|middleware|express|fastify|koa)/i, icon: '📡', label: 'API', tint: '#63b3ed' },
-  { pattern: /(store|state|redux|zustand|mobX|recoil|slice|action|reducer|context)/i, icon: '💾', label: 'State', tint: '#fbd38d' },
-  { pattern: /(util|helper|lib|shared|common|tools)/i, icon: '🔧', label: 'Utils', tint: '#4fd1c5' },
-  { pattern: /(test|spec|__test__|mock|fixture)/i, icon: '🧪', label: 'Tests', tint: '#68d391' },
-  { pattern: /(style|css|theme|design|token|scss|sass|tailwind)/i, icon: '🎨', label: 'Styles', tint: '#f687b3' },
-  { pattern: /(config|setup|env|constant)/i, icon: '⚙️', label: 'Config', tint: '#a0aec0' },
-  { pattern: /(db|model|migration|schema|prisma|sequelize|typeorm|entity)/i, icon: '🗄️', label: 'Data', tint: '#ed8936' },
-  { pattern: /(hook|composable|use[A-Z])/i, icon: '🪝', label: 'Hooks', tint: '#38b2ac' },
-  { pattern: /(service|worker|job|queue|cron|task)/i, icon: '⚡', label: 'Services', tint: '#9f7aea' },
-]
 
 function detectCluster(label: string, file?: string): { clusterId: string; label: string; icon: string; tint: string } | null {
   const text = `${label} ${file || ''}`
@@ -861,8 +754,8 @@ function computeNodeDetail(nodeId: string): NodeDetail | null {
   const definedIn: Array<{ file: string; line: number }> = []
 
   for (const edge of graphEdges) {
-    const srcId = typeof edge.source === 'string' ? edge.source : (edge.source as GraphNode).id
-    const tgtId = typeof edge.target === 'string' ? edge.target : (edge.target as GraphNode).id
+    const srcId = edge.source
+    const tgtId = edge.target
 
     if (tgtId === nodeId && edge.type === 'calls') {
       const srcNode = graphNodes.find(n => n.id === srcId)
@@ -977,15 +870,13 @@ function updateGraphFromEvent(event: GraphEvent) {
 
   // Add/update edges (dedupe by source+target+type)
   for (const edge of event.edges) {
-    const srcId = typeof edge.source === 'string' ? edge.source : (edge.source as GraphNode).id
-    const tgtId = typeof edge.target === 'string' ? edge.target : (edge.target as GraphNode).id
-    const exists = graphEdges.some(e => {
-      const eSrc = typeof e.source === 'string' ? e.source : (e.source as GraphNode).id
-      const eTgt = typeof e.target === 'string' ? e.target : (e.target as GraphNode).id
-      return eSrc === srcId && eTgt === tgtId && e.type === edge.type
-    })
+    const srcId = edge.source
+    const tgtId = edge.target
+    const exists = graphEdges.some(e =>
+      e.source === srcId && e.target === tgtId && e.type === edge.type
+    )
     if (!exists) {
-      graphEdges.push({ ...edge, source: srcId, target: tgtId })
+      graphEdges.push(edge)
     }
   }
 }
@@ -1037,8 +928,36 @@ io.on('connection', (socket) => {
     }
     commandTimestamps.set(socket.id, Date.now())
 
+    // Security: command whitelist validation
+    if (!ALLOWED_COMMANDS.has(command)) {
+      socket.emit('command_result', {
+        command,
+        result: { success: false, error: `Command '${command}' is not recognized. Allowed commands: ${[...ALLOWED_COMMANDS].sort().join(', ')}` },
+      })
+      return
+    }
+
+    // Security: sanitize arguments — strip dangerous characters
+    const safeArgs = sanitizeArgs(args)
+
+    // Security: validate workspace paths in args
     try {
-      const result = await executeCodelens(command, args)
+      for (const arg of safeArgs) {
+        // Heuristic: if an arg looks like a path (starts with / or ./), validate it
+        if (arg.startsWith('/') || arg.startsWith('./')) {
+          validateWorkspace(arg)
+        }
+      }
+    } catch (validationErr: any) {
+      socket.emit('command_result', {
+        command,
+        result: { success: false, error: validationErr.message || String(validationErr) },
+      })
+      return
+    }
+
+    try {
+      const result = await executeCodelens(command, safeArgs)
 
       if (!result.success) {
         socket.emit('command_result', {

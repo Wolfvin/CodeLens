@@ -2,72 +2,101 @@
 // CodeLens Neural Workspace — Scan Result Cache
 // ============================================================
 //
-// Caches the result of `codelens scan` to avoid re-running the
-// CLI on every API request. The cache is invalidated after a
-// configurable TTL (default 30 seconds) or when the workspace
-// path changes.
-//
-// This dramatically reduces latency for repeated /api/graph and
-// /api/health calls during active dashboard use.
+// Caches the result of CLI scan commands to avoid re-running
+// the Python CLI on every API request. Uses an in-memory cache
+// with configurable TTL (time-to-live).
 // ============================================================
 
-interface CacheEntry {
-  workspace: string
-  result: Record<string, any>
+import { GraphNode, GraphEdge, Cluster } from '@/types/neural'
+import { DEFAULT_CACHE_TTL } from '@/lib/constants'
+
+interface CachedScanResult {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  clusters: Cluster[]
   timestamp: number
+  workspace: string
 }
 
-/** Cache TTL in milliseconds (default: 30 seconds) */
-const CACHE_TTL = Number(process.env.SCAN_CACHE_TTL_MS) || 30_000
-
-let cache: CacheEntry | null = null
-
-/**
- * Get a cached scan result if it exists and is still fresh.
- * Returns null if no cache or if the cache is stale.
- */
-export function getCachedScan(workspace: string): Record<string, any> | null {
-  if (!cache) return null
-
-  // Workspace must match
-  if (cache.workspace !== workspace) return null
-
-  // Cache must be fresh
-  const age = Date.now() - cache.timestamp
-  if (age > CACHE_TTL) return null
-
-  return cache.result
+interface CachedHealthResult {
+  healthScore: Record<string, unknown>
+  coupling: unknown[]
+  heatmap: unknown[]
+  impactRadius?: unknown
+  timestamp: number
+  workspace: string
 }
 
-/**
- * Store a scan result in the cache.
- */
-export function setCachedScan(workspace: string, result: Record<string, any>): void {
-  cache = {
-    workspace,
-    result,
-    timestamp: Date.now(),
+class ScanCache {
+  private scanCache = new Map<string, CachedScanResult>()
+  private healthCache = new Map<string, CachedHealthResult>()
+  private ttl: number
+
+  constructor(ttl: number = DEFAULT_CACHE_TTL) {
+    this.ttl = ttl
+  }
+
+  /** Get cached scan result if still fresh */
+  getScan(workspace: string): CachedScanResult | null {
+    const cached = this.scanCache.get(workspace)
+    if (!cached) return null
+    if (Date.now() - cached.timestamp > this.ttl) {
+      this.scanCache.delete(workspace)
+      return null
+    }
+    return cached
+  }
+
+  /** Store scan result in cache */
+  setScan(workspace: string, nodes: GraphNode[], edges: GraphEdge[], clusters: Cluster[]): void {
+    this.scanCache.set(workspace, {
+      nodes,
+      edges,
+      clusters,
+      timestamp: Date.now(),
+      workspace,
+    })
+  }
+
+  /** Get cached health result if still fresh */
+  getHealth(workspace: string): CachedHealthResult | null {
+    const cached = this.healthCache.get(workspace)
+    if (!cached) return null
+    if (Date.now() - cached.timestamp > this.ttl) {
+      this.healthCache.delete(workspace)
+      return null
+    }
+    return cached
+  }
+
+  /** Store health result in cache */
+  setHealth(workspace: string, healthScore: Record<string, unknown>, coupling: unknown[], heatmap: unknown[], impactRadius?: unknown): void {
+    this.healthCache.set(workspace, {
+      healthScore,
+      coupling,
+      heatmap,
+      impactRadius,
+      timestamp: Date.now(),
+      workspace,
+    })
+  }
+
+  /** Invalidate all caches for a workspace (call after incremental scan) */
+  invalidate(workspace: string): void {
+    this.scanCache.delete(workspace)
+    this.healthCache.delete(workspace)
+  }
+
+  /** Invalidate all caches */
+  invalidateAll(): void {
+    this.scanCache.clear()
+    this.healthCache.clear()
+  }
+
+  /** Set TTL (useful for testing) */
+  setTTL(ttl: number): void {
+    this.ttl = ttl
   }
 }
 
-/**
- * Invalidate the cache (e.g., after a command that modifies the registry).
- */
-export function invalidateScanCache(): void {
-  cache = null
-}
-
-/**
- * Get cache stats for monitoring.
- */
-export function getCacheStats(): { cached: boolean; workspace: string | null; ageMs: number | null; ttlMs: number } {
-  if (!cache) {
-    return { cached: false, workspace: null, ageMs: null, ttlMs: CACHE_TTL }
-  }
-  return {
-    cached: true,
-    workspace: cache.workspace,
-    ageMs: Date.now() - cache.timestamp,
-    ttlMs: CACHE_TTL,
-  }
-}
+export const scanCache = new ScanCache()

@@ -67,9 +67,7 @@ class GraphStore {
     // Remove all edges connected to this node
     const edgesToRemove: string[] = []
     for (const [edgeId, edge] of this.edges) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-      if (sourceId === id || targetId === id) {
+      if (edge.source === id || edge.target === id) {
         edgesToRemove.push(edgeId)
       }
     }
@@ -177,17 +175,14 @@ class GraphStore {
     const neighborEdges: GraphEdge[] = []
 
     for (const edge of this.edges.values()) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-
-      if (sourceId === nodeId) {
-        const neighbor = this.nodes.get(targetId)
+      if (edge.source === nodeId) {
+        const neighbor = this.nodes.get(edge.target)
         if (neighbor) {
           neighborNodes.push(neighbor)
           neighborEdges.push(edge)
         }
-      } else if (targetId === nodeId) {
-        const neighbor = this.nodes.get(sourceId)
+      } else if (edge.target === nodeId) {
+        const neighbor = this.nodes.get(edge.source)
         if (neighbor) {
           neighborNodes.push(neighbor)
           neighborEdges.push(edge)
@@ -201,9 +196,7 @@ class GraphStore {
   getEdgesByNode(nodeId: string): GraphEdge[] {
     const result: GraphEdge[] = []
     for (const edge of this.edges.values()) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-      if (sourceId === nodeId || targetId === nodeId) {
+      if (edge.source === nodeId || edge.target === nodeId) {
         result.push(edge)
       }
     }
@@ -404,15 +397,13 @@ class GraphStore {
     const tests: NodeDetail['tests'] = []
 
     for (const edge of this.edges.values()) {
-      const sourceId = typeof edge.source === 'string' ? edge.source : edge.source.id
-      const targetId = typeof edge.target === 'string' ? edge.target : edge.target.id
-      const sourceNode = this.nodes.get(sourceId)
-      const targetNode = this.nodes.get(targetId)
+      const sourceNode = this.nodes.get(edge.source)
+      const targetNode = this.nodes.get(edge.target)
 
       if (!sourceNode || !targetNode) continue
 
       // This node is the target of a call → caller
-      if (targetId === nodeId && edge.type === 'calls') {
+      if (edge.target === nodeId && edge.type === 'calls') {
         callers.push({
           fn: sourceNode.label,
           file: sourceNode.file ?? '',
@@ -421,7 +412,7 @@ class GraphStore {
       }
 
       // This node is the source of a call → callee
-      if (sourceId === nodeId && edge.type === 'calls') {
+      if (edge.source === nodeId && edge.type === 'calls') {
         callees.push({
           fn: targetNode.label,
           file: targetNode.file ?? '',
@@ -430,7 +421,7 @@ class GraphStore {
       }
 
       // This node is referenced
-      if (targetId === nodeId && edge.type === 'references') {
+      if (edge.target === nodeId && edge.type === 'references') {
         references.push({
           file: sourceNode.file ?? '',
           line: sourceNode.line ?? 0,
@@ -439,18 +430,18 @@ class GraphStore {
       }
 
       // Taints edge — this node is tainted by source
-      if (targetId === nodeId && edge.type === 'taints') {
+      if (edge.target === nodeId && edge.type === 'taints') {
         references.push({ file: sourceNode.file ?? '', line: sourceNode.line ?? 0, source: sourceNode.label })
       }
 
       // Sanitizes edge — this node sanitizes the source
-      if (targetId === nodeId && edge.type === 'sanitizes') {
+      if (edge.target === nodeId && edge.type === 'sanitizes') {
         references.push({ file: sourceNode.file ?? '', line: sourceNode.line ?? 0, source: sourceNode.label })
       }
 
       // This node is defined in / contained in a file
       if (
-        targetId === nodeId &&
+        edge.target === nodeId &&
         (edge.type === 'defines' || edge.type === 'contains')
       ) {
         definedIn.push({
@@ -460,7 +451,7 @@ class GraphStore {
       }
 
       // Test references — edge from a test-like node to this node
-      if (targetId === nodeId && sourceNode.type === 'function') {
+      if (edge.target === nodeId && sourceNode.type === 'function') {
         const srcFile = sourceNode.file ?? ''
         if (/(test|spec|__test__)/i.test(srcFile)) {
           tests.push({
