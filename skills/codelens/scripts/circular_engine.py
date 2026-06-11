@@ -12,6 +12,11 @@ codebases with many cycles (e.g., 65K+ nodes, 320K+ edges).
 v5.9 fix: Early return from DFS due to max_cycles limit no longer corrupts
 path/color state. Uses a `stopped` flag to propagate early exit and ensure
 proper unwinding of the DFS stack.
+
+v5.10: Rust trait impl false positive filtering. Cycles composed entirely of
+conversion trait methods (from_*/into_*/to_*/as_*) and very long chains (>8
+nodes) are classified as 'info' severity instead of 'warning', since they are
+intentional bidirectional conversions or spurious name-matching artifacts.
 """
 
 import os
@@ -57,6 +62,20 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
 
     total_cycles = sum(len(v) for v in cycles.values())
 
+    # Count severity levels across all cycle types
+    warning_count = 0
+    info_count = 0
+    critical_count = 0
+    for cat_cycles in cycles.values():
+        for cycle in cat_cycles:
+            sev = cycle.get("severity", "warning")
+            if sev == "critical":
+                critical_count += 1
+            elif sev == "warning":
+                warning_count += 1
+            else:
+                info_count += 1
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -67,6 +86,11 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
             "function_call_cycles": len(cycles["function_calls"]),
             "import_chain_cycles": len(cycles["import_chains"]),
             "css_import_cycles": len(cycles["css_imports"])
+        },
+        "severity_breakdown": {
+            "genuine_warning": warning_count,
+            "likely_false_positive_info": info_count,
+            "critical": critical_count
         }
     }
 
@@ -188,6 +212,53 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
     return cycles_found
 
 
+def _is_conversion_trait_fn(fn_name: str) -> bool:
+    """Check if a function name looks like a Rust conversion trait implementation.
+
+    Rust's From/Into/TryFrom/TryInto/AsRef/AsMut traits generate impl methods
+    like `from_<type>`, `into_<type>`, `to_<type>`, `as_<type>`, etc.
+    These bidirectional conversions commonly create apparent circular chains
+    (e.g. From<A> for B and From<B> for A) that are intentional and safe.
+    """
+    fn_lower = fn_name.lower().rsplit("::", 1)[-1]  # strip module path
+    # Match common Rust conversion trait impl patterns
+    if fn_lower.startswith(("from_", "into_", "try_from_", "try_into_")):
+        return True
+    # to_ / as_ are more ambiguous, but in Rust trait impls they follow
+    # the pattern `<Type as Trait>::to_<type>` or similar
+    if fn_lower.startswith(("to_", "as_")) and "::" in fn_name.lower():
+        return True
+    # Also match the standard From::from / Into::into trait methods themselves
+    if fn_lower in ("from", "into", "try_from", "try_into"):
+        return True
+    return False
+
+
+def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
+    """Classify a cycle's severity based on its characteristics.
+
+    Rules:
+    - If ALL functions in the chain are Rust conversion trait impls (from_*/into_*/etc.),
+      classify as 'info' — these are intentional bidirectional conversions, not real cycles.
+    - If the cycle is very long (>8 nodes), classify as 'info' — likely a false positive
+      from name matching that creates spurious chains across unrelated modules.
+    - Short chains (2-3 nodes) with non-conversion functions are genuine: 'warning'.
+    """
+    fn_names = [c.get("fn", "unknown") for c in chain]
+
+    # Check if every function in the chain is a conversion trait impl
+    all_conversion = all(_is_conversion_trait_fn(fn) for fn in fn_names)
+    if all_conversion:
+        return "info"
+
+    # Very long chains are almost always false positives from name matching
+    if cycle_length > 8:
+        return "info"
+
+    # Short chains with non-conversion functions are genuine cycles
+    return "warning"
+
+
 def _format_function_cycle(cycle_path: List[str], node_by_id: Dict) -> Dict:
     """Format a function call cycle for output."""
     chain = []
@@ -203,14 +274,25 @@ def _format_function_cycle(cycle_path: List[str], node_by_id: Dict) -> Dict:
     # Human-readable cycle string
     fn_names = [c["fn"] for c in chain]
     cycle_str = " → ".join(fn_names)
+    cycle_length = len(cycle_path) - 1
+
+    # Classify severity using the new heuristic
+    severity = _classify_cycle_severity(chain, cycle_length)
+
+    # Build a descriptive message that explains the classification
+    message = f"Circular function call: {cycle_str}"
+    if severity == "info" and all(_is_conversion_trait_fn(c.get("fn", "")) for c in chain):
+        message += " (likely intentional bidirectional trait impl)"
+    elif severity == "info" and cycle_length > 8:
+        message += " (long chain, likely false positive from name matching)"
 
     return {
         "type": "function_call_cycle",
         "chain": chain,
         "cycle": cycle_str,
-        "length": len(cycle_path) - 1,
-        "severity": "warning" if len(cycle_path) <= 3 else "info",
-        "message": f"Circular function call: {cycle_str}"
+        "length": cycle_length,
+        "severity": severity,
+        "message": message
     }
 
 

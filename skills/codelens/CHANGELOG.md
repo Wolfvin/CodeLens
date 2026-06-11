@@ -5,44 +5,106 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.1] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: 6 broken commands restored** — `scan`, `ask`, `handbook`, `env-check`, `refactor-safe`, and `watch` commands failed to import due to missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `resolve_tauri_ipc_from_apimap`, `scan_binary_artifacts`, `scan_tauri_artifacts`). All missing symbols have been implemented in their respective modules (`utils.py`, `edge_resolver.py`).
+- **CRITICAL: Dead-code total count always showed 0** — Three consumers (markdown formatter, dead_code command, handbook) used `stats.get('total_dead', 0)` while the engine returns `total_dead_code`. Fixed key name in all three locations.
+- **HIGH: Rust build.rs false positive in debug-leak** — `println!()` in `build.rs` is the canonical way to emit cargo directives and should not be flagged as a debug leak. Added exclusion for `println!()` in files ending with `build.rs` (but still flags `eprintln!()` which is typically actual debug output).
+- **pyproject.toml duplicate version keys** — Four `version =` lines in `[project]` section collapsed to single `version = "5.9.1"`.
+
+### Added
+
+- **Rust workspace detection** (`scripts/framework_detect.py`): New fields in `detect_frameworks()` output: `has_cargo_workspace` (bool), `rust_edition` (str or None), `cargo_crate_count` (int). Detects `[workspace]` section in Cargo.toml and counts workspace members.
+- **Circular dependency trait-impl filtering** (`scripts/circular_engine.py`): Rust conversion trait implementations (`from_*`, `into_*`, `try_from_*`, `try_into_*`, `to_*`, `as_*`) create apparent circular chains that are intentional bidirectional conversions. These are now classified as `info` severity instead of `warning`. Long chains (>8 nodes) are also downgraded to `info` as they are likely name-matching artifacts.
+- **Shared constants in utils.py**: `MAX_FILE_SIZE` (500KB), `MAX_FILES_DEFAULT` (3000), `time_budget_expired()` function, `is_generated_file()` function — provides centralized definitions that engines can import instead of redefining locally.
+- **Binary artifact scanning** (`utils.py`): `scan_binary_artifacts()` and `scan_tauri_artifacts()` functions for the `binary-scan` and `ask` commands.
+- **Tauri IPC edge resolution** (`edge_resolver.py`): `resolve_tauri_ipc_from_apimap()` function for cross-language edge resolution between TypeScript `invoke()` calls and Rust `#[tauri::command]` handlers.
+
+### Test Target Documentation
+
+- **surrealdb/surrealdb** (GitHub): Used as test target for v5.9.1 — a multi-model document-graph database written in Rust with 1635 .rs files, 20 .py files, 16671 backend nodes, and 104464 edges. Large Rust workspace with 21 crates. Testing revealed: 6 broken commands (all fixed), debug-leak false positives on build.rs (fixed), dead-code total count bug (fixed), 1732 circular dependencies mostly from trait impls (filtered). Health score: 70/100 with 610 critical smells (mostly god objects in Rust impl blocks).
+
+## [5.9.0] — 2026-06-12
+
+### Added
+
+- **Tauri reverse engineering analysis** (`scripts/utils.py` → `scan_tauri_artifacts()`): Deep analysis of Tauri applications for security auditing and reverse engineering. New capabilities:
+  - IPC command/handler mapping: Scans Rust source for `#[tauri::command]` functions, `generate_handler!` macro registrations, and `invoke()` calls from TypeScript frontend. Maps which commands exist, which are registered, and which are called from the UI.
+  - Capabilities/permissions security audit: Parses all `capabilities/*.json` files and flags dangerous permissions (`shell:allow-execute`, `shell:allow-spawn`, `fs:allow-write-file`, etc.) with severity ratings. Detects permissive filesystem scopes (`**` wildcards).
+  - Sidecar binary analysis: Detects `externalBin` entries in tauri.conf.json, checks for source availability, and flags closed-source/proprietary sidecar risks.
+  - Updater security audit: Analyzes updater configuration for insecure HTTP endpoints, missing signing keys, and install mode settings.
+  - WebView security audit: Flags missing CSP (Content Security Policy), permissive asset protocol scope (`**` wildcards), and other webview misconfigurations.
+  - Deep-link scheme analysis: Detects registered URL schemes and warns about potential URL-scheme injection vulnerabilities.
+  - Build script analysis: Scans `build.rs` for filesystem and process operations.
+  - URI scheme protocol detection: Finds `register_uri_scheme_protocol` calls in Rust source.
+  - Security summary with risk level classification (critical/high/moderate).
+- **Enhanced `binary-scan` command** (`scripts/commands/binary_scan.py`): Now automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full RE findings.
+- **Rust monorepo detection** (`scripts/framework_detect.py`): `_discover_workspace_package_jsons()` now also detects:
+  - `Cargo.toml` with `[workspace]` section → `cargo-workspace` indicator
+  - `crates/` directory with 2+ `Cargo.toml` files → `cargo-crates` indicator
+  - `pnpm-workspace.yaml` presence → `pnpm-workspace` indicator (even without `packages:` list)
+  - `package.json` workspaces field → `npm-workspaces` indicator
+- **Monorepo tools field** (`scripts/framework_detect.py`): `detect_frameworks()` now returns `monorepo_tools` list (e.g., `["pnpm-workspace", "cargo-crates"]`) to identify which monorepo mechanisms were detected.
+- **Ask command Tauri routing** (`scripts/commands/ask.py`): Added 17 new keyword patterns for binary/RE queries (binary, exe, sidecar, tauri command, ipc command, capabilities, webview security, csp, etc.). Queries like "what Tauri commands are available" now correctly route to `binary-scan` instead of `context`.
+
+### Fixed
+
+- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (like clash-verge-rev which has `allowBuilds` instead) were incorrectly classified as non-monorepo. Now uses structural indicators (pnpm-workspace.yaml presence, Cargo workspace, crates/ directory) in addition to multiple package.json count.
+- **HIGH: Version mismatch** — `utils.py` had version 5.7.1 while CHANGELOG documented 5.8.0. Unified to 5.9.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
+
+### Changed
+
+- **`_discover_workspace_package_jsons()` return type**: Now returns `tuple[list[str], list[str]]` — (package_json_paths, monorepo_indicators) instead of just `list[str]`. All callers updated.
+- **`_collect_deps_from_package_jsons()` signature**: Now accepts optional `monorepo_indicators` parameter to augment monorepo detection beyond just multiple package.json files.
+- **`detect_frameworks()` output**: Now includes `monorepo_tools` field with list of detected monorepo mechanisms.
+
+### Test Target Documentation
+
+- **clash-verge-rev/clash-verge-rev** (GitHub): Used as test target for v5.9.0 — the most popular Tauri app on GitHub (~125k stars). Complex VPN/proxy management app with Rust backend + React frontend. Monorepo with pnpm workspace + 6 Rust crates. Testing revealed: 2 sidecar binaries (verge-mihomo, verge-mihomo-alpha), missing CSP (null), wildcard asset protocol scope (**), shell:allow-execute + shell:allow-spawn permissions, 2 deep-link schemes, signed updater with 3 endpoints. Security findings: 1 high (missing CSP), 1 high (permissive asset protocol), 2 critical (shell permissions), 1 info (signed updates).
+
 ## [5.8.0] — 2026-06-12
 
 ### Added
-- **Tauri framework detection**: Auto-detects Tauri apps via `src-tauri/tauri.conf.json`, `@tauri-apps/api` in package.json, and `tauri` crate in Cargo.toml. Sets `has_tauri` and `has_rust_backend` flags in framework detection output.
-- **Tauri command mapping (api-map)**: Extracts `#[tauri::command]` annotated Rust functions as IPC routes with method `INVOKE`, path `tauri://<fn_name>`. Detects async commands, State<T> parameters, auth-gated commands, macro-generated commands (channel_commands!), and `tauri::generate_handler![]` registration blocks. Tested with 320+ Tauri commands on OpenPawz.
-- **Rust framework signatures**: Added detection for axum, actix-web, rocket, warp, poem, salvo via Cargo.toml dependency scanning.
-- **Cargo.toml dependency scanning**: New `_find_cargo_tomls()` and `_parse_cargo_dependencies()` functions in `framework_detect.py` that scan root, `src-tauri/`, and `crates/*` Cargo.toml files for framework crate dependencies.
-- **Rust memory_leak patterns**: Added 4 Rust-specific performance hints — `Box::leak()`, nested `Rc/Arc` cycles, `mem::forget()`, and unbounded channels (`mpsc::channel` without `sync_channel`/`bounded`).
-- **Per-pattern extension gating**: Memory leak patterns now have `applies_to_ext` field to prevent JS-only patterns (addEventListener, setInterval, etc.) from false-positiving on Rust files. Pattern-level gating runs before regex matching.
-- **`safe_read_file()` utility**: Safe file reading with size limit and error handling (max 200KB default). Added to `utils.py` for use by a11y_engine and other modules.
-- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore check that prevents false matches (e.g., workspace named "test-dist" doesn't match "dist"). Added to `utils.py`.
-- **Tauri-aware recommended config**: When Tauri is detected, `get_recommended_config()` adds `src/` to frontend_paths, `src-tauri/src/` to backend_paths, removes `src/` from backend_paths, and adds `src-tauri/target/` and `src-tauri/gen/` to ignore list.
+
+- **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
+- **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.
+- **Monorepo-aware init config** (`scripts/framework_detect.py`): `get_recommended_config()` now generates correct `frontend_paths` and `backend_paths` for monorepo Tauri projects (e.g., `apps/readest-app/src/` for frontend, `apps/readest-app/src-tauri/src/` for backend).
+- **Lockfile detection** (`scripts/framework_detect.py`): Added automatic detection of package managers from lock files: `bun.lock`/`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. Exposed as `lockfile` in framework detection output.
+- **New framework signatures** (`scripts/framework_detect.py`): Added detection for `trpc`, `orpc`, `zustand`, `redux`, and `vite` frameworks/packages.
+- **SearchConfig dataclass** (`scripts/search_engine.py`): Introduced `SearchConfig` dataclass to replace the 11-parameter `search_workspace()` function. The old function is preserved for backward compatibility and now delegates to `search_with_config(cfg)`. This eliminates the `many_params` code smell (11 → 2 parameters) and makes call sites self-documenting.
+- **FrontendRegistryInput dataclass** (`scripts/registry.py`): Introduced `FrontendRegistryInput` dataclass to replace the 9-parameter `build_frontend_registry()` function. Legacy function preserved for backward compatibility, delegates to `build_frontend_registry_from_input(inp)`. Eliminates the `many_params` code smell (9 → 1 parameter).
+- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
+- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
+- **Missing logger import fix** (`scripts/framework_detect.py`): Added `logger` import from `utils` — the module was referencing `logger.debug()` without importing it, causing `NameError` at runtime when parsing requirements.txt/pyproject.toml failed.
 
 ### Fixed
-- **ImportError on startup**: `safe_read_file` and `should_ignore_dir` were imported by a11y_engine and tailwind_detector but not defined in `utils.py`. Both functions are now implemented.
-- **Framework detection crash**: `FRAMEWORK_SIGNATURES` entries without `packages` key (Rust-only frameworks) caused KeyError. Fixed with `.get("packages", [])`.
-- **dead-code recommended_action missing**: The `recommended_action` field was only added when `total_dead > 0`, missing the zero-dead-code case. Now always present.
-- **dead-code total_dead field mismatch**: Command used `stats.total_dead` but engine returns `stats.total_dead_code`. Fixed with fallback lookup.
 
-### Test Target
-- **OpenPawz** (https://github.com/OpenPawz/openpawz): Large Tauri v2 app with vanilla TypeScript frontend, 1088 files, 870+ source files, 320+ Tauri commands, 343 Rust files. Used to validate all Tauri-related improvements.
+- **CRITICAL: `should_ignore_dir` missing from utils.py** — The function was imported by `framework_detect.py`, `tailwind_detector.py`, and 40 command modules via the import chain, but never defined in `utils.py`. This caused ALL 41 CLI commands to fail with `ImportError` on startup. Added the function with path-segment-aware matching consistent with `should_ignore()` in scan.py.
+- **CRITICAL: Frontend registry deletion cleanup used nonexistent field** — Incremental scan tried to clean deleted-file entries using `c.get("defined_in")`, but frontend classes use `css`/`js` arrays with `path` fields, and IDs use `defined_in_html`. This meant deleted files' frontend data was NEVER removed from the registry. Rewrote cleanup to properly strip refs by path and recalculate ref_count/status.
+- **CRITICAL: `ask` command missing handlers for 8 commands** — Side-effect, dataflow, missing-refs, ownership, config-drift, stack-trace, and type-infer queries all returned "Unknown command" because `_execute_ask_command` had no handler branches. Added all missing handlers.
+- **HIGH: Rust parser `impl_for` context leaked to sibling functions** — When tree-sitter walked past an `impl_item` to a sibling `function_item` outside the impl block, `current_impl_for` still held the previous impl's type name. Fixed by checking parent ancestry before assigning impl context.
+- **HIGH: Circular dependency detection missed `../` imports** — The import regex only matched `./` relative imports, silently ignoring all parent-directory imports (`import X from '../utils'`). Fixed regex to match `\.{1,2}/` for both `./` and `../`.
+- **HIGH: `vulnscan_engine.py` created its own logger** — Bypassed the shared `utils.get_logger()` which configures handlers and log level, causing all vulnscan debug/warning messages to be silently dropped. Changed to import `logger` from utils.
+- **HIGH: Version mismatch** — `utils.py` had version 5.7.0, `skill.json` and `pyproject.toml` had 5.7.1. Unified to 5.8.0 across all three.
+- **MEDIUM: `scan.py` imported unused `compute_frontend_status`** — Removed dead import.
+- **MEDIUM: `context_engine.py` used raw `open()` instead of `safe_read_file()`** — Could crash on minified/large files. Switched to the safe utility.
+- **MEDIUM: `search_engine.py` used simple set membership for directory ignoring** — Didn't benefit from path-segment-aware matching. Added `should_ignore_dir()` call.
+- **MEDIUM: Dead code branch in `incremental.py`** — `if not is_resolved and from_is_changed` was unreachable because `from_is_changed` was already checked earlier. Removed the dead branch.
+- **MEDIUM: `context_engine.py` auto-domain silently dropped backend matches** — When a name matched in both frontend and backend, only the frontend result was returned. Now adds `also_matched_in` note to indicate the overlap.
+- **MEDIUM: `convention_engine.py` had no file count limits** — Could be extremely slow on large codebases (10K+ files). Added `MAX_FILES_PER_CATEGORY = 500` sampling limit.
+- **LOW: 12 engine files imported `DEFAULT_IGNORE_DIRS` but not `logger`** — Added `logger` to imports in: smell_engine, debugleak_engine, apimap_engine, envcheck_engine, dependents_engine, dataflow_engine, regexaudit_engine, statemap_engine, complexity_engine, typeinfer_engine, cssdeep_engine, entrypoints_engine.
 
-## [6.0.0] — 2026-06-12
+### Changed
 
-### Added
-- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
-- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
-- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
-- **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
+- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
+- **Version bump**: Updated from 5.7.1 to 5.8.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
+- **Tauri+React monorepo JSX mode** (`scripts/framework_detect.py`): JSX mode is now correctly enabled when both React and Tauri are detected in a monorepo.
 
-### Fixed
-- **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
-- **API route false positives**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
-- **CSS specificity false positives**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba()`, `var()`, gradient values as selectors.
-- **State map over-classification**: Skips ALL_CAPS constants, React components (arrow functions, forwardRef, memo, styled), and immutable values. Removed module.exports scanning.
-- **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
-- **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
-- **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
+### Test Target Documentation
+
+- **readest/readest** (GitHub): Used as a test target for monorepo support — a large Tauri ebook reader app with React frontend and Rust backend. Monorepo structure: 40 Rust files, 1167 TSX files, 1 CSS file. Previously, `detect` returned `has_react: false` because React was only in `apps/readest-app/package.json`. After fix, all 6 frameworks detected: react, next.js, tailwind, zustand, vite, tauri. Also validated: smell (6389 issues, health 75), secrets (72 findings), complexity (3494 functions), circular deps (111 cycles), dead code (450 items), vuln scan (1 CVE), perf hints (952), a11y (584 issues).
 
 ## [5.6.0] — 2026-06-11
 

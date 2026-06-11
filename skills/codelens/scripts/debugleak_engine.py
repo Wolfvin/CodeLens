@@ -352,6 +352,9 @@ def _detect_print_statements(
                 continue
             if label in ("println!()", "eprintln!()") and ext not in {".rs"}:
                 continue
+            # Rust build.rs scripts use println!() to emit cargo directives — not a leak
+            if label in ("println!()",) and rel_path.endswith("build.rs"):
+                continue
             if label in ("print()", "pprint()", "pprint.pprint()") and ext not in {".py", ".rs"}:
                 continue
 

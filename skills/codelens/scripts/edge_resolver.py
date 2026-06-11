@@ -313,90 +313,109 @@ def _to_alternate_case(name: str) -> str:
     return leading + name
 
 
+# ─── Tauri IPC Cross-Language Edge Resolution ────────────────
+
 def resolve_tauri_ipc_from_apimap(
     nodes: List[Dict],
     edges: List[Dict],
     api_routes: List[Dict]
 ) -> List[Dict]:
-    """Resolve Tauri IPC edges from api-map results.
+    """Resolve cross-language Tauri IPC edges from API map data.
 
-    When api-map detects #[tauri::command] routes, we can create cross-language
-    edges from JS/TS frontend invoke() calls to the Rust backend command handlers.
+    In Tauri apps, the frontend calls Rust backend functions via the
+    invoke('commandName') IPC bridge. This creates cross-language edges
+    that normal same-language resolution cannot find.
+
+    This function matches:
+    - Frontend invoke('command_name') calls → Rust #[tauri::command] handlers
+    - Uses snake_case ↔ camelCase conversion for name matching
 
     Args:
-        nodes: Current list of resolved backend nodes.
-        edges: Current list of resolved backend edges.
-        api_routes: Routes from apimap_engine that have framework='tauri'.
+        nodes: All parsed backend nodes.
+        edges: Currently resolved edges (will be extended).
+        api_routes: API route data from apimap_engine.
 
     Returns:
-        Updated edges list with Tauri IPC cross-language edges added.
+        Updated edges list with new Tauri IPC edges appended.
     """
-    # Build index of Rust command handler nodes by function name
-    rust_fn_index: Dict[str, Dict] = {}
+    if not api_routes:
+        return edges
+
+    # Build index of Rust tauri::command nodes by name
+    tauri_nodes: Dict[str, Dict] = {}
+    for node in nodes:
+        if node.get("is_tauri_command"):
+            fn_name = node.get("fn", "")
+            tauri_nodes[fn_name] = node
+            # Also index by alternate case
+            alt = _to_alternate_case(fn_name)
+            if alt != fn_name:
+                tauri_nodes[alt] = node
+
+    # Build index of all backend nodes for frontend → backend matching
+    backend_fn_index: Dict[str, List[Dict]] = {}
     for node in nodes:
         fn_name = node.get("fn", "")
-        file = node.get("file", "")
-        if fn_name and file.endswith(".rs"):
-            rust_fn_index[fn_name] = node
-            # Also index by camelCase version (Tauri convention)
-            camel = _to_alternate_case(fn_name)
-            if camel != fn_name:
-                rust_fn_index[camel] = node
+        if fn_name:
+            backend_fn_index.setdefault(fn_name, []).append(node)
+            alt = _to_alternate_case(fn_name)
+            if alt != fn_name:
+                backend_fn_index.setdefault(alt, []).append(node)
 
-    # Build set of existing edges to avoid duplicates
-    existing_edges = set()
-    for edge in edges:
-        from_id = edge.get("from", "")
-        to_id = edge.get("to", "")
-        if from_id and to_id:
-            existing_edges.add((from_id, to_id))
-
-    # Add IPC edges from api-map routes
     new_edges = []
     for route in api_routes:
-        if route.get("framework") != "tauri":
-            continue
+        handler = route.get("handler", "")
+        method = route.get("method", "")
+        path = route.get("path", "")
 
-        handler_name = route.get("handler_name", "")
-        command_name = route.get("command_name", handler_name)
-        handler_file = route.get("file", "")
-        handler_line = route.get("line", 0)
+        # Match handler name to a backend node
+        target_node = None
 
-        if not handler_name:
-            continue
+        # Try direct match first
+        if handler in backend_fn_index:
+            candidates = backend_fn_index[handler]
+            target_node = candidates[0]
 
-        # Find the Rust handler node
-        handler_node = rust_fn_index.get(handler_name) or rust_fn_index.get(command_name)
-        if not handler_node:
-            continue
+        # Try tauri command nodes
+        if not target_node and handler in tauri_nodes:
+            target_node = tauri_nodes[handler]
 
-        handler_id = handler_node["id"]
+        # Try stripping common prefixes
+        if not target_node:
+            for prefix in ("cmd_", "handle_", "invoke_"):
+                if handler.startswith(prefix):
+                    stripped = handler[len(prefix):]
+                    if stripped in backend_fn_index:
+                        target_node = backend_fn_index[stripped][0]
+                        break
 
-        # Find JS/TS nodes that call invoke('commandName') or invoke('handlerName')
-        for node in nodes:
-            fn_name = node.get("fn", "")
-            file = node.get("file", "")
-            # Only look at JS/TS callers
-            if not (file.endswith(('.ts', '.tsx', '.js', '.jsx', '.mjs'))):
-                continue
+        if target_node:
+            # Create a synthetic source node for the frontend invoke() call
+            source_id = f"tauri_ipc:{method}:{path}"
+            new_edges.append({
+                "from": source_id,
+                "to": target_node["id"],
+                "edge_type": "tauri_ipc",
+                "invoke_name": handler,
+            })
 
-            # Check if this node's function name suggests it's an invoke caller
-            # for this specific Tauri command
-            node_id = node["id"]
-            edge_key = (node_id, handler_id)
-            if edge_key not in existing_edges:
-                # Check if the function name or its alternate case matches
-                alt_name = _to_alternate_case(fn_name)
-                if fn_name == command_name or fn_name == handler_name or \
-                   alt_name == command_name or alt_name == handler_name:
-                    new_edge = {
-                        "from": node_id,
-                        "to": handler_id,
-                        "ipc_bridge": True,
-                        "ipc_type": "tauri",
-                    }
-                    new_edges.append(new_edge)
-                    existing_edges.add(edge_key)
+    # Also scan for invoke() patterns in edges that weren't resolved
+    for edge in edges:
+        if edge.get("resolved") is False:
+            to_fn = edge.get("to_fn", "")
+            # Check if this looks like a Tauri invoke
+            if to_fn in tauri_nodes:
+                edge["to"] = tauri_nodes[to_fn]["id"]
+                edge["resolved"] = True
+                edge["edge_type"] = "tauri_ipc"
+                del edge["to_fn"]
+            else:
+                alt = _to_alternate_case(to_fn)
+                if alt in tauri_nodes:
+                    edge["to"] = tauri_nodes[alt]["id"]
+                    edge["resolved"] = True
+                    edge["edge_type"] = "tauri_ipc"
+                    del edge["to_fn"]
 
     edges.extend(new_edges)
     return edges
