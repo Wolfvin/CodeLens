@@ -88,10 +88,40 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
             nonlocal current_class, current_fn_id
 
             if node.type == 'class_definition':
-                # Track class context
+                # Track class context — also register the class itself as a node
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     cls_name = self.get_text(name_node, source)
+                    line = self.get_line(node)
+
+                    # Register class as a node so query/context can find it
+                    class_id = f"{file_path}:{line}"
+                    # Extract superclass info if present
+                    superclasses_node = node.child_by_field_name('superclasses')
+                    superclass_names = []
+                    if superclasses_node:
+                        for child in superclasses_node.children:
+                            if child.type == 'identifier':
+                                superclass_names.append(self.get_text(child, source))
+                            elif child.type == 'attribute':
+                                attr = child.child_by_field_name('attribute')
+                                if attr:
+                                    superclass_names.append(self.get_text(attr, source))
+
+                    class_node = {
+                        "id": class_id,
+                        "fn": cls_name,
+                        "file": file_path,
+                        "line": line,
+                        "async": False,
+                        "type": "class",
+                    }
+                    if superclass_names:
+                        class_node["superclasses"] = superclass_names
+
+                    nodes.append(class_node)
+                    declared_fns[cls_name] = class_id
+
                     # Walk the body with class context
                     body = node.child_by_field_name('body')
                     if body:
