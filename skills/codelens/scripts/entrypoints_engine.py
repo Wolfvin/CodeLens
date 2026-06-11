@@ -655,7 +655,7 @@ ENTRYPOINT_PATTERNS = {
             },
             # Rust #[test]
             {
-                "regex": r'#\[test\]\s*(?:\n\s*#!\[.*\]\s*)?\n\s*(?:pub\s+)?fn\s+(\w+)',
+                "regex": r'#\[test\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)',
                 "language": {".rs"},
                 "extract": "handler",
                 "handler_group": 1,
@@ -663,11 +663,19 @@ ENTRYPOINT_PATTERNS = {
             },
             # Rust #[tokio::test]
             {
-                "regex": r'#\[tokio::test\]\s*(?:\n\s*#!\[.*\]\s*)?\n\s*(?:pub\s+)?fn\s+(\w+)',
+                "regex": r'#\[tokio::test\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)',
                 "language": {".rs"},
                 "extract": "handler",
                 "handler_group": 1,
                 "label": "rust_tokio_test",
+            },
+            # Rust #[cfg(test)] module
+            {
+                "regex": r'#\[cfg\(test\)\]\s*\n\s*mod\s+(\w+)',
+                "language": {".rs"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "rust_test_module",
             },
         ],
     },

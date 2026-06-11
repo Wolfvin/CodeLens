@@ -5,6 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-12
+
+### Fixed
+- **is_generated_file missing from utils.py**: `refactor_safe_engine.py` imported `is_generated_file` from `utils`, but the function did not exist. This caused the entire `refactor-safe` command to fail with ImportError. Now implemented with proper detection of lock files, minified files, build artifacts, and declaration files.
+- **Rust parser only extracted functions**: Both tree-sitter and fallback Rust parsers only extracted `fn` declarations, missing structs, traits, enums, modules, consts, statics, type aliases, macros, and impl blocks. This meant queries for Rust struct/trait/enum names always returned "not found". Now both parsers extract all Rust symbol types.
+- **Framework detection missed Rust and Python projects**: `detect_frameworks()` only detected JS frameworks, specific Python frameworks (Django/Flask/FastAPI), and Tauri. It completely missed generic Rust (Cargo.toml) and Python (pyproject.toml/setup.py) projects. Now detects: rust, actix, axum, tokio, serde, clap, wasm, and generic python projects.
+- **Monorepo detection missed Cargo workspaces**: `_extract_project_identity()` only checked for turborepo/pnpm/lerna/nx monorepo indicators. Cargo workspace with `[workspace] members` was not detected. Now properly identifies Cargo workspace monorepos.
+- **Rust test entrypoint regex too strict**: `#[test]` and `#[tokio::test]` patterns required exact single newline between attribute and function, failing when additional attributes like `#[should_panic]` were present. Now handles arbitrary intermediate attributes.
+
+### Added
+- **Rust full symbol extraction (tree-sitter)**: `rust_parser.py` now extracts struct_item, enum_item, trait_item, impl_item, mod_item, const_item, static_item, type_item, macro_definition, and use_declaration nodes in addition to function_item. Each node has both `name` and `fn` fields for backward compatibility.
+- **Rust full symbol extraction (fallback)**: `fallback_rust.py` now extracts structs, enums, traits, impl blocks, modules, consts, statics, type aliases, and macros in addition to functions. Also tracks type usage and method call chains.
+- **Use statement tracking**: Both Rust parsers now return `use_statements` data for dependency/import analysis.
+- **Cargo workspace monorepo detection**: Handbook command now identifies Cargo workspace projects as monorepos with `cargo-workspace` tool. Also detects multi-crate repos via `crates/*/Cargo.toml`.
+- **Rust framework auto-detection**: Detects actix-web, axum, tokio, serde, clap, and wasm from Cargo.toml content.
+- **Generic Python project detection**: Detects Python projects via pyproject.toml, setup.py, setup.cfg, requirements.txt, or .py file presence.
+- **Rust/Python backend path configuration**: `get_recommended_config()` now adds appropriate backend paths for Rust (src/, crates/) and Python (src/, lib/, python/) projects.
+- **is_generated_file() utility**: New utility function with comprehensive detection of lock files (Cargo.lock, package-lock.json, etc.), minified/bundled files, and declaration files.
+- **Rust cfg(test) module detection**: Entrypoints engine now detects `#[cfg(test)] mod tests` blocks as test entry points.
+
+### Changed
+- **Version bumped**: 5.7.1 → 5.8.0
+- **Backend node schema**: Rust nodes now include `type` field (function, struct, enum, trait, impl, module, const, static, type_alias, macro) and `name` field (in addition to backward-compatible `fn`).
+
 ## [5.7.2] — 2026-06-12
 
 ### Fixed

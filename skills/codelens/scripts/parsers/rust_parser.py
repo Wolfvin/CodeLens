@@ -62,16 +62,20 @@ class RustParser(BaseParser):
 
     def extract_references(self, content: str, file_path: str) -> Dict[str, List[Dict]]:
         """
-        Extract function nodes and edges from Rust content.
+        Extract all symbol nodes and edges from Rust content.
 
         Returns:
-            {"nodes": [...], "edges": [...]}
+            {"nodes": [...], "edges": [...], "use_statements": [...]}
+
+        Nodes include: functions, structs, enums, traits, impls, modules, consts, statics, type aliases, macros.
+        Each node has both 'fn' (backward compat) and 'name' fields.
         """
         source = content.encode('utf-8')
         tree = self.parse(source)
 
         nodes = []
         edges = []
+        use_statements = []
 
         # Track current impl context
         current_impl_for = None
@@ -88,10 +92,70 @@ class RustParser(BaseParser):
 
             if node.type == 'impl_item':
                 current_impl_for, current_trait_name = self._parse_impl(node, source)
+                # Create an impl node
+                if current_impl_for:
+                    line = self.get_line(node)
+                    impl_node = {
+                        "id": f"{file_path}:{line}:impl:{current_impl_for}",
+                        "name": f"impl {f'{current_trait_name} for ' if current_trait_name else ''}{current_impl_for}",
+                        "fn": f"impl_{current_impl_for}",
+                        "type": "impl",
+                        "file": file_path,
+                        "line": line,
+                        "pub": False,
+                        "impl_for": current_impl_for,
+                    }
+                    if current_trait_name:
+                        impl_node["trait_name"] = current_trait_name
+                    nodes.append(impl_node)
+
+            elif node.type == 'struct_item':
+                struct_node = self._parse_struct_item(node, source, file_path)
+                if struct_node:
+                    nodes.append(struct_node)
+
+            elif node.type == 'enum_item':
+                enum_node = self._parse_enum_item(node, source, file_path)
+                if enum_node:
+                    nodes.append(enum_node)
+
+            elif node.type == 'trait_item':
+                trait_node = self._parse_trait_item(node, source, file_path)
+                if trait_node:
+                    nodes.append(trait_node)
+
+            elif node.type == 'mod_item':
+                mod_node = self._parse_mod_item(node, source, file_path)
+                if mod_node:
+                    nodes.append(mod_node)
+
+            elif node.type == 'const_item':
+                const_node = self._parse_const_item(node, source, file_path)
+                if const_node:
+                    nodes.append(const_node)
+
+            elif node.type == 'static_item':
+                static_node = self._parse_static_item(node, source, file_path)
+                if static_node:
+                    nodes.append(static_node)
+
+            elif node.type == 'type_item':
+                type_node = self._parse_type_item(node, source, file_path)
+                if type_node:
+                    nodes.append(type_node)
+
+            elif node.type == 'macro_definition':
+                macro_node = self._parse_macro_item(node, source, file_path)
+                if macro_node:
+                    nodes.append(macro_node)
+
+            elif node.type == 'use_declaration':
+                use_info = self._parse_use_declaration(node, source, file_path)
+                if use_info:
+                    use_statements.append(use_info)
 
             elif node.type == 'function_item':
                 # Only apply impl_for if this function is a descendant of an impl_item.
-                # Walk up the tree to check if any ancestor is an impl_item.
                 impl_for_this_fn = current_impl_for
                 trait_for_this_fn = current_trait_name
                 parent = node.parent
@@ -100,8 +164,6 @@ class RustParser(BaseParser):
                     if parent.type == 'impl_item':
                         found_impl = True
                         break
-                    # If we hit a module or source_file before an impl, this function
-                    # is at module level, not inside an impl.
                     if parent.type in ('source_file', 'mod_item', 'declaration_statement'):
                         break
                     parent = parent.parent
@@ -121,9 +183,6 @@ class RustParser(BaseParser):
                     fn_declarations.append(decl)
                     nodes.append(decl["node"])
 
-                # Reset impl for after processing the function inside it
-                # (impl contains functions, so we keep context while inside)
-
         self.walk_tree(tree, source, visit)
 
         # Reset impl tracking for second pass
@@ -140,16 +199,11 @@ class RustParser(BaseParser):
                         "to_fn": call_info["fn_name"],
                         "via_self": call_info.get("via_self", False),
                     }
-                    # Track call object context to prevent false self-edges.
-                    # When a function foo() calls obj.foo(), the edge resolver
-                    # might match it back to itself. Including call_object
-                    # lets the resolver know this is a method call on a different
-                    # object, not a recursive call.
                     if call_info.get("call_object"):
                         edge["call_object"] = call_info["call_object"]
                     edges.append(edge)
 
-        return {"nodes": nodes, "edges": edges}
+        return {"nodes": nodes, "edges": edges, "use_statements": use_statements}
 
     def _find_tauri_command_lines(self, source: bytes) -> set:
         """Pre-scan to find line numbers of functions annotated with #[tauri::command].
@@ -191,6 +245,196 @@ class RustParser(BaseParser):
 
         return impl_for, trait_name
 
+    def _parse_struct_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a struct_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'type_identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:struct:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "struct",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_enum_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse an enum_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'type_identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:enum:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "enum",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_trait_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a trait_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'type_identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:trait:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "trait",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_mod_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a mod_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:mod:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "module",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_const_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a const_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:const:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "const",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_static_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a static_item node."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:static:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "static",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_type_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a type_item node (type alias)."""
+        name = None
+        is_pub = False
+        for child in node.children:
+            if child.type == 'type_identifier':
+                name = self.get_text(child, source)
+            elif child.type == 'visibility_modifier':
+                is_pub = True
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:type:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "type_alias",
+            "file": file_path,
+            "line": line,
+            "pub": is_pub,
+        }
+
+    def _parse_macro_item(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a macro_definition node."""
+        name = None
+        for child in node.children:
+            if child.type == 'identifier':
+                name = self.get_text(child, source)
+                break
+        if not name or name in SKIP_NAMES:
+            return None
+        line = self.get_line(node)
+        return {
+            "id": f"{file_path}:{line}:macro:{name}",
+            "name": name,
+            "fn": name,  # backward compat
+            "type": "macro",
+            "file": file_path,
+            "line": line,
+            "pub": True,  # macros are always pub
+        }
+
+    def _parse_use_declaration(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a use_declaration node for dependency tracking."""
+        line = self.get_line(node)
+        text = self.get_text(node, source)
+        # Extract the last identifier from the use path
+        parts = text.replace('{', '').replace('}', '').replace(' ', '').split('::')
+        last_part = parts[-1].split(',')[0] if parts else None
+        if last_part and last_part not in SKIP_NAMES and last_part != 'self' and last_part != '*':
+            return {
+                "from_file": file_path,
+                "from_line": line,
+                "use_path": text,
+                "imported_name": last_part,
+            }
+        return None
+
     def _parse_function_item(self, node: Node, source: bytes, file_path: str,
                               impl_for: Optional[str], trait_name: Optional[str],
                               is_tauri_cmd: bool = False) -> Optional[Dict]:
@@ -219,7 +463,9 @@ class RustParser(BaseParser):
         line = self.get_line(node)
         node_data = {
             "id": f"{file_path}:{line}",
-            "fn": fn_name,
+            "name": fn_name,
+            "fn": fn_name,  # backward compat
+            "type": "function",
             "file": file_path,
             "line": line,
             "pub": is_pub,

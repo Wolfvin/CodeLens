@@ -387,6 +387,53 @@ def _identify_signature(sig: bytes) -> Optional[str]:
     return None
 
 
+# ─── Generated File Detection ───────────────────────────────
+
+GENERATED_FILE_PATTERNS = frozenset({
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'uv.lock',
+    'go.sum', 'composer.lock', 'mix.lock',
+    '.tsbuildinfo',
+})
+
+GENERATED_FILE_PREFIXES = (
+    '.min.',          # minified JS/CSS
+    '.bundle.',       # bundled files
+    '.chunk.',        # webpack chunks
+)
+
+GENERATED_DIR_NAMES = frozenset({
+    '__pycache__', '.pytest_cache', '.tox', '.mypy_cache',
+    'node_modules', '.next', '.nuxt', '.cache',
+    'dist', 'build', 'target', 'out',
+})
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped during analysis.
+
+    Detects:
+    1. Lock files (package-lock.json, Cargo.lock, etc.)
+    2. Minified/bundled files (.min.js, .bundle.css, etc.)
+    3. Build info files (.tsbuildinfo)
+    4. Declaration files (.d.ts) — these are auto-generated type definitions
+
+    Args:
+        filename: Just the filename (not the full path).
+
+    Returns:
+        True if the file should be treated as generated.
+    """
+    if filename in GENERATED_FILE_PATTERNS:
+        return True
+    for prefix in GENERATED_FILE_PREFIXES:
+        if prefix in filename:
+            return True
+    if filename.endswith('.d.ts'):
+        return True
+    return False
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.0"

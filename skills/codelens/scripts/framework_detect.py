@@ -147,6 +147,43 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["CMakeLists.txt"],
         "indicators": []
     },
+    # Rust ecosystem
+    "rust": {
+        "packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["src/main.rs", "src/lib.rs"]
+    },
+    "actix": {
+        "packages": ["actix-web"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["actix_web"]
+    },
+    "axum": {
+        "packages": ["axum"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["axum"]
+    },
+    "tokio": {
+        "packages": ["tokio"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["tokio"]
+    },
+    "wasm": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": [],
+        "indicators": ["wasm-bindgen", "wasm-pack"]
+    },
+    # Generic Python project (no specific framework)
+    "python": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["pyproject.toml", "setup.py", "setup.cfg"],
+        "indicators": ["__init__.py"]
+    },
 }
 
 
@@ -198,6 +235,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_golang": False,
+        "has_rust": False,
+        "has_python": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -479,6 +518,64 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_golang"] = True
                 break
 
+    # 8. Detect Rust (Cargo.toml) — Cargo workspace and single-crate
+    if not detected["has_rust"]:
+        cargo_toml = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(cargo_toml):
+            if "rust" not in detected["frameworks"]:
+                detected["frameworks"].append("rust")
+            detected["has_rust"] = True
+            # Check for workspace members (monorepo)
+            try:
+                with open(cargo_toml, 'r', encoding='utf-8') as f:
+                    cargo_content = f.read()
+                # Detect workspace members
+                if 'workspace' in cargo_content and 'members' in cargo_content:
+                    detected["is_cargo_workspace"] = True
+                # Detect specific Rust frameworks from dependencies
+                rust_fw_patterns = {
+                    "actix": ["actix-web", "actix_web"],
+                    "axum": ["axum"],
+                    "tokio": ["tokio"],
+                    "serde": ["serde"],
+                    "clap": ["clap"],
+                    "wasm": ["wasm-bindgen", "wasm_pack"],
+                }
+                for fw_name, patterns in rust_fw_patterns.items():
+                    if fw_name not in detected["frameworks"]:
+                        for pattern in patterns:
+                            if pattern in cargo_content:
+                                detected["frameworks"].append(fw_name)
+                                break
+            except (IOError, OSError):
+                pass
+
+    # 9. Detect generic Python project (pyproject.toml, setup.py, etc.)
+    if not detected["has_python"]:
+        python_markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
+        for marker in python_markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if "python" not in detected["frameworks"]:
+                    detected["frameworks"].append("python")
+                detected["has_python"] = True
+                break
+
+        # Also check for .py files if no markers found
+        if not detected["has_python"]:
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for f in files:
+                    if f.endswith('.py') and f != '__init__.py':
+                        if "python" not in detected["frameworks"]:
+                            detected["frameworks"].append("python")
+                        detected["has_python"] = True
+                        break
+                if detected["has_python"]:
+                    break
+
     return detected
 
 
@@ -541,6 +638,38 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                             config["backend_paths"].append(rel + "/")
                 except OSError:
                     pass
+
+    # Rust: add common Rust source paths
+    if fw.get("has_rust"):
+        config["backend_paths"].extend(["src/", "crates/"])
+        # Detect Cargo workspace sub-crates
+        cargo_toml = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(cargo_toml):
+            try:
+                with open(cargo_toml, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if 'workspace' in content:
+                    # Add crates/* paths for monorepo
+                    crates_dir = os.path.join(workspace, "crates")
+                    if os.path.isdir(crates_dir):
+                        try:
+                            for entry in os.listdir(crates_dir):
+                                crate_src = os.path.join(crates_dir, entry, "src")
+                                if os.path.isdir(crate_src):
+                                    rel = os.path.relpath(crate_src, workspace)
+                                    config["backend_paths"].append(rel + "/")
+                        except OSError:
+                            pass
+            except (IOError, OSError):
+                pass
+
+    # Python: add common Python source paths
+    if fw.get("has_python"):
+        config["backend_paths"].extend(["src/", "lib/", "python/"])
+        # Detect src-layout vs flat-layout
+        src_init = os.path.join(workspace, "src", "__init__.py")
+        if os.path.exists(src_init):
+            config["backend_paths"].append("src/")
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
