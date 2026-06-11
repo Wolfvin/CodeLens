@@ -151,6 +151,7 @@ def _detect_workspace() -> Optional[str]:
         'go.mod', 'pom.xml', 'build.gradle', 'Gemfile',
         '.git', '.codelens', 'tsconfig.json', 'next.config.js',
         'next.config.ts', 'vite.config.ts', 'vite.config.js',
+        'composer.json', 'artisan',
     ]
 
     # Check cwd first
@@ -169,7 +170,7 @@ def _detect_workspace() -> Optional[str]:
         depth += 1
 
     # Use cwd as fallback if it has source files
-    for ext in ('.py', '.js', '.ts', '.tsx', '.rs', '.go', '.html', '.css', '.vue', '.svelte'):
+    for ext in ('.py', '.js', '.ts', '.tsx', '.rs', '.html', '.css', '.vue', '.svelte', '.php'):
         if any(f.endswith(ext) for f in os.listdir(cwd) if os.path.isfile(os.path.join(cwd, f))):
             return cwd
 

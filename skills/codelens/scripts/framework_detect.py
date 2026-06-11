@@ -75,7 +75,7 @@ FRAMEWORK_SIGNATURES = {
     "flask": {
         "packages": ["flask"],
         "pip_packages": ["flask"],
-        "config_files": ["app.py", "wsgi.py"],
+        "config_files": ["wsgi.py"],
         "indicators": []
     },
     "django": {
@@ -108,125 +108,97 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
-    # Rust / Tauri frameworks
+    # Mobile/native frameworks
+    "nativescript": {
+        "packages": ["@nativescript/core"],
+        "config_files": ["nativescript.config.ts", "nativescript.config.js"],
+        "indicators": ["tns_modules"]
+    },
+    "capacitor": {
+        "packages": ["@capacitor/core"],
+        "config_files": ["capacitor.config.ts", "capacitor.config.json"],
+        "indicators": []
+    },
+    "cordova": {
+        "packages": ["cordova"],
+        "config_files": ["config.xml"],
+        "indicators": ["www"]
+    },
+    "expo": {
+        "packages": ["expo"],
+        "config_files": ["app.json", "app.config.js", "app.config.ts"],
+        "indicators": []
+    },
+    "react-native": {
+        "packages": ["react-native"],
+        "config_files": [],
+        "indicators": []
+    },
+    "ionic": {
+        "packages": ["@ionic/react", "@ionic/angular", "@ionic/vue"],
+        "config_files": ["ionic.config.json"],
+        "indicators": []
+    },
+    # Monorepo tools
+    "nx": {
+        "packages": ["nx"],
+        "config_files": ["nx.json"],
+        "indicators": []
+    },
+    "turborepo": {
+        "packages": ["turbo"],
+        "config_files": ["turbo.json"],
+        "indicators": []
+    },
+    # Desktop frameworks
     "tauri": {
         "packages": ["@tauri-apps/api"],
-        "cargo_crates": ["tauri"],
         "config_files": ["src-tauri/tauri.conf.json"],
-        "indicators": ["#[tauri::command]"]
+        "indicators": []
     },
-    "axum": {
-        "cargo_crates": ["axum"],
+    "electron": {
+        "packages": ["electron"],
+        "config_files": ["electron-builder.yml", "electron-builder.json"],
+        "indicators": []
+    },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan", "bootstrap/app.php", "bootstrap/cache/config.php"],
+        "indicators": [".blade.php", "app/Http/Kernel.php", "app/Http/Middleware"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle", "symfony/symfony"],
+        "config_files": ["symfony.lock", "config/bundles.php"],
+        "indicators": []
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php", "wp-settings.php"],
+        "indicators": ["wp-content/", "wp-includes/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core", "drupal/drupal"],
+        "config_files": ["drupal/autoload.php"],
+        "indicators": ["sites/default/"]
+    },
+    "slim": {
+        "packages": [],
+        "composer_packages": ["slim/slim"],
         "config_files": [],
         "indicators": []
     },
-    "actix-web": {
-        "cargo_crates": ["actix-web"],
+    "lumen": {
+        "packages": [],
+        "composer_packages": ["laravel/lumen-framework"],
         "config_files": [],
         "indicators": []
     },
-    "rocket": {
-        "cargo_crates": ["rocket"],
-        "config_files": [],
-        "indicators": []
-    },
-    "warp": {
-        "cargo_crates": ["warp"],
-        "config_files": [],
-        "indicators": []
-    },
-    "poem": {
-        "cargo_crates": ["poem"],
-        "config_files": [],
-        "indicators": []
-    },
-    "salvo": {
-        "cargo_crates": ["salvo"],
-        "config_files": [],
-        "indicators": []
-    }
 }
-
-
-def _find_cargo_tomls(workspace: str) -> List[str]:
-    """Find all Cargo.toml files in the workspace, including workspace members.
-
-    Checks root, src-tauri/, and crates/* subdirectories.
-    """
-    cargo_files = []
-
-    # Root Cargo.toml
-    root_cargo = os.path.join(workspace, "Cargo.toml")
-    if os.path.exists(root_cargo):
-        cargo_files.append(root_cargo)
-
-    # src-tauri/Cargo.toml (Tauri standard layout)
-    tauri_cargo = os.path.join(workspace, "src-tauri", "Cargo.toml")
-    if os.path.exists(tauri_cargo):
-        cargo_files.append(tauri_cargo)
-
-    # Workspace members: crates/*
-    crates_dir = os.path.join(workspace, "src-tauri", "crates")
-    if os.path.isdir(crates_dir):
-        try:
-            for entry in os.listdir(crates_dir):
-                entry_path = os.path.join(crates_dir, entry)
-                cargo_path = os.path.join(entry_path, "Cargo.toml")
-                if os.path.isfile(cargo_path):
-                    cargo_files.append(cargo_path)
-        except OSError:
-            pass
-
-    # Also check top-level crates/*
-    top_crates_dir = os.path.join(workspace, "crates")
-    if os.path.isdir(top_crates_dir) and top_crates_dir != crates_dir:
-        try:
-            for entry in os.listdir(top_crates_dir):
-                entry_path = os.path.join(top_crates_dir, entry)
-                cargo_path = os.path.join(entry_path, "Cargo.toml")
-                if os.path.isfile(cargo_path):
-                    cargo_files.append(cargo_path)
-        except OSError:
-            pass
-
-    return cargo_files
-
-
-def _parse_cargo_dependencies(cargo_path: str) -> Dict[str, str]:
-    """Parse Cargo.toml and extract dependency names.
-
-    Handles both [dependencies] and [dev-dependencies] sections,
-    as well as workspace-inherited deps.
-    Returns dict of crate_name -> version (or "*" for complex specs).
-    """
-    deps = {}
-    try:
-        with open(cargo_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        # Find [dependencies] and [dev-dependencies] sections
-        in_dep_section = False
-        for line in content.split('\n'):
-            stripped = line.strip()
-
-            # Section header
-            if stripped.startswith('['):
-                section = stripped.strip('[]').strip()
-                in_dep_section = section in ('dependencies', 'dev-dependencies')
-                continue
-
-            if not in_dep_section:
-                continue
-
-            # Parse dependency line: name = "version" or name = { version = "..." }
-            m = re.match(r'^([a-zA-Z0-9_-]+)\s*=', stripped)
-            if m:
-                crate_name = m.group(1).lower()
-                deps[crate_name] = "*"
-    except (IOError, OSError):
-        pass
-
-    return deps
 
 
 def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
@@ -274,8 +246,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_nativescript": False,
+        "has_capacitor": False,
+        "has_expo": False,
+        "has_react_native": False,
+        "has_nx": False,
         "has_tauri": False,
+        "has_electron": False,
         "has_rust_backend": False,
+        "has_laravel": False,
+        "has_symfony": False,
+        "has_wordpress": False,
+        "has_php": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -301,9 +283,53 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except (json.JSONDecodeError, IOError):
             pass
 
+    # 1b. Better module system detection — check multiple signals
+    if detected["module_system"] is None or detected["module_system"] == "cjs":
+        # Check if any sub-package.json has "type": "module"
+        for pkg_path in pkg_files:
+            try:
+                with open(pkg_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                if pkg.get("type") == "module":
+                    detected["module_system"] = "esm"
+                    break
+            except (json.JSONDecodeError, IOError):
+                pass
+        # Check for .mjs files as ESM indicator
+        if detected["module_system"] != "esm":
+            mjs_count = 0
+            cjs_count = 0
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for fn in filenames:
+                    if fn.endswith('.mjs'):
+                        mjs_count += 1
+                    elif fn.endswith('.cjs'):
+                        cjs_count += 1
+                if mjs_count + cjs_count > 20:
+                    break
+            if mjs_count > cjs_count:
+                detected["module_system"] = "esm"
+            elif mjs_count > 0 and cjs_count == 0:
+                detected["module_system"] = "esm"
+        # Check for pnpm-workspace.yaml (monorepos often use ESM)
+        if detected["module_system"] == "cjs" and os.path.isfile(os.path.join(workspace, "pnpm-workspace.yaml")):
+            # Check if .mjs files exist
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                if any(fn.endswith('.mjs') for fn in filenames):
+                    detected["module_system"] = "esm"
+                    break
+
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            for pkg_name in sig.get("packages", []):
+            for pkg_name in sig["packages"]:
                 if pkg_name in all_deps:
                     detected["frameworks"].append(fw_name)
                     if fw_name == "react":
@@ -318,8 +344,20 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "nativescript":
+                        detected["has_nativescript"] = True
+                    elif fw_name == "capacitor":
+                        detected["has_capacitor"] = True
+                    elif fw_name == "expo":
+                        detected["has_expo"] = True
+                    elif fw_name == "react-native":
+                        detected["has_react_native"] = True
+                    elif fw_name == "nx":
+                        detected["has_nx"] = True
                     elif fw_name == "tauri":
                         detected["has_tauri"] = True
+                    elif fw_name == "electron":
+                        detected["has_electron"] = True
                     break
 
         # Detect CSS preprocessor
@@ -350,10 +388,21 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "tauri":
                     detected["has_tauri"] = True
+                elif fw_name == "electron":
+                    detected["has_electron"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                    detected["has_php"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                    detected["has_php"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                    detected["has_php"] = True
                 break
-            # Check one level deep for monorepo (apps/*, packages/*)
+            # Check one level deep for monorepo (apps/*, packages/*, src-tauri/*)
             found_in_subdir = False
-            for subdir in ('apps', 'packages', 'projects', 'services'):
+            for subdir in ('apps', 'packages', 'projects', 'services', 'src-tauri'):
                 subdir_path = os.path.join(workspace, subdir)
                 if not os.path.isdir(subdir_path):
                     continue
@@ -368,8 +417,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                                 detected["has_nextjs"] = True
                             elif fw_name == "react":
                                 detected["has_react"] = True
-                            elif fw_name == "tauri":
-                                detected["has_tauri"] = True
                             found_in_subdir = True
                             break
                 except OSError:
@@ -379,31 +426,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if found_in_subdir:
                 break
 
-    # 3. Check Cargo.toml (Rust dependencies)
-    cargo_deps = {}
-    cargo_files = _find_cargo_tomls(workspace)
-
-    for cargo_path in cargo_files:
-        file_deps = _parse_cargo_dependencies(cargo_path)
-        cargo_deps.update(file_deps)
-
-    if cargo_deps:
-        detected["has_rust_backend"] = True
-
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            for crate_name in sig.get("cargo_crates", []):
-                if crate_name.lower() in cargo_deps:
-                    detected["frameworks"].append(fw_name)
-                    if fw_name == "tauri":
-                        detected["has_tauri"] = True
-                    break
-
-    # 4. Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)
+    # 3. Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)
     pip_deps = set()
 
-    # 4a. requirements.txt
+    # 3a. requirements.txt
     req_path = os.path.join(workspace, "requirements.txt")
     if os.path.exists(req_path):
         try:
@@ -417,7 +443,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             logger.debug("Failed to parse requirements.txt", exc_info=True)
 
-    # 4b. pyproject.toml
+    # 3b. pyproject.toml
     pyproject_path = os.path.join(workspace, "pyproject.toml")
     if os.path.exists(pyproject_path):
         try:
@@ -432,7 +458,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             logger.debug("Failed to parse pyproject.toml", exc_info=True)
 
-    # 4c. Check pip deps against framework signatures
+    # 3c. Check pip deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
         if fw_name in detected["frameworks"]:
             continue
@@ -448,35 +474,114 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 5. Check file patterns (for Vue, Svelte, Tauri config)
-    for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+    # 3d. Check Cargo.toml for Rust dependencies (Tauri, Axum, Actix, etc.)
+    cargo_deps = set()
+    _find_cargo_toml = lambda ws: [
+        os.path.join(ws, "Cargo.toml"),
+        os.path.join(ws, "src-tauri", "Cargo.toml"),
+    ]
+
+    for cargo_path in _find_cargo_toml(workspace):
+        if not os.path.exists(cargo_path):
             continue
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            # Parse [dependencies] section — extract crate names
+            in_deps = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[dependencies]':
+                    in_deps = True
+                    continue
+                if stripped.startswith('[') and in_deps:
+                    break  # End of [dependencies] section
+                if in_deps and '=' in stripped:
+                    crate_name = stripped.split('=')[0].strip().lower()
+                    if crate_name:
+                        cargo_deps.add(crate_name)
+        except IOError:
+            logger.debug("Failed to parse Cargo.toml", exc_info=True)
 
-        for f in files:
-            if f.endswith('.vue') and not detected["has_vue"]:
-                if "vue" not in detected["frameworks"]:
-                    detected["frameworks"].append("vue")
-                detected["has_vue"] = True
-            elif f.endswith('.svelte') and not detected["has_svelte"]:
-                if "svelte" not in detected["frameworks"]:
-                    detected["frameworks"].append("svelte")
-                detected["has_svelte"] = True
-            elif f == 'tauri.conf.json' and not detected["has_tauri"]:
-                if "tauri" not in detected["frameworks"]:
-                    detected["frameworks"].append("tauri")
-                detected["has_tauri"] = True
+    if cargo_deps:
+        detected["has_rust_backend"] = True
+        # Detect Tauri from Cargo dependency
+        if "tauri" in cargo_deps:
+            if "tauri" not in detected["frameworks"]:
+                detected["frameworks"].append("tauri")
+            detected["has_tauri"] = True
+        # Detect other Rust frameworks
+        rust_framework_map = {
+            "axum": "axum",
+            "actix-web": "actix",
+            "rocket": "rocket",
+            "warp": "warp",
+        }
+        for crate, fw_name in rust_framework_map.items():
+            if crate in cargo_deps and fw_name not in detected["frameworks"]:
+                detected["frameworks"].append(fw_name)
 
-    # 6. Detect Tailwind from CSS content
-    if not detected["has_tailwind"]:
-        tailwind_indicators = ['@tailwind', '@apply']
+    # 4. Check composer.json for PHP framework dependencies
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_deps.update(composer.get("require", {}).keys())
+            composer_deps.update(composer.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            logger.debug("Failed to parse composer.json", exc_info=True)
+
+    if composer_deps:
+        detected["has_php"] = True
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name in composer_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    elif fw_name == "symfony":
+                        detected["has_symfony"] = True
+                    elif fw_name == "wordpress":
+                        detected["has_wordpress"] = True
+                    break
+
+    # 4b. Check PHP framework config files and indicators
+    if not detected["has_php"]:
+        # Check for artisan (Laravel) or other PHP markers
+        if os.path.exists(os.path.join(workspace, "artisan")):
+            detected["has_php"] = True
+            if "laravel" not in detected["frameworks"]:
+                detected["frameworks"].append("laravel")
+                detected["has_laravel"] = True
+
+    # 4c. Check for any PHP files as a last resort
+    if not detected["has_php"]:
+        php_count = 0
         for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for f in files:
+                if f.endswith('.php'):
+                    php_count += 1
+                    break
+            if php_count > 0:
+                break
+        if php_count > 0:
+            detected["has_php"] = True
+
+    # 5. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
+    need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
+    if need_file_scan:
+        for root, dirs, files in os.walk(workspace):
+            # Skip ignored dirs
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
             skip = False
             for ignore in DEFAULT_IGNORE_DIRS:
                 if ignore in root:
@@ -484,23 +589,83 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
             if skip:
                 continue
+
+            # Check Vue/Svelte file patterns
             for f in files:
-                if f.endswith(('.css', '.scss', '.pcss')):
-                    try:
-                        fpath = os.path.join(root, f)
-                        with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
-                            content = fh.read(4096)  # Read first 4KB
-                            for indicator in tailwind_indicators:
-                                if indicator in content:
+                if f.endswith('.vue') and not detected["has_vue"]:
+                    if "vue" not in detected["frameworks"]:
+                        detected["frameworks"].append("vue")
+                    detected["has_vue"] = True
+                elif f.endswith('.svelte') and not detected["has_svelte"]:
+                    if "svelte" not in detected["frameworks"]:
+                        detected["frameworks"].append("svelte")
+                    detected["has_svelte"] = True
+
+            # Check Tailwind from CSS content
+            if not detected["has_tailwind"]:
+                for f in files:
+                    if f.endswith(('.css', '.scss', '.pcss')):
+                        try:
+                            fpath = os.path.join(root, f)
+                            with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                                content = fh.read(4096)  # Read first 4KB
+                                if '@tailwind' in content or '@apply' in content:
                                     if "tailwind" not in detected["frameworks"]:
                                         detected["frameworks"].append("tailwind")
                                     detected["has_tailwind"] = True
                                     break
-                            if detected["has_tailwind"]:
-                                break
-                    except IOError:
-                        pass
-            if detected["has_tailwind"]:
+                        except IOError:
+                            pass
+                if detected["has_tailwind"]:
+                    pass  # Continue walking for Vue/Svelte if not found yet
+
+            # Early exit if all targets found
+            if detected["has_vue"] and detected["has_svelte"] and detected["has_tailwind"]:
+                break
+
+    # 7. Source-level Python framework detection (Flask / FastAPI / Django)
+    #    Some frameworks (especially Flask) can be falsely detected via generic
+    #    config file names like "app.py".  To avoid false positives, we verify
+    #    by checking for actual import statements in Python source files.
+    python_framework_imports = {
+        "flask": [r'(?:from\s+flask\s+import|import\s+flask\b)'],
+        "fastapi": [r'(?:from\s+fastapi\s+import|import\s+fastapi\b)'],
+        "django": [r'(?:from\s+django\s+import|import\s+django\b)'],
+    }
+
+    for fw_name, patterns in python_framework_imports.items():
+        if fw_name in detected["frameworks"]:
+            continue  # Already detected via deps/config — that's sufficient
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            found = False
+            for f in files:
+                if not f.endswith('.py'):
+                    continue
+                try:
+                    fpath = os.path.join(root, f)
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                        content = fh.read(8192)  # Read first 8KB
+                    for pattern in patterns:
+                        if re.search(pattern, content):
+                            if fw_name not in detected["frameworks"]:
+                                detected["frameworks"].append(fw_name)
+                            if fw_name == "flask":
+                                detected["has_flask"] = True
+                            elif fw_name == "fastapi":
+                                detected["has_fastapi"] = True
+                            elif fw_name == "django":
+                                detected["has_django"] = True
+                            found = True
+                            break
+                    if found:
+                        break
+                except IOError:
+                    pass
+            if found:
                 break
 
     return detected
@@ -534,20 +699,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         # Next.js app router — everything under app/ could be frontend
         config["frontend_paths"] = list(set(config["frontend_paths"]))
 
-    if fw["has_tauri"]:
-        config["frontend_paths"].extend(["src/", "ui/"])
-        config["backend_paths"].extend(["src-tauri/src/"])
-        # Ensure src/ is NOT in backend_paths for Tauri
-        config["backend_paths"] = [p for p in config["backend_paths"] if p == "src-tauri/src/" or not p.startswith("src/")]
-        # Add Tauri-specific ignore patterns
-        for pat in ["src-tauri/target/", "src-tauri/gen/"]:
-            if pat not in config["ignore"]:
-                config["ignore"].append(pat)
-
-    if fw["has_rust_backend"] and not fw["has_tauri"]:
-        # Pure Rust backend (not Tauri)
-        config["backend_paths"].extend(["src/"])
-
     if fw["has_react"]:
         config["jsx_mode"] = True
         config["frontend_paths"].extend(["src/components/", "src/views/"])
@@ -562,6 +713,30 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    if fw.get("has_tauri"):
+        config["frontend_paths"].extend(["src/", "src-tauri/"])
+        config["backend_paths"].extend(["src-tauri/src/"])
+        # Remove generic src/ from backend_paths since it's frontend in Tauri
+        if "src/" in config["backend_paths"]:
+            config["backend_paths"].remove("src/")
+
+    if fw.get("has_nativescript"):
+        config["frontend_paths"].extend(["app/", "src/app/"])
+        config["backend_paths"].extend(["src/"])
+
+    if fw.get("has_capacitor"):
+        config["frontend_paths"].extend(["src/", "www/"])
+        config["backend_paths"].extend(["android/", "ios/"])
+
+    # PHP / Laravel specific paths
+    if fw.get("has_laravel"):
+        config["backend_paths"].extend(["app/", "routes/", "database/", "config/"])
+        config["frontend_paths"].extend(["resources/views/", "resources/js/", "resources/css/"])
+        config["ignore"].extend(["vendor/", "storage/"])
+    elif fw.get("has_php"):
+        config["backend_paths"].extend(["app/", "src/", "routes/", "config/"])
+        config["ignore"].append("vendor/")
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
