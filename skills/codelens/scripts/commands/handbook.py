@@ -224,6 +224,61 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     return handbook
 
 
+def _is_python_application(workspace: str, pyproject_content: str) -> bool:
+    """Check if a Python project is a full application rather than a library.
+
+    Distinguishes applications (like Home Assistant, Odoo) from libraries by checking:
+    1. Has a main entry point (__main__.py, cli entrypoint in pyproject.toml)
+    2. Has application-specific directory structure (components/, integrations/, apps/)
+    3. Has a Dockerfile or deployment configuration
+    4. Has scripts/console_scripts entry point in pyproject.toml
+    5. Has large number of component/integration directories
+
+    Args:
+        workspace: Absolute path to workspace root
+        pyproject_content: Content of pyproject.toml
+
+    Returns:
+        True if the project appears to be a full application.
+    """
+    # Check for console_scripts entry point
+    if re.search(r'console_scripts\s*=', pyproject_content):
+        return True
+
+    # Check for [project.scripts] section
+    if '[project.scripts]' in pyproject_content:
+        return True
+
+    # Check for __main__.py in the main package
+    pkg_name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', pyproject_content)
+    if pkg_name_match:
+        pkg_name = pkg_name_match.group(1).replace('-', '_')
+        main_path = os.path.join(workspace, pkg_name, '__main__.py')
+        if os.path.isfile(main_path):
+            return True
+
+    # Check for Dockerfile (applications typically have one)
+    if os.path.isfile(os.path.join(workspace, 'Dockerfile')):
+        return True
+
+    # Check for application-specific directory patterns
+    app_indicators = ['components', 'integrations', 'apps', 'modules', 'plugins']
+    for indicator in app_indicators:
+        indicator_path = os.path.join(workspace, indicator)
+        if os.path.isdir(indicator_path):
+            # If there are many subdirectories, it's likely an application
+            try:
+                subdirs = [d for d in os.listdir(indicator_path)
+                          if os.path.isdir(os.path.join(indicator_path, d))
+                          and not d.startswith('.') and not d.startswith('_')]
+                if len(subdirs) >= 10:
+                    return True
+            except OSError:
+                pass
+
+    return False
+
+
 def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     """Extract project identity from package.json, pyproject.toml, or README.
 
@@ -343,6 +398,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["version"] = ver_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
                 python_type = "backend-api"
+            elif _is_python_application(workspace, content):
+                python_type = "python-application"
             elif "pytest" in content:
                 python_type = "python-library"
             else:

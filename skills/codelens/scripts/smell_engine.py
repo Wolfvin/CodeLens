@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -99,6 +99,10 @@ def detect_smells(
 
             # Skip minified files
             if '.min.' in filename:
+                continue
+
+            # Skip generated files (generated/, vendor/, _pb2.py, etc.)
+            if is_generated_file(rel_path):
                 continue
 
             # Skip files exceeding size cap
@@ -640,7 +644,16 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
 
 
 def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Detect magic numbers and strings (unexplained constants)."""
+    """Detect magic numbers and strings (unexplained constants).
+
+    v2 improvements:
+    - Skip generated files (path checked externally, but also skip by content markers)
+    - Python-aware: skip numbers in const assignments (UPPER_CASE =), type annotations,
+      default arguments, f-strings, docstrings, and known Python patterns
+    - Expanded common_numbers with common Python/Rust constants
+    - Skip numbers in dict/list literals (likely config)
+    - Skip numbers that are part of string content
+    """
     smells = []
     lines = content.split('\n')
 
@@ -649,20 +662,27 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         'config', 'eslint', 'prettier', 'vitest', 'jest',
         'playwright', 'postcss', 'next.config', 'tsconfig',
         '.fixture.', '.stories.', '.story.', '.test.', '.spec.',
+        'constants', 'const.py', 'consts', 'enums',
     ]
     rel_lower = rel_path.lower()
     if any(kw in rel_lower for kw in config_file_keywords):
         return smells
 
-    # Numbers that are likely magic (not 0, 1, -1, 2, or common HTTP codes)
-    common_numbers = {0, 1, -1, 2, 3, 10, 100, 256, 1000, 200, 201, 204, 301, 302, 400, 401, 403, 404, 500, 502, 503}
+    # Numbers that are likely NOT magic (common constants, HTTP codes, etc.)
+    common_numbers = {
+        0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 20, 24, 30, 32, 36,
+        48, 50, 60, 64, 100, 128, 200, 256, 300, 360, 500, 512, 1000, 1024,
+        # HTTP status codes
+        200, 201, 202, 204, 206, 301, 302, 304, 307, 308,
+        400, 401, 403, 404, 405, 409, 422, 429, 500, 502, 503, 504,
+    }
 
     # Context patterns that indicate config-like lines (skip numbers on these)
     config_context_patterns = [
         '.config.', '.config(', 'eslint', 'prettier', 'vitest',
         'jest', 'playwright', 'tailwind',
     ]
-    
+
     # JSX/TSX style prop patterns — numbers in style/CSS props are not magic values
     jsx_style_patterns = [
         r'width\s*[:=]', r'height\s*[:=]', r'padding\s*[:=]', r'margin\s*[:=]',
@@ -673,11 +693,50 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         r'timeout\s*[:=]', r'port\s*[:=]',
     ]
 
+    # Python-specific skip patterns — these are NOT magic values
+    python_skip_patterns = [
+        r'^\s*[A-Z_][A-Z0-9_]*\s*=',     # UPPER_CASE = constant assignment
+        r'^\s*def\s+\w+',                   # function definition (default args)
+        r'^\s*class\s+\w+',                 # class definition
+        r'.*:\s*(int|float|str|bool)\s*=',   # type annotation with default
+        r'.*#.*type:\s*ignore',              # type: ignore comments
+        r'^\s*"""', r'^\s*"""',             # docstrings
+        r'^\s*return\s+',                   # return statements (often correct)
+        r'.*range\(',                        # range() calls
+        r'.*enumerate\(',                    # enumerate() calls
+        r'.*\.format\(',                     # .format() calls
+        r'.*%[sd]$',                         # %-formatting
+        r'.*os\.path\.',                     # os.path operations
+        r'.*logging\.',                      # logging configuration
+        r'.*assert\s+',                      # assert statements
+        r'.*pytest\.',                       # pytest configuration
+        r'.*@pytest\.',                      # pytest decorators
+        r'.*unittest\.',                     # unittest configuration
+        r'.*__version__',                    # version declarations
+        r'.*__all__',                        # __all__ exports
+        r'.*typing\.',                       # typing module
+        r'.*Optional\[',                     # Optional types
+        r'.*Union\[',                        # Union types
+    ]
+
+    in_docstring = False
+
     for i, line in enumerate(lines):
         stripped = line.strip()
 
+        # Track docstring boundaries
+        if '"""' in stripped or "'''" in stripped:
+            count = stripped.count('"""') + stripped.count("'''")
+            if count == 1:
+                in_docstring = not in_docstring
+            continue  # Skip docstring lines entirely
+        if in_docstring:
+            continue
+
         # Skip comments, imports, and console/logs
         if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('import'):
+            continue
+        if stripped.startswith('from ') and ' import ' in stripped:
             continue
         if 'console.' in stripped or 'print(' in stripped or 'log!' in stripped:
             continue
@@ -686,10 +745,15 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         stripped_lower = stripped.lower()
         if any(pat in stripped_lower for pat in config_context_patterns):
             continue
-        
+
         # Skip JSX style prop lines in TSX/JSX files
         if ext in {'.tsx', '.jsx'}:
             if any(re.search(pat, stripped) for pat in jsx_style_patterns):
+                continue
+
+        # Python-specific skips
+        if ext == '.py':
+            if any(re.search(pat, stripped) for pat in python_skip_patterns):
                 continue
 
         # Check for magic numbers
@@ -702,13 +766,25 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             if num in common_numbers or num > 10000:
                 continue
 
-            # Check if number is part of a const/let/var declaration
+            # Check if number is part of a const/let/var/UPPER_CASE declaration
             if 'const ' in stripped or 'let ' in stripped or 'var ' in stripped:
                 continue
 
-            # Check if it's in an array literal or object (likely config)
+            # Python: skip UPPER_CASE constant assignments
+            if ext == '.py' and re.match(r'^\s*[A-Z_][A-Z0-9_]*\s*=', stripped):
+                continue
+
+            # Check if it's in an array literal or object/dict (likely config)
             if stripped.startswith('[') or stripped.startswith('{'):
                 continue
+
+            # Python: skip if number is in a dict literal context (key: value)
+            if ext == '.py' and ':' in stripped and not stripped.startswith('if ') and not stripped.startswith('elif '):
+                # Could be dict literal {key: 42} or type annotation
+                if re.search(r'[:=]\s*\d+', stripped):
+                    # Check if it's a variable assignment like x: int = 42
+                    if re.match(r'^\s*\w+\s*:\s*\w+\s*=\s*', stripped):
+                        continue
 
             smells.append({
                 "file": rel_path,

@@ -84,6 +84,12 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["manage.py"],
         "indicators": ["django/__init__.py", "django/apps/", "django/conf/", "django/contrib/", "django/core/"]
     },
+    "homeassistant": {
+        "packages": ["homeassistant"],
+        "pip_packages": ["homeassistant"],
+        "config_files": [],
+        "indicators": ["homeassistant/__init__.py", "homeassistant/components/", "homeassistant/core.py", "homeassistant/bootstrap.py"]
+    },
     "celery": {
         "packages": ["celery"],
         "pip_packages": ["celery"],
@@ -195,6 +201,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_homeassistant": False,
         "has_tauri": False,
         "has_electron": False,
         "has_golang": False,
@@ -275,6 +282,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "homeassistant":
+                    detected["has_homeassistant"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
                 break
@@ -350,6 +359,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "homeassistant":
+                    detected["has_homeassistant"] = True
                 break
 
     # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
@@ -421,6 +432,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 detected["frameworks"].append(fw_name)
                 if fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "homeassistant":
+                    detected["has_homeassistant"] = True
                 elif fw_name == "fastapi":
                     detected["has_fastapi"] = True
                 elif fw_name == "flask":
@@ -524,6 +537,10 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # Home Assistant: add component/integration paths
+    if fw.get("has_homeassistant"):
+        config["backend_paths"].extend(["homeassistant/", "homeassistant/components/", "homeassistant/helpers/"])
 
     # Tauri: add Rust backend paths and src-tauri
     if fw.get("has_tauri"):

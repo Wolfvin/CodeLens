@@ -1546,12 +1546,25 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 # ─── Module-level State (Python) ───────────────────────────────
 
 def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract module-level global variables and singletons in Python."""
+    """Extract module-level global variables and singletons in Python.
+
+    v4 improvements:
+    - Skip private module-level variables (leading underscore)
+    - Skip dunder attributes (__tablename__, __slots__, etc.)
+    - Skip test directories more aggressively
+    - Skip class-type assignments (ClassName = SomeClass) - not mutable state
+    - Skip type annotations without assignment
+    - Skip import-like assignments
+    - Expanded PY_CONSTANT_SKIP with common framework patterns
+    """
     stores = []
     flow = []
 
-    # Skip test and config files
-    if any(x in rel_path for x in ['test_', 'conftest', 'settings.py', 'config.py']):
+    # Skip test and config files (expanded patterns)
+    test_patterns = ['test_', 'conftest', 'tests/', '/tests/', 'settings.py',
+                     'config.py', '_test.py', '.test.', '.spec.', 'fixtures/',
+                     '__tests__']
+    if any(x in rel_path for x in test_patterns):
         return {"stores": [], "flow": []}
 
     # v5.8: Expanded skip list for Python constants that are NOT mutable state.
@@ -1564,6 +1577,13 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         'KEY', 'ID', 'TOKEN', 'SECRET', 'TYPE', 'STATUS', 'DEFAULT',
         'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
         'PATTERN', 'REGEX', 'SCHEMA', 'TIMEOUT', 'DELAY', 'LIMIT',
+        # v4: Additional common Python module constants
+        'PLATFORM', 'DOMAIN', 'PLATFORMS', 'COMPONENT', 'SERVICE',
+        'ATTR', 'CONF', 'DATA', 'EVENT', 'SIGNAL', 'STATE',
+        'SUPPORT', 'REQUIREMENT', 'DEPENDENCY', 'DEPENDENCIES',
+        'ISSUE', 'SCAN_INTERVAL', 'CONF_UPDATE', 'DISCOVERY',
+        'ATTRIBUTION', 'MANUFACTURER', 'MODEL', 'SW_VERSION',
+        'HW_VERSION', 'VIA_DEVICE', 'SUGGESTED_AREA',
     }
 
     # v5.8: Python builtins and common stdlib aliases
@@ -1572,6 +1592,11 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         '__name__', '__file__', '__doc__', '__package__',
         '__builtins__', '__all__', '__path__', '__spec__',
         '__loader__', '__cached__', '__version__',
+        # v4: Additional dunder attributes that are NOT mutable state
+        '__tablename__', '__table_args__', '__slots__',
+        '__module__', '__qualname__', '__annotations__',
+        '__abstractmethods__', '__dict__', '__weakref__',
+        '__init_subclass__', '__class_vars__', '__instance_vars__',
     }
 
     lines = content.split('\n')
@@ -1580,7 +1605,7 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
         # Module-level assignments (not inside functions/classes)
         if not stripped.startswith((' ', '\t')):  # Top-level
-            m = re.match(r'^([A-Z_]\w+)\s*=\s*(.*)', stripped)
+            m = re.match(r'^([A-Z_]\w*)\s*=\s*(.*)', stripped)
             if m:
                 var_name = m.group(1)
                 value_part = m.group(2).strip() if m.group(2) else ""
@@ -1592,13 +1617,55 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 if var_name in PY_BUILTIN_SKIP:
                     continue
 
+                # v4: Skip private module-level variables (leading underscore)
+                # These are implementation details, not global state
+                if var_name.startswith('_'):
+                    continue
+
                 # v5.8: Skip ALL_CAPS constants
                 # (e.g., VERBOSE, CLI, ROOT are all-caps single-word constants)
                 if var_name == var_name.upper() and len(var_name) >= 3:
                     continue
 
+                # v4: Skip class-type assignments (ClassName = SomeClass)
+                # These are type aliases, not mutable state
+                if re.match(r'^[A-Z][a-zA-Z0-9]*\s*$', value_part):
+                    continue
+
+                # v4: Skip import-like assignments (from x import Y as Z)
+                if re.match(r'^(import|from\s)', value_part):
+                    continue
+
+                # v4: Skip type annotation assignments without value
+                # (x: int or x: SomeType — no actual state)
+                # These lines don't have = sign, already filtered by regex
+
                 # v5.8: Skip path references and env var lookups
                 if re.match(r'^(os\.path|Path|pathlib|os\.getenv|os\.environ)', value_part):
+                    continue
+
+                # v4: Skip lambda, function, and class definitions
+                if re.match(r'^(lambda |def |class )', value_part):
+                    continue
+
+                # v4: Skip simple string/number/boolean constants
+                # (likely configuration, not mutable state)
+                if re.match(r'^[\'"]', value_part) and not re.search(r'[\'"]\s*[+(]', value_part):
+                    continue
+                if re.match(r'^-?\d+(\.\d+)?$', value_part):
+                    continue
+                if value_part in ('True', 'False', 'None'):
+                    continue
+
+                # v4: Skip frozenset/set/tuple/list/dict of literals
+                # (likely configuration constants)
+                if re.match(r'^(frozenset|set|tuple|list|dict)\s*\(', value_part):
+                    continue
+
+                # v4: Skip Logging/getLogger assignments (not mutable state)
+                if re.match(r'^logging\.getLogger', value_part):
+                    continue
+                if re.match(r'^_?LOG(?:GER)?\b', value_part):
                     continue
 
                 stores.append({
