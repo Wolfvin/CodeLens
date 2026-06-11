@@ -147,6 +147,48 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["CMakeLists.txt"],
         "indicators": []
     },
+    # Rust frameworks
+    "rust": {
+        "packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": []
+    },
+    "tokio": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["tokio"],
+        "indicators": []
+    },
+    "actix-web": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["actix-web", "actix_web"],
+        "indicators": []
+    },
+    "axum": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["axum"],
+        "indicators": []
+    },
+    "deno_core": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["deno_core", "deno_core_impl"],
+        "indicators": []
+    },
+    "warp": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["warp"],
+        "indicators": []
+    },
+    "rocket": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["rocket"],
+        "indicators": []
+    },
 }
 
 
@@ -198,6 +240,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_golang": False,
+        "has_rust": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -352,7 +395,76 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
+    # 4. Check Rust/Cargo.toml for framework detection
+    cargo_deps = set()
+    cargo_path = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(cargo_path):
+        if "rust" not in detected["frameworks"]:
+            detected["frameworks"].append("rust")
+        detected["has_rust"] = True
+
+        # Parse root Cargo.toml for dependencies
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            # Extract dependency names from [dependencies] and [dev-dependencies] sections
+            in_deps = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped.startswith('['):
+                    section = stripped.strip('[]').strip()
+                    in_deps = section in ('dependencies', 'dev-dependencies')
+                    continue
+                if in_deps and '=' in stripped:
+                    dep_name = stripped.split('=')[0].strip().lower()
+                    if dep_name and not dep_name.startswith('#'):
+                        cargo_deps.add(dep_name)
+                elif in_deps and stripped and not stripped.startswith('#') and not stripped.startswith('['):
+                    # Handle inline table: dep = { version = "..." }
+                    dep_name = stripped.split('=')[0].strip().lower()
+                    if dep_name:
+                        cargo_deps.add(dep_name)
+        except IOError:
+            pass
+
+        # Also parse workspace members' Cargo.toml
+        for crate_dir_name in ('crates', 'ext', 'libs', 'packages'):
+            crate_dir = os.path.join(workspace, crate_dir_name)
+            if os.path.isdir(crate_dir):
+                try:
+                    for entry in os.listdir(crate_dir):
+                        sub_cargo = os.path.join(crate_dir, entry, "Cargo.toml")
+                        if os.path.isfile(sub_cargo):
+                            try:
+                                with open(sub_cargo, 'r', encoding='utf-8') as f:
+                                    sub_content = f.read()
+                                in_deps = False
+                                for line in sub_content.split('\n'):
+                                    stripped = line.strip()
+                                    if stripped.startswith('['):
+                                        section = stripped.strip('[]').strip()
+                                        in_deps = section in ('dependencies', 'dev-dependencies')
+                                        continue
+                                    if in_deps and '=' in stripped:
+                                        dep_name = stripped.split('=')[0].strip().lower()
+                                        if dep_name and not dep_name.startswith('#'):
+                                            cargo_deps.add(dep_name)
+                            except IOError:
+                                pass
+                except OSError:
+                    pass
+
+        # Match cargo deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            cargo_crates = sig.get("cargo_crates", [])
+            for crate_name in cargo_crates:
+                if crate_name.lower() in cargo_deps:
+                    detected["frameworks"].append(fw_name)
+                    break
+
+    # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
@@ -524,6 +636,22 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # Rust: add Rust-specific paths
+    if fw.get("has_rust"):
+        config["backend_paths"].extend(["src/", "crates/", "ext/"])
+        # Check for Cargo workspace subdirectories
+        for crate_dir_name in ('crates', 'ext', 'libs'):
+            crate_dir = os.path.join(workspace, crate_dir_name)
+            if os.path.isdir(crate_dir):
+                try:
+                    for entry in os.listdir(crate_dir):
+                        entry_path = os.path.join(crate_dir, entry)
+                        if os.path.isdir(entry_path):
+                            rel = os.path.relpath(entry_path, workspace)
+                            config["backend_paths"].append(rel + "/src/")
+                except OSError:
+                    pass
 
     # Tauri: add Rust backend paths and src-tauri
     if fw.get("has_tauri"):

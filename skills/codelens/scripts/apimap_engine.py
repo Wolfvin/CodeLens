@@ -218,6 +218,16 @@ def map_api_routes(
                     frameworks_detected.add("tauri")
                     routes.extend(tauri_cmd_routes)
 
+                # v5.8: Rust HTTP handler detection (actix-web, axum, warp, rocket)
+                rust_http_routes = _extract_rust_http_routes(content, rel_path)
+                if rust_http_routes:
+                    routes.extend(rust_http_routes)
+                    # Track which Rust framework was detected
+                    for r in rust_http_routes:
+                        fw = r.get("framework", "")
+                        if fw:
+                            frameworks_detected.add(fw)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -2235,5 +2245,113 @@ def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict]:
             "request_type": "ipc_handler",
             "response_type": None,
         })
+
+    return routes
+
+
+def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract HTTP route handlers from Rust web framework code.
+
+    Supports:
+    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route()
+    - axum: .route("/path", get(handler)), Router::new().route()
+    - warp: warp::path("segment"), warp::get()/post()
+    - rocket: #[get("/path")], #[post("/path")]
+    """
+    routes = []
+
+    # ─── actix-web / rocket: attribute-style routes ─────────────
+    ACTIX_METHOD_MAP = {
+        'get': 'GET', 'post': 'POST', 'put': 'PUT', 'delete': 'DELETE',
+        'patch': 'PATCH', 'head': 'HEAD', 'options': 'OPTIONS',
+    }
+    for m in re.finditer(
+        r'#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"\s*\)\s*\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
+        content
+    ):
+        method_raw = m.group(1).lower()
+        path = m.group(2)
+        handler = m.group(3)
+        line_num = content[:m.start()].count('\n') + 1
+
+        fw = "actix-web"
+        if 'rocket' in content and 'actix' not in content:
+            fw = "rocket"
+
+        routes.append({
+            "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
+            "path": path,
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": fw,
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "http_handler",
+            "response_type": None,
+        })
+
+    # ─── actix-web: web::resource().route().method() ─────────────
+    for m in re.finditer(
+        r'\.resource\s*\(\s*"([^"]+)"\s*\)',
+        content
+    ):
+        path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "RESOURCE",
+            "path": path,
+            "handler_name": None,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "actix-web",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "resource_route",
+            "response_type": None,
+        })
+
+    # ─── axum: .route("/path", get(handler)) ─────────────
+    for m in re.finditer(
+        r'\.route\s*\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options|any)\s*\(\s*(\w+)\s*\)',
+        content
+    ):
+        path = m.group(1)
+        method_raw = m.group(2).lower()
+        handler = m.group(3)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": method_raw.upper(),
+            "path": path,
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "axum",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "http_handler",
+            "response_type": None,
+        })
+
+    # ─── warp: warp::path("segment") ─────────────
+    if 'warp::' in content:
+        warp_paths = re.findall(r'warp::path\s*\(\s*"([^"]+)"\s*\)', content)
+        if warp_paths:
+            for segment in warp_paths[:20]:
+                idx = content.find(f'warp::path("{segment}")')
+                line_num = content[:idx].count('\n') + 1 if idx >= 0 else 0
+                routes.append({
+                    "method": "FILTER",
+                    "path": f"/{segment}",
+                    "handler_name": None,
+                    "file": rel_path,
+                    "line": line_num,
+                    "framework": "warp",
+                    "middleware": [],
+                    "auth_required": False,
+                    "request_type": "path_filter",
+                    "response_type": None,
+                })
 
     return routes

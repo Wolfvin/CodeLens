@@ -40,7 +40,19 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8 — Tested on elizaOS/eliza (5000+ file TypeScript AI agent framework)
+## What's New in v5.8 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
+
+- **Rust framework detection**: `detect_frameworks()` now parses `Cargo.toml` for dependencies and detects `rust`, `tokio`, `actix-web`, `axum`, `warp`, `rocket`, `deno_core`. Also scans workspace members' `Cargo.toml` in `crates/`, `ext/`, `libs/`, `packages/`.
+- **Rust HTTP route extraction**: `api-map` now detects routes from Rust web frameworks: actix-web (`#[get]`/`#[post]` attributes, `web::resource()`), axum (`.route("/path", get(handler))`), warp (`warp::path("segment")`), rocket (`#[get]`/`#[post]` attributes).
+- **Cargo workspace monorepo detection**: `handbook` detects `[workspace]` in `Cargo.toml` and sub-crate patterns. Reports `is_monorepo: true` with `monorepo_tools: ["cargo-workspace"]`.
+- **`is_generated_file()` utility**: Detects lock files, declaration files, minified files. Fixes `refactor_safe` command crash. Total commands: 42 → 43.
+- **State-map `__dunder` runtime helper filtering**: JS/TS runtime binding helpers (`__default`, `__createBinding`, `__exportStar`, `__importDefault`, `__reexport`, `__buffer`, `__esModule`, etc.) no longer classified as state stores. General `__` prefix pattern also filtered.
+- **`handbook` crash fix**: Removed invalid `max_files` keyword argument from `cmd_scan()` call.
+- **Smell `health_score` at top level**: `health_score` now also returned as top-level key for easier programmatic access.
+- **File scan cap increases**: Complexity engine 3,000→5,000 files. Debug-leak 3,000→5,000 files.
+- **Version alignment**: skill.json version `5.7.1` → `5.8.0`. Description now accurately reflects current capabilities.
+
+## What's New in v5.8.0 (elizaOS/eliza test) — Previous Release
 
 - **State map false positive reduction**: Expanded skip lists for Node.js globals (__dirname, __filename, process, Buffer, etc.), CLI argument constants, path aliases (ROOT, HOME, CWD), environment variable references, and import-like assignments. ALL_CAPS single-word constants (VERBOSE, CLI, CHECK, PRUNE) now correctly skipped. Python global filtering also improved with builtin/dunder/path skips. State stores dropped from ~1493 false positives to significantly fewer real ones.
 - **Entrypoints markdown fix (v2)**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers, silently consumed. Now uses backticks for reliable rendering: `module_export`, `main`.

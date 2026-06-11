@@ -92,8 +92,8 @@ def compute_complexity(
 
     function_results: List[Dict] = []
     files_scanned = 0
-    MAX_FILES = 3000  # Cap to prevent timeout on large repos
-    MAX_FUNCTIONS = 5000  # Cap total functions to analyze
+    MAX_FILES = 5000  # v5.8: Increased from 3000 to handle large repos like deno
+    MAX_FUNCTIONS = 8000  # Cap total functions to analyze
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]

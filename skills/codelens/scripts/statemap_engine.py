@@ -329,8 +329,31 @@ def map_state(
         # Python dunder attributes
         '__name__', '__file__', '__doc__', '__package__', '__all__',
         '__builtins__', '__path__', '__spec__', '__loader__', '__cached__',
+        # JS/TS runtime binding helpers (found in deno, Node polyfills)
+        '__default', '__createBinding', '__exportStar', '__importDefault',
+        '__reexport', '__importStar', '__buffer', '__default_export__',
+        '__telemetry', '__esModule', '__webpack_require__', '__webpack_modules__',
+        '__non_webpack_require__', '__callGSB', '__extends', '__assign',
+        '__rest', '__decorate', '__param', '__metadata', '__awaiter',
+        '__generator', '__values', '__read', '__spread', '__spreadArrays',
     }
     stores = [s for s in stores if s.get("name", "") not in _POST_FILTER_SKIP_NAMES]
+
+    # v5.8: Also filter any name starting with __ that looks like a runtime helper.
+    # These are typically TypeScript/__esModule interop helpers, not state stores.
+    def _is_dunder_runtime_helper(name: str) -> bool:
+        """Check if a __dunder__ name is a runtime/interop helper, not state."""
+        if not name.startswith('__'):
+            return False
+        # Common patterns: __XxxYyy (PascalCase after __) = TS/JS helper
+        # __lowercase = Node.js/polyfill internal
+        # Only skip if it's clearly a helper (starts with __ but is not a known state pattern)
+        known_state_prefixes = ('__store', '__state', '__context', '__atom', '__slice')
+        if any(name.startswith(p) for p in known_state_prefixes):
+            return False
+        return True
+
+    stores = [s for s in stores if not _is_dunder_runtime_helper(s.get("name", ""))]
 
     # v5.8.1: Also filter stores where the name is ALL_CAPS with no underscore
     # and looks like a simple constant (3+ uppercase letters only = config constant).

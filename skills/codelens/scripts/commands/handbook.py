@@ -74,7 +74,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
-        scan_result = cmd_scan(workspace, max_files=max_files)
+        scan_result = cmd_scan(workspace)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
@@ -260,6 +260,37 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["is_monorepo"] = True
             if tool_name not in identity["monorepo_tools"]:
                 identity["monorepo_tools"].append(tool_name)
+
+    # v5.8: Check for Rust/Cargo workspace monorepo
+    cargo_toml_path = os.path.join(workspace, 'Cargo.toml')
+    if os.path.isfile(cargo_toml_path):
+        try:
+            with open(cargo_toml_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            # Check for [workspace] section with members
+            if '[workspace]' in cargo_content:
+                identity["is_monorepo"] = True
+                if "cargo-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cargo-workspace")
+        except Exception:
+            pass
+
+    # v5.8: Check for crates/ or ext/ directories with Cargo.toml (Rust monorepo pattern)
+    for crate_dir_name in ('crates', 'ext'):
+        crate_dir = os.path.join(workspace, crate_dir_name)
+        if os.path.isdir(crate_dir):
+            sub_crates = 0
+            try:
+                for entry in os.listdir(crate_dir):
+                    sub_cargo = os.path.join(crate_dir, entry, 'Cargo.toml')
+                    if os.path.isfile(sub_cargo):
+                        sub_crates += 1
+            except OSError:
+                pass
+            if sub_crates >= 2:
+                identity["is_monorepo"] = True
+                if "cargo-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cargo-workspace")
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
