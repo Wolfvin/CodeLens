@@ -5,12 +5,31 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import path from 'path'
 
 const execFileAsync = promisify(execFile)
 
-// Path to codelens CLI — use venv python3 to ensure tree-sitter is available
-const CODELENS_PYTHON = process.env.CODELENS_PYTHON || '/home/z/.venv/bin/python3'
-const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT || '/home/z/my-project/skills/codelens/scripts/codelens.py'
+// Path to codelens CLI — MUST be set via environment variables.
+// No hardcoded fallbacks: if these are missing, the server throws a clear error.
+const CODELENS_PYTHON = process.env.CODELENS_PYTHON
+const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
+  ? path.resolve(process.env.CODELENS_SCRIPT)
+  : undefined
+
+if (!CODELENS_PYTHON) {
+  throw new Error(
+    '[CodeLens] CODELENS_PYTHON env var is not set. ' +
+    'Set it to the path of your Python 3 interpreter (the one with tree-sitter installed). ' +
+    'Example: CODELENS_PYTHON=/home/you/.venv/bin/python3'
+  )
+}
+if (!CODELENS_SCRIPT) {
+  throw new Error(
+    '[CodeLens] CODELENS_SCRIPT env var is not set. ' +
+    'Set it to the path of the CodeLens CLI script (codelens.py). ' +
+    'Example: CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py'
+  )
+}
 
 /** Maximum execution time for a CLI command (ms) */
 const COMMAND_TIMEOUT = 60_000
