@@ -290,7 +290,7 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 | `query` | Look up a symbol by name and return its details |
 | `list` | List registry entries with optional domain/type filter |
 | `detect` | Auto-detect frameworks used in the workspace |
-| `watch` | Watch for file changes and re-scan automatically |
+| `watch` | Watch for file changes, re-scan with debounce, generate outline.json + summary.json |
 
 ### Search & Trace (P1)
 
@@ -441,7 +441,6 @@ CodeLens/
 │   ├── scripts/           # 39 command engines + parsers
 │   ├── tests/             # Python unit tests
 │   └── setup.sh           # One-time tree-sitter setup
-├── codelens-watch.py      # Standalone file watcher (Python)
 ├── __tests__/             # Backend integration tests
 ├── db/                    # SQLite database
 ├── .env.example           # Environment variable template
@@ -450,24 +449,33 @@ CodeLens/
 
 ---
 
-## Standalone File Watcher
+## Watch Mode (File Watcher)
 
-CodeLens includes `codelens-watch.py` — a standalone Python script that watches a project folder and auto-generates JSON outlines on every file change. This works independently of the Node.js server.
+The `watch` command monitors your workspace for file changes, re-scans automatically, and generates AI-friendly output files. It uses debounce to coalesce rapid changes and prints a clean one-line summary instead of raw JSON.
 
 ```bash
-# One-time scan
-python3 codelens-watch.py /path/to/project --once
+# Watch with default 0.5s debounce
+python3 skills/codelens/scripts/codelens.py watch /path/to/project
 
-# Continuous watch (with 0.5s debounce)
-python3 codelens-watch.py /path/to/project --debounce 0.5
+# Custom debounce interval
+python3 skills/codelens/scripts/codelens.py watch /path/to/project --debounce 1.0
 
-# Custom output directory
-python3 codelens-watch.py /path/to/project --output-dir codelens
+# Short flag
+python3 skills/codelens/scripts/codelens.py watch /path/to/project -d 2.0
 ```
 
-Output files:
-- `codelens/outline.json` — per-file detail (functions, classes, imports, calls)
-- `codelens/summary.json` — aggregate totals (language breakdown, command count)
+**Terminal output (clean one-line summary):**
+```
+[CodeLens] Scanning /path/to/project...
+[14:32:01] ✓ 87 files | 312 funcs | 45 classes | 203 nodes | 156 edges
+[CodeLens] Watching /path/to/project (debounce: 0.5s) — Press Ctrl+C to stop
+  Changed: src/auth.ts
+[14:32:15] ✓ 87 files | 314 funcs | 45 classes | 205 nodes | 158 edges | 1 changed
+```
+
+**Generated output files** (in `.codelens/`):
+- `.codelens/outline.json` — per-file detail (functions, classes, imports, exports)
+- `.codelens/summary.json` — aggregate totals (file count, function count, language breakdown, node/edge counts)
 
 ---
 
