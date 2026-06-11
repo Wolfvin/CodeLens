@@ -166,6 +166,19 @@ def resolve_edges(
                     same_file = [c for c in candidates if c.get("file", "") == from_file]
                     target_node = same_file[0] if same_file else candidates[0]
 
+        # 4. Pinia store usage: "useXxxStore" → match store node with fn="useXxxStore"
+        if not target_node and to_fn.startswith('use') and to_fn.endswith('Store'):
+            if to_fn in fn_name_to_nodes:
+                candidates = fn_name_to_nodes[to_fn]
+                # Prefer pinia_store type nodes
+                pinia_nodes = [c for c in candidates if c.get("type") == "pinia_store"]
+                if pinia_nodes:
+                    target_node = pinia_nodes[0]
+                else:
+                    from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                    same_file = [c for c in candidates if c.get("file", "") == from_file]
+                    target_node = same_file[0] if same_file else candidates[0]
+
         # Build resolved edge
         if target_node:
             resolved_edge = {
@@ -300,160 +313,69 @@ def _to_alternate_case(name: str) -> str:
     return leading + name
 
 
-# ─── Tauri IPC Cross-Language Edge Resolution ────────────────────
-
 def resolve_tauri_ipc_from_apimap(
     nodes: List[Dict],
     edges: List[Dict],
     api_routes: List[Dict]
 ) -> List[Dict]:
-    """Resolve cross-language edges for Tauri IPC invoke() ↔ #[tauri::command].
+    """Resolve cross-language Tauri IPC edges from API map results.
 
-    In a Tauri app the frontend calls Rust handlers via ``invoke('commandName')``
-    which is invisible to same-language call-graph analysis.  This function
-    bridges that gap by:
-
-    1. Collecting all *invoke* routes from ``api_routes`` (``request_type ==
-       "TauriInvoke"``) — these represent the frontend call site.
-    2. Collecting all *command* routes (``request_type == "TauriIPC"``) —
-       these represent the Rust handler.
-    3. Matching them by command name (Tauri converts snake_case Rust names to
-       camelCase for JS, so we try both the exact name and the alternate case).
-    4. Adding an ``ipc_bridge`` edge from the invoking node to the handler
-       node for every match, preventing the Rust handler from being falsely
-       flagged as dead code.
+    When a Tauri app's TypeScript frontend calls `invoke('commandName')`,
+    the Rust handler `#[tauri::command] fn command_name()` is not directly
+    called by any Rust code — it's invoked through the IPC bridge. This
+    function creates synthetic edges connecting TS invoke calls to their
+    Rust handler counterparts.
 
     Args:
-        nodes: The current resolved backend node list.
-        edges: The current resolved edge list (will be extended in-place).
-        api_routes: The output of ``apimap_engine.map_api_routes()``.
+        nodes: Resolved backend nodes list.
+        edges: Resolved backend edges list.
+        api_routes: API map routes (from apimap_engine).
 
     Returns:
-        The updated ``edges`` list (same object, mutated in-place for
-        efficiency, but also returned for convenience).
+        Updated edges list with new IPC cross-language edges appended.
     """
-    if not api_routes:
-        return edges
+    ipc_edges = []
+    node_map = {n["id"]: n for n in nodes if "id" in n}
 
-    # Build a node lookup by id for fast matching
-    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
-
-    # Separate Tauri IPC routes into invokes (frontend) and commands (backend)
-    invoke_routes: List[Dict] = []
-    command_routes: List[Dict] = []
     for route in api_routes:
-        rt = route.get("request_type", "")
-        if rt == "TauriInvoke":
-            invoke_routes.append(route)
-        elif rt == "TauriIPC":
-            command_routes.append(route)
+        handler = route.get("handler", "")
+        method = route.get("method", "")
+        path = route.get("path", "")
+        source_file = route.get("file", "")
 
-    if not invoke_routes or not command_routes:
-        return edges
-
-    # Index command routes by their IPC name for O(1) lookup
-    # The path field for commands looks like "invoke('commandName')"
-    command_by_name: Dict[str, Dict] = {}
-    for cmd in command_routes:
-        name = _extract_tauri_command_name(cmd)
-        if name:
-            command_by_name[name] = cmd
-            # Also index by alternate case (snake_case ↔ camelCase)
-            alt = _to_alternate_case(name)
-            if alt != name:
-                command_by_name[alt] = cmd
-
-    # Match each invoke to its command handler and create IPC bridge edges
-    for inv in invoke_routes:
-        inv_name = _extract_tauri_command_name(inv)
-        if not inv_name:
+        # Look for Tauri IPC routes: invoke('xxx') → Rust #[tauri::command]
+        if not handler or route.get("framework") != "tauri_ipc":
             continue
 
-        # Find the matching command
-        cmd_route = command_by_name.get(inv_name) or command_by_name.get(_to_alternate_case(inv_name))
-        if not cmd_route:
-            continue
-
-        # Find the node for the invoke (frontend caller)
-        inv_file = inv.get("file", "")
-        inv_line = inv.get("line", 0)
-        inv_handler = inv.get("handler_name", "")
-        inv_node_id = _find_node_id(nodes, inv_file, inv_line, inv_handler)
-
-        # Find the node for the command (Rust handler)
-        cmd_file = cmd_route.get("file", "")
-        cmd_line = cmd_route.get("line", 0)
-        cmd_handler = cmd_route.get("handler_name", "")
-        cmd_node_id = _find_node_id(nodes, cmd_file, cmd_line, cmd_handler)
-
-        # Create the IPC bridge edge
-        if inv_node_id and cmd_node_id:
-            # Prevent self-edges (same node)
-            if inv_node_id != cmd_node_id:
-                edge = {
-                    "from": inv_node_id,
-                    "to": cmd_node_id,
-                    "edge_type": "ipc_bridge",
-                    "ipc_command": inv_name,
-                }
-                edges.append(edge)
-
-                # Mark the Rust handler as ipc_exposed so it's not flagged dead
-                cmd_node = node_by_id.get(cmd_node_id)
-                if cmd_node:
-                    cmd_node["is_tauri_command"] = True
-                    if cmd_node.get("ref_count", 0) == 0:
-                        cmd_node["status"] = "ipc_exposed"
-
-    return edges
-
-
-def _extract_tauri_command_name(route: Dict) -> str:
-    """Extract the Tauri IPC command name from an API route entry.
-
-    The ``path`` field for Tauri routes typically looks like
-    ``invoke('commandName')``.  This helper strips the wrapper and
-    returns just the name.
-    """
-    path = route.get("path", "")
-    if path.startswith("invoke('") and path.endswith("')"):
-        return path[8:-2]
-    if path.startswith("invoke(\"") and path.endswith("\")"):
-        return path[8:-2]
-    # Fallback: use handler_name directly
-    return route.get("handler_name", "")
-
-
-def _find_node_id(
-    nodes: List[Dict],
-    file_path: str,
-    line: int,
-    fn_name: str
-) -> Optional[str]:
-    """Find the best-matching node ID for a given file/line/function.
-
-    Tries exact (file + line) match first, then falls back to
-    (file + fn_name) match.
-    """
-    # Exact match on file + line
-    for n in nodes:
-        if n.get("file") == file_path and n.get("line") == line:
-            return n["id"]
-
-    # Fuzzy match on file + function name
-    if fn_name:
+        # Find the Rust handler node
+        rust_node_id = None
         for n in nodes:
-            if n.get("file") == file_path and n.get("fn") == fn_name:
-                return n["id"]
+            fn = n.get("fn", "")
+            # Match handler name (snake_case) with invoke command (camelCase or snake_case)
+            if fn == handler or _to_alternate_case(fn) == handler:
+                rust_node_id = n.get("id")
+                break
 
-    # Last resort: match by function name across all files
-    if fn_name:
-        candidates = [n for n in nodes if n.get("fn") == fn_name]
-        if candidates:
-            # Prefer the one with matching file
-            for c in candidates:
-                if c.get("file") == file_path:
-                    return c["id"]
-            return candidates[0]["id"]
+        if not rust_node_id:
+            continue
 
-    return None
+        # Find the TypeScript invoke() caller node(s)
+        for n in nodes:
+            fn = n.get("fn", "")
+            nfile = n.get("file", "")
+            if "invoke" in fn.lower() and nfile.endswith((".ts", ".tsx", ".js", ".jsx")):
+                ipc_edge = {
+                    "from": n["id"],
+                    "to": rust_node_id,
+                    "to_fn": handler,
+                    "type": "tauri_ipc",
+                    "resolved": True,
+                }
+                ipc_edges.append(ipc_edge)
+
+    # Mark Rust Tauri commands as ipc_exposed
+    for n in nodes:
+        if n.get("is_tauri_command"):
+            n.setdefault("status", "ipc_exposed")
+
+    return edges + ipc_edges

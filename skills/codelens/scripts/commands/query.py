@@ -308,12 +308,11 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
             worst_action = "LIST_FIRST"
 
-    # Fuzzy/substring match in backend (always try when exact match fails)
-    # Only search backend if domain allows it, and load registry only when needed
-    if domain in (None, "backend"):
-        # backend may already be loaded; only load if not already
-        if 'backend' not in dir():
-            backend = load_backend_registry(workspace)
+    # Fuzzy/substring match in backend (only try when no exact matches found)
+    # This avoids discarding exact multi-match results when fuzzy matches exist
+    if total_matches == 0 and domain in (None, "backend"):
+        # backend is guaranteed to be loaded at this point because
+        # the same domain condition at line ~144 loaded it earlier
         query_lower = query_name.lower()
         fuzzy_matches = []
         for node in backend.get("nodes", []):

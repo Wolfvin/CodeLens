@@ -33,25 +33,69 @@ DEFAULT_IGNORE_DIRS = frozenset({
     'storybook-static', '.storybook',
 })
 
+# Generated/lock files that should be excluded from analysis engines
+# (refactor-safe, smell, dead-code, etc.) but NOT from file walking.
+# These are committed but not human-written source code.
+GENERATED_FILE_PATTERNS = frozenset({
+    'Cargo.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'bun.lock', 'bun.lockb', 'go.sum', 'poetry.lock', 'uv.lock',
+    'Gemfile.lock', 'composer.lock', 'pip-wheel-metadata',
+    '.pnp.cjs', '.pnp.js',
+})
+
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
 })
 
 
-def should_ignore_file(filename: str) -> bool:
-    """Check if a file should be ignored based on extension patterns.
+def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
+    """Check if a relative directory path should be ignored.
 
-    Covers minified files, source maps, and type declarations.
+    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS (plus any
+    caller-supplied extra set) to avoid false positives from substring matches.
+    For example, 'target' matches 'src/target/debug' but NOT 'test-target/src'.
+
+    Args:
+        rel_path: Relative path from workspace root (e.g. 'src/node_modules/pkg').
+        extra_ignore: Optional additional directory names to ignore.
+
+    Returns:
+        True if the path contains an ignored directory segment, False otherwise.
     """
-    lower = filename.lower()
-    for ext in DEFAULT_IGNORE_EXTENSIONS:
-        if lower.endswith(ext):
+    # Normalize to forward slashes for consistent matching
+    normalized = rel_path.replace('\\', '/')
+
+    # Merge default + extra ignore sets
+    ignore_dirs = DEFAULT_IGNORE_DIRS
+    if extra_ignore:
+        ignore_dirs = ignore_dirs | extra_ignore
+
+    # Split the path into segments and check each against the ignore set
+    segments = normalized.split('/')
+    for segment in segments:
+        if segment in ignore_dirs:
             return True
-    # Also check .d.tsx
-    if lower.endswith('.d.tsx'):
-        return True
+
     return False
+
+
+def is_generated_file(file_path: str) -> bool:
+    """Check if a file is a generated/lock file that should be excluded from analysis.
+
+    These files (Cargo.lock, package-lock.json, etc.) are committed to VCS
+    but are not human-written source code. Analysis engines like refactor-safe,
+    smell, and dead-code should skip them.
+
+    Args:
+        file_path: Absolute or relative path to the file.
+
+    Returns:
+        True if the file is a generated/lock file, False otherwise.
+    """
+    basename = os.path.basename(file_path)
+    return basename in GENERATED_FILE_PATTERNS
+
 
 # ─── Output File Generation ─────────────────────────────────
 
@@ -134,22 +178,7 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte', '.php'}
-
-
-def should_ignore_dir(rel_path: str) -> bool:
-    """Check if a relative directory path should be ignored.
-
-    Uses path-segment-aware matching so that a workspace named
-    'test-dist' doesn't falsely match the 'dist' ignore rule.
-    """
-    if rel_path == '.':
-        return False
-    parts = rel_path.replace(os.sep, '/').split('/')
-    for part in parts:
-        if part in DEFAULT_IGNORE_DIRS:
-            return True
-    return False
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
 def is_file_path(name: str) -> bool:
@@ -186,168 +215,302 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
-# ─── File Reading Utility ──────────────────────────────────────
+# ─── File Reading Utility ──────────────────────────────────
 
-def safe_read_file(path: str, max_size: int = 200 * 1024, encoding: str = 'utf-8') -> Optional[str]:
-    """Safely read a file with size limit and error handling.
+def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file's contents with error handling and size limit.
 
     Args:
-        path: Absolute or relative file path.
+        file_path: Absolute or relative path to the file.
         max_size: Maximum file size in bytes to read (default 200KB).
+                  Files larger than this are skipped to avoid memory issues.
         encoding: File encoding (default utf-8).
 
     Returns:
-        File content as string, or None if the file cannot be read
-        (missing, too large, encoding error, etc.).
+        File contents as string, or None if the file cannot be read,
+        doesn't exist, is too large, or is a binary file.
     """
     try:
-        file_size = os.path.getsize(path)
-        if file_size > max_size:
-            logger.debug(f"Skipping large file ({file_size} bytes): {path}")
+        if not os.path.isfile(file_path):
             return None
-        with open(path, 'r', encoding=encoding, errors='ignore') as f:
+
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            logger.debug(f"Skipping large file ({file_size} bytes): {file_path}")
+            return None
+
+        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
             return f.read()
-    except (OSError, IOError):
-        logger.debug(f"Failed to read file: {path}", exc_info=True)
+    except (IOError, OSError, UnicodeDecodeError):
+        logger.debug(f"Failed to read file: {file_path}", exc_info=True)
         return None
-
-
-# ─── Directory Ignore Utility ──────────────────────────────────
-
-def should_ignore_dir(rel_path: str) -> bool:
-    """Check if a relative path contains any segment from DEFAULT_IGNORE_DIRS.
-
-    Uses path-segment-aware matching so that a workspace named
-    "test-dist" does NOT match "dist".
-
-    Args:
-        rel_path: Relative path from workspace root (e.g., "src/components",
-                  "node_modules/react", ".git/hooks").
-
-    Returns:
-        True if any path segment is in DEFAULT_IGNORE_DIRS.
-    """
-    if rel_path == '.':
-        return False
-    # Normalize to forward slashes and split into segments
-    segments = rel_path.replace(os.sep, '/').split('/')
-    return any(seg in DEFAULT_IGNORE_DIRS for seg in segments)
-
-
-# ─── Source File Walking ────────────────────────────────────
-
-# Common source extensions used by multiple engines
-SOURCE_EXTENSIONS_ALL = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".php",
-    ".html", ".css", ".scss", ".less",
-}
-
-# Generated / lock / vendored file patterns — should be skipped by engines
-_GENERATED_PATTERNS = {
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock',
-    'composer.lock', 'Gemfile.lock', 'Cargo.lock', 'pipfile.lock', 'poetry.lock',
-    'go.sum', '.pnp.cjs', '.pnp.js',
-}
-
-
-def walk_source_files(
-    workspace: str,
-    extensions: Optional[set] = None,
-    max_files: int = MAX_FILES_DEFAULT,
-    ignore_dirs: Optional[frozenset] = None,
-) -> List[tuple]:
-    """Walk the workspace and yield source files matching the given extensions.
-
-    This is a shared utility used by multiple engines (smell, handbook, context,
-    ask) to avoid each engine reimplementing file discovery.
-
-    Args:
-        workspace: Absolute path to workspace root.
-        extensions: Set of file extensions to include (e.g., {'.js', '.ts'}).
-                    If None, uses SOURCE_EXTENSIONS_ALL.
-        max_files: Maximum number of files to return (performance safeguard).
-        ignore_dirs: Override for directories to ignore. Defaults to DEFAULT_IGNORE_DIRS.
-
-    Returns:
-        List of (rel_path, extension, content) tuples for each matching file.
-    """
-    workspace = os.path.abspath(workspace)
-    if extensions is None:
-        extensions = SOURCE_EXTENSIONS_ALL
-    if ignore_dirs is None:
-        ignore_dirs = DEFAULT_IGNORE_DIRS
-
-    results: List[tuple] = []
-    for root, dirs, filenames in os.walk(workspace):
-        # Prune ignored directories
-        rel_root = os.path.relpath(root, workspace)
-        parts = rel_root.replace('\\', '/').split('/')
-        if any(p in ignore_dirs for p in parts):
-            dirs.clear()
-            continue
-
-        # Don't descend into .codelens
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in extensions:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip generated/lock files
-            if is_generated_file(filename):
-                continue
-
-            content = safe_read_file(file_path)
-            if content is not None:
-                results.append((rel_path, ext, content))
-
-            if len(results) >= max_files:
-                return results
-
-    return results
-
-
-def is_generated_file(filename: str) -> bool:
-    """Check if a file is a generated/lock/vendored file that should be skipped.
-
-    Args:
-        filename: Just the filename (not the full path), e.g. 'package-lock.json'.
-
-    Returns:
-        True if the file should be skipped during analysis.
-    """
-    fname_lower = filename.lower()
-
-    # Exact match for known lock/generated files
-    if fname_lower in _GENERATED_PATTERNS:
-        return True
-
-    # Minified files: *.min.js, *.min.css
-    if '.min.' in fname_lower:
-        return True
-
-    # Source maps
-    if fname_lower.endswith('.map'):
-        return True
-
-    # Declaration files
-    if fname_lower.endswith('.d.ts'):
-        return True
-
-    # Bundle/chunk files
-    if '.bundle.' in fname_lower or '.chunk.' in fname_lower:
-        return True
-
-    return False
 
 
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"
+
+# ─── Shared Constants ────────────────────────────────────────
+
+# Default maximum file size for engines that scan source files.
+# Files larger than this are skipped to avoid slow regex/memory issues.
+MAX_FILE_SIZE = 200 * 1024  # 200KB
+
+# Default maximum number of files to scan per category.
+# Prevents extremely slow scans on huge codebases (10K+ files).
+MAX_FILES_DEFAULT = 2000
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if a time budget has been exceeded.
+
+    Used by engines to bail out early on very large codebases.
+
+    Args:
+        start_time: Unix timestamp from time.time() when scanning started.
+        budget_sec: Maximum seconds allowed for the scan.
+
+    Returns:
+        True if the budget has been exceeded, False otherwise.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
+
+
+# ─── Binary Artifact Scanning ──────────────────────────────────
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/compiled artifacts.
+
+    Detects:
+    - Executable files (.exe, .msi, .dmg, .AppImage, .deb)
+    - Shared libraries (.dll, .so, .dylib)
+    - Compiled objects (.o, .pyc, .class)
+    - Build output directories (dist/, target/release/)
+    - Bundled resources (assets/, resources/)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with binary artifact findings and metadata
+    """
+    workspace = os.path.abspath(workspace)
+
+    EXECUTABLE_EXTS = {'.exe', '.msi', '.dmg', '.app', '.deb', '.rpm',
+                       '.AppImage', '.snap', '.flatpak', '.bin'}
+    LIBRARY_EXTS = {'.dll', '.so', '.dylib', '.ko'}
+    COMPILED_EXTS = {'.o', '.obj', '.pyc', '.pyo', '.class', '.jar',
+                     '.wasm', '.node'}
+
+    BINARY_EXTENSIONS_ALL = EXECUTABLE_EXTS | LIBRARY_EXTS | COMPILED_EXTS
+
+    # Known build output directories
+    BUILD_DIRS = {
+        'dist', 'target/release', 'target/debug', 'build', 'out',
+        'bin', 'output', 'release', 'Debug', 'Release',
+    }
+
+    executables = []
+    libraries = []
+    compiled = []
+    build_dirs_found = []
+    total_binary_size = 0
+
+    for root, dirs, files in os.walk(workspace):
+        # Skip ignored dirs
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        rel_root = os.path.relpath(root, workspace)
+
+        # Check for known build output directories
+        for build_dir in BUILD_DIRS:
+            if rel_root == build_dir or rel_root.replace('\\', '/').startswith(build_dir + '/'):
+                build_dirs_found.append({
+                    'path': rel_root,
+                    'type': 'build_output',
+                })
+
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext not in BINARY_EXTENSIONS_ALL:
+                continue
+
+            file_path = os.path.join(root, f)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            try:
+                file_size = os.path.getsize(file_path)
+            except OSError:
+                file_size = 0
+
+            total_binary_size += file_size
+
+            artifact = {
+                'name': f,
+                'path': rel_path,
+                'size': file_size,
+                'size_human': _human_size(file_size),
+                'extension': ext,
+            }
+
+            if ext in EXECUTABLE_EXTS:
+                artifact['type'] = 'executable'
+                executables.append(artifact)
+            elif ext in LIBRARY_EXTS:
+                artifact['type'] = 'shared_library'
+                libraries.append(artifact)
+            elif ext in COMPILED_EXTS:
+                artifact['type'] = 'compiled_object'
+                compiled.append(artifact)
+
+    total = len(executables) + len(libraries) + len(compiled)
+
+    # Determine build system
+    build_system = _detect_build_system(workspace)
+
+    return {
+        'status': 'ok',
+        'workspace': workspace,
+        'build_system': build_system,
+        'stats': {
+            'total_artifacts': total,
+            'executables': len(executables),
+            'shared_libraries': len(libraries),
+            'compiled_objects': len(compiled),
+            'build_dirs': len(build_dirs_found),
+            'total_binary_size': total_binary_size,
+            'total_binary_size_human': _human_size(total_binary_size),
+        },
+        'executables': executables,
+        'shared_libraries': libraries,
+        'compiled_objects': compiled,
+        'build_dirs': build_dirs_found,
+        'recommendations': _generate_binary_recommendations(
+            executables, libraries, compiled, build_dirs_found, build_system
+        ),
+    }
+
+
+def _human_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable size."""
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def _detect_build_system(workspace: str) -> Dict[str, Any]:
+    """Detect the build system and packaging tools used."""
+    systems = []
+
+    # Tauri
+    if os.path.exists(os.path.join(workspace, 'src-tauri', 'Cargo.toml')):
+        systems.append({'name': 'tauri', 'config': 'src-tauri/Cargo.toml'})
+    elif os.path.exists(os.path.join(workspace, 'Cargo.toml')):
+        cargo_path = os.path.join(workspace, 'Cargo.toml')
+        try:
+            with open(cargo_path, 'r', encoding='utf-8', errors='replace') as f:
+                if 'tauri' in f.read().lower():
+                    systems.append({'name': 'tauri', 'config': 'Cargo.toml'})
+        except IOError:
+            pass
+
+    # Electron
+    if os.path.exists(os.path.join(workspace, 'electron', 'main.js')) or \
+       os.path.exists(os.path.join(workspace, 'electron', 'main.ts')):
+        systems.append({'name': 'electron', 'config': 'electron/'})
+    else:
+        pkg_path = os.path.join(workspace, 'package.json')
+        if os.path.exists(pkg_path):
+            try:
+                with open(pkg_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
+                if 'electron' in deps or 'electron-builder' in deps:
+                    systems.append({'name': 'electron', 'config': 'package.json'})
+            except (json.JSONDecodeError, IOError):
+                pass
+
+    # Cargo (Rust)
+    if os.path.exists(os.path.join(workspace, 'Cargo.toml')):
+        systems.append({'name': 'cargo', 'config': 'Cargo.toml'})
+
+    # npm/yarn/pnpm/bun
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.exists(pkg_path):
+        if os.path.exists(os.path.join(workspace, 'yarn.lock')):
+            systems.append({'name': 'yarn', 'config': 'yarn.lock'})
+        elif os.path.exists(os.path.join(workspace, 'pnpm-lock.yaml')):
+            systems.append({'name': 'pnpm', 'config': 'pnpm-lock.yaml'})
+        elif os.path.exists(os.path.join(workspace, 'bun.lock')) or os.path.exists(os.path.join(workspace, 'bun.lockb')):
+            systems.append({'name': 'bun', 'config': 'bun.lock'})
+        else:
+            systems.append({'name': 'npm', 'config': 'package-lock.json'})
+
+    # Python
+    if os.path.exists(os.path.join(workspace, 'pyproject.toml')):
+        systems.append({'name': 'python', 'config': 'pyproject.toml'})
+    elif os.path.exists(os.path.join(workspace, 'setup.py')):
+        systems.append({'name': 'python', 'config': 'setup.py'})
+
+    return {
+        'detected': [s['name'] for s in systems],
+        'details': systems,
+    }
+
+
+def _generate_binary_recommendations(
+    executables, libraries, compiled, build_dirs, build_system
+) -> List[str]:
+    """Generate recommendations based on binary artifact findings."""
+    recs = []
+
+    if executables:
+        recs.append(
+            f"Found {len(executables)} executable(s). "
+            f"Ensure these are not committed to version control — "
+            f"use CI/CD to build and distribute via releases."
+        )
+
+    if libraries:
+        recs.append(
+            f"Found {len(libraries)} shared library/libraries. "
+            f"Verify these are not proprietary or need separate licensing."
+        )
+
+    if compiled:
+        total_pyc = sum(1 for c in compiled if c['extension'] in ('.pyc', '.pyo'))
+        if total_pyc:
+            recs.append(
+                f"Found {total_pyc} .pyc/.pyo files. "
+                f"Add '**/__pycache__/' to .gitignore."
+            )
+
+    if build_dirs:
+        recs.append(
+            f"Found {len(build_dirs)} build output directories. "
+            f"Ensure these are in .gitignore and not committed."
+        )
+
+    tauri_detected = any(s['name'] == 'tauri' for s in build_system.get('details', []))
+    electron_detected = any(s['name'] == 'electron' for s in build_system.get('details', []))
+
+    if tauri_detected:
+        recs.append(
+            "TAURI: Use 'tauri build' for production builds. "
+            "Output goes to src-tauri/target/release/bundle/. "
+            "Distribute via GitHub Releases."
+        )
+
+    if electron_detected:
+        recs.append(
+            "ELECTRON: Use 'electron-builder' or 'electron-forge' for packaging. "
+            "Add 'dist/' and '*.exe' to .gitignore."
+        )
+
+    return recs

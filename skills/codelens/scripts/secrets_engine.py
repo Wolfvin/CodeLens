@@ -1,5 +1,5 @@
 """
-Secrets Detection Engine for CodeLens — v3
+Secrets Detection Engine for CodeLens — v4
 Detects hardcoded secrets, API keys, tokens, passwords, and connection strings
 in source code that should never be committed.
 
@@ -11,6 +11,8 @@ Architecture:
 - Entropy-based detection: flag high-entropy strings that look like secrets
 - .env file scanner: read all .env files and report every secret variable
 - .gitignore check: verify .env files are excluded from version control
+- Context-aware filtering: language-specific false-positive elimination
+  (Python format placeholders, SQL templates, identifier constants, type annotations)
 
 Secret Categories (by severity):
 - critical: private_key, password, connection_string
@@ -19,6 +21,12 @@ Secret Categories (by severity):
 
 Each finding includes masked value (first 4 chars + "***") to prevent
 the engine itself from becoming a secret-leaking vector.
+
+v4 improvements:
+- Python context-aware filtering: SQL templates, format placeholders, identifiers,
+  type annotations, default prompt arguments
+- Expanded safe value patterns for Python identifiers and framework constants
+- Line-level context analysis to eliminate false positives from template code
 """
 
 import os
@@ -32,17 +40,12 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".go", ".env", ".yaml", ".yml",
+    ".py", ".rs", ".env", ".yaml", ".yml",
     ".json", ".toml", ".cfg", ".ini", ".conf",
 }
 
-# Lock/auto-generated files to skip — they contain URLs/hashes that trigger
-# false positives (e.g., @scope in npm registry URLs looks like credentials)
-LOCK_FILES_TO_SKIP = {
-    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
-    "bun.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock",
-    "Cargo.lock", "composer.lock", "pipfile.lock",
-}
+# Performance limits for large codebases
+MAX_FILES_PER_RUN = 3000
 
 # ─── Secret Pattern Definitions ────────────────────────────────
 
@@ -274,6 +277,20 @@ SAFE_VALUE_PATTERNS = [
     r'(?i)^(decode|encode|decrypt|encrypt|hash|verify|validate|escape|unescape)$',
     # Translation/localization keys
     r'(?i)^(password_field|password_label|password_hint|password_confirm|password_reset|password_new|password_current|password_enter|password_forgot|password_change|password_required|password_strength|password_mismatch)$',
+    # ── v4: Python format placeholders — never actual secrets ──
+    r'^%\([a-zA-Z_]\w*\)[sdiroxXefgG]$',  # %(name)s, %(password)s, etc.
+    r'^\{[a-zA-Z_]\w*\}$',                  # {name}, {password}, etc.
+    r'^\{[a-zA-Z_]\w*\.[a-zA-Z_]\w*\}$',  # {obj.field}
+    # ── v4: Python/framework identifier constants — not secrets ──
+    r'^_[a-zA-Z]',                             # Underscore-prefixed identifiers (_password_reset_token)
+    r'(?i)^[a-z_]+_[a-z_]+$',                  # snake_case identifiers (session_key, reset_token)
+    # ── v4: SQL template keywords at start — not secret values ──
+    r'(?i)^(ALTER|CREATE|DROP|INSERT|UPDATE|DELETE|SELECT|GRANT|REVOKE)\s',
+    # ── v4: Prompt/label strings (end with colon+space or are short UI text) ──
+    r'(?i)^(Enter|Type|Input|Provide|Set|Choose|Confirm)\s',  # UI prompts
+    r':\s*$',                                   # Ends with colon (label)
+    # ── v4: Django/framework constant patterns ──
+    r'(?i)^(INTERNAL_|EXTERNAL_|DEFAULT_|AUTO_|MAX_|MIN_|OPT_|CFG_)',
 ]
 
 # .env variable name patterns that indicate secrets
@@ -309,7 +326,8 @@ ENTROPY_EXCLUSION_PATTERNS = [
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -331,6 +349,7 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
+    truncated = False
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -344,17 +363,13 @@ def detect_secrets(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip auto-generated lock files — they contain URLs/hashes that
-            # trigger false positives (e.g., @scope in npm registry URLs)
-            if os.path.basename(file_path) in LOCK_FILES_TO_SKIP:
-                continue
-
-            # Skip TypeScript declaration files (type-only, no runtime code)
-            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
-                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -380,6 +395,9 @@ def detect_secrets(
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
                 entropy_findings = _scan_file_entropy(content, rel_path, ext)
                 findings.extend(entropy_findings)
+
+        if truncated:
+            break
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -409,7 +427,7 @@ def detect_secrets(
         "status": "ok",
         "workspace": workspace,
         "severity_filter": severity,
-        "stats": stats,
+        "stats": {**stats, "truncated": truncated},
         "risk": risk,
         "findings": findings[:200],  # Cap to avoid explosion
         "env_exposed": env_exposed,
@@ -458,6 +476,16 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str,
                     # function call, or expression — not a hardcoded string literal.
                     # e.g., `password: someVariable`, `password: func(args)`, `password: obj.prop`
                     if ext in ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx') and _is_js_property_assignment(content, match.start(), raw_value):
+                        continue
+
+                    # v4: Python context-aware false-positive filtering
+                    # Python has many patterns that look like secrets but aren't:
+                    # - SQL templates with %(password)s placeholders
+                    # - Type annotations: password: str
+                    # - Default prompt args: prompt="Password: "
+                    # - String constants used as keys: INTERNAL_TOKEN = "_reset_token"
+                    # - Format strings: "password=%(password)s"
+                    if ext == '.py' and _is_python_non_secret(content, match.start(), raw_value, category):
                         continue
 
                     # Mask the value for safe reporting
@@ -657,11 +685,10 @@ def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
                 is_covered = True
                 break
             # Check if the pattern matches the filename
-            if re.match(pattern.replace('*', '.*'), filename):
-                is_covered = True
-                break
-            # Check if the pattern matches the full path
-            if re.match(pattern.replace('*', '.*'), env_path):
+            # Use re.search instead of re.match for path-based patterns,
+            # and properly handle glob wildcards (* → .*, ? → .)
+            safe_pattern = re.escape(pattern).replace(r'\*', '.*').replace(r'\?', '.')
+            if re.search(safe_pattern, filename) or re.search(safe_pattern, env_path):
                 is_covered = True
                 break
 
@@ -715,11 +742,12 @@ def _mask_value(value: str) -> str:
 
 def _is_safe_value(value: str) -> bool:
     """Check if a value is a known safe / false-positive pattern."""
-    if not value or len(value) < MIN_SECRET_LENGTH:
-        # Allow short values for private key patterns etc.
-        # But flag them for password-like checks
-        if len(value) < 4:
-            return True
+    if not value or len(value) < 4:
+        return True
+    if len(value) < MIN_SECRET_LENGTH:
+        # Too short to be a real credential — skip to avoid false positives
+        # on short variable names like pwd="test" (6 chars)
+        return True
 
     for pattern in SAFE_VALUE_PATTERNS:
         if re.match(pattern, value.strip()):
@@ -921,6 +949,124 @@ def _is_js_property_assignment(content: str, match_start: int, raw_value: str) -
     # Also check if the line pattern looks like a property assignment with expression
     if re.match(r'.*\b(?:password|passwd|pwd|secret|token)\s*:\s*[a-zA-Z_$]', line):
         return True
+
+    return False
+
+
+def _is_python_non_secret(content: str, match_start: int, raw_value: str, category: str) -> bool:
+    """Check if a password/secret/token match in a Python file is actually a non-secret pattern.
+
+    Python-specific false positives that this catches:
+    1. SQL template strings: 'ALTER USER %(user)s IDENTIFIED BY "%(password)s"'
+       → The captured value is a SQL keyword or format placeholder, not a real password
+    2. Type annotations: password: str, password: Optional[str]
+       → These are function parameter types, not assignments
+    3. Default prompt arguments: prompt="Password: ", label="Enter password"
+       → UI text, not hardcoded secrets
+    4. String constants used as identifiers/keys:
+       INTERNAL_RESET_SESSION_TOKEN = "_password_reset_token"
+       → The value is a key name, not a real token
+    5. Python format strings with secret-like keys:
+       "password=%(password)s" or "user={username}"
+       → Template content, not actual credentials
+    6. Variable references / attribute access:
+       self.password = form.cleaned_data['password']
+       password = request.POST.get('password')
+       → Dynamic values, not hardcoded
+    7. Django/framework settings references:
+       PASSWORD_HASHERS, PASSWORD_VALIDATORS, etc.
+       → Configuration references, not actual passwords
+    """
+    # Get the line containing the match
+    line_start = content.rfind('\n', 0, match_start) + 1
+    line_end = content.find('\n', match_start)
+    if line_end == -1:
+        line_end = len(content)
+    line = content[line_start:line_end].strip()
+
+    # ── Check 1: SQL template strings ──
+    # Lines containing SQL DDL/DML keywords with Python format placeholders
+    sql_keywords = ['ALTER', 'CREATE', 'DROP', 'INSERT', 'UPDATE', 'DELETE',
+                    'SELECT', 'GRANT', 'REVOKE', 'IDENTIFIED', 'SET PASSWORD']
+    line_upper = line.upper()
+    if any(kw in line_upper for kw in sql_keywords):
+        # This is a SQL template, not a hardcoded secret
+        return True
+
+    # ── Check 2: Python format placeholder patterns in the value ──
+    # %(name)s or {name} inside the matched string indicate template content
+    if re.search(r'%\([a-zA-Z_]\w*\)[sdiroxXefgG]', raw_value):
+        return True
+    if re.search(r'\{[a-zA-Z_]\w*\}', raw_value):
+        return True
+
+    # ── Check 3: Type annotations in function signatures ──
+    # def func(password: str) or def func(password: Optional[str])
+    if re.match(r'def\s+\w+.*password\s*:\s*(?:Optional\[)?(?:str|bytes|Union)', line, re.IGNORECASE):
+        return True
+    # Class field type annotation: password: str = ...
+    if re.match(r'(?:\s+)?password\s*:\s*(?:Optional\[)?(?:str|bytes)', line, re.IGNORECASE):
+        return True
+
+    # ── Check 4: Default prompt/label arguments ──
+    # prompt="Password: ", label="Enter password", help_text="..."
+    # These are UI strings, not secrets
+    if category == "password":
+        # Check if the variable name suggests it's a label/prompt, not a secret
+        if re.match(r'.*\b(?:prompt|label|help_text|placeholder|message|title|header|text|display_name|verbose_name)\s*=\s*["\']', line, re.IGNORECASE):
+            return True
+        # Check if the value looks like a prompt (contains colon+space, question mark)
+        if raw_value.strip().endswith(':') or raw_value.strip().endswith(': ') or '?' in raw_value:
+            return True
+        # Check if the value is a short UI string (< 20 chars, starts with common words)
+        if len(raw_value) < 20 and re.match(r'(?i)^(Enter |Type |Input |Provide |Your |The |New |Old |Current |Repeat |Confirm )', raw_value):
+            return True
+
+    # ── Check 5: String constants used as identifiers/keys ──
+    # CONSTANT_NAME = "_some_identifier" — the value is a key, not a secret
+    if category in ("token", "secret_key"):
+        # Check if the LHS is a module-level constant (ALL_CAPS)
+        if re.match(r'^[A-Z][A-Z0-9_]+\s*=\s*["\']', line):
+            # Check if the value looks like an identifier (underscore-separated, lowercase)
+            if re.match(r'^_?[a-z][a-z0-9_]*$', raw_value):
+                return True
+        # Check if the variable name contains "INTERNAL", "KEY_NAME", "SESSION_KEY", etc.
+        if re.match(r'^[A-Z_]*(?:INTERNAL|EXTERNAL|SESSION|CSRF|KEY_NAME|FIELD|PARAM|HEADER|COOKIE|ATTR)\w*\s*=\s*["\']', line):
+            return True
+
+    # ── Check 6: Variable references and attribute access ──
+    # self.password = obj.password  → not a hardcoded string
+    # password = form.cleaned_data['password']  → not hardcoded
+    # password = request.POST.get('password')  → not hardcoded
+    if category == "password":
+        # If the RHS is a variable reference or method call, not a string literal
+        # Match: password = something. (not password = "literal")
+        rhs_match = re.match(r'(?:\w+\.)*password\s*=\s*(.+)', line, re.IGNORECASE)
+        if rhs_match:
+            rhs = rhs_match.group(1).strip()
+            # If RHS doesn't start with a quote, it's a variable reference
+            if rhs and rhs[0] not in ('"', "'"):
+                return True
+            # If RHS accesses an attribute or calls a method: form.data, request.GET
+            if re.match(r'(?:self\.)?\w+\.\w+', rhs):
+                return True
+            # If RHS is a method call: getpass(), input(), etc.
+            if re.match(r'\w+\(', rhs):
+                return True
+
+    # ── Check 7: Django/framework settings references ──
+    # PASSWORD_HASHERS = [...], PASSWORD_VALIDATORS = [...]
+    # AUTH_PASSWORD_VALIDATORS, etc.
+    if category in ("password", "secret_key"):
+        if re.match(r'^[A-Z_]*(?:HASHERS|VALIDATORS|BACKENDS|ENGINES|MIDDLEWARE|PROCESSORS|RENDERERS)\s*=', line):
+            return True
+
+    # ── Check 8: Function parameter default with string value ──
+    # def _get_pass(self, prompt="Password: ") — this is a prompt default
+    if re.match(r'def\s+\w+.*(?:password|passwd|pwd|secret|token)\s*=\s*["\']', line, re.IGNORECASE):
+        # It's inside a function definition — the default is likely a UI string
+        if category in ("password", "token"):
+            return True
 
     return False
 
