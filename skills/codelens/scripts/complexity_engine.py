@@ -26,7 +26,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -35,9 +35,6 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs",
 }
-
-# Performance limit for large codebases
-MAX_FILES_PER_RUN = 3000
 
 # Cyclomatic complexity thresholds
 CC_SIMPLE = 5
@@ -73,8 +70,7 @@ def compute_complexity(
     threshold: Optional[int] = None,
     config: Optional[Dict] = None,
     sort_by: Optional[str] = None,
-    limit: Optional[int] = None,
-    max_files: int = MAX_FILES_PER_RUN
+    limit: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Compute cyclomatic and cognitive complexity for all functions in the workspace.
@@ -87,7 +83,6 @@ def compute_complexity(
         config: CodeLens configuration dict
         sort_by: Sort results by 'complexity' (cyclomatic desc), 'cognitive', 'loc', or None (file order)
         limit: Max number of functions to return in the 'functions' list
-        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with status, stats, function list, hotspots, and recommendations
@@ -97,7 +92,8 @@ def compute_complexity(
 
     function_results: List[Dict] = []
     files_scanned = 0
-    truncated = False
+    MAX_FILES = 3000  # Cap to prevent timeout on large repos
+    MAX_FUNCTIONS = 5000  # Cap total functions to analyze
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -106,21 +102,34 @@ def compute_complexity(
             continue
 
         for filename in filenames:
+            if files_scanned >= MAX_FILES:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
-            # File-count limit to prevent timeout on huge repos
-            if files_scanned >= max_files:
-                truncated = True
-                break
+            # Skip minified and declaration files
+            if any(filename.endswith(ig) for ig in ('.min.js', '.min.css', '.map', '.d.ts')):
+                continue
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > 500 * 1024:
+                    continue
+            except OSError:
+                continue
+
             # Apply file filter
             if file_filter and file_filter not in rel_path:
                 continue
+
+            # Early exit if too many functions already
+            if len(function_results) >= MAX_FUNCTIONS:
+                break
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -176,9 +185,6 @@ def compute_complexity(
                     "complexity_level": complexity_level,
                     "refactoring_suggestion": suggestion,
                 })
-
-        if truncated:
-            break
 
     # If searching for a specific function, return early
     if function_name:
@@ -247,7 +253,6 @@ def compute_complexity(
             "avg_cognitive": avg_cognitive,
             "high_complexity": high_complexity,
             "by_complexity_level": dict(by_level),
-            "truncated": truncated,
         },
         "functions": displayed_functions,
         "hotspots": hotspots,

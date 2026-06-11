@@ -1,5 +1,5 @@
 """
-Code Smell Detector for CodeLens — v3
+Code Smell Detector for CodeLens — v4
 Systematically detects code smells that AI struggles to find without reading every file.
 
 Smell Categories:
@@ -15,13 +15,16 @@ Smell Categories:
 10. Complex Conditional — overly complex if/switch/ternary
 
 Each smell gets a severity (info, warning, critical) and refactoring suggestion.
+
+v4: Single-pass scan (merged 3 walks into 1), added MAX_FILES cap,
+    uses walk_source_files for consistent file walking.
 """
 
 import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, walk_source_files
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -30,6 +33,11 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte"
 }
+
+# Performance caps
+MAX_FILES = 3000  # Maximum files to scan
+MAX_SMELLS_PER_CATEGORY = 200  # Cap per-category results
+MAX_TOTAL_SMELLS = 2000  # Cap total results
 
 # Thresholds
 LONG_FUNCTION_LINES = 50
@@ -52,6 +60,10 @@ def detect_smells(
 ) -> Dict[str, Any]:
     """
     Detect code smells across the workspace.
+
+    v4: Single-pass scan — all 3 previous walks merged into 1.
+    Duplicate patterns and inconsistent patterns are now collected
+    during the main scan pass instead of separate walks.
 
     Args:
         workspace: Absolute path to workspace
@@ -81,108 +93,185 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
-    smell_checked_files = 0  # Track files that were actually checked for smells
+    truncated = False
 
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
+    # ─── Single-pass scan using walk_source_files ────────────
+    # Collect data for ALL categories in one pass, including
+    # duplicate patterns and inconsistent patterns.
 
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in SOURCE_EXTENSIONS:
-                continue
+    # For duplicate_pattern: collect function signatures across files
+    fn_signatures: Dict[str, List[Dict]] = defaultdict(list) if "duplicate_pattern" in categories else {}
 
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
+    # For inconsistent: track error/async/export patterns
+    error_patterns = {"try_catch": 0, "promise_catch": 0, "result_type": 0, "exception": 0}
+    async_patterns = {"async_await": 0, "promise_then": 0, "callback": 0}
+    export_patterns = {"es_module": 0, "commonjs": 0}
+    inconsistent_file_count = 0
 
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
+    source_files = walk_source_files(workspace, extensions=SOURCE_EXTENSIONS, max_files=MAX_FILES)
+    truncated = len(source_files) >= MAX_FILES
 
-            files_scanned += 1
-            lines = content.split('\n')
-            line_count = len(lines)
+    for rel_path, ext, content in source_files:
+        files_scanned += 1
+        lines = content.split('\n')
+        line_count = len(lines)
 
-            # Track if this is a docs/examples/test file for scoring
-            is_docs_or_example = _is_docs_or_example(rel_path)
-            if not is_docs_or_example:
-                production_files_scanned += 1
+        # Track if this is a docs/examples/test file for scoring
+        is_docs_or_example = _is_docs_or_example(rel_path)
+        if not is_docs_or_example:
+            production_files_scanned += 1
 
-            # Track if this file type was actually smell-checked (not just counted)
-            # Vue files have script sections that get smell-checked via _detect_long_functions etc.
-            ext_has_smell_detectors = ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-                                              ".py", ".rs", ".vue", ".svelte"}
-            if ext_has_smell_detectors and not is_docs_or_example:
-                smell_checked_files += 1
+        # ─── Per-file smell detection (merged from Walk #1) ──
 
-            # Large file detection
-            if "large_file" in categories:
-                if line_count > LARGE_FILE_LINES_CRITICAL:
-                    all_smells["large_file"].append({
-                        "file": rel_path,
-                        "line_count": line_count,
-                        "severity": "critical",
-                        "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES_CRITICAL})",
-                        "suggestion": "Split into multiple modules. Extract related functionality."
-                    })
-                elif line_count > LARGE_FILE_LINES:
-                    all_smells["large_file"].append({
-                        "file": rel_path,
-                        "line_count": line_count,
-                        "severity": "warning",
-                        "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES})",
-                        "suggestion": "Consider splitting into smaller modules."
-                    })
+        # Large file detection
+        if "large_file" in categories:
+            if line_count > LARGE_FILE_LINES_CRITICAL:
+                all_smells["large_file"].append({
+                    "file": rel_path,
+                    "line_count": line_count,
+                    "severity": "critical",
+                    "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES_CRITICAL})",
+                    "suggestion": "Split into multiple modules. Extract related functionality."
+                })
+            elif line_count > LARGE_FILE_LINES:
+                all_smells["large_file"].append({
+                    "file": rel_path,
+                    "line_count": line_count,
+                    "severity": "warning",
+                    "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES})",
+                    "suggestion": "Consider splitting into smaller modules."
+                })
 
-            # Long function detection
-            if "long_fn" in categories:
-                fns = _detect_long_functions(content, ext, rel_path)
-                all_smells["long_fn"].extend(fns)
+        # Long function detection
+        if "long_fn" in categories:
+            fns = _detect_long_functions(content, ext, rel_path)
+            all_smells["long_fn"].extend(fns[:MAX_SMELLS_PER_CATEGORY])
 
-            # Deep nesting detection
-            if "deep_nesting" in categories:
-                nested = _detect_deep_nesting(content, ext, rel_path)
-                all_smells["deep_nesting"].extend(nested)
+        # Deep nesting detection
+        if "deep_nesting" in categories:
+            nested = _detect_deep_nesting(content, ext, rel_path)
+            all_smells["deep_nesting"].extend(nested[:MAX_SMELLS_PER_CATEGORY])
 
-            # Too many parameters
-            if "many_params" in categories:
-                params = _detect_many_params(content, ext, rel_path)
-                all_smells["many_params"].extend(params)
+        # Too many parameters
+        if "many_params" in categories:
+            params = _detect_many_params(content, ext, rel_path)
+            all_smells["many_params"].extend(params[:MAX_SMELLS_PER_CATEGORY])
 
-            # Callback hell
-            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                cb = _detect_callback_hell(content, rel_path)
-                all_smells["callback_hell"].extend(cb)
+        # Callback hell
+        if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            cb = _detect_callback_hell(content, rel_path)
+            all_smells["callback_hell"].extend(cb[:MAX_SMELLS_PER_CATEGORY])
 
-            # Magic values
-            if "magic_values" in categories:
-                magic = _detect_magic_values(content, ext, rel_path)
-                all_smells["magic_values"].extend(magic)
+        # Magic values
+        if "magic_values" in categories:
+            magic = _detect_magic_values(content, ext, rel_path)
+            all_smells["magic_values"].extend(magic[:MAX_SMELLS_PER_CATEGORY])
 
-            # Complex conditionals
-            if "complex_conditional" in categories:
-                conds = _detect_complex_conditionals(content, ext, rel_path)
-                all_smells["complex_conditional"].extend(conds)
+        # Complex conditionals
+        if "complex_conditional" in categories:
+            conds = _detect_complex_conditionals(content, ext, rel_path)
+            all_smells["complex_conditional"].extend(conds[:MAX_SMELLS_PER_CATEGORY])
 
-            # God object (classes/modules with too many methods)
-            # Skip test/mock files — they inherently have many methods and are not production code
-            if "god_object" in categories and not _is_test_or_mock_file(rel_path):
-                gods = _detect_god_objects(content, ext, rel_path)
-                all_smells["god_object"].extend(gods)
+        # God object (classes/modules with too many methods)
+        # Skip test/mock files — they inherently have many methods and are not production code
+        if "god_object" in categories and not _is_test_or_mock_file(rel_path):
+            gods = _detect_god_objects(content, ext, rel_path)
+            all_smells["god_object"].extend(gods[:MAX_SMELLS_PER_CATEGORY])
 
-    # Duplicate pattern detection (cross-file, only if requested)
+        # ─── Duplicate pattern data collection (merged from Walk #2) ──
+        if "duplicate_pattern" in categories:
+            for m in re.finditer(
+                r'(?:function\s+\w+|const\s+\w+\s*=\s*(?:async\s+)?\(|def\s+\w+|(?:pub\s+)?fn\s+\w+)\s*\([^)]*\)',
+                content
+            ):
+                sig = m.group(0).strip()
+                normalized = re.sub(r'\s+', ' ', sig)
+                line_num = content[:m.start()].count('\n') + 1
+                fn_signatures[normalized].append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "signature": sig
+                })
+
+        # ─── Inconsistent pattern data collection (merged from Walk #3) ──
+        if "inconsistent" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            inconsistent_file_count += 1
+
+            # Error handling patterns
+            if 'try' in content and 'catch' in content:
+                error_patterns["try_catch"] += 1
+            if '.catch(' in content:
+                error_patterns["promise_catch"] += 1
+            if 'Result<' in content or 'Ok(' in content:
+                error_patterns["result_type"] += 1
+            if 'try:' in content and 'except' in content:
+                error_patterns["exception"] += 1
+
+            # Async patterns
+            if 'async ' in content or 'await ' in content:
+                async_patterns["async_await"] += 1
+            if '.then(' in content:
+                async_patterns["promise_then"] += 1
+            if re.search(r'function\s*\(\s*err', content):
+                async_patterns["callback"] += 1
+
+            # Export patterns
+            if re.search(r'export\s+(default\s+)?', content):
+                export_patterns["es_module"] += 1
+            if 'module.exports' in content or 'require(' in content:
+                export_patterns["commonjs"] += 1
+
+    # ─── Process cross-file patterns from collected data ─────
+
+    # Duplicate pattern detection from collected signatures
     if "duplicate_pattern" in categories:
-        dupes = _detect_duplicate_patterns(workspace)
-        all_smells["duplicate_pattern"] = dupes
+        for sig, locations in fn_signatures.items():
+            unique_files = set(loc["file"] for loc in locations)
+            if len(unique_files) >= 3:
+                all_smells["duplicate_pattern"].append({
+                    "files": list(unique_files),
+                    "occurrences": len(locations),
+                    "signature": sig,
+                    "severity": "warning" if len(unique_files) >= 5 else "info",
+                    "message": f"Similar function signature found in {len(unique_files)} files",
+                    "suggestion": "Extract into a shared utility module."
+                })
+        all_smells["duplicate_pattern"] = all_smells["duplicate_pattern"][:30]  # Cap results
 
-    # Inconsistent patterns (cross-file)
-    if "inconsistent" in categories:
-        inconsistent = _detect_inconsistent_patterns(workspace)
-        all_smells["inconsistent"] = inconsistent
+    # Inconsistent pattern detection from collected data
+    if "inconsistent" in categories and inconsistent_file_count > 0:
+        # Check for inconsistency in error handling
+        total_error = sum(error_patterns.values())
+        if total_error > 3:
+            dominant = max(error_patterns, key=error_patterns.get)
+            for pattern, count in error_patterns.items():
+                if pattern != dominant and count > 0 and count < total_error * 0.3:
+                    all_smells["inconsistent"].append({
+                        "type": "error_handling_inconsistency",
+                        "severity": "warning",
+                        "message": f"Mixed error handling: {pattern} ({count} files) vs {dominant} ({error_patterns[dominant]} files)",
+                        "suggestion": f"Standardize on {dominant} pattern across the codebase."
+                    })
+
+        # Check for async inconsistency
+        total_async = sum(async_patterns.values())
+        if total_async > 3:
+            if async_patterns["async_await"] > 0 and async_patterns["promise_then"] > 0:
+                all_smells["inconsistent"].append({
+                    "type": "async_style_inconsistency",
+                    "severity": "info",
+                    "message": f"Mixed async styles: async/await ({async_patterns['async_await']}) vs .then() ({async_patterns['promise_then']})",
+                    "suggestion": "Prefer async/await for consistency."
+                })
+
+        # Check for module system inconsistency
+        if export_patterns["es_module"] > 0 and export_patterns["commonjs"] > 0:
+            all_smells["inconsistent"].append({
+                "type": "module_system_inconsistency",
+                "severity": "warning",
+                "message": f"Mixed module systems: ESM ({export_patterns['es_module']} files) vs CJS ({export_patterns['commonjs']} files)",
+                "suggestion": "Standardize on one module system."
+            })
 
     # Apply severity filter
     if severity_filter:
@@ -211,10 +300,7 @@ def detect_smells(
     # Weight info-level smells less so they don't inflate density
     # Use production_files_scanned for health score (exclude docs/examples/tests)
     # so that documentation code doesn't penalize the project health
-    # Use smell_checked_files (files actually checked by smell detectors)
-    # instead of production_files_scanned to avoid denominator inflation
-    # from file types that are counted but never produce smells
-    score_files = max(smell_checked_files, 1)
+    score_files = max(production_files_scanned, 1)
     # Count smells in production code only for health score
     prod_smells = 0
     prod_critical = 0
@@ -296,7 +382,8 @@ def detect_smells(
             "critical": critical_count,
             "warning": warning_count,
             "info": info_count,
-            "health_score": health_score
+            "health_score": health_score,
+            "truncated": truncated
         },
         "by_category": {
             cat: smells for cat, smells in all_smells.items() if smells
@@ -326,22 +413,6 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)', line.strip())
                 if m:
                     fn_starts.append((i, m.group(1)))
-
-    elif ext == ".vue":
-        # Extract <script> section from Vue SFC and parse it as JS/TS
-        script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
-        if script_match:
-            script_content = script_match.group(1)
-            script_lines = script_content.split('\n')
-            for i, line in enumerate(script_lines):
-                if re.match(r'(?:export\s+)?(?:async\s+)?function\s+\w+', line.strip()):
-                    fn_starts.append((i, _extract_fn_name_js(line)))
-                elif re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(', line.strip()):
-                    m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)', line.strip())
-                    if m:
-                        fn_starts.append((i, m.group(1)))
-            # Override lines with script section for length calculation
-            lines = script_lines
 
     elif ext == ".py":
         for i, line in enumerate(lines):
@@ -776,147 +847,33 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
     return smells
 
 
-def _count_js_class_methods(lines: List[str], class_start_line: int) -> int:
-    """Count method definitions inside a JS/TS class body.
-
-    Uses brace-depth tracking to find the class body boundary and
-    only counts method definitions (not calls) within it.
-
-    Method definition patterns:
-      - foo() {           (regular method)
-      - async foo() {     (async method)
-      - get foo() {       (getter)
-      - set foo() {       (setter)
-      - static foo() {    (static method)
-      - private foo() {   (TS access modifier)
-      - foo = () => {     (arrow class field method)
-      - foo = async () => { (async arrow class field)
-    """
-    # Find the opening brace of the class
-    brace_depth = 0
-    in_class = False
-    method_count = 0
-
-    # Method definition pattern: matches method declarations at class body level
-    # This must be at the start of a line (with optional whitespace) and NOT inside
-    # a nested function/object. We track brace depth to ensure we're at class level.
-    method_def_pattern = re.compile(
-        r'^\s*'                           # start of line + whitespace
-        r'(?:'
-        r'(?:private|public|protected|static|abstract|override|readonly)\s+'  # modifiers
-        r')*'
-        r'(?:async\s+)?'                  # optional async
-        r'(?:get|set)?\s*'                # optional getter/setter
-        r'#?'                             # optional private field marker
-        r'(\w+)\s*'                       # method name
-        r'(?:<[^>]*>)?\s*'               # optional generic type params
-        r'\('                             # opening paren = method signature
-    )
-
-    # Arrow class field method pattern: foo = () => {, foo = async () => {
-    arrow_method_pattern = re.compile(
-        r'^\s*'
-        r'(?:private|public|protected|static|abstract|override|readonly)\s*'
-        r'(?:async\s+)?'
-        r'#?(\w+)\s*=\s*(?:async\s+)?\(?[^)]*\)?\s*=>'
-    )
-
-    class_depth = 0  # brace depth when we first enter the class
-
-    for i in range(class_start_line, len(lines)):
-        line = lines[i]
-
-        for ch in line:
-            if ch == '{':
-                brace_depth += 1
-                if not in_class:
-                    in_class = True
-                    class_depth = brace_depth
-            elif ch == '}':
-                if in_class and brace_depth == class_depth:
-                    # We've closed the class body
-                    return method_count
-                brace_depth -= 1
-
-        if not in_class:
-            continue
-
-        # We're inside the class body at the right depth (class_depth + 0 means class-level)
-        # Only count methods when we're at class body level (brace_depth == class_depth)
-        if brace_depth == class_depth:
-            if method_def_pattern.match(line):
-                method_name = method_def_pattern.match(line).group(1)
-                # Filter out constructor (it's not a regular method)
-                if method_name != 'constructor':
-                    method_count += 1
-            elif arrow_method_pattern.match(line):
-                method_name = arrow_method_pattern.match(line).group(1)
-                if method_name != 'constructor':
-                    method_count += 1
-
-    return method_count
-
-
 def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect god objects (classes/modules with too many methods)."""
     smells = []
 
-    # Keywords that should NOT be treated as class names
-    JS_KEYWORDS = {"extends", "implements", "contains", "constructor", "static",
-                   "get", "set", "new", "return", "typeof", "instanceof"}
-
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Find all classes in the file with their names
-        # Handle: class Foo { ... }, class Foo extends Bar { ... },
-        #         const X = class { ... }, export default class { ... }
-        class_blocks = []  # (class_name, start_line_idx)
+        # Count class methods
+        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
+        class_match = re.search(r'class\s+(\w+)', content)
 
-        lines = content.split('\n')
-        for i, line in enumerate(lines):
-            # Named class declaration: class Foo, class Foo extends Bar
-            m = re.match(r'^\s*(?:export\s+)?(?:default\s+)?class\s+(\w+)', line)
-            if m:
-                name = m.group(1)
-                if name not in JS_KEYWORDS:
-                    class_blocks.append((name, i))
-                continue
-
-            # Anonymous class expression: const X = class extends ... {, const X = class {
-            # Try to extract the variable name as the class name
-            m_anon = re.match(r'^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*class(?:\s+extends\s+\w+)?\s*\{', line)
-            if m_anon:
-                class_blocks.append((m_anon.group(1), i))
-                continue
-
-            # Also catch: const X = class extends ... { on same line
-            m_anon2 = re.match(r'^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*class\s+extends', line)
-            if m_anon2:
-                class_blocks.append((m_anon2.group(1), i))
-                continue
-
-        for class_name, class_start_line in class_blocks:
-            # Count method definitions INSIDE the class body only
-            # We need to find the matching closing brace
-            method_count = _count_js_class_methods(lines, class_start_line)
-
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_name,
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{class_name}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_name,
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{class_name}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                    "suggestion": "Consider extracting some methods into a separate class."
-                })
+        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
+            smells.append({
+                "file": rel_path,
+                "class": class_match.group(1),
+                "method_count": method_count,
+                "severity": "critical",
+                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+            })
+        elif class_match and method_count >= GOD_CLASS_METHODS:
+            smells.append({
+                "file": rel_path,
+                "class": class_match.group(1),
+                "method_count": method_count,
+                "severity": "warning",
+                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
+                "suggestion": "Consider extracting some methods into a separate class."
+            })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping

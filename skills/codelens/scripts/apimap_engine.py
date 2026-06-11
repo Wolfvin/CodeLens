@@ -52,6 +52,16 @@ NON_ROUTER_OBJECTS = {
     "props", "state", "config", "options", "headers",
     "localStorage", "sessionStorage", "document", "window",
     "cache", "store", "db", "query", "client",
+    # HTTP clients (commonly confused with route definitions)
+    "axios", "fetch", "http", "https", "supertest", "agent", "pool",
+    "api", "service", "sdk", "transport", "xhr",
+    # Testing libraries
+    "describe", "it", "test", "expect", "beforeEach", "afterEach",
+    # Database/ORM
+    "prisma", "sequelize", "typeorm", "mongoose", "knex",
+    # Utility objects
+    "router",  # only if not imported from express/fastify
+    "app",     # too generic — can be Electron app, Vue app, etc.
 }
 
 # Known middleware identifiers
@@ -103,6 +113,8 @@ def map_api_routes(
     middleware_map: Dict[str, List[Dict]] = defaultdict(list)
     route_groups: List[Dict[str, Any]] = []
     files_scanned = 0
+    MAX_FILES = 3000  # Cap to prevent timeout on large repos
+    MAX_ROUTES = 500  # Cap total routes to collect
 
     # Global middleware collectors
     global_middleware: List[Dict] = []
@@ -115,12 +127,26 @@ def map_api_routes(
             continue
 
         for filename in filenames:
+            if files_scanned >= MAX_FILES or len(routes) >= MAX_ROUTES:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # Skip minified and declaration files
+            if any(filename.endswith(ig) for ig in ('.min.js', '.min.css', '.map', '.d.ts')):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > 500 * 1024:
+                    continue
+            except OSError:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
