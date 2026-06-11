@@ -33,6 +33,16 @@ DEFAULT_IGNORE_DIRS = frozenset({
     'storybook-static', '.storybook',
 })
 
+# Generated/lock files that should be excluded from analysis engines
+# (refactor-safe, smell, dead-code, etc.) but NOT from file walking.
+# These are committed but not human-written source code.
+GENERATED_FILE_PATTERNS = frozenset({
+    'Cargo.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'bun.lock', 'bun.lockb', 'go.sum', 'poetry.lock', 'uv.lock',
+    'Gemfile.lock', 'composer.lock', 'pip-wheel-metadata',
+    '.pnp.cjs', '.pnp.js',
+})
+
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
@@ -68,6 +78,24 @@ def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -
             return True
 
     return False
+
+
+def is_generated_file(file_path: str) -> bool:
+    """Check if a file is a generated/lock file that should be excluded from analysis.
+
+    These files (Cargo.lock, package-lock.json, etc.) are committed to VCS
+    but are not human-written source code. Analysis engines like refactor-safe,
+    smell, and dead-code should skip them.
+
+    Args:
+        file_path: Absolute or relative path to the file.
+
+    Returns:
+        True if the file is a generated/lock file, False otherwise.
+    """
+    basename = os.path.basename(file_path)
+    return basename in GENERATED_FILE_PATTERNS
+
 
 # ─── Output File Generation ─────────────────────────────────
 
