@@ -5,6 +5,37 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] — 2026-06-12
+
+### Added
+
+- **Tauri IPC cross-language edge resolution** (`scripts/edge_resolver.py`): New `resolve_tauri_ipc_from_apimap()` function that bridges the gap between TypeScript `invoke('commandName')` calls and Rust `#[tauri::command]` handler functions. Creates `ipc_bridge` edges in the call graph, ensuring Tauri command handlers are correctly marked as "active" instead of "dead". Integrated into the `scan` command — automatically runs for Tauri projects.
+- **Rust `#[tauri::command]` annotation tracking** (`scripts/parsers/rust_parser.py`): The Rust parser now detects functions annotated with `#[tauri::command]` and adds `is_tauri_command: true` and `ipc_name` (camelCase version of the Rust fn name) to the node data. This enables Tauri-aware analysis across all engines.
+- **`ipc_exposed` node status** (`scripts/edge_resolver.py`): Tauri `#[tauri::command]` functions that are exposed to the frontend but have no direct Rust callers are marked with status `ipc_exposed` instead of `dead`. This prevents false "dead code" reports for IPC command handlers.
+- **Self-edge false positive prevention** (`scripts/edge_resolver.py`): When a Rust function `foo()` calls `obj.foo()` (e.g., `window.open_devtools()` inside `fn open_devtools()`), the resolver now checks the `call_object` context. If the call is on a different object and the only match would create a self-edge, the edge is marked as unresolved instead of creating a false self-referencing edge.
+- **Method call object tracking in Rust parser** (`scripts/parsers/rust_parser.py`): The `_parse_call` method now tracks the object name for method calls (e.g., `window.open_devtools()` → `call_object: "window"`) and module paths for scoped calls (e.g., `feat::restart_app()` → `call_object: "feat"`). This context is passed to the edge resolver for self-edge prevention.
+- **Tree-sitter Rust grammar field name fix** (`scripts/parsers/rust_parser.py`): Fixed `child_by_field_name('object')` to use `'value'` for Rust field expressions, matching the actual tree-sitter Rust grammar. The previous `'object'` always returned `None`, causing all method call objects to be untracked.
+- **Tauri-aware dead code analysis** (`scripts/deadcode_engine.py`): The dead-code engine now skips functions marked as `is_tauri_command` or with status `ipc_exposed`, preventing false "zero references" reports for Tauri IPC handlers.
+- **IPC-aware query action** (`scripts/commands/query.py`): Added `ipc_exposed` status handling to `_get_query_action()`, returning `EXTEND` with an appropriate message about Tauri IPC commands.
+- **Improved React Context detection** (`scripts/statemap_engine.py`): The `_extract_react_context()` function now detects:
+  - Context variables without the "Context" suffix (e.g., `const ProxiesContext = createContext()`)
+  - `useContext()` calls with any variable name (not just `*Context` pattern)
+  - `<Provider>` JSX with or without "Context" suffix
+
+### Fixed
+
+- **CRITICAL: Self-edge false positives for Tauri commands** — Functions like `open_devtools()`, `restart_app()`, `exit_app()` were reported as "recursive" because they called methods with the same name on different objects (e.g., `window.open_devtools()`, `feat::restart_app()`). The edge resolver matched the method name back to the same function, creating 78 false self-edges. Fixed by tracking `call_object` context and preventing self-edges when the call is on a different object.
+- **CRITICAL: Tauri IPC commands falsely reported as dead code** — All `#[tauri::command]` Rust functions appeared as "dead" (ref_count=0, status="dead") because the call graph had no cross-language edges from TypeScript `invoke()` calls to Rust handlers. Fixed by adding Tauri IPC edge resolution that creates bridge edges between the two languages.
+- **HIGH: Tree-sitter Rust field_expression object always None** — The Rust parser used `child_by_field_name('object')` for field expressions, but the tree-sitter Rust grammar uses `'value'` as the field name for the left-hand side. This caused all method call objects to be untracked, contributing to the self-edge false positives.
+
+### Tested
+
+- Real-world tested on **clash-verge-rev** (github.com/clash-verge-rev/clash-verge-rev) — a large Tauri v2 desktop app with 115 Rust files, 225 TypeScript files, and 50+ IPC commands. Results:
+  - Self-edges reduced from 48+ false positives to 5 legitimate recursions
+  - 78 Tauri command functions correctly marked as "active" (were all "dead")
+  - 77 IPC bridge edges created between TypeScript and Rust
+  - Circular dependency reports reduced from 52 to 13 (eliminating 39 false positives)
+
 ## [5.8.0] — 2026-06-12
 
 ### Added

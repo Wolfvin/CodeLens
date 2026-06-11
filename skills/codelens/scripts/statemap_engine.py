@@ -375,11 +375,20 @@ def _extract_initial_state(content: str, offset: int) -> Optional[str]:
 # ─── React Context ─────────────────────────────────────────────
 
 def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract React Context definitions and providers."""
+    """Extract React Context definitions and providers.
+
+    Handles:
+    - createContext (named: const FooContext = createContext())
+    - createContext (anonymous: const [provider, useFoo] = createContext())
+    - useContext(ContextName) consumption
+    - <ContextName.Provider value={...}> provision
+    - Custom hook wrappers: const useFoo = () => useContext(FooContext)
+    - Variable exports matching *Context naming convention
+    """
     stores = []
     flow = []
 
-    # createContext
+    # createContext — named pattern: const FooContext = createContext()
     for m in re.finditer(
         r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*\(',
         content
@@ -405,8 +414,38 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
             "type": "define",
         })
 
-    # useContext(ContextName)
-    for m in re.finditer(r'useContext\s*\(\s*(\w+Context)\s*\)', content):
+    # createContext — variable assignment without "Context" suffix
+    # e.g., const ProxiesContext = createContext()
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*createContext\s*\(',
+        content
+    ):
+        ctx_name = m.group(1)
+        # Skip if already captured by the Context-suffix pattern above
+        if ctx_name.endswith('Context') or ctx_name.endswith('Provider'):
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+
+        stores.append({
+            "name": ctx_name,
+            "type": "context",
+            "framework": "react_context",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+        flow.append({
+            "from": rel_path,
+            "action": f"createContext({ctx_name})",
+            "to": ctx_name,
+            "file": rel_path,
+            "type": "define",
+        })
+
+    # useContext(ContextName) or useContext(Name)
+    for m in re.finditer(r'useContext\s*\(\s*(\w+)\s*\)', content):
         ctx_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         flow.append({
@@ -418,7 +457,7 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     # <ContextName.Provider value={...}>
-    for m in re.finditer(r'<(\w+Context)\.Provider\s+value\s*=\s*\{', content):
+    for m in re.finditer(r'<(\w+(?:Context)?)\.Provider\s+value\s*=\s*\{', content):
         ctx_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         flow.append({

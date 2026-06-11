@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.7.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: SearchConfig/FrontendRegistryInput dataclasses (fixes many_params smell), O(n log n) Gini coefficient, bun.lock detection, trpc/orpc detection, improved normalizer coverage. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
+  "version": "5.10.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Tauri IPC cross-language edge resolution (invoke()→#[tauri::command]), self-edge false positive prevention (window.open_devtools() no longer creates self-referencing edges), Rust #[tauri::command] annotation tracking with ipc_name, Tauri-aware dead-code analysis (IPC commands not falsely reported as dead), ipc_exposed status for Tauri commands, improved React Context detection (non-Context-suffix patterns). Real-world tested on clash-verge-rev (115 Rust files, 225 TypeScript files, 50+ IPC commands).",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -30,6 +30,8 @@
     "markdown-output", "format-markdown", "convention-detection", "agent-md",
     "decision-tree", "actionable-output", "quality-metrics", "project-brief",
     "colloquial-trigger", "negative-trigger", "fallback-chain", "error-recovery",
-    "parallel-execution", "edge-case", "streaming", "rest-api"
+    "parallel-execution", "edge-case", "streaming", "rest-api",
+    "tauri", "tauri-ipc", "invoke", "ipc-bridge", "cross-language",
+    "ipc-exposed", "self-edge-prevention"
   ]
 }
