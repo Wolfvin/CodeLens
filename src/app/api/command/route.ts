@@ -5,14 +5,9 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { commandRunner, sanitizeWorkspace } from '@/lib/commandRunner'
+import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
-import { invalidateScanCache } from '@/lib/scanCache'
-
-// Commands that modify the registry and should invalidate the scan cache
-const REGISTRY_MUTATING_COMMANDS = new Set([
-  'init', 'scan',
-])
+import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,9 +29,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Validate workspace path to prevent path traversal
-    const safeWorkspace = sanitizeWorkspace(workspace)
+    const wsValidation = validateWorkspace(workspace)
+    if (!wsValidation.valid) {
+      return NextResponse.json(
+        { error: `Invalid workspace: ${wsValidation.error}` },
+        { status: 400 }
+      )
+    }
+    const safeWorkspace = wsValidation.resolved
 
-    const commandArgs: string[] = Array.isArray(args) ? args : []
+    const commandArgs: string[] = Array.isArray(args)
+      ? args.filter((a): a is string => typeof a === 'string' && a.length <= 4096)
+      : []
 
     // Guard: watch command is not supported via REST API
     if (command === 'watch') {
@@ -63,11 +67,6 @@ export async function POST(request: NextRequest) {
 
     // Normalize the output into a GraphEvent
     const graphEvent = normalizer.normalize(command, rawOutput)
-
-    // Invalidate scan cache if the command mutates the registry
-    if (REGISTRY_MUTATING_COMMANDS.has(command)) {
-      invalidateScanCache()
-    }
 
     return NextResponse.json(graphEvent)
   } catch (err: any) {

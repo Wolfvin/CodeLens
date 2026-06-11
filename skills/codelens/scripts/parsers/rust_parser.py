@@ -71,11 +71,9 @@ class RustParser(BaseParser):
         nodes = []
         edges = []
 
-        # Track current impl context with proper scope management
+        # Track current impl context
         current_impl_for = None
         current_trait_name = None
-        # Stack of (impl_for, trait_name, end_byte) for scope tracking
-        impl_scope_stack = []
 
         # Find all function items and impl items
         fn_declarations = []
@@ -83,21 +81,15 @@ class RustParser(BaseParser):
         def visit(node: Node, _, depth):
             nonlocal current_impl_for, current_trait_name
 
-            # Pop impl scopes that have ended (node starts after scope ended)
-            while impl_scope_stack and node.start_byte >= impl_scope_stack[-1][2]:
-                impl_scope_stack.pop()
-                if impl_scope_stack:
-                    current_impl_for, current_trait_name = impl_scope_stack[-1][0], impl_scope_stack[-1][1]
-                else:
-                    current_impl_for = None
-                    current_trait_name = None
-
             if node.type == 'impl_item':
-                impl_for, trait_name = self._parse_impl(node, source)
-                # Push current scope, then set new context
-                impl_scope_stack.append((impl_for, trait_name, node.end_byte))
-                current_impl_for = impl_for
-                current_trait_name = trait_name
+                current_impl_for, current_trait_name = self._parse_impl(node, source)
+                # Walk children within this impl context
+                for child in node.children:
+                    visit(child, source, depth + 1)
+                # Reset after leaving impl_item
+                current_impl_for = None
+                current_trait_name = None
+                return
 
             elif node.type == 'function_item':
                 decl = self._parse_function_item(node, source, file_path,
@@ -107,6 +99,10 @@ class RustParser(BaseParser):
                     nodes.append(decl["node"])
 
         self.walk_tree(tree, source, visit)
+
+        # Reset impl tracking for second pass
+        current_impl_for = None
+        current_trait_name = None
 
         # Second pass: find all function calls within each function's scope
         for decl in fn_declarations:

@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v5.8 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -35,7 +35,7 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5.7.1
+# CodeLens v5
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
@@ -45,14 +45,39 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Performance Anti-Pattern Detection**: 8 categories — N+1 queries, sync blocking, memory leaks, expensive re-renders, large bundles, inefficient iterations, unoptimized images, cache misses
 - **Deep CSS Analysis**: Unused custom properties (--var), orphan @keyframes, specificity wars (!important overuse), duplicate property declarations, z-index abuse, non-standard @media breakpoints
 
-## What's New in v5.7 — Bug Fixes & Safety
+## What's New in v5.1 — Workspace Auto-Detect
 
-- **Circular engine phantom edge fix**: `_resolve_import_path` now returns `None` for unresolved imports instead of returning the unresolved path, preventing phantom edges in import cycle detection.
-- **Refactor-safe string matching fix**: `_find_string_refs` regex now uses word boundaries (`\b`) so symbol names are matched as standalone words within strings, eliminating overly broad false positives.
-- **Dead-code export detection fix**: Removed `handler` and `router` from the entry-point skip list (which caused false negatives for Next.js API routes) and added HTTP method names (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) as recognized Next.js API route handlers.
-- **Incremental scan mutation safety**: `_recompute_duplicate_define` now creates copies of CSS ref dicts before mutating, preventing in-place corruption of shared data structures.
-- **Side-effect argparse**: Verified `workspace` positional argument uses `nargs='?'` and `--name` is properly optional, eliminating argument confusion.
-- **Removed duplicate `missing_refs.py`**: Deleted leftover `scripts/missing_refs.py` from monolith refactor (the registered version is `scripts/commands/missing_refs.py`).
+- **Workspace Auto-Detect**: The `workspace` argument is now optional for ALL commands. Fallback chain: current directory → parent directories → source files → last workspace cache → cwd
+- **Python Parser**: Full tree-sitter Python parsing
+- **Vue SFC / Svelte / SCSS parsers**: Additional frontend framework support
+- **TSX/JSX parser**: React component parser with className tracking
+
+## What's New in v5.2 — Agent Optimization
+
+- **`handbook` command**: One-stop project orientation for AI agents. Aggregates identity, structure, health, conventions, risks, and quick reference into a single output. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`.
+- **`ask` command**: Natural language query router. Agents don't need to memorize 41 commands — just ask a question and CodeLens routes to the right tool.
+- **`--format markdown`**: Global flag on ALL commands. Output markdown instead of JSON for direct LLM consumption.
+- **`scan` generates `outline.json` + `summary.json`**: Previously only `watch` produced these AI-friendly files. Now `scan` does too.
+- **Decision trees in output**: `query` returns `action` + `action_reason`, `impact` returns `risk_level` + `recommended_action`, `smell` returns `actionable_items`, `dead-code` returns `removal_safety`.
+- **`context` enriched with quality metrics**: Adds `quality` block with complexity, side effects, safety assessment, smells, and test coverage.
+- **Convention detection**: New `convention_engine.py` detects naming conventions, file organization, import styles, component patterns, and error handling.
+- **`.codelens/AGENT.md`**: Auto-generated markdown project brief that can be included as system prompt context.
+
+## What's New in v5.4 — Modular Architecture
+
+- **Modular command structure**: `codelens.py` monolith reduced from 3504 → 307 lines. Commands now live in `commands/` directory and auto-register via `commands/__init__.py`.
+- **True incremental scan**: Partial registry merge — changed files' entries are updated in-place instead of rebuilding the entire registry.
+- **Complete markdown formatters**: All 41 commands now have specific markdown formatters (was 15/41).
+- **Score-based ask routing**: Natural language query router now uses weighted scoring instead of first-match.
+- **3 new semantic convention detectors**: CSS framework, Authentication, Deployment.
+- **Consistent status field**: All commands now return `status: "ok"` or `status: "error"`.
+
+## What's New in v5.5 — Auto-Incremental
+
+- **Auto-incremental scan**: Scan automatically uses incremental mode when a registry already exists. No need to pass `--incremental` flag.
+- **oRPC route detection**: API-map now detects oRPC-style routers.
+- **Context/Query by file path**: `context src/lib/auth.ts` and `query src/lib/auth.ts` now return all symbols in the file.
+- **Health score calibration**: Deep nesting now reports per-block instead of per-line. Typical React project health: 90 (was 25).
 
 ## What's New in v5.6 — Real-World Tested
 
@@ -66,16 +91,23 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Workspace detection depth limit**: Walks up at most 10 directory levels (was unlimited).
 - **God objects Python scoping**: Method count now scoped to each class using indentation (was counting ALL `def` in file).
 
-## What's New in v5.2 — Agent Optimization
+## What's New in v5.7 — Shared Configuration & Logging
 
-- **`handbook` command**: One-stop project orientation for AI agents. Aggregates identity, structure, health, conventions, risks, and quick reference into a single output. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`.
-- **`ask` command**: Natural language query router. Agents don't need to memorize 41 commands — just ask a question and CodeLens routes to the right tool.
-- **`--format markdown`**: Global flag on ALL commands. Output markdown instead of JSON for direct LLM consumption.
-- **`scan` generates `outline.json` + `summary.json`**: Previously only `watch` produced these AI-friendly files. Now `scan` does too.
-- **Decision trees in output**: `query` returns `action` + `action_reason`, `impact` returns `risk_level` + `recommended_action`, `smell` returns `actionable_items`, `dead-code` returns `removal_safety`.
-- **`context` enriched with quality metrics**: Adds `quality` block with complexity, side effects, safety assessment, smells, and test coverage.
-- **Convention detection**: New `convention_engine.py` detects naming conventions, file organization, import styles, component patterns, and error handling.
-- **`.codelens/AGENT.md`**: Auto-generated markdown project brief that can be included as system prompt context.
+- **Shared DEFAULT_IGNORE_DIRS across 22 engines**: All engine files now import from `utils.py` instead of defining local copies with inconsistent entries. Eliminated ~132 lines of duplicated configuration.
+- **Query command status consistency**: All 4 found-code-paths now return `status: "ok"`.
+- **Comprehensive logging across 15 files**: Replaced 26 bare `except ... pass` blocks with `logger.debug()`/`logger.warning()` calls.
+
+## What's New in v5.8 — Bug Fix Release
+
+- **CRITICAL: Version mismatch fixed**: pyproject.toml, utils.py, and skill.json now all aligned to v5.8.0.
+- **CRITICAL: Broken test imports fixed**: 5 test files updated to import from `parsers.fallback_*` modules.
+- **HIGH: Frontend deletion cleanup fixed**: Deleted files' frontend entries now properly removed.
+- **HIGH: CSS parser pseudo-element detection fixed**: `::` no longer triggers SCSS fallback on standard CSS.
+- **HIGH: Class collision detection fixed**: HTML classes now get `defined_in_html` field.
+- **HIGH: GrammarLoader thread safety**: Added `threading.Lock` to singleton and dict operations.
+- **HIGH: Watch command race condition fixed**: Changes during rescan no longer lost.
+- **MEDIUM: Performance improvements**: O(n²)→O(n) BFS, O(1) path lookups, regex compiled once per scan.
+- **Command count updated**: 41 commands (was "39" in some docs).
 
 ---
 
@@ -273,7 +305,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" search "Button" /path/to/workspace -
 
 **Options:** `--type`, `--file`, `--max-results`, `--context`, `--ignore-case`, `--whole-word`
 
-### 9. `codelens_symbols` — Symbol Search
+### 10. `codelens_symbols` — Symbol Search
 
 Search symbol in the registry (not in files). Faster than search.
 
@@ -288,7 +320,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" symbols "modal" /path/to/workspace -
 python3 "$CODELENS_DIR/scripts/codelens.py" symbols "auth" /path/to/workspace --domain backend --fuzzy
 ```
 
-### 10. `codelens_trace` — Deep Call Chain
+### 11. `codelens_trace` — Deep Call Chain
 
 Trace call chain from a symbol. For root cause analysis and impact assessment.
 
@@ -305,7 +337,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/worksp
 
 **AI Use Case:** "Bug in render() → trace where it originates" → `trace render workspace --direction up`
 
-### 11. `codelens_impact` — Change Impact Analysis
+### 12. `codelens_impact` — Change Impact Analysis
 
 Predict the impact if a symbol is modified or deleted. Mandatory before refactoring.
 
@@ -329,7 +361,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" impact "btn-primary" /path/to/worksp
 
 ## P2 Tools — Outline, Missing-refs, Diff, Circular
 
-### 12. `codelens_outline` — File Structure Outline
+### 13. `codelens_outline` — File Structure Outline
 
 View file structure without reading full content. All functions, classes, imports, exports.
 
@@ -344,7 +376,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --file sr
 python3 "$CODELENS_DIR/scripts/codelens.py" outline /path/to/workspace --all
 ```
 
-### 13. `codelens_missing-refs` — CSS/HTML Mismatch Detection
+### 14. `codelens_missing-refs` — CSS/HTML Mismatch Detection
 
 Detect bugs: class in HTML but not in CSS, CSS selector but no HTML, typos.
 
@@ -359,7 +391,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" missing-refs /path/to/workspace
 - `js_id_no_html` — JS reference ID but no HTML definition
 - `possible_typos` — Dead class similar to active class (possible typo)
 
-### 14. `codelens_diff` — Registry Diff
+### 15. `codelens_diff` — Registry Diff
 
 Compare current registry vs last snapshot. Track what changed.
 
@@ -376,7 +408,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" diff /path/to/workspace --snapshot1 
 
 **Note:** Snapshots are automatically saved every time `scan` is run.
 
-### 15. `codelens_circular` — Circular Dependency Detection
+### 16. `codelens_circular` — Circular Dependency Detection
 
 Detect circular: function calls, import chains, CSS @import.
 
@@ -397,7 +429,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" circular /path/to/workspace --domain
 
 ## P3 Tools — Context, Dependents, Validate
 
-### 16. `codelens_context` — Rich Symbol Context
+### 17. `codelens_context` — Rich Symbol Context
 
 Everything an AI needs about a symbol: definition code, callers, callees, file outline, imports.
 
@@ -413,7 +445,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" /path/to/work
 
 **Returns:** definition, code_snippet, callers, callees, nearby_symbols, file_outline, imports
 
-### 17. `codelens_dependents` — Module-Level Import Tracking
+### 18. `codelens_dependents` — Module-Level Import Tracking
 
 Who imports this file? Module level, not function level.
 
@@ -428,7 +460,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" dependents src/utils/auth.ts /path/t
 python3 "$CODELENS_DIR/scripts/codelens.py" dependents src/utils/auth.ts /path/to/workspace --direction graph
 ```
 
-### 18. `codelens_validate` — Registry Sanity Check
+### 19. `codelens_validate` — Registry Sanity Check
 
 Check whether the registry is still in sync with the file system.
 
@@ -446,7 +478,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" validate /path/to/workspace
 
 ## v3 P0: Dataflow & Smell
 
-### 19. `codelens_dataflow` — Data Flow Analysis (Source→Sink)
+### 20. `codelens_dataflow` — Data Flow Analysis (Source→Sink)
 
 Trace where data flows from sources (user input, env vars, file reads, API responses) to sinks (DB queries, HTML output, command exec, file writes, HTTP headers). Detect taint violations (data that reaches dangerous sinks without sanitization).
 
@@ -468,7 +500,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" dataflow /path/to/workspace --sink d
 
 **Options:** `--source` (user_input, dom_input, env_var, file_input, api_response), `--sink` (db_query, html_output, command_exec, file_write, http_header), `--depth`
 
-### 20. `codelens_smell` — Code Smell Detection
+### 21. `codelens_smell` — Code Smell Detection
 
 Detect 10 code smell categories: long_fn, deep_nesting, many_params, large_file, callback_hell, magic_values, god_object, complex_conditional, duplicate_pattern, inconsistent. Each smell has severity (info/warning/critical) and refactoring suggestion. Computes health_score (0-100).
 
@@ -489,7 +521,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" smell /path/to/workspace --severity 
 
 ## v3 P1: Side-effect, Refactor-safe, Dead-code
 
-### 21. `codelens_side-effect` — Side Effect Analysis
+### 22. `codelens_side-effect` — Side Effect Analysis
 
 Tag functions as pure vs impure. Detect 7 side-effect categories: DOM, State, Network, IO, Timer, Random, External. Compute purity ratio for the entire workspace.
 
@@ -506,7 +538,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace --nam
 python3 "$CODELENS_DIR/scripts/codelens.py" side-effect /path/to/workspace --file src/orders.ts
 ```
 
-### 22. `codelens_refactor-safe` — Refactoring Safety Check
+### 23. `codelens_refactor-safe` — Refactoring Safety Check
 
 Pre-flight check before rename/move symbol. Detect: string refs, dynamic access, eval refs, meta-programming, test refs, config refs, doc refs, import breaks, CSS refs. Safety level: safe/mostly_safe/cautious/risky/dangerous. Generates pre-refactor checklist.
 
@@ -520,7 +552,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" refactor-safe verify_token /path/to/
 python3 "$CODELENS_DIR/scripts/codelens.py" refactor-safe auth /path/to/workspace --action move --new-name src/auth/
 ```
 
-### 23. `codelens_dead-code` — Enhanced Dead Code Detection
+### 24. `codelens_dead-code` — Enhanced Dead Code Detection
 
 More than just 0-ref_count: detect unreachable code, unused exports, zombie CSS, unused variables, dead event listeners.
 
@@ -538,7 +570,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" dead-code /path/to/workspace --categ
 
 ## v3 P2: Stack-trace, Test-map, Config-drift
 
-### 24. `codelens_stack-trace` — Error Propagation Simulation
+### 25. `codelens_stack-trace` — Error Propagation Simulation
 
 Simulate what happens if a function throws: trace error up the call stack. Show which callers have try/catch (handled) and which don't (unhandled → crash). Crash risk: low/medium/high/critical.
 
@@ -551,7 +583,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" stack-trace verify_token /path/to/wo
 python3 "$CODELENS_DIR/scripts/codelens.py" stack-trace processOrder /path/to/workspace --error-type NetworkError
 ```
 
-### 25. `codelens_test-map` — Test Coverage Mapping
+### 26. `codelens_test-map` — Test Coverage Mapping
 
 Map which functions have test coverage. Strategies: file name matching, function name matching, import matching. Find files with no tests at all.
 
@@ -565,7 +597,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" test-map /path/to/workspace
 python3 "$CODELENS_DIR/scripts/codelens.py" test-map /path/to/workspace --function verify_token
 ```
 
-### 26. `codelens_config-drift` — Dependency Drift Detection
+### 27. `codelens_config-drift` — Dependency Drift Detection
 
 Validate package.json/Cargo.toml/requirements.txt vs actual imports. Find: missing deps, unused deps, phantom imports.
 
@@ -579,7 +611,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" config-drift /path/to/workspace
 
 ## v3 P3: Type-infer, Ownership
 
-### 27. `codelens_type-infer` — Lightweight Type Inference
+### 28. `codelens_type-infer` — Lightweight Type Inference
 
 Infer types for variables and functions in JS/Python. Strategies: literal inference, return type inference, known API return types, propagation. Skip files that already have TypeScript annotations.
 
@@ -596,7 +628,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" type-infer /path/to/workspace --file
 python3 "$CODELENS_DIR/scripts/codelens.py" type-infer /path/to/workspace --function processOrder
 ```
 
-### 28. `codelens_ownership` — Code Ownership Analysis
+### 29. `codelens_ownership` — Code Ownership Analysis
 
 Git blame-based ownership: who last touched what, how old is this code. Find stale code, hotspots (many authors), orphan files (no recent changes). Fallback to mtime if git is unavailable.
 
@@ -617,7 +649,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" ownership /path/to/workspace --funct
 
 ## v4 P0: Secrets, Entrypoints
 
-### 29. `codelens_secrets` — Hardcoded Secret Detection
+### 30. `codelens_secrets` — Hardcoded Secret Detection
 
 Detect API keys, passwords, tokens, connection strings, private keys, and secret keys that are hardcoded in source code. Includes Shannon entropy detection to flag high-entropy strings that may be secrets. Scan .env files and check .gitignore.
 
@@ -633,7 +665,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" secrets /path/to/workspace --severit
 
 **Categories:** api_key, password, token, connection_string, private_key, secret_key, oauth, webhook
 
-### 30. `codelens_entrypoints` — Execution Entry Point Mapping
+### 31. `codelens_entrypoints` — Execution Entry Point Mapping
 
 Map all execution entry points: main(), HTTP handlers, event listeners, CLI commands, cron jobs, workers, module exports, test entries. "Where does this application start?"
 
@@ -656,7 +688,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" entrypoints /path/to/workspace --typ
 
 ## v4 P1: API Map, State Map, Env Check
 
-### 31. `codelens_api-map` — REST/GraphQL/gRPC Route Mapping
+### 32. `codelens_api-map` — REST/GraphQL/gRPC Route Mapping
 
 Map all routes to handlers: Express, Fastify, Koa, Hono, Next.js, Nuxt, Django, Flask, FastAPI, GraphQL, gRPC, tRPC. Extract method, path, handler name, middleware chain. Flag auth-protected vs public routes.
 
@@ -673,7 +705,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" api-map /path/to/workspace --method 
 python3 "$CODELENS_DIR/scripts/codelens.py" api-map /path/to/workspace --path "/api/users"
 ```
 
-### 32. `codelens_state-map` — Global State Tracking
+### 33. `codelens_state-map` — Global State Tracking
 
 Track state management: Redux, React Context, Zustand, MobX, Pinia, Vuex, Recoil, Jotai, XState, module-level state. Map reads/writes per state slice.
 
@@ -687,7 +719,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" state-map /path/to/workspace
 python3 "$CODELENS_DIR/scripts/codelens.py" state-map /path/to/workspace --store userSlice
 ```
 
-### 33. `codelens_env-check` — Environment Variable Audit
+### 34. `codelens_env-check` — Environment Variable Audit
 
 Audit env vars: which are referenced, required (no fallback), undocumented, missing from .env.example. Check naming inconsistencies and secrets in .env files.
 
@@ -705,7 +737,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" env-check /path/to/workspace --var D
 
 ## v4 P2: Debug Leak, Complexity
 
-### 34. `codelens_debug-leak` — Debug Code Leak Detection
+### 35. `codelens_debug-leak` — Debug Code Leak Detection
 
 Detect leftover debug code: console.log, print(), debugger, TODO/FIXME/HACK, commented-out code blocks, test skips, mock data, dev-only guards. Context-aware (skip console.error in catch blocks, downgrade findings in test files).
 
@@ -721,7 +753,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" debug-leak /path/to/workspace --cate
 
 **Categories:** console_log, print_statement, debugger, todo_fixme, commented_code, test_skip, mock_data, dev_only
 
-### 35. `codelens_complexity` — Complexity Scoring
+### 36. `codelens_complexity` — Complexity Scoring
 
 Compute cyclomatic + cognitive complexity per function with precise numbers. Unlike `smell` which detects patterns qualitatively — this tool gives numerical scores. Cyclomatic: 1-5 simple, 6-10 moderate, 11-20 complex, 21-50 very complex, 50+ untamable. Cognitive: SonarSource spec with nesting increment.
 
@@ -742,7 +774,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" complexity /path/to/workspace --thre
 
 ## v4 P3: Regex Audit, A11y
 
-### 36. `codelens_regex-audit` — Regex Pattern Auditing
+### 37. `codelens_regex-audit` — Regex Pattern Auditing
 
 Audit regex patterns: ReDoS-vulnerable patterns (nested quantifiers, overlapping alternatives), overly broad patterns, incorrect escaping, unsafe RegExp constructor (dynamic input), performance issues.
 
@@ -758,7 +790,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" regex-audit /path/to/workspace --sev
 
 **Categories:** redos_vulnerable, overly_broad, incorrect_escaping, unsafe_constructor, performance
 
-### 37. `codelens_a11y` — Accessibility Auditing
+### 38. `codelens_a11y` — Accessibility Auditing
 
 Detect a11y issues: missing alt text, form labels, ARIA issues, keyboard navigation, semantic HTML, color contrast, heading order, vague link text, focus management. Mapped to WCAG 2.1 criteria.
 
@@ -781,7 +813,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" a11y /path/to/workspace --severity c
 
 ## v5 P0: Vulnerability Scanning
 
-### 38. `codelens_vuln-scan` — Dependency Vulnerability Scanning
+### 39. `codelens_vuln-scan` — Dependency Vulnerability Scanning
 
 Scan dependencies for known CVEs using native audit tools (npm audit, cargo audit, pip-audit, govulncheck) and a built-in vulnerability database with 35+ entries. Supports npm, Rust, Python, and Go ecosystems. Each finding includes CVE ID, severity, fix version, and recommendation.
 
@@ -799,7 +831,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" vuln-scan /path/to/workspace --sever
 
 ## v5 P1: Performance Hints
 
-### 39. `codelens_perf-hint` — Performance Anti-Pattern Detection
+### 40. `codelens_perf-hint` — Performance Anti-Pattern Detection
 
 Detect performance anti-patterns across 8 categories: N+1 queries, sync blocking calls, memory leaks (missing cleanup), expensive React re-renders, large bundle imports, inefficient iterations, unoptimized images, and cache misses. Each hint includes severity, fix suggestion, and context.
 
@@ -820,7 +852,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" perf-hint /path/to/workspace --sever
 
 ## v5 P2: Deep CSS Analysis
 
-### 40. `codelens_css-deep` — Deep CSS Analysis
+### 41. `codelens_css-deep` — Deep CSS Analysis
 
 Analyze CSS for deep issues: unused custom properties (--var), orphan @keyframes animations, specificity wars (!important overuse, deeply nested selectors), duplicate property declarations within rule blocks, non-standard @media breakpoints, and z-index abuse (excessive values, too many unique values). Cross-references CSS with HTML/JS for variable and keyframe usage.
 

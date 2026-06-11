@@ -111,7 +111,7 @@ curl "http://localhost:3000/api/graph?workspace=/home/user/my-project"
 
 ### `POST /api/command`
 
-Execute any of the 39 CodeLens CLI commands and receive a normalized `GraphEvent` in response. This is the general-purpose command endpoint.
+Execute any of the 41 CodeLens CLI commands and receive a normalized `GraphEvent` in response. This is the general-purpose command endpoint.
 
 **Example request:**
 
@@ -291,8 +291,8 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 | `list` | List registry entries with optional domain/type filter |
 | `detect` | Auto-detect frameworks used in the workspace |
 | `watch` | Watch for file changes, re-scan with debounce, generate outline.json + summary.json |
-| `handbook` | Generate project handbook for AI agents (identity, structure, health, conventions, risks) |
-| `ask` | Natural language query router — ask a question, CodeLens routes to the right command |
+| `handbook` | Project handbook for AI agents (one-stop orientation) |
+| `ask` | Natural language query router |
 
 ### Search & Trace (P1)
 
@@ -304,7 +304,6 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 | `impact` | Analyze change impact for a symbol |
 | `dependents` | Module-level import tracking |
 | `stack-trace` | Error propagation simulation |
-| `query` | Look up a specific symbol by name |
 
 ### Outline & Diff (P2)
 
@@ -441,6 +440,12 @@ CodeLens/
 │       └── index.ts
 ├── skills/codelens/       # CodeLens Python CLI (v5.8)
 │   ├── scripts/           # 41 command engines + parsers
+│   │   ├── commands/      # Modular CLI commands (auto-registered)
+│   │   ├── formatters/    # Markdown/JSON output formatters
+│   │   ├── parsers/       # Tree-sitter + fallback parsers
+│   │   ├── utils.py       # Shared utilities, constants, logger
+│   │   ├── convention_engine.py  # Semantic convention detection
+│   │   └── codelens.py    # CLI entry point (~307 lines)
 │   ├── tests/             # Python unit tests
 │   └── setup.sh           # One-time tree-sitter setup
 ├── __tests__/             # Backend integration tests

@@ -8,6 +8,7 @@
 // ============================================================
 
 import { createServer } from 'http'
+import path from 'path'
 import { Server } from 'socket.io'
 
 // ─── Types (mirrored from src/types/neural.ts) ──────────────
@@ -783,85 +784,74 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
     case 'vuln-scan':
     case 'dataflow':
     case 'env-check':
-    case 'regex-audit':
+    case 'regex-audit': {
       // Security commands - use alarm animation
+      const generic = normalizeGeneric(command, cliResult)
       return {
-        ...normalizeGeneric(command, cliResult),
+        ...generic,
         animation: {
           type: 'alarm',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          targetNodeIds: generic.animation.targetNodeIds,
           intensity: cliResult.risk === 'critical' ? 'critical' : 'high',
         },
       }
+    }
     case 'smell':
     case 'complexity':
     case 'debug-leak':
     case 'dead-code':
-    case 'a11y':
+    case 'a11y': {
       // Quality commands - use pulse animation
+      const generic = normalizeGeneric(command, cliResult)
       return {
-        ...normalizeGeneric(command, cliResult),
+        ...generic,
         animation: {
           type: 'pulse',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          targetNodeIds: generic.animation.targetNodeIds,
           intensity: 'medium',
         },
       }
+    }
     case 'perf-hint':
-    case 'circular':
+    case 'circular': {
       // Performance - use ripple animation
+      const generic = normalizeGeneric(command, cliResult)
       return {
-        ...normalizeGeneric(command, cliResult),
+        ...generic,
         animation: {
           type: 'ripple',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          targetNodeIds: generic.animation.targetNodeIds,
           intensity: 'medium',
         },
       }
+    }
     case 'css-deep':
-    case 'missing-refs':
+    case 'missing-refs': {
       // CSS - use flash animation
+      const generic = normalizeGeneric(command, cliResult)
       return {
-        ...normalizeGeneric(command, cliResult),
+        ...generic,
         animation: {
           type: 'flash',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          targetNodeIds: generic.animation.targetNodeIds,
           intensity: 'low',
         },
       }
+    }
     case 'side-effect':
-    case 'refactor-safe':
+    case 'refactor-safe': {
       // Refactoring - use flow animation
+      const generic = normalizeGeneric(command, cliResult)
       return {
-        ...normalizeGeneric(command, cliResult),
+        ...generic,
         animation: {
           type: 'flow',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
+          targetNodeIds: generic.animation.targetNodeIds,
           intensity: 'medium',
           direction: 'both',
         },
       }
-    case 'handbook':
-      // Handbook - use pulse animation (project orientation)
-      return {
-        ...normalizeGeneric(command, cliResult),
-        animation: {
-          type: 'pulse',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
-          intensity: 'low',
-        },
-      }
-    case 'ask':
-      // Ask - use flow animation (NL routing)
-      return {
-        ...normalizeGeneric(command, cliResult),
-        animation: {
-          type: 'flow',
-          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
-          intensity: 'medium',
-          direction: 'down',
-        },
-      }
+    }
     default:
       return normalizeGeneric(command, cliResult)
   }
@@ -1020,13 +1010,10 @@ function replaceGraphFromScan(nodes: GraphNode[], edges: GraphEdge[], clusters: 
 // ─── WebSocket Server ───────────────────────────────────────
 
 const httpServer = createServer()
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
-  : ['http://localhost:3000', 'http://localhost:81']
 const io = new Server(httpServer, {
   path: '/',
   cors: {
-    origin: allowedOrigins,
+    origin: process.env.CORS_ORIGIN || '*',
     methods: ['GET', 'POST'],
   },
   pingTimeout: 60000,
@@ -1035,6 +1022,34 @@ const io = new Server(httpServer, {
 
 const commandTimestamps = new Map<string, number>()
 const COMMAND_RATE_LIMIT_MS = 2000 // 2 seconds between commands
+
+// ─── Command Whitelist ────────────────────────────────────
+
+const ALLOWED_COMMANDS = new Set([
+  'init', 'scan', 'query', 'list', 'search', 'symbols', 'trace', 'impact',
+  'dependents', 'outline', 'missing-refs', 'diff', 'circular', 'context',
+  'validate', 'detect', 'secrets', 'vuln-scan', 'dataflow', 'env-check',
+  'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
+  'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
+  'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
+  'state-map', 'regex-audit', 'handbook', 'ask',
+])
+
+// ─── Workspace Path Validation ─────────────────────────────
+
+function validateWorkspacePath(ws: string): { valid: boolean; error?: string } {
+  if (!ws || typeof ws !== 'string') return { valid: false, error: 'Workspace path is required' }
+  const normalized = path.normalize(ws)
+  if (normalized.includes('..')) return { valid: false, error: 'Path traversal not allowed' }
+  if (!path.isAbsolute(normalized)) return { valid: false, error: 'Workspace must be absolute path' }
+  const blocked = ['/etc', '/proc', '/sys', '/dev', '/boot']
+  for (const prefix of blocked) {
+    if (normalized === prefix || normalized.startsWith(prefix + '/')) {
+      return { valid: false, error: `Workspace cannot be within ${prefix}` }
+    }
+  }
+  return { valid: true }
+}
 
 io.on('connection', (socket) => {
   console.log(`[WS] Client connected: ${socket.id}`)
@@ -1053,6 +1068,24 @@ io.on('connection', (socket) => {
     const { command, args } = data
     console.log(`[WS] command: ${command} ${args.join(' ')}`)
 
+    // Block 'watch' command over WebSocket
+    if (command === 'watch') {
+      socket.emit('command_result', {
+        command,
+        error: `Command 'watch' is not supported via WebSocket.`,
+      })
+      return
+    }
+
+    // Validate command against whitelist
+    if (!ALLOWED_COMMANDS.has(command)) {
+      socket.emit('command_result', {
+        command,
+        error: `Command '${command}' is not recognized.`,
+      })
+      return
+    }
+
     // Rate limiting
     const lastCmd = commandTimestamps.get(socket.id) ?? 0
     if (Date.now() - lastCmd < COMMAND_RATE_LIMIT_MS) {
@@ -1060,6 +1093,19 @@ io.on('connection', (socket) => {
       return
     }
     commandTimestamps.set(socket.id, Date.now())
+
+    // Validate workspace path from args or lastWorkspace
+    const workspacePath = args[0] || lastWorkspace
+    if (workspacePath) {
+      const validation = validateWorkspacePath(workspacePath)
+      if (!validation.valid) {
+        socket.emit('command_result', {
+          command,
+          result: { success: false, error: validation.error },
+        })
+        return
+      }
+    }
 
     try {
       const result = await executeCodelens(command, args)
@@ -1210,6 +1256,7 @@ io.on('connection', (socket) => {
   // ─── Disconnect ────────────────────────────────────────
   socket.on('disconnect', () => {
     console.log(`[WS] Client disconnected: ${socket.id}`)
+    commandTimestamps.delete(socket.id)
   })
 
   socket.on('error', (error) => {

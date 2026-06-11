@@ -30,19 +30,18 @@ except ImportError:
     HAS_TREE_SITTER = False
 
 
-class PythonParser:
+class PythonParser(BaseParser):
     """Tree-sitter powered Python parser for function/class extraction."""
 
     def __init__(self):
         if not HAS_TREE_SITTER:
             raise ImportError("tree-sitter or base_parser not available")
-        self._parser = None
         from grammar_loader import get_grammar_loader
         loader = get_grammar_loader()
-        ts_parser = loader.get_parser('python')
-        if ts_parser is None:
+        lang = loader.get_language('python')
+        if lang is None:
             raise ImportError("tree-sitter Python grammar not available")
-        self._parser = ts_parser
+        super().__init__(lang)
 
     def extract_references(self, content: str, file_path: str) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -54,13 +53,19 @@ class PythonParser:
                 "edges": [{"from": str, "to_fn": str}]
             }
         """
-        tree = self._parser.parse(content.encode('utf-8'))
+        source = content.encode('utf-8')
+        tree = self.parse(source)
         nodes = []
         edges = []
 
         # Track declared functions and current class
         declared_fns: Dict[str, str] = {}  # fn_name → node_id
-        current_class: Optional[str] = None
+
+        # Context tracking via depth-aware stack
+        # Each entry: (depth, type, value)
+        #   type='class'  → value is class name
+        #   type='function' → value is previous current_fn_id to restore
+        context_stack: List[tuple] = []
         current_fn_id: Optional[str] = None
 
         # Skip names that aren't user-defined functions
@@ -77,27 +82,31 @@ class PythonParser:
             'staticmethod', 'classmethod', 'abstractmethod',
         }
 
-        def _walk(node, class_name=None, fn_id=None):
-            """Recursively walk the tree to find functions and calls."""
-            nonlocal current_class, current_fn_id
+        def visit(node, src, depth):
+            nonlocal current_fn_id
+
+            # Pop context entries whose depth >= current depth
+            # (we've exited those subtrees)
+            while context_stack and context_stack[-1][0] >= depth:
+                _, ctx_type, ctx_value = context_stack.pop()
+                if ctx_type == 'function':
+                    current_fn_id = ctx_value  # Restore previous fn_id
+
+            if node.type == 'decorator':
+                return False  # Skip decorator children
 
             if node.type == 'class_definition':
-                # Track class context
                 name_node = node.child_by_field_name('name')
                 if name_node:
-                    cls_name = content[name_node.start_byte:name_node.end_byte]
-                    # Walk the body with class context
-                    body = node.child_by_field_name('body')
-                    if body:
-                        for child in body.children:
-                            _walk(child, class_name=cls_name, fn_id=fn_id)
-                return
+                    cls_name = self.get_text(name_node, src)
+                    context_stack.append((depth, 'class', cls_name))
+                return  # Continue walking children
 
-            elif node.type == 'function_definition':
+            if node.type == 'function_definition':
                 name_node = node.child_by_field_name('name')
                 if name_node:
-                    fn_name = content[name_node.start_byte:name_node.end_byte]
-                    line = node.start_point[0] + 1  # 1-indexed
+                    fn_name = self.get_text(name_node, src)
+                    line = self.get_line(node)
                     node_id = f"{file_path}:{line}"
 
                     # Check async
@@ -105,6 +114,12 @@ class PythonParser:
                         child.type == 'async' or (child.type == 'identifier' and child.text == b'async')
                         for child in node.children
                     )
+
+                    # Get current class context
+                    class_name = None
+                    for _, ctx_type, ctx_name in context_stack:
+                        if ctx_type == 'class':
+                            class_name = ctx_name
 
                     node_data = {
                         "id": node_id,
@@ -119,54 +134,38 @@ class PythonParser:
                     nodes.append(node_data)
                     declared_fns[fn_name] = node_id
 
-                    # Walk the body with function context
-                    body = node.child_by_field_name('body')
-                    if body:
-                        old_fn_id = current_fn_id
-                        current_fn_id = node_id
-                        for child in body.children:
-                            _walk(child, class_name=class_name, fn_id=node_id)
-                        current_fn_id = old_fn_id
-                return
+                    # Save current fn_id to restore when exiting this function
+                    context_stack.append((depth, 'function', current_fn_id))
+                    current_fn_id = node_id
+                return  # Continue walking children
 
-            elif node.type == 'decorator':
-                # Skip decorators - they reference functions but aren't calls
-                return
-
-            elif node.type == 'call' and fn_id:
+            if node.type == 'call' and current_fn_id:
                 # Function call: name(args) or obj.method(args)
                 func_node = node.child_by_field_name('function')
                 if func_node:
-                    call_name = content[func_node.start_byte:func_node.end_byte]
+                    call_name = self.get_text(func_node, src)
 
                     # Handle attribute access: obj.method
                     if func_node.type == 'attribute':
                         attr_node = func_node.child_by_field_name('attribute')
                         obj_node = func_node.child_by_field_name('object')
                         if attr_node and obj_node:
-                            method_name = content[attr_node.start_byte:attr_node.end_byte]
-                            obj_name = content[obj_node.start_byte:obj_node.end_byte]
+                            method_name = self.get_text(attr_node, src)
+                            obj_name = self.get_text(obj_node, src)
                             if method_name not in skip_names:
                                 is_self = obj_name == 'self'
-                                full_name = f"{obj_name}.{method_name}"
                                 edges.append({
-                                    "from": fn_id,
+                                    "from": current_fn_id,
                                     "to_fn": method_name,
                                     "via_self": is_self
                                 })
                     elif func_node.type == 'identifier':
                         if call_name not in skip_names:
                             edges.append({
-                                "from": fn_id,
+                                "from": current_fn_id,
                                 "to_fn": call_name
                             })
 
-            # Recurse into children
-            for child in node.children:
-                _walk(child, class_name=class_name, fn_id=fn_id)
-
-        root = tree.root_node
-        for child in root.children:
-            _walk(child)
+        self.walk_tree(tree, source, visit)
 
         return {"nodes": nodes, "edges": edges}

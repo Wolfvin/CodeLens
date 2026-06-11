@@ -9,15 +9,7 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
-
-// ─── In-memory cache with 5-minute TTL ──────────────────────
-interface CacheEntry {
-  result: Record<string, unknown>
-  timestamp: number
-}
-
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
-const healthCache = new Map<string, CacheEntry>()
+import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -32,15 +24,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Check cache (only when not requesting node-specific impact radius)
-    const cacheKey = nodeId ? `${workspace}::${nodeId}` : workspace
-    const cached = healthCache.get(cacheKey)
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return NextResponse.json(cached.result)
+    // Validate workspace path to prevent path traversal
+    const wsValidation = validateWorkspace(workspace)
+    if (!wsValidation.valid) {
+      return NextResponse.json(
+        { error: `Invalid workspace: ${wsValidation.error}` },
+        { status: 400 }
+      )
     }
+    const safeWorkspace = wsValidation.resolved
 
     // Run the scan to get current graph state
-    const scanOutput = await commandRunner.scan(workspace)
+    const scanOutput = await commandRunner.scan(safeWorkspace)
 
     if (scanOutput.status === 'error') {
       return NextResponse.json(
@@ -69,18 +64,13 @@ export async function GET(request: NextRequest) {
       impactRadius = computeImpactRadius(nodeId, nodes, edges)
     }
 
-    const result = {
+    return NextResponse.json({
       healthScore,
       coupling: coupling.slice(0, 50),
       heatmap: heatmap.slice(0, 100),
       impactRadius,
       timestamp: Date.now(),
-    }
-
-    // Store in cache
-    healthCache.set(cacheKey, { result, timestamp: Date.now() })
-
-    return NextResponse.json(result)
+    })
   } catch (err: any) {
     console.error('[/api/health] Error:', err)
     return NextResponse.json(

@@ -158,6 +158,9 @@ class GraphStore {
       if (!edge.id) continue
       this.edges.set(edge.id, edge)
     }
+
+    // Invalidate TF-IDF cache since nodes/edges changed
+    this.invalidateTfidfCache()
   }
 
   // ============================================================

@@ -9,15 +9,7 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
-
-// ─── In-memory cache with 5-minute TTL ──────────────────────
-interface CacheEntry {
-  result: Record<string, unknown>
-  timestamp: number
-}
-
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
-const graphCache = new Map<string, CacheEntry>()
+import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,14 +23,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Check cache
-    const cached = graphCache.get(workspace)
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return NextResponse.json(cached.result)
+    // Validate workspace path to prevent path traversal
+    const wsValidation = validateWorkspace(workspace)
+    if (!wsValidation.valid) {
+      return NextResponse.json(
+        { error: `Invalid workspace: ${wsValidation.error}` },
+        { status: 400 }
+      )
     }
+    const safeWorkspace = wsValidation.resolved
 
     // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(workspace)
+    const scanOutput = await commandRunner.scan(safeWorkspace)
 
     // Check for CLI errors
     if (scanOutput.status === 'error') {
@@ -78,7 +74,6 @@ export async function GET(request: NextRequest) {
     const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
     // Assign clusterId to each node (using cloned nodes to avoid mutation)
-    // O(1) Map lookup instead of O(n) find per cluster node
     const finalNodes = selectedNodes.map(n => ({ ...n }))
     const nodeMap = new Map(finalNodes.map(n => [n.id, n]))
     for (const cluster of clusters) {
@@ -99,19 +94,14 @@ export async function GET(request: NextRequest) {
     // Compute heatmap (inspired by Emerge)
     const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
 
-    const result = {
+    return NextResponse.json({
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
       healthScore,
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
-    }
-
-    // Store in cache
-    graphCache.set(workspace, { result, timestamp: Date.now() })
-
-    return NextResponse.json(result)
+    })
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)
     return NextResponse.json(

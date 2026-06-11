@@ -1,7 +1,6 @@
 """Query command — Query a specific class/id/function from the registry."""
 
 import os
-import json
 from typing import Dict, Any, List
 
 from registry import load_frontend_registry, load_backend_registry
@@ -89,7 +88,9 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
         for cls in frontend.get("classes", []):
             if cls["name"] == query_name:
-                if file_filter and file_filter not in json.dumps(cls):
+                if file_filter and file_filter not in cls.get("file", "") and not any(
+                    file_filter in ref.get("path", "") for ref in cls.get("css", []) + cls.get("js", [])
+                ):
                     continue
                 action, action_reason = _get_query_action(cls["status"])
                 return {
@@ -108,7 +109,9 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
         for id_entry in frontend.get("ids", []):
             if id_entry["name"] == query_name:
-                if file_filter and file_filter not in json.dumps(id_entry):
+                if file_filter and file_filter not in id_entry.get("file", "") and not any(
+                    file_filter in ref.get("path", "") for ref in id_entry.get("css", []) + id_entry.get("js", []) + id_entry.get("defined_in_html", [])
+                ):
                     continue
                 action, action_reason = _get_query_action(id_entry["status"])
                 return {
