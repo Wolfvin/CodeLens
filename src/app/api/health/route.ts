@@ -10,6 +10,15 @@ import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
 
+// ─── In-memory cache with 5-minute TTL ──────────────────────
+interface CacheEntry {
+  result: Record<string, unknown>
+  timestamp: number
+}
+
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const healthCache = new Map<string, CacheEntry>()
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -21,6 +30,13 @@ export async function GET(request: NextRequest) {
         { error: 'Missing required query parameter: workspace' },
         { status: 400 }
       )
+    }
+
+    // Check cache (only when not requesting node-specific impact radius)
+    const cacheKey = nodeId ? `${workspace}::${nodeId}` : workspace
+    const cached = healthCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return NextResponse.json(cached.result)
     }
 
     // Run the scan to get current graph state
@@ -53,13 +69,18 @@ export async function GET(request: NextRequest) {
       impactRadius = computeImpactRadius(nodeId, nodes, edges)
     }
 
-    return NextResponse.json({
+    const result = {
       healthScore,
       coupling: coupling.slice(0, 50),
       heatmap: heatmap.slice(0, 100),
       impactRadius,
       timestamp: Date.now(),
-    })
+    }
+
+    // Store in cache
+    healthCache.set(cacheKey, { result, timestamp: Date.now() })
+
+    return NextResponse.json(result)
   } catch (err: any) {
     console.error('[/api/health] Error:', err)
     return NextResponse.json(

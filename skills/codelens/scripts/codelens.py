@@ -202,6 +202,11 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
+    # Create a parent parser for shared arguments
+    parent_parser = argparse.ArgumentParser(add_help=False)
+    parent_parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
+                        help="Output format (default: json)")
+
     parser = argparse.ArgumentParser(
         description="CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition)"
     )
@@ -210,14 +215,10 @@ def main():
     # Import and register all command modules
     registry = get_all_commands()
 
-    # Build subparsers from the command registry
+    # Build subparsers from the command registry, with parent for shared args
     for cmd_name, cmd_info in sorted(registry.items()):
-        sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
+        sub = subparsers.add_parser(cmd_name, help=cmd_info["help"], parents=[parent_parser])
         cmd_info["add_args"](sub)
-
-    # Global format option
-    parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
-                        help="Output format (default: json)")
 
     # ─── Parse and dispatch ─────────────────────────────
 

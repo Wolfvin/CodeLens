@@ -2,6 +2,42 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.8.0] — 2026-06-11
+
+### Fixed — Critical
+- **`--format` flag unreachable in CLI** (codelens.py): Added `--format` to parent parser so it works on all subcommands (e.g., `codelens scan . --format markdown` now works correctly)
+- **`handbook` and `ask` commands blocked by API whitelist** (commandRunner.ts): Added both commands to `ALLOWED_COMMANDS` so they work via REST API and WebSocket
+- **KeyError crashes on malformed backend nodes** (edge_resolver.py): Changed `node["fn"]`/`node["id"]` to `.get()` with safe defaults — prevents crashes on malformed parser output
+- **Version mismatch**: Aligned `package.json` (was 5.1.0) to 5.7.0 matching `utils.py` CODELENS_VERSION
+
+### Fixed — High
+- **`/api/graph` and `/api/health` re-scan on every GET**: Added in-memory cache with 5-minute TTL — prevents O(workspace_size) DOS per request
+- **`_infer_literal_type_py` set detection unreachable** (typeinfer_engine.py): Reordered set/dict checks so `{1, 2, 3}` correctly infers as `set` instead of always `dict`
+- **`configdrift_engine.py` pyproject.toml parsing non-functional**: Empty loop body meant zero dependencies were ever extracted from pyproject.toml — now correctly parses `[project.dependencies]` sections
+- **In-place mutation of shared ref dicts** (registry.py, incremental.py): `_build_class_entries` and `_recompute_duplicate_define` now create copies before mutating flags — prevents cross-entry data corruption
+- **`compute_summary` inconsistent dict access** (utils.py): Handles `nodes`/`edges`/`classes`/`ids` being either lists or integers — uses `len()` for lists with int fallback
+
+### Fixed — Medium
+- **`circular_engine.py` phantom import edges**: `_resolve_import_path` now returns `None` instead of unresolved path when no file matches
+- **`refactor_safe_engine.py` overly broad string ref matching**: Added `\b` word boundaries to regex — eliminates false positives like `"OrderProcessor"` matching symbol `"Order"`
+- **`deadcode_engine.py` unused export skip list too aggressive**: Removed `handler` and `router` from entry_points skip set (common Next.js API exports), added HTTP method names (`GET`, `POST`, etc.)
+- **`search_engine.py` ReDoS protection**: Added `_is_redos_risky()` heuristic to reject nested quantifier patterns before compilation
+- **Hardcoded workspace path** (analysisStore.ts): Changed `workspace: '/home/z/my-project'` to `workspace: ''`
+- **Duplicate `missing_refs.py`**: Removed leftover `scripts/missing_refs.py` (canonical version is `scripts/commands/missing_refs.py`)
+- **O(n) cluster assignment** (graph route.ts): Replaced `Array.find()` with `Map.get()` for O(1) lookups
+
+### Fixed — Test Suite
+- **Integration test workspace pollution**: Added autouse cleanup fixture that removes test-generated files after each test
+- **Weak assertion `test_no_secrets_in_clean_code`**: Now asserts `total_secrets == 0` instead of just checking type
+- **Weak async detection assertions** (test_js_backend_parser, test_rust_parser): Explicitly checks `node.get("async") is True or == "async"`
+- **Weak scan assertions** (test_cli.py): Strengthened from `> 0` to specific minimum counts with structure validation
+- **Hardcoded `/home/z/my-project` in analysisStore.test.ts**: Replaced with empty string
+- **Missing `jest` devDependency**: Added `jest@^29.7.0` to package.json
+- **Missing `test` script**: Added `"test": "jest"` and `"test:py"` to package.json
+
+### Changed
+- SKILL.md: Added "What's New in v5.7" section documenting safety and bugfix improvements
+
 ## [5.3.0] — 2026-06-11
 
 ### Architecture

@@ -260,7 +260,7 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
             continue
 
         # Look for name inside quotes
-        for m in re.finditer(r'["\']([^"\']*' + re.escape(name) + r'[^"\']*)["\']', stripped):
+        for m in re.finditer(r'["\']([^"\']*\b' + re.escape(name) + r'\b[^"\']*)["\']', stripped):
             string_content = m.group(1)
 
             # Skip if it's a normal import path

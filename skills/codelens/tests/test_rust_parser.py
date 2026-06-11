@@ -56,7 +56,8 @@ class TestRustParser:
                 else:
                     # Fallback regex parser has a known limitation with async detection
                     # when the regex itself matches the 'async' keyword
-                    assert "async" in node or node.get("async") is not None
+                    assert node.get("async") is True or node.get("async") == "async", \
+                        f"Expected async flag on node, got: {node}"
 
     def test_impl_block(self):
         rust = """

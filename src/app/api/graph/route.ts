@@ -10,6 +10,15 @@ import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
 
+// ─── In-memory cache with 5-minute TTL ──────────────────────
+interface CacheEntry {
+  result: Record<string, unknown>
+  timestamp: number
+}
+
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const graphCache = new Map<string, CacheEntry>()
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -20,6 +29,12 @@ export async function GET(request: NextRequest) {
         { error: 'Missing required query parameter: workspace' },
         { status: 400 }
       )
+    }
+
+    // Check cache
+    const cached = graphCache.get(workspace)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return NextResponse.json(cached.result)
     }
 
     // Run the scan command to build the registry and get all data
@@ -63,10 +78,12 @@ export async function GET(request: NextRequest) {
     const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
     // Assign clusterId to each node (using cloned nodes to avoid mutation)
+    // O(1) Map lookup instead of O(n) find per cluster node
     const finalNodes = selectedNodes.map(n => ({ ...n }))
+    const nodeMap = new Map(finalNodes.map(n => [n.id, n]))
     for (const cluster of clusters) {
       for (const nodeId of cluster.nodeIds) {
-        const node = finalNodes.find((n) => n.id === nodeId)
+        const node = nodeMap.get(nodeId)
         if (node) {
           node.clusterId = cluster.id
         }
@@ -82,14 +99,19 @@ export async function GET(request: NextRequest) {
     // Compute heatmap (inspired by Emerge)
     const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
 
-    return NextResponse.json({
+    const result = {
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
       healthScore,
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
-    })
+    }
+
+    // Store in cache
+    graphCache.set(workspace, { result, timestamp: Date.now() })
+
+    return NextResponse.json(result)
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)
     return NextResponse.json(

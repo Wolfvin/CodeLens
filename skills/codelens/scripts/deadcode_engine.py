@@ -359,7 +359,7 @@ def _detect_unused_exports(
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
+            if name in {'default', 'app', 'server', 'main', 'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'configure', 'setup'}:
                 continue
 
             if name not in all_imported_names:

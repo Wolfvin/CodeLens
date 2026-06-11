@@ -46,7 +46,7 @@ class TestSecretsEngine:
         try:
             result = detect_secrets(ws)
             assert result["status"] == "ok"
-            assert isinstance(result["stats"]["total_secrets"], int)
+            assert result["stats"]["total_secrets"] == 0, "Clean code should have zero secrets detected"
         finally:
             shutil.rmtree(ws, ignore_errors=True)
 

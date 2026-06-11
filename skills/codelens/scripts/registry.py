@@ -280,7 +280,7 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
         ref_count = len(refs["css"]) + len(refs["js"])
         status = compute_frontend_status(name, "class", refs["html"], refs["css"], refs["js"])
 
-        # Check duplicate_define across CSS
+        # Check duplicate_define across CSS - work on copies to avoid mutation
         css_paths = {}
         for css_ref in refs["css"]:
             p = css_ref.get("path", "")
@@ -289,18 +289,20 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             css_paths[p].append(css_ref)
 
         # Flag duplicate_define: same selector defined in same file 2+ times
+        flagged_css = []
         for path, path_refs in css_paths.items():
-            if len(path_refs) > 1:
-                for i, ref in enumerate(path_refs):
-                    if i > 0:
-                        ref["flag"] = "duplicate_define"
+            for i, ref in enumerate(path_refs):
+                ref_copy = dict(ref)  # copy to avoid mutating shared dicts
+                if i > 0:
+                    ref_copy["flag"] = "duplicate_define"
+                flagged_css.append(ref_copy)
 
         entry = {
             "name": name,
             "ref_count": ref_count,
             "status": status,
             "defined_in_html": refs["html"],
-            "css": refs["css"],
+            "css": flagged_css if flagged_css else refs["css"],
             "js": refs["js"]
         }
         classes.append(entry)

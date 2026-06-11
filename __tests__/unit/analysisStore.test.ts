@@ -11,7 +11,7 @@ function getFreshStore() {
   const store = useAnalysisStore
   // Reset to initial state
   store.setState({
-    workspace: '/home/z/my-project',
+    workspace: '',
     isScanning: false,
     lastScanTime: null,
     frameworks: [],
@@ -103,7 +103,7 @@ describe('AnalysisStore', () => {
 
     it('has default workspace', () => {
       const state = useAnalysisStore.getState()
-      expect(state.workspace).toBe('/home/z/my-project')
+      expect(state.workspace).toBe('')
     })
 
     it('has default sidebar tab as commands', () => {
