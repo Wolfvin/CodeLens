@@ -255,3 +255,179 @@ class TestFrameworkDetect:
             assert any("axum" in fw.lower() for fw in result["frameworks"])
         finally:
             shutil.rmtree(ws, ignore_errors=True)
+
+    # ─── Monorepo Detection Tests (v5.8) ──────────────────────────
+
+    def test_monorepo_pnpm_workspace(self):
+        """React in a monorepo sub-package should be detected via pnpm-workspace.yaml."""
+        ws = tempfile.mkdtemp()
+        # Root package.json with only dev deps
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"devDependencies": {"typescript": "^5.0.0"}}, f)
+        # pnpm-workspace.yaml
+        with open(os.path.join(ws, "pnpm-workspace.yaml"), 'w') as f:
+            f.write("packages:\n  - 'apps/*'\n  - 'packages/*'\n")
+        # Sub-package with React
+        apps_dir = os.path.join(ws, "apps", "web")
+        os.makedirs(apps_dir)
+        with open(os.path.join(apps_dir, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0", "react-dom": "^18.0.0"}}, f)
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_react"] is True
+            assert result["is_monorepo"] is True
+            assert any("react" in fw.lower() for fw in result["frameworks"])
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_monorepo_npm_workspaces(self):
+        """React in a monorepo sub-package should be detected via npm workspaces."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({
+                "workspaces": ["apps/*", "packages/*"],
+                "devDependencies": {"typescript": "^5.0.0"}
+            }, f)
+        apps_dir = os.path.join(ws, "apps", "web")
+        os.makedirs(apps_dir)
+        with open(os.path.join(apps_dir, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0"}}, f)
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_react"] is True
+            assert result["is_monorepo"] is True
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_monorepo_tauri_react(self):
+        """Tauri + React monorepo (like Readest) should detect both frameworks."""
+        ws = tempfile.mkdtemp()
+        # Root package.json with only workspace tooling
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"devDependencies": {"typescript": "^5.0.0"}}, f)
+        with open(os.path.join(ws, "pnpm-workspace.yaml"), 'w') as f:
+            f.write("packages:\n  - 'apps/*'\n")
+        # Tauri app in apps/
+        app_dir = os.path.join(ws, "apps", "myapp")
+        os.makedirs(app_dir)
+        with open(os.path.join(app_dir, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0", "react-dom": "^18.0.0", "next": "^14.0.0"}}, f)
+        # Tauri config
+        src_tauri = os.path.join(app_dir, "src-tauri")
+        os.makedirs(src_tauri)
+        with open(os.path.join(src_tauri, "tauri.conf.json"), 'w') as f:
+            json.dump({"build": {}}, f)
+        with open(os.path.join(src_tauri, "Cargo.toml"), 'w') as f:
+            f.write('[package]\nname = "myapp"\nversion = "0.1.0"\n\n[dependencies]\ntauri = "2.0"\n')
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_react"] is True, f"Expected has_react=True, got {result}"
+            assert result["has_tauri"] is True
+            assert result["has_rust_backend"] is True
+            assert result["is_monorepo"] is True
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_monorepo_config_paths(self):
+        """Monorepo Tauri config should set correct frontend/backend paths."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"devDependencies": {}}, f)
+        with open(os.path.join(ws, "pnpm-workspace.yaml"), 'w') as f:
+            f.write("packages:\n  - 'apps/*'\n")
+        # Create Tauri app structure
+        app_dir = os.path.join(ws, "apps", "myapp")
+        os.makedirs(app_dir)
+        with open(os.path.join(app_dir, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0"}}, f)
+        src_tauri = os.path.join(app_dir, "src-tauri")
+        os.makedirs(src_tauri)
+        with open(os.path.join(src_tauri, "tauri.conf.json"), 'w') as f:
+            json.dump({"build": {}}, f)
+        try:
+            config = get_recommended_config(ws)
+            # apps/myapp/src/ should be in frontend_paths
+            assert any("apps/myapp/src/" in p for p in config["frontend_paths"]), \
+                f"Expected 'apps/myapp/src/' in frontend_paths, got {config['frontend_paths']}"
+            # apps/myapp/src-tauri/src/ should be in backend_paths
+            assert any("apps/myapp/src-tauri/src/" in p for p in config["backend_paths"]), \
+                f"Expected 'apps/myapp/src-tauri/src/' in backend_paths, got {config['backend_paths']}"
+            assert config["is_monorepo"] is True
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_lockfile_detection(self):
+        """Lockfile type should be detected."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({}, f)
+        with open(os.path.join(ws, "pnpm-lock.yaml"), 'w') as f:
+            f.write("lockfileVersion: '6.0'\n")
+        try:
+            result = detect_frameworks(ws)
+            assert result["lockfile"] == "pnpm"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_lockfile_bun_detection(self):
+        """bun.lock should be detected."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({}, f)
+        with open(os.path.join(ws, "bun.lock"), 'w') as f:
+            f.write("{}")
+        try:
+            result = detect_frameworks(ws)
+            assert result["lockfile"] == "bun"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_tauri_deep_scan_in_monorepo(self):
+        """Tauri config deep in monorepo tree should be detected."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({}, f)
+        # Tauri config deep in monorepo (not at standard src-tauri/ path)
+        deep_path = os.path.join(ws, "apps", "desktop", "src-tauri")
+        os.makedirs(deep_path)
+        with open(os.path.join(deep_path, "tauri.conf.json"), 'w') as f:
+            json.dump({"build": {}}, f)
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_tauri"] is True
+            assert result["has_rust_backend"] is True
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_new_framework_signatures(self):
+        """New framework signatures (trpc, zustand, vite) should be detected."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({
+                "dependencies": {
+                    "@trpc/server": "^10.0.0",
+                    "zustand": "^4.0.0",
+                },
+                "devDependencies": {
+                    "vite": "^5.0.0",
+                }
+            }, f)
+        try:
+            result = detect_frameworks(ws)
+            frameworks = result["frameworks"]
+            assert any("trpc" in fw.lower() for fw in frameworks), f"Expected trpc in {frameworks}"
+            assert any("zustand" in fw.lower() for fw in frameworks), f"Expected zustand in {frameworks}"
+            assert any("vite" in fw.lower() for fw in frameworks), f"Expected vite in {frameworks}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_non_monorepo_workspace(self):
+        """Single-package project should not be flagged as monorepo."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0"}}, f)
+        try:
+            result = detect_frameworks(ws)
+            assert result["is_monorepo"] is False
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
