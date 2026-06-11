@@ -153,16 +153,5 @@ class JSFrontendParser(BaseParser):
             })
 
     def _get_string_value(self, node: Node, source: bytes) -> Optional[str]:
-        """
-        Extract the string value from a string node.
-        Returns None for template literals or non-literal strings.
-        """
-        text = self.get_text(node, source)
-        # Remove quotes
-        if (text.startswith('"') and text.endswith('"')) or \
-           (text.startswith("'") and text.endswith("'")):
-            return text[1:-1]
-        # Template literal — skip (dynamic)
-        if text.startswith('`'):
-            return None
-        return None
+        """Extract the string value from a string node. Delegates to BaseParser.get_string_value."""
+        return self.get_string_value(node, source)
