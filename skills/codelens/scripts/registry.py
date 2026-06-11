@@ -50,7 +50,7 @@ def load_config(workspace: str) -> Dict[str, Any]:
                 saved = json.load(f)
                 defaults.update(saved)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt config file {config_path}, using defaults", exc_info=True)
     return defaults
 
 
@@ -70,7 +70,7 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -99,7 +99,7 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -136,8 +136,9 @@ def compute_frontend_status(
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Collision: ID/class appears in >1 HTML element
-    if len(html_refs) > 1:
+    # Only IDs can collide (same id on multiple HTML elements is a bug)
+    # Classes are designed to be used on multiple elements
+    if entry_type == "id" and len(html_refs) > 1:
         return "collision"
 
     # Dead: no CSS or JS references (defined in HTML but not styled or used)

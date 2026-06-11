@@ -129,7 +129,7 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
         result["query_interpretation"] = {
             "question": question,
             "interpreted_as": command,
-            "confidence": args.pop("_confidence", "medium")
+            "confidence": args.get("_confidence", "medium")
         }
 
     return result

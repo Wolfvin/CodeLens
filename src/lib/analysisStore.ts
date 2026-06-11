@@ -2,7 +2,16 @@
 
 import { create } from 'zustand'
 import type { SidebarTab, CommandHistoryEntry, ResultTab } from '@/types/neural'
-import { DEMO_SECURITY, DEMO_QUALITY, DEMO_PERFORMANCE, DEMO_CSS, DEMO_P1, DEMO_P2P3, DEMO_REFACTORING } from './demoData'
+// Replace static import with dynamic import to reduce bundle size
+// import { DEMO_SECURITY, DEMO_QUALITY, DEMO_PERFORMANCE, DEMO_CSS, DEMO_P1, DEMO_P2P3, DEMO_REFACTORING } from './demoData'
+type _D = typeof import('./demoData')
+type _Sec = _D['DEMO_SECURITY']
+type _Qual = _D['DEMO_QUALITY']
+type _Perf = _D['DEMO_PERFORMANCE']
+type _CSS = _D['DEMO_CSS']
+type _P1 = _D['DEMO_P1']
+type _P2P3 = _D['DEMO_P2P3']
+type _Ref = _D['DEMO_REFACTORING']
 
 // ---- Store Interface ----
 interface AnalysisState {
@@ -20,52 +29,52 @@ interface AnalysisState {
 
   // Analysis results
   securityResults: {
-    secrets: typeof DEMO_SECURITY.secrets | null
-    vulnerabilities: typeof DEMO_SECURITY.vulnerabilities | null
-    dataflow: typeof DEMO_SECURITY.dataflow | null
-    envCheck: typeof DEMO_SECURITY.envCheck | null
-    regexAudit: typeof DEMO_SECURITY.regexAudit | null
+    secrets: _Sec['secrets'] | null
+    vulnerabilities: _Sec['vulnerabilities'] | null
+    dataflow: _Sec['dataflow'] | null
+    envCheck: _Sec['envCheck'] | null
+    regexAudit: _Sec['regexAudit'] | null
   }
   qualityResults: {
-    smells: typeof DEMO_QUALITY.smells | null
-    complexity: typeof DEMO_QUALITY.complexity | null
-    debugLeaks: typeof DEMO_QUALITY.debugLeaks | null
-    deadCode: typeof DEMO_QUALITY.deadCode | null
-    a11y: typeof DEMO_QUALITY.a11y | null
+    smells: _Qual['smells'] | null
+    complexity: _Qual['complexity'] | null
+    debugLeaks: _Qual['debugLeaks'] | null
+    deadCode: _Qual['deadCode'] | null
+    a11y: _Qual['a11y'] | null
   }
   performanceResults: {
-    perfHints: typeof DEMO_PERFORMANCE.perfHints | null
-    circular: typeof DEMO_PERFORMANCE.circular | null
+    perfHints: _Perf['perfHints'] | null
+    circular: _Perf['circular'] | null
   }
   cssResults: {
-    cssDeep: typeof DEMO_CSS.cssDeep | null
-    missingRefs: typeof DEMO_CSS.missingRefs | null
+    cssDeep: _CSS['cssDeep'] | null
+    missingRefs: _CSS['missingRefs'] | null
   }
   p1Results: {
-    search: typeof DEMO_P1.search | null
-    symbols: typeof DEMO_P1.symbols | null
-    trace: typeof DEMO_P1.trace | null
-    impact: typeof DEMO_P1.impact | null
-    dependents: typeof DEMO_P1.dependents | null
-    stackTrace: typeof DEMO_P1.stackTrace | null
-    query: typeof DEMO_P1.query | null
-    list: typeof DEMO_P1.list | null
+    search: _P1['search'] | null
+    symbols: _P1['symbols'] | null
+    trace: _P1['trace'] | null
+    impact: _P1['impact'] | null
+    dependents: _P1['dependents'] | null
+    stackTrace: _P1['stackTrace'] | null
+    query: _P1['query'] | null
+    list: _P1['list'] | null
   }
   p2p3Results: {
-    outline: typeof DEMO_P2P3.outline | null
-    diff: typeof DEMO_P2P3.diff | null
-    context: typeof DEMO_P2P3.context | null
-    testMap: typeof DEMO_P2P3.testMap | null
-    configDrift: typeof DEMO_P2P3.configDrift | null
-    typeInfer: typeof DEMO_P2P3.typeInfer | null
-    ownership: typeof DEMO_P2P3.ownership | null
-    entrypoints: typeof DEMO_P2P3.entrypoints | null
-    apiMap: typeof DEMO_P2P3.apiMap | null
-    stateMap: typeof DEMO_P2P3.stateMap | null
+    outline: _P2P3['outline'] | null
+    diff: _P2P3['diff'] | null
+    context: _P2P3['context'] | null
+    testMap: _P2P3['testMap'] | null
+    configDrift: _P2P3['configDrift'] | null
+    typeInfer: _P2P3['typeInfer'] | null
+    ownership: _P2P3['ownership'] | null
+    entrypoints: _P2P3['entrypoints'] | null
+    apiMap: _P2P3['apiMap'] | null
+    stateMap: _P2P3['stateMap'] | null
   }
   refactoringResults: {
-    refactorSafe: typeof DEMO_REFACTORING.refactorSafe | null
-    sideEffect: typeof DEMO_REFACTORING.sideEffect | null
+    refactorSafe: _Ref['refactorSafe'] | null
+    sideEffect: _Ref['sideEffect'] | null
   }
 
   // Watch mode
@@ -107,7 +116,7 @@ interface AnalysisState {
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   // Workspace
-  workspace: '/home/z/my-project',
+  workspace: process.env.NEXT_PUBLIC_CODELENS_WORKSPACE || process.cwd(),
   isScanning: false,
   lastScanTime: null,
   frameworks: [],
@@ -155,11 +164,15 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       recentCommands: [command, ...state.recentCommands.filter(c => c !== command)].slice(0, 5),
     }))
 
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 90000) // 90s timeout
+
     try {
       const res = await fetch('/api/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command, args, workspace: get().workspace }),
+        signal: controller.signal,
       })
 
       if (!res.ok) {
@@ -325,8 +338,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         ...updates,
       }))
 
+      clearTimeout(timeoutId)
       return data
     } catch (err) {
+      clearTimeout(timeoutId)
       const errorTabId = `error-${command}-${Date.now()}`
       set(state => ({
         runningCommands: state.runningCommands.filter(c => c !== command),
@@ -395,56 +410,62 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     activeResultTab: null,
   }),
 
-  loadDemoData: () => set({
-    securityResults: {
-      secrets: DEMO_SECURITY.secrets,
-      vulnerabilities: DEMO_SECURITY.vulnerabilities,
-      dataflow: DEMO_SECURITY.dataflow,
-      envCheck: DEMO_SECURITY.envCheck,
-      regexAudit: DEMO_SECURITY.regexAudit,
-    },
-    qualityResults: {
-      smells: DEMO_QUALITY.smells,
-      complexity: DEMO_QUALITY.complexity,
-      debugLeaks: DEMO_QUALITY.debugLeaks,
-      deadCode: DEMO_QUALITY.deadCode,
-      a11y: DEMO_QUALITY.a11y,
-    },
-    performanceResults: {
-      perfHints: DEMO_PERFORMANCE.perfHints,
-      circular: DEMO_PERFORMANCE.circular,
-    },
-    cssResults: {
-      cssDeep: DEMO_CSS.cssDeep,
-      missingRefs: DEMO_CSS.missingRefs,
-    },
-    p1Results: {
-      search: DEMO_P1.search,
-      symbols: DEMO_P1.symbols,
-      trace: DEMO_P1.trace,
-      impact: DEMO_P1.impact,
-      dependents: DEMO_P1.dependents,
-      stackTrace: DEMO_P1.stackTrace,
-      query: DEMO_P1.query,
-      list: DEMO_P1.list,
-    },
-    p2p3Results: {
-      outline: DEMO_P2P3.outline,
-      diff: DEMO_P2P3.diff,
-      context: DEMO_P2P3.context,
-      testMap: DEMO_P2P3.testMap,
-      configDrift: DEMO_P2P3.configDrift,
-      typeInfer: DEMO_P2P3.typeInfer,
-      ownership: DEMO_P2P3.ownership,
-      entrypoints: DEMO_P2P3.entrypoints,
-      apiMap: DEMO_P2P3.apiMap,
-      stateMap: DEMO_P2P3.stateMap,
-    },
-    refactoringResults: {
-      refactorSafe: DEMO_REFACTORING.refactorSafe,
-      sideEffect: DEMO_REFACTORING.sideEffect,
-    },
-    lastScanTime: Date.now() - 120000,
-    frameworks: ['Next.js', 'React', 'Tailwind CSS', 'Prisma'],
-  }),
+  loadDemoData: () => {
+    import('./demoData').then(mod => {
+      set({
+        securityResults: {
+          secrets: mod.DEMO_SECURITY.secrets,
+          vulnerabilities: mod.DEMO_SECURITY.vulnerabilities,
+          dataflow: mod.DEMO_SECURITY.dataflow,
+          envCheck: mod.DEMO_SECURITY.envCheck,
+          regexAudit: mod.DEMO_SECURITY.regexAudit,
+        },
+        qualityResults: {
+          smells: mod.DEMO_QUALITY.smells,
+          complexity: mod.DEMO_QUALITY.complexity,
+          debugLeaks: mod.DEMO_QUALITY.debugLeaks,
+          deadCode: mod.DEMO_QUALITY.deadCode,
+          a11y: mod.DEMO_QUALITY.a11y,
+        },
+        performanceResults: {
+          perfHints: mod.DEMO_PERFORMANCE.perfHints,
+          circular: mod.DEMO_PERFORMANCE.circular,
+        },
+        cssResults: {
+          cssDeep: mod.DEMO_CSS.cssDeep,
+          missingRefs: mod.DEMO_CSS.missingRefs,
+        },
+        p1Results: {
+          search: mod.DEMO_P1.search,
+          symbols: mod.DEMO_P1.symbols,
+          trace: mod.DEMO_P1.trace,
+          impact: mod.DEMO_P1.impact,
+          dependents: mod.DEMO_P1.dependents,
+          stackTrace: mod.DEMO_P1.stackTrace,
+          query: mod.DEMO_P1.query,
+          list: mod.DEMO_P1.list,
+        },
+        p2p3Results: {
+          outline: mod.DEMO_P2P3.outline,
+          diff: mod.DEMO_P2P3.diff,
+          context: mod.DEMO_P2P3.context,
+          testMap: mod.DEMO_P2P3.testMap,
+          configDrift: mod.DEMO_P2P3.configDrift,
+          typeInfer: mod.DEMO_P2P3.typeInfer,
+          ownership: mod.DEMO_P2P3.ownership,
+          entrypoints: mod.DEMO_P2P3.entrypoints,
+          apiMap: mod.DEMO_P2P3.apiMap,
+          stateMap: mod.DEMO_P2P3.stateMap,
+        },
+        refactoringResults: {
+          refactorSafe: mod.DEMO_REFACTORING.refactorSafe,
+          sideEffect: mod.DEMO_REFACTORING.sideEffect,
+        },
+        lastScanTime: Date.now() - 120000,
+        frameworks: ['Next.js', 'React', 'Tailwind CSS', 'Prisma'],
+      })
+    }).catch(err => {
+      console.error('Failed to load demo data:', err)
+    })
+  },
 }))

@@ -2,6 +2,49 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.8.0] — 2026-06-11
+
+### Security
+
+- **Workspace path validation**: REST API and WebSocket now validate workspace paths — reject `..` traversal, optional `CODELENS_WORKSPACE_ROOT` allowlist, symlink resolution.
+- **WebSocket command injection prevention**: Command whitelist, arg sanitization, and shell metacharacter rejection for Socket.IO `command` event.
+- **Error info disclosure fixed**: All API catch blocks now use `err: unknown` with safe message extraction instead of exposing internal error details.
+
+### Fixed
+
+- **CRITICAL: Class collision false-positive**: CSS classes used on multiple HTML elements were incorrectly flagged as "collision". Only IDs should trigger collision detection (registry.py `compute_frontend_status`).
+- **CRITICAL: Handbook circular dependency reporting**: `handbook` read non-existent `chains` key from `detect_circular()`. Now correctly reads from `cycles` dict.
+- **CRITICAL: Scan edge filtering on file deletion**: Deleted-file cleanup preserved stale edges referencing removed nodes. Both `from` and `to` must now reference surviving node IDs.
+- **CRITICAL: Double normalization in WebSocket**: `normalizeGeneric()` was called twice for security/quality/performance/CSS/refactoring commands. Now computed once and reused.
+- **CRITICAL: CLI output JSON parse failure**: WebSocket `JSON.parse` failed when CLI emitted `[CodeLens]` prefix lines. New `parseCliOutput()` helper strips non-JSON prefix.
+- **HIGH: Module-level throw on missing env vars**: Server crashed on startup if `CODELENS_PYTHON`/`CODELENS_SCRIPT` were unset. Now uses lazy getters; errors surface at first command execution.
+- **HIGH: Hardcoded workspace path**: `analysisStore.ts` default workspace `/home/z/my-project` replaced with env var `NEXT_PUBLIC_CODELENS_WORKSPACE` or `process.cwd()`.
+- **HIGH: `--format` argument placement**: `--format` now works after the subcommand name (e.g., `scan /path --format markdown`). Moved from main parser to subparsers.
+- **HIGH: Trace deduplication**: Multi-start-node traces no longer produce duplicate nodes. Shared `visited` set across BFS calls.
+- **HIGH: Context engine int() crash**: `int()` on node ID suffix crashed on non-numeric values. Added `_safe_parse_line()` with try/except.
+- **HIGH: Missing refs StopIteration**: `next()` without default crashed on corrupted registry. Now uses `next(..., None)` with None guard.
+- **HIGH: Search engine KeyError**: Direct dict key access `r['path']`/`r['line']` crashed on missing fields. Changed to `.get()`.
+- **HIGH: ask.py args mutation**: `args.pop("_confidence")` mutated the args dict. Changed to `args.get()`.
+- **HIGH: Orphaned logger in vulnscan_engine**: Used `logging.getLogger()` instead of shared `from utils import logger`. All log calls were silently discarded.
+- **MEDIUM: O(n²) normalizer performance**: `nodes.find()` replaced with `Set<string>` for dedup in 6 normalizer methods.
+- **MEDIUM: O(n²) coupling computation**: `computeCoupling()` in healthScore.ts still O(N×E) but documented for future optimization.
+- **MEDIUM: Tailwind content paths**: Added `./src/**/*` to content paths — production CSS was missing utility classes from src/.
+- **MEDIUM: React StrictMode**: Changed from `false` to `true` for better dev warnings.
+- **MEDIUM: WebSocket graph updates O(N)**: `findIndex` replaced with `Map<string, number>` index.
+- **MEDIUM: WebSocket memory leak**: `commandTimestamps` Map now cleaned up on socket disconnect.
+- **MEDIUM: Circular engine recursion limit**: Raised to 5000 for deeply nested codebases.
+- **MEDIUM: Incremental mtime float comparison**: Uses tolerance `abs(a-b) > 0.001` instead of exact equality.
+- **MEDIUM: Shared DEFAULT_SOURCE_EXTENSIONS**: Centralized in utils.py, eliminating duplication across 6+ engine files.
+- **LOW: Root API route**: Returns proper health/version check instead of "Hello, world!".
+- **LOW: Demo data bundle size**: Changed to dynamic import in analysisStore.ts.
+- **LOW: Client-side fetch timeout**: 90s AbortController added to `/api/command` requests.
+- **LOW: setup.sh version**: Updated from "v2" to "v5".
+
+### Added
+
+- **`scan --force` flag**: Force full re-scan even when existing registry triggers auto-incremental mode.
+- **Workspace path validation utility**: Exported `validateWorkspace()` from commandRunner.ts for reuse.
+
 ## [5.3.0] — 2026-06-11
 
 ### Architecture

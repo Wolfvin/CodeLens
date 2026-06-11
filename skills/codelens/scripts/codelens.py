@@ -214,10 +214,9 @@ def main():
     for cmd_name, cmd_info in sorted(registry.items()):
         sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
         cmd_info["add_args"](sub)
-
-    # Global format option
-    parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
-                        help="Output format (default: json)")
+        # Add --format to each subparser so it works after the subcommand name
+        sub.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
+                         help="Output format (json or markdown)")
 
     # ─── Parse and dispatch ─────────────────────────────
 

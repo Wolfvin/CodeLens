@@ -34,13 +34,16 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--force", action="store_true",
+                        help="Force full re-scan (ignore existing registry)")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    force = getattr(args, 'force', False)
     # Auto-enable incremental mode if registry already exists
-    if not incremental:
+    if not incremental and not force:
         registry_path = os.path.join(workspace, '.codelens', 'backend.json')
         if os.path.exists(registry_path):
             incremental = True
@@ -120,8 +123,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 # Clean edges that reference deleted nodes
                 remaining_ids = {n["id"] for n in existing_backend["nodes"] if "id" in n}
                 existing_backend["edges"] = [e for e in existing_backend.get("edges", [])
-                                              if e.get("from", "") in remaining_ids or e.get("to", "") in remaining_ids
-                                              or e.get("from_fn", "") or e.get("to_fn", "")]
+                                              if e.get("from", "") in remaining_ids and e.get("to", "") in remaining_ids]
                 save_backend_registry(workspace, existing_backend)
 
             # Clean frontend data — remove entries whose only refs are from deleted files

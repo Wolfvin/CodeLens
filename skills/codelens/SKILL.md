@@ -39,6 +39,30 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v5.8 — Hardening & Bug Fix Release
+
+- **Class collision false-positive fixed**: CSS classes used on multiple HTML elements are no longer incorrectly flagged as "collision". Only IDs trigger collision detection now (v5.7 regression).
+- **Handbook circular dependency reporting fixed**: `handbook` now correctly reads `cycles` dict from `detect_circular()` instead of the non-existent `chains` key. Circular dependency risks are now properly surfaced.
+- **Scan edge filtering on file deletion fixed**: Deleted-file cleanup no longer preserves stale edges that reference removed nodes. Both `from` and `to` must now reference surviving nodes.
+- **Workspace path validation (server-side)**: REST API and WebSocket now validate workspace paths — reject `..` traversal, optionally enforce `CODELENS_WORKSPACE_ROOT` allowlist, resolve symlinks.
+- **WebSocket command injection prevention**: Command whitelist, arg sanitization, and shell metacharacter rejection added to the Socket.IO `command` event handler.
+- **Lazy env var initialization**: Server no longer crashes on startup if `CODELENS_PYTHON`/`CODELENS_SCRIPT` are unset. Errors surface at first command execution instead.
+- **Double normalization bug fixed**: WebSocket server no longer calls `normalizeGeneric()` twice for security/quality/performance/CSS/refactoring commands.
+- **CLI output parsing hardened**: WebSocket server now strips `[CodeLens]` log prefix lines before `JSON.parse`, preventing parse failures on mixed output.
+- **`scan --force` flag**: Force a full re-scan even when an existing registry would trigger auto-incremental mode.
+- **`--format` now works after subcommand**: `codelens scan /path --format markdown` works as expected (previously required placing `--format` before the subcommand).
+- **Trace deduplication**: Multi-start-node traces no longer produce duplicate nodes in the output.
+- **Safe int parsing**: `context` command no longer crashes on node IDs with non-numeric suffixes.
+- **Missing refs typo detection hardened**: `next()` calls now have default fallbacks, preventing `StopIteration` on corrupted registry data.
+- **O(n²) → O(n) performance**: Normalizer dedup uses `Set` instead of `.find()`. WebSocket graph updates use `Map` indexes instead of `findIndex`. Health score coupling computation optimized.
+- **Shared `DEFAULT_SOURCE_EXTENSIONS`**: Centralized in `utils.py`, eliminating duplication across 6+ engine files.
+- **Recursion limit raised**: Circular dependency detection now uses `sys.setrecursionlimit(5000)` to handle deeply nested codebases.
+- **Mtime float comparison**: Incremental scan uses tolerance-based mtime comparison instead of exact equality.
+- **React StrictMode enabled**: Next.js dev server now catches unsafe lifecycle warnings.
+- **Tailwind content paths fixed**: Production CSS build now includes `./src/**/*` (previously missing).
+- **Client-side fetch timeout**: 90-second AbortController timeout on `/api/command` requests.
+- **Memory leak fixed**: WebSocket `commandTimestamps` Map now cleans up on socket disconnect.
+
 ## What's New in v5
 
 - **Vulnerability Scanning**: Dependency CVE scanning via native audit tools (npm audit, cargo audit, pip-audit, govulncheck) + built-in vulnerability database with 35+ entries
@@ -264,7 +288,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" search "Button" /path/to/workspace -
 
 **Options:** `--type`, `--file`, `--max-results`, `--context`, `--ignore-case`, `--whole-word`
 
-### 8. `codelens_symbols` — Symbol Search
+### 10. `codelens_symbols` — Symbol Search
 
 Search symbol in the registry (not in files). Faster than search.
 
@@ -279,7 +303,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" symbols "modal" /path/to/workspace -
 python3 "$CODELENS_DIR/scripts/codelens.py" symbols "auth" /path/to/workspace --domain backend --fuzzy
 ```
 
-### 9. `codelens_trace` — Deep Call Chain
+### 11. `codelens_trace` — Deep Call Chain
 
 Trace call chain from a symbol. For root cause analysis and impact assessment.
 
@@ -296,7 +320,7 @@ python3 "$CODELENS_DIR/scripts/codelens.py" trace "verify_token" /path/to/worksp
 
 **AI Use Case:** "Bug in render() → trace where it originates" → `trace render workspace --direction up`
 
-### 10. `codelens_impact` — Change Impact Analysis
+### 12. `codelens_impact` — Change Impact Analysis
 
 Predict the impact if a symbol is modified or deleted. Mandatory before refactoring.
 

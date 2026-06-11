@@ -5,30 +5,68 @@
 
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { realpathSync, existsSync } from 'fs'
 import path from 'path'
 
 const execFileAsync = promisify(execFile)
 
 // Path to codelens CLI — MUST be set via environment variables.
-// No hardcoded fallbacks: if these are missing, the server throws a clear error.
-const CODELENS_PYTHON = process.env.CODELENS_PYTHON
-const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
-  ? path.resolve(process.env.CODELENS_SCRIPT)
-  : undefined
-
-if (!CODELENS_PYTHON) {
-  throw new Error(
+// Lazy getters: validation happens at execution time instead of module load,
+// so the server can start even if env vars are missing (errors surface on first command).
+const getPython = () => {
+  const py = process.env.CODELENS_PYTHON
+  if (!py) throw new Error(
     '[CodeLens] CODELENS_PYTHON env var is not set. ' +
     'Set it to the path of your Python 3 interpreter (the one with tree-sitter installed). ' +
     'Example: CODELENS_PYTHON=/home/you/.venv/bin/python3'
   )
+  return py
 }
-if (!CODELENS_SCRIPT) {
-  throw new Error(
+const getScript = () => {
+  const script = process.env.CODELENS_SCRIPT
+  if (!script) throw new Error(
     '[CodeLens] CODELENS_SCRIPT env var is not set. ' +
     'Set it to the path of the CodeLens CLI script (codelens.py). ' +
     'Example: CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py'
   )
+  return path.resolve(script)
+}
+
+/**
+ * Validate and normalize a workspace path to prevent command injection.
+ * Rejects traversal attempts and optionally restricts to an allowed root.
+ */
+export function validateWorkspace(workspace: string): string {
+  if (!workspace || typeof workspace !== 'string') {
+    throw new Error('Workspace path is required')
+  }
+
+  // Reject obvious traversal attempts
+  if (workspace.includes('..')) {
+    throw new Error('Workspace path must not contain ".."')
+  }
+
+  // If workspace root is configured, validate against it
+  const allowedRoot = process.env.CODELENS_WORKSPACE_ROOT
+  const resolved = path.resolve(workspace)
+
+  if (allowedRoot) {
+    const allowedResolved = path.resolve(allowedRoot)
+    if (!resolved.startsWith(allowedResolved)) {
+      throw new Error(`Workspace path must be within ${allowedRoot}`)
+    }
+  }
+
+  // Try to resolve symlinks if path exists
+  try {
+    if (existsSync(resolved)) {
+      return realpathSync(resolved)
+    }
+  } catch {
+    // If realpath fails, use the resolved path
+  }
+
+  return resolved
 }
 
 /** Maximum execution time for a CLI command (ms) */
@@ -99,7 +137,7 @@ class CommandRunner {
     const safeArgs = sanitizeArgs(args)
 
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...safeArgs], {
+      const { stdout, stderr } = await execFileAsync(getPython(), [getScript(), command, ...safeArgs], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })
@@ -124,11 +162,12 @@ class CommandRunner {
           rawOutput: stdout.trim(),
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // execFileAsync throws on non-zero exit codes
-      const stderr = err.stderr ?? ''
-      const stdout = err.stdout ?? ''
-      const exitCode = err.code ?? 'unknown'
+      const errAny = err as Record<string, unknown>
+      const stderr = (errAny.stderr as string) ?? ''
+      const stdout = (errAny.stdout as string) ?? ''
+      const exitCode = (errAny.code as string) ?? 'unknown'
 
       // Some commands (like npm audit) exit with non-zero when findings exist
       // Try to parse stdout anyway
@@ -155,11 +194,13 @@ class CommandRunner {
 
   // ─── Full Graph ───────────────────────────────────────────────
 
+  /** @deprecated Unused — API routes construct graph data directly */
   /**
    * Get full graph by running the scan command.
    * This returns all nodes and edges from the workspace registry.
    */
   async getFullGraph(workspace: string): Promise<{ nodes: any; edges: any }> {
+    workspace = validateWorkspace(workspace)
     const result = await this.execute('scan', [workspace])
 
     // The scan command returns { frontend: { classes, ids }, backend: { nodes, edges } }
@@ -177,6 +218,7 @@ class CommandRunner {
 
   /** Query a specific symbol by name */
   async query(name: string, workspace: string, domain?: string, fileFilter?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [name, workspace]
     if (domain) args.push('--domain', domain)
     if (fileFilter) args.push('--file', fileFilter)
@@ -185,6 +227,7 @@ class CommandRunner {
 
   /** Trace a symbol's call chain */
   async trace(name: string, workspace: string, direction?: string, depth?: number, domain?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [name, workspace]
     if (direction) args.push('--direction', direction)
     if (depth !== undefined) args.push('--depth', String(depth))
@@ -194,6 +237,7 @@ class CommandRunner {
 
   /** Analyze change impact for a symbol */
   async impact(name: string, workspace: string, action?: string, domain?: string, depth?: number): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [name, workspace]
     if (action) args.push('--action', action)
     if (domain) args.push('--domain', domain)
@@ -203,6 +247,7 @@ class CommandRunner {
 
   /** Scan workspace and build registry */
   async scan(workspace: string, incremental: boolean = false): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (incremental) args.push('--incremental')
     return this.execute('scan', args)
@@ -210,6 +255,7 @@ class CommandRunner {
 
   /** List entries with optional filter */
   async list(workspace: string, domain?: string, filterType?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (domain) args.push('--domain', domain)
     if (filterType) args.push('--filter', filterType)
@@ -224,6 +270,7 @@ class CommandRunner {
     ignoreCase?: boolean
     wholeWord?: boolean
   }): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [pattern, workspace]
     if (options?.fileType) args.push('--type', options.fileType)
     if (options?.file) args.push('--file', options.file)
@@ -235,6 +282,7 @@ class CommandRunner {
 
   /** Search symbols in registry by name */
   async symbols(name: string, workspace: string, domain?: string, fuzzy?: boolean): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [name, workspace]
     if (domain) args.push('--domain', domain)
     if (fuzzy) args.push('--fuzzy')
@@ -243,16 +291,19 @@ class CommandRunner {
 
   /** Detect circular dependencies */
   async circular(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('circular', [workspace])
   }
 
   /** Trace data flow source→sink */
   async dataflow(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('dataflow', [workspace])
   }
 
   /** Detect code smells */
   async smell(workspace: string, categories?: string[], severityFilter?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (categories?.length) args.push('--categories', categories.join(','))
     if (severityFilter) args.push('--severity', severityFilter)
@@ -261,16 +312,19 @@ class CommandRunner {
 
   /** Analyze function side effects */
   async sideEffect(name: string, workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('side-effect', [name, workspace])
   }
 
   /** Pre-flight rename/move check */
   async refactorSafe(name: string, workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('refactor-safe', [name, workspace])
   }
 
   /** Enhanced dead code detection */
   async deadCode(workspace: string, categories?: string[]): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (categories?.length) args.push('--categories', categories.join(','))
     return this.execute('dead-code', args)
@@ -278,21 +332,25 @@ class CommandRunner {
 
   /** Error propagation simulation */
   async stackTrace(name: string, workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('stack-trace', [name, workspace])
   }
 
   /** Test coverage mapping */
   async testMap(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('test-map', [workspace])
   }
 
   /** Dependency drift detection */
   async configDrift(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('config-drift', [workspace])
   }
 
   /** Lightweight type inference */
   async typeInfer(workspace: string, functionName?: string, fileFilter?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (functionName) args.push('--function', functionName)
     if (fileFilter) args.push('--file', fileFilter)
@@ -301,11 +359,13 @@ class CommandRunner {
 
   /** Git blame code ownership */
   async ownership(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('ownership', [workspace])
   }
 
   /** Detect hardcoded secrets/API keys */
   async secrets(workspace: string, severity?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (severity) args.push('--severity', severity)
     return this.execute('secrets', args)
@@ -313,31 +373,37 @@ class CommandRunner {
 
   /** Map execution entry points */
   async entrypoints(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('entrypoints', [workspace])
   }
 
   /** Map REST/GraphQL routes to handlers */
   async apiMap(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('api-map', [workspace])
   }
 
   /** Track global state management */
   async stateMap(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('state-map', [workspace])
   }
 
   /** Audit environment variables */
   async envCheck(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('env-check', [workspace])
   }
 
   /** Detect leftover debug code */
   async debugLeak(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('debug-leak', [workspace])
   }
 
   /** Compute cyclomatic/cognitive complexity */
   async complexity(workspace: string, functionName?: string, fileFilter?: string, threshold?: number): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (functionName) args.push('--function', functionName)
     if (fileFilter) args.push('--file', fileFilter)
@@ -347,16 +413,19 @@ class CommandRunner {
 
   /** Audit regex for ReDoS and issues */
   async regexAudit(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('regex-audit', [workspace])
   }
 
   /** Detect accessibility issues */
   async a11y(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('a11y', [workspace])
   }
 
   /** Scan dependencies for known CVEs */
   async vulnScan(workspace: string, severity?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (severity) args.push('--severity', severity)
     return this.execute('vuln-scan', args)
@@ -364,31 +433,37 @@ class CommandRunner {
 
   /** Detect performance anti-patterns */
   async perfHint(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('perf-hint', [workspace])
   }
 
   /** Deep CSS analysis */
   async cssDeep(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('css-deep', [workspace])
   }
 
   /** Validate registry vs file system */
   async validate(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('validate', [workspace])
   }
 
   /** Compare registry snapshots */
   async diff(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('diff', [workspace])
   }
 
   /** Module-level import tracking */
   async dependents(file: string, workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('dependents', [file, workspace])
   }
 
   /** Get rich symbol context */
   async context(name: string, workspace: string, domain?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [name, workspace]
     if (domain) args.push('--domain', domain)
     return this.execute('context', args)
@@ -396,6 +471,7 @@ class CommandRunner {
 
   /** Get file structure outline */
   async outline(workspace: string, file?: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     const args = [workspace]
     if (file) args.push('--file', file)
     return this.execute('outline', args)
@@ -403,16 +479,19 @@ class CommandRunner {
 
   /** Detect CSS/HTML mismatches */
   async missingRefs(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('missing-refs', [workspace])
   }
 
   /** Initialize .codelens config */
   async init(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('init', [workspace])
   }
 
   /** Detect frameworks in workspace */
   async detect(workspace: string): Promise<any> {
+    workspace = validateWorkspace(workspace)
     return this.execute('detect', [workspace])
   }
 }

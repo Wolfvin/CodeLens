@@ -10,6 +10,16 @@ from typing import Dict, List, Any, Optional
 from utils import logger
 
 
+def _safe_parse_line(node_id: str) -> int:
+    """Safely extract line number from node ID like 'file:fn:42'."""
+    try:
+        if ":" in node_id:
+            return int(node_id.rsplit(":", 1)[-1])
+    except (ValueError, IndexError):
+        pass
+    return 0
+
+
 def get_symbol_context(
     name: str,
     workspace: str,
@@ -167,7 +177,7 @@ def get_symbol_context(
                         {
                             "id": c["from"],
                             "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
-                            "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
+                            "line": _safe_parse_line(c["from"])
                         }
                         for c in callers
                     ]

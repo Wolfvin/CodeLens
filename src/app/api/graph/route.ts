@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
+import { validateWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
@@ -22,8 +23,17 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Validate workspace path to prevent command injection
+    let validatedWorkspace: string
+    try {
+      validatedWorkspace = validateWorkspace(workspace)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Invalid workspace'
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
+
     // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(workspace)
+    const scanOutput = await commandRunner.scan(validatedWorkspace)
 
     // Check for CLI errors
     if (scanOutput.status === 'error') {
@@ -90,10 +100,11 @@ export async function GET(request: NextRequest) {
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[/api/graph] Error:', err)
+    const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json(
-      { error: err.message ?? 'Internal server error' },
+      { error: message },
       { status: 500 }
     )
   }

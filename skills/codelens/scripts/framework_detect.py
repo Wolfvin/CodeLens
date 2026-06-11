@@ -153,6 +153,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 detected["has_svelte"] = True
 
     # 4. Detect Tailwind from CSS content
+    # TODO: This is a second full os.walk traversal — could be merged with step 3
+    # to avoid walking the directory tree twice. Left as-is for now since the
+    # logic is complex and the performance cost is acceptable for typical repos.
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
         for root, dirs, files in os.walk(workspace):
