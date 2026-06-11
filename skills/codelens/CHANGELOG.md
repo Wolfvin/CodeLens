@@ -3,72 +3,26 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-
-## [5.9.0] — 2026-06-12
-
-### Added
-- **C++/C project detection**: `framework_detect.py` now detects CMakeLists.txt, Makefile, .cc/.cpp/.h/.hpp files. Sets `has_cpp: true` and adds "cmake"/"make"/"cpp" to frameworks list.
-- **Go project detection**: `framework_detect.py` now detects go.mod, go.work, and .go files. Sets `has_go: true` and adds "go" to frameworks list. Also detects Go web frameworks (Gin, Echo, Fiber, Chi, Mux) from go.mod.
-- **C++/Go file scanning**: `scan.py` discover_files() now categorizes .cc/.cpp/.cxx/.c/.h/.hpp/.hxx as "cpp" and .go as "go" in the files_scanned output.
-- **C++/Go entry point patterns**: `entrypoints_engine.py` now detects `int main()` in C++ and `func main()` in Go, plus Go HTTP handlers (net/http, Gin, Echo) and C++ Crow framework routes.
-- **HTTP/network keyword routing in ask command**: Added "http request", "xhr", "fetch", "ajax", "api call", "handler", "request handler" keywords to route natural language queries about HTTP/network to api-map command.
-- **Question word exclusion in ask symbol extraction**: `_extract_symbol_name()` now skips question words (what, how, where, who, etc.) instead of returning them as symbol names.
-- **List command summary**: `list` command now returns a `summary` dict with `by_type` and `by_status` breakdowns for filtered results.
-- **XHR/AJAX patterns in dataflow engine**: Added axios.get/post/put/delete/patch/head/options/request, XMLHttpRequest, xhr.open/xhr.send, and jQuery $.ajax/$.get/$.post patterns to api_responses source detection.
-- **Precise DOM .value patterns**: Replaced overly broad `.value\s*` pattern in dataflow_engine with specific patterns (event.target.value, this.value, input.value, select.value, textarea.value, form.*.value, target.value).
-
-### Fixed
-- **CRITICAL: ask command misroutes "what functions handle HTTP requests?"** — Was parsed as context(name="what") due to missing HTTP/network keywords and question word fallback. Now correctly routes to api-map.
-- **CRITICAL: DragonflyDB and other C++/Go projects invisible** — framework_detect.py returned empty frameworks; scan.py silently dropped .cc/.cpp/.go files. Both now properly detect and categorize these files.
-- **HIGH: Spring Boot @RequestMapping pattern restricted to .py** — Changed to .java (Spring Boot is Java, not Python).
-- **HIGH: .await pattern flagged ALL async Rust as external side effect** — Removed `.await` from "external_service" patterns. Normal Rust async/await is NOT an external side effect.
-- **HIGH: Double-append bug in sideeffect_engine.py** — Last line of function body was appended twice in brace-tracking mode. Fixed by moving append before inner character loop.
-- **MEDIUM: .value\s* pattern matched ANY .value access** — Replaced with 10 specific DOM input patterns to eliminate false positives.
-- **LOW: Redundant `import re` inside function in context_engine.py** — Moved to module-level import.
-
-### Test Repositories Used
-- **dragonflydb/dragonfly** (19MB) — C++ in-memory database with CMake, Makefile, and Go tools. 259 .cc files, 110 Python files, 6 Go files.
-- **axios/axios** (5.5MB) — JavaScript HTTP client library for XHR/network. 201 JS files, 23 TS files.
-
-## [6.0.0] — 2026-06-12
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.0] — 2026-06-12
+## [5.7.2] — 2026-06-12
 
-### Added
+### Fixed
 
-- **Full PHP language support** — CodeLens now supports PHP as a first-class language alongside JS/TS, Python, and Rust. This closes the biggest language gap in CodeLens, enabling analysis of the most popular server-side language.
-- **PHP fallback parser** (`scripts/parsers/fallback_php.py`): Regex-based parser that extracts functions, classes (with methods, properties, constants), interfaces, traits, enums (PHP 8.1+), namespaces, use/import statements (including group use), class method visibility (public/private/protected/static), and class categories (controller, model, middleware, etc. based on Laravel naming conventions). Also detects Laravel-specific patterns: Eloquent model relationships ($fillable, $guarded, $hidden, $casts, $table, hasOne/hasMany/belongsTo/etc.), route definitions, middleware registrations, event listeners, and Artisan command signatures.
-- **Blade template parser** (`scripts/parsers/blade_parser.py`): Parses `.blade.php` files for HTML classes/IDs, Blade directives (@if, @foreach, @section, @yield, @include, etc.), template inheritance (@extends), section definitions, component usage (<x-component>, @component), includes, and stack/push operations. Blade classes/IDs are integrated into the frontend registry.
-- **PHP framework detection** (`scripts/framework_detect.py`): Added detection for 9 PHP frameworks via `composer.json` dependencies, config files, and directory indicators:
-  - **Laravel** — detected via `laravel/framework` in composer.json, `artisan` file, `app/Http/Kernel.php`, `routes/web.php`, `routes/api.php`
-  - **Symfony** — detected via `symfony/framework-bundle`, `symfony.lock`, `bin/console`, `src/Kernel.php`
-  - **WordPress** — detected via `johnpbloch/wordpress`, `wp-config.php`, `wp-includes/`
-  - **Drupal** — detected via `drupal/core`, `modules/`, `sites/default/`
-  - **CodeIgniter** — detected via `codeigniter4/framework`, `app/Config/`
-  - **Yii** — detected via `yiisoft/yii2`
-  - **Slim** — detected via `slim/slim`
-  - **Lumen** — detected via `laravel/lumen-framework`, `bootstrap/app.php`
-  - **CakePHP** — detected via `cakephp/cakephp`, `src/Controller/`
-- **Laravel path auto-configuration** (`scripts/framework_detect.py`): When Laravel is detected, `get_recommended_config()` automatically sets correct `frontend_paths` (resources/views/, resources/js/, resources/css/, public/) and `backend_paths` (app/Http/Controllers/, app/Models/, app/Services/, routes/, config/, database/). Also adds `vendor/` and `storage/` to ignore list.
-- **Laravel route extraction** (`scripts/apimap_engine.py`): The `api-map` command now extracts routes from Laravel route files:
-  - `Route::get/post/put/patch/delete/options/any` with controller handlers `[Controller::class, 'method']`
-  - `Route::resource` and `Route::apiResource` (generates full CRUD endpoint set)
-  - `Route::group` with prefix and middleware
-  - `Route::middleware` chains
-  - Route prefix chains via `->prefix()`
-  - Chained middleware detection via `->middleware()`
-- **Symfony route extraction** (`scripts/apimap_engine.py`): Supports both PHP 8 attributes (`#[Route('/path', methods: ['GET'])]`) and Doctrine annotations (`@Route("/path", methods={"GET"})`).
-- **Slim route extraction** (`scripts/apimap_engine.py`): Supports `$app->get/post/put/delete/patch('/path', ...)` patterns.
-- **PHP entrypoint patterns** (`scripts/entrypoints_engine.py`):
-  - Laravel route handlers as `http_handler` entrypoints
-  - Laravel Artisan command signatures as `cli_command` entrypoints
-  - Laravel Event::listen as `event_handler` entrypoints
-  - Symfony #[Route] attributes as `http_handler` entrypoints
-- **Composer.lock detection** (`scripts/framework_detect.py`): Detects `composer.lock` and exposes as `php_lockfile` in detection results.
-- **PHP detection flag** (`scripts/framework_detect.py`): `has_php` flag set when `.php` files or `composer.json` are found, even without a recognized framework.
-- **Scan command PHP support** (`scripts/commands/scan.py`): `discover_files()` now categorizes `.php` and `.blade.php` files. Scan results include `php` and `blade` in `files_scanned` and `php_parsed`/`blade_parsed` counts. PHP nodes/edges are merged into backend registry alongside Rust, JS, and Python data.
-- **Storage directory auto-ignore** (`scripts/utils.py`): Added `storage/` to `DEFAULT_IGNORE_DIRS` for Laravel projects.
+- **CRITICAL: Trace markdown formatter displayed paths character-by-character** — `_md_trace()` treated the `path` string field as an iterable list, splitting `"packages/runtime-core/src/ref.ts"` into `p → a → c → k → a → g → e → s → / → …`. Introduced `_format_trace_chain()` helper that correctly handles both string and list `path` values, with depth indentation, cyclic markers (↻), and unresolved markers (⚠).
+- **CRITICAL: TS/JS backend parser missed arrow functions wrapped in parentheses or `as` expressions** — Patterns like `const name = ((...args) => { ... })` and `const name = ((...args) => { ... }) as Type` were not captured because tree-sitter wraps these in `parenthesized_expression` and `as_expression` nodes respectively. Added `_unwrap_fn_from_parens()` recursive helper and `as_expression` handling to both `TSBackendParser` and `JSBackendParser`. This fixes missing functions like Vue's `createApp` in query results.
+- **HIGH: Framework detection missed Rust/Python polyglot projects** — Ruff (Rust+Python) showed "No frameworks detected" and "cjs" module system. Added proper `module_system` detection for Cargo-only (`cargo`), Python-only (`python`), and Rust+Python (`rust-python`) projects. Added `languages` field to framework detection output. Added `has_rust_backend` flag display and `Cargo.toml` presence detection for `has_rust_backend`.
+- **HIGH: Zombie CSS false positives with invalid class names** — CSS class names containing special characters like `.(version`, `.===`, `.\`@${currentCommit}\`` were reported as zombie CSS. Added regex validation (`^[a-zA-Z_\-][a-zA-Z0-9_\-]*$`) and character blacklist filtering to `_detect_zombie_css()` in `deadcode_engine.py`.
+- **HIGH: God object detection had massive false positives in JS/TS files** — The regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched any function-like pattern in the entire file, including `if(`, `for(`, `console.log(`, etc. Rewrote `_detect_god_objects()` for JS/TS to properly extract class bodies first using brace-depth matching, then count only actual class methods. Also rewrote Rust detection to scope `fn` counting to each `impl` block instead of the entire file.
+- **MEDIUM: API map included routes from test fixture files** — Routes from `/test/`, `/tests/`, `/fixtures/`, `/examples/`, `*.test.*`, `*.spec.*` files were reported as real API routes. Added test fixture file filtering to `apimap_engine.py` with path and filename pattern matching.
+- **MEDIUM: Framework detect markdown output missing flags** — `_md_detect()` did not display `has_fastapi`, `has_flask`, `has_django`, `has_tauri`, or `has_rust_backend` flags. Also missing `is_monorepo` and `lockfile` display. Added all missing flags and fields.
+
+### Testing
+
+Tested against 3 diverse, large open-source repositories:
+- **vuejs/core** (Vue.js framework) — 506 JS files, 11 TSX, 11 Vue files — tested Vue parser, JS/TS backend parsing, query, trace, complexity, dead code, data flow
+- **astral-sh/ruff** (Rust+Python linter) — 1863 Rust files, 2942 Python files — tested Rust parser, Python parser, framework detection for polyglot, secrets scan, smell engine
+- **sveltejs/kit** (SvelteKit framework) — 904 Svelte files, 682 JS backend files — tested Svelte parser, SSR framework detection, a11y, smell engine, state map
 
 ## [5.8.0] — 2026-06-12
 

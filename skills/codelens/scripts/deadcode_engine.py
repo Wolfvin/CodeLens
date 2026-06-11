@@ -546,6 +546,8 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:
     """Detect CSS classes defined but never used in HTML/JS/TSX."""
+    import re as _re
+
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
@@ -555,16 +557,31 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
 
     zombie = []
 
+    # Valid CSS class name pattern: starts with letter, underscore, or hyphen;
+    # contains only letters, digits, underscores, hyphens.
+    # Filters out false positives like ".(version", ".===", ".`@${...}`", etc.
+    _VALID_CSS_CLASS = _re.compile(r'^[a-zA-Z_\-][a-zA-Z0-9_\-]*$')
+
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
+        class_name = cls["name"]
+
+        # Skip obviously invalid CSS class names (false positives from parsing)
+        if not _VALID_CSS_CLASS.match(class_name):
+            continue
+
+        # Skip class names that look like template expressions or code artifacts
+        if any(ch in class_name for ch in ('$', '{', '}', '(', ')', '=', '+', '*', '#', '@', '!', '|', '<', '>', '~', '`', "'", '"')):
+            continue
+
         if cls["status"] == "dead" and not cls.get("js"):
             zombie.append({
                 "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
                 "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": cls["name"],
+                "class": class_name,
                 "severity": "info",
-                "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{cls['name']}' or add to HTML/JSX."
+                "message": f"CSS class '.{class_name}' defined but never used in HTML or JS",
+                "suggestion": f"Remove unused CSS class '.{class_name}' or add to HTML/JSX."
             })
 
     return zombie[:50]

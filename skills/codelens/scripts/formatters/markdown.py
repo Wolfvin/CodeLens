@@ -379,6 +379,71 @@ def _md_impact(data: Dict, lines: list) -> None:
         lines.append("")
 
 
+def _format_trace_chain(chain) -> str:
+    """Format a single trace chain entry as a readable bullet point.
+
+    The ``path`` field from ``_bfs_trace`` is a string like
+    ``"file:line:fn → file:line:fn"``, NOT a list.  Older code treated it
+    as an iterable and ended up splitting the string character-by-character
+    (``p → a → c → k → …``).  This helper handles both string and list
+    paths correctly.
+    """
+    if isinstance(chain, dict):
+        path = chain.get("path", "")
+        if isinstance(path, str) and path:
+            # Path is already a formatted string with → separators
+            fn = chain.get("fn", "")
+            file = chain.get("file", "")
+            line = chain.get("line", "")
+            depth = chain.get("depth", 0)
+            cyclic = chain.get("cyclic", False)
+            resolved = chain.get("resolved", True)
+
+            # Build a readable entry: show function@file:line with depth indent
+            parts = []
+            if fn:
+                label = fn
+            else:
+                label = path.split(" → ")[-1] if " → " in path else path
+            if file:
+                label = f"`{label}` ({file}"
+                if line:
+                    label += f":{line}"
+                label += ")"
+            else:
+                label = f"`{label}`"
+            if cyclic:
+                label += " ↻ cyclic"
+            if not resolved:
+                label += " ⚠ unresolved"
+
+            indent = "  " * min(depth, 5)
+            return f"{indent}- {label}"
+        elif isinstance(path, list) and path:
+            return f"- {' → '.join(str(p) for p in path)}"
+        else:
+            # Fallback: use fn/file/depth
+            fn = chain.get("fn", "")
+            file = chain.get("file", "")
+            depth = chain.get("depth", 0)
+            cyclic = chain.get("cyclic", False)
+            indent = "  " * min(depth, 5)
+            entry = f"{indent}- `{fn}`" if fn else f"{indent}- (unknown)"
+            if file:
+                entry += f" ({file}"
+                line = chain.get("line", "")
+                if line:
+                    entry += f":{line}"
+                entry += ")"
+            if cyclic:
+                entry += " ↻ cyclic"
+            return entry
+    elif isinstance(chain, list):
+        return f"- {' → '.join(str(p) for p in chain)}"
+    else:
+        return f"- {chain}"
+
+
 def _md_trace(data: Dict, lines: list) -> None:
     """Markdown for trace command."""
     lines.append(f"## Trace: `{data.get('symbol', data.get('name', ''))}`")
@@ -394,30 +459,12 @@ def _md_trace(data: Dict, lines: list) -> None:
             for dir_key, dir_chains in chains.items():
                 if isinstance(dir_chains, list) and dir_chains:
                     lines.append(f"### {dir_key.title()}")
-                    for chain in dir_chains[:10]:
-                        if isinstance(chain, dict):
-                            path = chain.get("path", [])
-                            if path:
-                                lines.append(f"- {' → '.join(str(p) for p in path)}")
-                            else:
-                                fn = chain.get("fn", "")
-                                file = chain.get("file", "")
-                                depth = chain.get("depth", "")
-                                lines.append(f"- `{' → ' * depth}{fn}` ({file})")
-                        elif isinstance(chain, list):
-                            lines.append(f"- {' → '.join(str(p) for p in chain)}")
-                        else:
-                            lines.append(f"- {chain}")
+                    for chain in dir_chains[:15]:
+                        lines.append(_format_trace_chain(chain))
                     lines.append("")
         elif isinstance(chains, list):
-            for chain in chains[:10]:
-                if isinstance(chain, dict):
-                    path = chain.get("path", [])
-                    lines.append(f"- {' → '.join(str(p) for p in path)}")
-                elif isinstance(chain, list):
-                    lines.append(f"- {' → '.join(str(p) for p in chain)}")
-                else:
-                    lines.append(f"- {chain}")
+            for chain in chains[:15]:
+                lines.append(_format_trace_chain(chain))
             lines.append("")
 
 
@@ -826,12 +873,26 @@ def _md_detect(data: Dict, lines: list) -> None:
         flags.append("Tailwind")
     if data.get("has_angular"):
         flags.append("Angular")
+    if data.get("has_fastapi"):
+        flags.append("FastAPI")
+    if data.get("has_flask"):
+        flags.append("Flask")
+    if data.get("has_django"):
+        flags.append("Django")
+    if data.get("has_tauri"):
+        flags.append("Tauri")
+    if data.get("has_rust_backend"):
+        flags.append("Rust")
     if flags:
         lines.append(f"- **Flags:** {', '.join(flags)}")
     if data.get("css_preprocessor"):
         lines.append(f"- **CSS preprocessor:** {data['css_preprocessor']}")
     if data.get("module_system"):
         lines.append(f"- **Module system:** {data['module_system']}")
+    if data.get("is_monorepo"):
+        lines.append("- **Monorepo:** Yes")
+    if data.get("lockfile"):
+        lines.append(f"- **Lockfile:** {data['lockfile']}")
     lines.append("")
 
 

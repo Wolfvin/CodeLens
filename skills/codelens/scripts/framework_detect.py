@@ -326,8 +326,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_rust_backend": False,
-        "has_cpp": False,
-        "has_go": False,
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
@@ -547,79 +545,42 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_rust_backend"] and cargo_deps:
         detected["has_rust_backend"] = True
 
-    # 4b. Check for C++ / C / Go projects
-    # CMakeLists.txt → C++ project
-    cmake_path = os.path.join(workspace, "CMakeLists.txt")
-    if os.path.exists(cmake_path):
-        detected["has_cpp"] = True
-        if "cmake" not in detected["frameworks"]:
-            detected["frameworks"].append("cmake")
+    # Also detect Rust project from Cargo.toml presence (even with 0 parsed deps)
+    if not detected["has_rust_backend"]:
+        root_cargo = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(root_cargo):
+            detected["has_rust_backend"] = True
 
-    # Makefile → C/C++ project
-    makefile_path = os.path.join(workspace, "Makefile")
-    if os.path.exists(makefile_path):
-        detected["has_cpp"] = True
-        if "make" not in detected["frameworks"]:
-            detected["frameworks"].append("make")
+    # Fix module_system for Rust/Python polyglot projects:
+    # If no package.json was found (module_system still None or "cjs" by default)
+    # but we have Cargo.toml or pyproject.toml, set a more accurate module_system.
+    has_cargo = os.path.exists(os.path.join(workspace, "Cargo.toml"))
+    has_pyproject = os.path.exists(os.path.join(workspace, "pyproject.toml"))
+    has_pkg_json = os.path.exists(os.path.join(workspace, "package.json"))
 
-    # go.mod / go.work → Go project
-    go_mod_path = os.path.join(workspace, "go.mod")
-    go_work_path = os.path.join(workspace, "go.work")
-    if os.path.exists(go_mod_path) or os.path.exists(go_work_path):
-        detected["has_go"] = True
-        if "go" not in detected["frameworks"]:
-            detected["frameworks"].append("go")
-        # Scan go.mod for Go web frameworks
-        if os.path.exists(go_mod_path):
-            try:
-                with open(go_mod_path, 'r', encoding='utf-8') as f:
-                    go_mod_content = f.read()
-                go_frameworks = {
-                    "gin": "gin-gonic/gin",
-                    "echo": "labstack/echo",
-                    "fiber": "gofiber/fiber",
-                    "chi": "go-chi/chi",
-                    "mux": "gorilla/mux",
-                }
-                for fw_name, mod_path in go_frameworks.items():
-                    if mod_path.lower() in go_mod_content.lower():
-                        if fw_name not in detected["frameworks"]:
-                            detected["frameworks"].append(fw_name)
-            except IOError:
-                pass
+    if not has_pkg_json:
+        if has_cargo and has_pyproject:
+            detected["module_system"] = "rust-python"
+        elif has_cargo:
+            detected["module_system"] = "cargo"
+        elif has_pyproject:
+            detected["module_system"] = "python"
+    elif detected["module_system"] == "cjs" and has_cargo:
+        # Project has both package.json (cjs) and Cargo.toml — polyglot
+        if has_pyproject:
+            detected["module_system"] = "cjs-rust-python"
+        else:
+            detected["module_system"] = "cjs-rust"
 
-    # If no CMake/Makefile found yet, check for .cc/.cpp/.h files
-    if not detected["has_cpp"]:
-        for root, dirs, files in os.walk(workspace):
-            rel_root = os.path.relpath(root, workspace)
-            if should_ignore_dir(rel_root):
-                dirs.clear()
-                continue
-            for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext in ('.cc', '.cpp', '.cxx', '.c', '.h', '.hpp', '.hxx'):
-                    detected["has_cpp"] = True
-                    if "cpp" not in detected["frameworks"]:
-                        detected["frameworks"].append("cpp")
-                    break
-            if detected["has_cpp"]:
-                break
-
-    # If no go.mod found yet, check for .go files
-    if not detected["has_go"]:
-        for root, dirs, files in os.walk(workspace):
-            rel_root = os.path.relpath(root, workspace)
-            if should_ignore_dir(rel_root):
-                dirs.clear()
-                continue
-            for f in files:
-                if f.endswith('.go'):
-                    detected["has_go"] = True
-                    if "go" not in detected["frameworks"]:
-                        detected["frameworks"].append("go")
-                    break
-            if detected["has_go"]:
-                break
+    # Detect polyglot project type for framework reporting
+    languages_present = []
+    if has_cargo or detected["has_rust_backend"]:
+        languages_present.append("rust")
+    if has_pyproject or pip_deps:
+        languages_present.append("python")
+    if has_pkg_json:
+        languages_present.append("javascript")
+    detected["languages"] = languages_present
 
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
@@ -781,18 +742,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
-
-    # C++ project paths
-    if fw.get("has_cpp"):
-        config["backend_paths"].extend(["src/", "src/core/", "src/lib/"])
-        # Don't add src/ to frontend_paths for C++ projects
-        config["frontend_paths"] = [p for p in config["frontend_paths"] if p != "src/"]
-
-    # Go project paths
-    if fw.get("has_go"):
-        config["backend_paths"].extend(["cmd/", "internal/", "pkg/"])
-        # Remove generic src/ from backend if Go project (Go uses cmd/internal/pkg)
-        config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

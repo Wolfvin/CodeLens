@@ -172,9 +172,31 @@ class TSBackendParser(BaseParser):
             "scope_end": node.end_point.row
         }
 
+    @staticmethod
+    def _unwrap_fn_from_parens(node: Node) -> Optional[Node]:
+        """Unwrap arrow_function or function_expression from parenthesized_expression.
+
+        Handles nested parentheses: ((...args) => { ... })
+        Returns the innermost function node, or None.
+        """
+        for inner in node.children:
+            if inner.type in ('arrow_function', 'function_expression'):
+                return inner
+            elif inner.type == 'parenthesized_expression':
+                result = TSBackendParser._unwrap_fn_from_parens(inner)
+                if result:
+                    return result
+        return None
+
     def _parse_variable_declarator(self, node: Node, source: bytes,
                                     file_path: str) -> Optional[Dict]:
-        """Parse a variable_declarator that contains an arrow function or function expression."""
+        """Parse a variable_declarator that contains an arrow function or function expression.
+
+        Also handles cases where the function is wrapped in parentheses:
+            const name = ((...args) => { ... })
+        In tree-sitter, this produces a parenthesized_expression wrapping
+        the arrow_function, so we need to look inside it.
+        """
         name_node = None
         value_node = None
         is_async = False
@@ -188,6 +210,31 @@ class TSBackendParser(BaseParser):
                 for vc in child.children:
                     if vc.type == 'async':
                         is_async = True
+            elif child.type == 'parenthesized_expression':
+                # Unwrap: const name = ((...args) => { ... })
+                # The arrow_function or function_expression is inside the parens
+                value_node = self._unwrap_fn_from_parens(child)
+                if value_node:
+                    for vc in value_node.children:
+                        if vc.type == 'async':
+                            is_async = True
+            elif child.type == 'as_expression':
+                # TypeScript: const name = ((...args) => { ... }) as Type
+                # as_expression → parenthesized_expression → arrow_function
+                for inner in child.children:
+                    if inner.type in ('arrow_function', 'function_expression'):
+                        value_node = inner
+                        for vc in inner.children:
+                            if vc.type == 'async':
+                                is_async = True
+                        break
+                    elif inner.type == 'parenthesized_expression':
+                        value_node = self._unwrap_fn_from_parens(inner)
+                        if value_node:
+                            for vc in value_node.children:
+                                if vc.type == 'async':
+                                    is_async = True
+                        break
 
         if not name_node or not value_node:
             return None
