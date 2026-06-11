@@ -435,14 +435,58 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
+    # v7: Try go.mod — detect Go projects
+    go_type = None
+    go_mod_path = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_content = f.read()
+            # Extract module name
+            mod_match = re.search(r'^module\s+(\S+)', go_content, re.MULTILINE)
+            if mod_match:
+                identity["name"] = mod_match.group(1).split('/')[-1]
+            # Check for common Go project patterns
+            if 'cobra' in go_content.lower():
+                go_type = "go-cli"
+            else:
+                go_type = "go-project"
+        except Exception:
+            logger.warning("go.mod parsing failed", exc_info=True)
+
+    # v7: Try composer.json — detect PHP projects
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            identity["name"] = composer_data.get("name", identity["name"]).split('/')[-1]
+            identity["description"] = composer_data.get("description", "")
+            composer_deps = {**composer_data.get("require", {}), **composer_data.get("require-dev", {})}
+            if "laravel/framework" in composer_deps or "laravel/laravel" in composer_deps:
+                php_type = "laravel-app"
+            elif "flarum/core" in composer_deps or "flarum/framework" in composer_deps:
+                php_type = "flarum-app"
+            elif "symfony/framework-bundle" in composer_deps or "symfony/symfony" in composer_deps:
+                php_type = "symfony-app"
+            else:
+                php_type = "php-project"
+        except Exception:
+            logger.warning("composer.json parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
             type_parts.append("rust")
+        if go_type:
+            type_parts.append("go")
+        if php_type:
+            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

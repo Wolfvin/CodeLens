@@ -35,9 +35,19 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5.8.1
+# CodeLens v5.8.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v5.8.2
+
+- **CRITICAL FIX: 6 commands now load** — `scan`, `ask`, `env-check`, `handbook`, `refactor-safe`, `watch` all failed with ImportError on startup. Added all missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `scan_binary_artifacts`, `scan_tauri_artifacts` to utils.py; `resolve_tauri_ipc_from_apimap` to edge_resolver.py).
+- **Go framework detection**: Parse `go.mod` to detect Go projects — Gin, Echo, Fiber, Chi, Cobra frameworks. New `has_go_backend` flag.
+- **PHP framework detection**: Parse `composer.json` to detect PHP projects — Laravel, Symfony, Flarum, WordPress, Drupal, Slim. New `has_php_backend` flag.
+- **Go API route extraction**: Detect REST routes from Gin/Echo/Chi/Fiber, Gorilla mux, and stdlib `http.HandleFunc`. Route groups supported.
+- **PHP API route extraction**: Detect routes from Laravel `Route::get()`, Flarum/Slim `$app->get()`. Handler syntax parsing for `[Controller::class, 'method']`, `Controller@method`.
+- **Go/PHP project types in handbook**: `go-cli` (Cobra), `go-project`, `laravel-app`, `flarum-app`, `symfony-app`, `php-project`. Polyglot types like `go-js-polyglot`, `php-js-polyglot`.
+- **Framework detection false-positive fix**: Test/benchmark directories now excluded from `.vue`/`.svelte` file scanning. Rust projects like `bat` no longer falsely detected as "vue + svelte".
 
 ## What's New in v5.8.1
 

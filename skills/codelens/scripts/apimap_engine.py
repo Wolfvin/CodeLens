@@ -38,6 +38,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql",
+    ".go", ".php",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -207,6 +208,16 @@ def map_api_routes(
                 if vue_routes:
                     frameworks_detected.add("vue-router")
                     routes.extend(vue_routes)
+
+            # ─── Go API Routes ────────────────────────────────
+            elif ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path, frameworks_detected)
+                routes.extend(go_routes)
+
+            # ─── PHP API Routes ────────────────────────────────
+            elif ext == ".php":
+                php_routes = _extract_php_routes(content, rel_path, frameworks_detected)
+                routes.extend(php_routes)
 
             # ─── Tauri IPC Commands ────────────────────────────
             elif ext == ".rs":
@@ -2265,3 +2276,290 @@ def _snake_to_camel(name: str) -> str:
     """Convert a snake_case name to camelCase."""
     parts = name.split('_')
     return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
+
+
+# ─── Go API Route Extraction ────────────────────────────────────
+
+def _extract_go_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract API routes from Go source files.
+
+    Detects patterns from common Go web frameworks:
+    - Gin:       r.GET("/path", handler), r.POST("/path", handler)
+    - Echo:      e.GET("/path", handler), e.POST("/path", handler)
+    - Fiber:     app.Get("/path", handler), app.Post("/path", handler)
+    - Chi:       r.Get("/path", handler), r.Post("/path", handler)
+    - Stdlib:    mux.HandleFunc("/path", handler), http.HandleFunc
+    - Gorilla:   r.HandleFunc("/path", handler).Methods("GET")
+
+    Also detects route groups:
+    - g := r.Group("/api/v1")
+    """
+    routes = []
+    lines = content.split('\n')
+
+    # Track route group prefixes
+    group_prefixes: Dict[str, str] = {}  # var_name → prefix
+
+    # Pattern 1: Route group definitions
+    # g := r.Group("/api/v1") or apiGroup := router.Group("/api")
+    group_pattern = re.compile(
+        r'(\w+)\s*:?=\s*\w+\.Group\s*\(\s*["\']([^"\']+)["\']'
+    )
+
+    # Pattern 2: HTTP method registrations
+    # Gin/Echo/Chi: r.GET("/path", handler)
+    # Fiber: app.Get("/path", handler)
+    # Stdlib/Gorilla: mux.HandleFunc("/path", handler)
+    go_http_patterns = [
+        # Gin/Echo/Chi style: r.GET("/path", handler) or r.Group.GET("/path", handler)
+        (re.compile(
+            r'(\w+(?:\.\w+)*)\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)'
+        ), "gin"),
+        # Gorilla mux: r.HandleFunc("/path", handler).Methods("GET")
+        (re.compile(
+            r'(\w+)\.HandleFunc\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)\s*\)'
+        ), "gorilla"),
+        # Stdlib: http.HandleFunc("/path", handler)
+        (re.compile(
+            r'http\.HandleFunc\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)\s*\)'
+        ), "stdlib"),
+    ]
+
+    # First pass: extract group prefixes
+    for line in lines:
+        m = group_pattern.search(line)
+        if m:
+            var_name = m.group(1)
+            prefix = m.group(2)
+            group_prefixes[var_name] = prefix
+
+    # Second pass: extract routes
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//') or stripped.startswith('/*'):
+            continue
+
+        # Pattern 1: Gin/Echo/Chi/Fiber style
+        for pattern, fw_name in go_http_patterns[:1]:
+            for m in pattern.finditer(line):
+                receiver = m.group(1)
+                method_raw = m.group(2)
+                path = m.group(3)
+                handler = m.group(4)
+
+                # Normalize method
+                method = method_raw.upper()
+
+                # Check for group prefix
+                prefix = group_prefixes.get(receiver, '')
+                full_path = prefix + path if prefix else path
+
+                routes.append({
+                    "method": method,
+                    "path": full_path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                    "group": prefix if prefix else None,
+                })
+                frameworks_detected.add(fw_name)
+
+        # Pattern 2: Gorilla mux HandleFunc
+        for pattern, fw_name in go_http_patterns[1:2]:
+            for m in pattern.finditer(line):
+                path = m.group(2)
+                handler = m.group(3)
+
+                # Look for .Methods("GET") on the same or next line
+                method = "ANY"
+                context = line
+                if i + 1 < len(lines):
+                    context += lines[i + 1]
+                method_match = re.search(r'\.Methods\s*\(\s*["\'](\w+)["\']', context)
+                if method_match:
+                    method = method_match.group(1).upper()
+
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+                frameworks_detected.add(fw_name)
+
+        # Pattern 3: Stdlib http.HandleFunc
+        for pattern, fw_name in go_http_patterns[2:]:
+            for m in pattern.finditer(line):
+                path = m.group(1)
+                handler = m.group(2)
+
+                routes.append({
+                    "method": "ANY",
+                    "path": path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+                frameworks_detected.add(fw_name)
+
+    return routes
+
+
+# ─── PHP API Route Extraction ────────────────────────────────────
+
+def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract API routes from PHP source files.
+
+    Detects patterns from common PHP web frameworks:
+    - Laravel:   Route::get('/path', [Controller::class, 'method'])
+    - Symfony:   $app->get('/path', 'Controller::method')
+    - Flarum:    $this->get('/path', 'controller')
+    - Slim:      $app->get('/path', Controller::class . ':method')
+    - Generic:   $router->get('/path', handler)
+    """
+    routes = []
+    lines = content.split('\n')
+
+    # Pattern 1: Laravel Route facade
+    # Route::get('/path', [Controller::class, 'method'])
+    # Route::post('/path', 'Controller@method')
+    # Route::put('/path', closure)
+    laravel_pattern = re.compile(
+        r'Route::(get|post|put|delete|patch|any|match)\s*\(\s*'
+        r'(?:\[([^\]]*)\]\s*,\s*)?["\']([^"\']+)["\']'
+        r'\s*(?:,\s*(.+?))?\s*\)'
+    )
+
+    # Pattern 2: Generic PHP router
+    # $app->get('/path', ...), $router->post('/path', ...)
+    # $this->get('/path', ...), $this->post('/path', ...)
+    # NOTE: Skip patterns that don't look like HTTP routes:
+    #   - $this->get('setting_name') — settings getter, not a route
+    #   - $this->get('config.key') — config getter
+    #   - $app->get('some_var') — variable accessor
+    # A real route path starts with '/' or contains '/' (e.g., '/api/users')
+    generic_pattern = re.compile(
+        r'(?:\$\w+|this)\s*->\s*(get|post|put|delete|patch|any)\s*\(\s*["\']((?:/|[^"\']*/)[^"\']*)["\']'
+        r'\s*(?:,\s*(.+?))?\s*\)'
+    )
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+            continue
+
+        # Try Laravel pattern
+        for m in laravel_pattern.finditer(line):
+            method_raw = m.group(1)
+            methods_str = m.group(2)  # For Route::match(['get', 'post'], ...)
+            path = m.group(3)
+            handler_raw = m.group(4) or ''
+
+            # Determine HTTP methods
+            methods = [method_raw.upper()]
+            if method_raw == 'match' and methods_str:
+                methods = [m.strip().strip("'\"").upper() for m in methods_str.split(',')]
+
+            # Parse handler
+            handler_name = _parse_php_handler(handler_raw)
+
+            for method in methods:
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "laravel",
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+            frameworks_detected.add("laravel")
+
+        # Try generic pattern
+        for m in generic_pattern.finditer(line):
+            method_raw = m.group(1)
+            path = m.group(2)
+            handler_raw = m.group(3) or ''
+
+            handler_name = _parse_php_handler(handler_raw)
+
+            routes.append({
+                "method": method_raw.upper(),
+                "path": path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": i + 1,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "php-generic",
+                "auth_protected": False,
+                "deprecated": False,
+            })
+
+    return routes
+
+
+def _parse_php_handler(handler_raw: str) -> str:
+    """Parse a PHP route handler string into a readable name.
+
+    Handles:
+    - [Controller::class, 'method'] → Controller::method
+    - 'Controller@method' → Controller@method
+    - Controller::class . ':method' → Controller::method
+    - 'controller_class' → controller_class
+    - Closure/Callable → 'closure'
+    """
+    handler = handler_raw.strip()
+
+    # Array syntax: [Controller::class, 'method']
+    arr_match = re.search(r"(\w+)::class\s*,\s*['\"](\w+)['\"]", handler)
+    if arr_match:
+        return f"{arr_match.group(1)}::{arr_match.group(2)}"
+
+    # @ syntax: Controller@method
+    if '@' in handler:
+        return handler.strip("'\"")
+
+    # ::class . ':method' syntax
+    class_method = re.search(r"(\w+)::class\s*\.\s*['\"]:(\w+)['\"]", handler)
+    if class_method:
+        return f"{class_method.group(1)}::{class_method.group(2)}"
+
+    # Simple string: 'method_name'
+    simple = re.search(r"['\"](\w+)['\"]", handler)
+    if simple:
+        return simple.group(1)
+
+    # Closure/function callback
+    if 'function' in handler or 'Closure' in handler:
+        return 'closure'
+
+    return handler[:50] if handler else 'unknown'

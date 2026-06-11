@@ -160,6 +160,63 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["electron"],
         "config_files": ["electron-builder.yml", "electron-builder.json"],
         "indicators": []
+    },
+    # Go frameworks
+    "gin": {
+        "go_modules": ["github.com/gin-gonic/gin"],
+        "config_files": [],
+        "indicators": []
+    },
+    "echo": {
+        "go_modules": ["github.com/labstack/echo"],
+        "config_files": [],
+        "indicators": []
+    },
+    "fiber": {
+        "go_modules": ["github.com/gofiber/fiber"],
+        "config_files": [],
+        "indicators": []
+    },
+    "chi": {
+        "go_modules": ["github.com/go-chi/chi"],
+        "config_files": [],
+        "indicators": []
+    },
+    "cobra": {
+        "go_modules": ["github.com/spf13/cobra"],
+        "config_files": [],
+        "indicators": []
+    },
+    # PHP frameworks
+    "laravel": {
+        "composer_packages": ["laravel/framework", "laravel/laravel"],
+        "config_files": ["artisan", "bootstrap/app.php"],
+        "indicators": []
+    },
+    "symfony": {
+        "composer_packages": ["symfony/framework-bundle", "symfony/symfony"],
+        "config_files": ["symfony.lock", "config/bundles.php"],
+        "indicators": []
+    },
+    "flarum": {
+        "composer_packages": ["flarum/core", "flarum/framework"],
+        "config_files": [],
+        "indicators": []
+    },
+    "wordpress": {
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php", "wp-config-sample.php"],
+        "indicators": []
+    },
+    "drupal": {
+        "composer_packages": ["drupal/core", "drupal/drupal"],
+        "config_files": [],
+        "indicators": []
+    },
+    "slim": {
+        "composer_packages": ["slim/slim"],
+        "config_files": [],
+        "indicators": []
     }
 }
 
@@ -217,6 +274,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_rust_backend": False,
+        "has_go_backend": False,
+        "has_php_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -427,7 +486,87 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if crate in cargo_deps and fw_name not in detected["frameworks"]:
                 detected["frameworks"].append(fw_name)
 
-    # 4. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
+    # 4. Parse go.mod for Go framework detection
+    go_deps = set()
+    go_mod_path = os.path.join(workspace, "go.mod")
+    if os.path.exists(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_mod_content = f.read()
+            # Parse require() block — extract module paths
+            in_require = False
+            for line in go_mod_content.split('\n'):
+                stripped = line.strip()
+                if stripped.startswith('require (') or stripped.startswith('require('):
+                    in_require = True
+                    continue
+                if stripped == ')' and in_require:
+                    in_require = False
+                    continue
+                if in_require or stripped.startswith('require '):
+                    # Extract module path (first token before version)
+                    parts = stripped.split()
+                    if parts:
+                        mod_path = parts[0].lower()
+                        go_deps.add(mod_path)
+        except IOError:
+            _logger.debug("Failed to parse go.mod", exc_info=True)
+
+    if go_deps:
+        detected["has_go_backend"] = True
+        # Detect Go frameworks from go.mod dependencies
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            go_modules = sig.get("go_modules", [])
+            for mod_path in go_modules:
+                if mod_path.lower() in go_deps:
+                    detected["frameworks"].append(fw_name)
+                    break
+
+    # 5. Parse composer.json for PHP framework detection
+    composer_path = os.path.join(workspace, "composer.json")
+    composer_deps = set()
+    # Also check subdirectory composer.json files for monorepos
+    for cp in [composer_path] + _find_subdir_composer_jsons(workspace):
+        if not os.path.exists(cp):
+            continue
+        try:
+            with open(cp, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            composer_deps.update(composer_data.get("require", {}).keys())
+            composer_deps.update(composer_data.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            _logger.debug(f"Failed to parse {cp}", exc_info=True)
+
+    if composer_deps:
+        detected["has_php_backend"] = True
+        # Detect PHP frameworks from composer dependencies
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name.lower() in {d.lower() for d in composer_deps}:
+                    detected["frameworks"].append(fw_name)
+                    break
+
+        # Also check PHP config file patterns
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            for cfg_file in sig.get("config_files", []):
+                if os.path.exists(os.path.join(workspace, cfg_file)):
+                    detected["frameworks"].append(fw_name)
+                    break
+
+    # 6. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
+    # NOTE: Skip test/benchmark/vendor directories to avoid false positives
+    _TEST_DIRS = frozenset({
+        'tests', 'test', '__tests__', 'testdata', 'test_data',
+        'benchmarks', 'benchmark', 'fixture', 'fixtures',
+        'examples', 'vendor', 'samples',
+    })
     need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
     if need_file_scan:
         for root, dirs, files in os.walk(workspace):
@@ -439,6 +578,13 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     skip = True
                     break
             if skip:
+                continue
+
+            # Skip test/benchmark directories for framework detection
+            # to avoid false positives (e.g., .vue test fixtures in a Rust project)
+            rel_root = os.path.relpath(root, workspace).replace('\\', '/')
+            path_parts = rel_root.split('/')
+            if any(part in _TEST_DIRS for part in path_parts if part != '.'):
                 continue
 
             # Check Vue/Svelte file patterns
@@ -475,6 +621,24 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     return detected
+
+
+def _find_subdir_composer_jsons(workspace: str, max_depth: int = 2) -> List[str]:
+    """Find composer.json files in subdirectories for PHP monorepos."""
+    results = []
+    for subdir in ('packages', 'extensions', 'modules', 'plugins'):
+        subdir_path = os.path.join(workspace, subdir)
+        if not os.path.isdir(subdir_path):
+            continue
+        try:
+            for entry in os.listdir(subdir_path):
+                entry_path = os.path.join(subdir_path, entry)
+                composer_path = os.path.join(entry_path, "composer.json")
+                if os.path.isfile(composer_path):
+                    results.append(composer_path)
+        except OSError:
+            pass
+    return results
 
 
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
@@ -534,6 +698,27 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_capacitor"):
         config["frontend_paths"].extend(["src/", "www/"])
         config["backend_paths"].extend(["android/", "ios/"])
+
+    # Go project paths
+    if fw.get("has_go_backend"):
+        config["backend_paths"].extend(["cmd/", "internal/", "pkg/"])
+        # Remove generic src/ from backend if Go project uses cmd/ style
+        if any(os.path.isdir(os.path.join(workspace, d)) for d in ['cmd', 'internal']):
+            if "src/" in config["backend_paths"]:
+                config["backend_paths"].remove("src/")
+
+    # PHP project paths
+    if fw.get("has_php_backend"):
+        config["backend_paths"].extend(["app/", "src/", "routes/"])
+        config["frontend_paths"].extend(["resources/", "public/", "resources/views/"])
+
+    # Rust project (non-Tauri)
+    if fw.get("has_rust_backend") and not fw.get("has_tauri"):
+        config["backend_paths"].extend(["src/"])
+        # Pure Rust project — src/ is the primary source dir
+        if not fw.get("has_vue") and not fw.get("has_react") and not fw.get("has_svelte"):
+            # This is a pure Rust project, not a fullstack app
+            config["frontend_paths"] = []
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

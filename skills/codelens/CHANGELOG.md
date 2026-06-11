@@ -5,6 +5,36 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.2] — 2026-06-12
+
+### Added
+
+- **Go framework detection** (`scripts/framework_detect.py`): Parse `go.mod` to detect Go projects and their web frameworks (Gin, Echo, Fiber, Chi, Cobra). New `has_go_backend` flag in detection output. Go-specific `backend_paths` (`cmd/`, `internal/`, `pkg/`) in recommended config.
+- **PHP framework detection** (`scripts/framework_detect.py`): Parse `composer.json` to detect PHP projects and their frameworks (Laravel, Symfony, Flarum, WordPress, Drupal, Slim). New `has_php_backend` flag. PHP-specific paths (`app/`, `routes/`, `resources/views/`) in recommended config.
+- **Go API route extraction** (`scripts/apimap_engine.py`): New `_extract_go_routes()` function that detects REST API routes from Go web frameworks — Gin/Echo/Chi/Fiber (`r.GET("/path", handler)`), Gorilla mux (`r.HandleFunc("/path", handler).Methods("GET")`), and stdlib (`http.HandleFunc`). Also detects route groups (`r.Group("/api/v1")`).
+- **PHP API route extraction** (`scripts/apimap_engine.py`): New `_extract_php_routes()` function that detects routes from Laravel (`Route::get('/path', ...)`), Flarum/Slim (`$app->get('/path', ...)`), and generic PHP routers. New `_parse_php_handler()` helper for parsing PHP handler syntax (`[Controller::class, 'method']`, `Controller@method`, closures).
+- **Go project type in handbook** (`scripts/commands/handbook.py`): New `go_type` detection from `go.mod` — `go-cli` for Cobra-based CLIs, `go-project` for general Go projects. Module name extraction from `module` directive.
+- **PHP project type in handbook** (`scripts/commands/handbook.py`): New `php_type` detection from `composer.json` — `laravel-app`, `flarum-app`, `symfony-app`, `php-project`. Name and description extracted from composer.json.
+- **Polyglot type detection for Go/PHP** (`scripts/commands/handbook.py`): Go and PHP types now participate in polyglot detection, producing types like `go-js-polyglot`, `php-js-polyglot`.
+- **Missing utility functions** (`scripts/utils.py`): Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired()`, `is_generated_file()`, `scan_binary_artifacts()`, `scan_tauri_artifacts()` — all previously imported but not defined, causing 6 commands to fail on startup.
+- **Missing Tauri IPC resolver** (`scripts/edge_resolver.py`): Added `resolve_tauri_ipc_from_apimap()` — previously imported but not defined, causing `scan`, `handbook`, `ask`, and `watch` commands to fail on startup.
+
+### Fixed
+
+- **CRITICAL: 6 commands failed to load on startup** — `scan`, `ask`, `env-check`, `handbook`, `refactor-safe`, and `watch` all failed with `ImportError` because `utils.py` was missing `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `scan_binary_artifacts`, `scan_tauri_artifacts`, and `edge_resolver.py` was missing `resolve_tauri_ipc_from_apimap`. Added all missing symbols.
+- **HIGH: Framework detection false positives from test files** — The file-pattern walk for `.vue` and `.svelte` files scanned test/benchmark directories, causing Rust projects like `bat` (which has `.vue`/`.svelte` syntax test fixtures) to be incorrectly detected as "vue + svelte". Added test directory exclusion (`tests/`, `benchmarks/`, `testdata/`, `vendor/`, etc.) during framework file scanning.
+- **HIGH: Go/PHP projects detected as "unknown"** — Framework detection only checked `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`. No `go.mod` or `composer.json` parsing existed. Added full Go and PHP dependency parsing.
+- **HIGH: Handbook classified Go/PHP projects incorrectly** — PocketBase (Go) was "unknown", Flarum (PHP) was "node-project". Added `go.mod` and `composer.json` parsing to `_extract_project_identity()`.
+- **MEDIUM: Pure Rust projects had incorrect frontend_paths** — Projects like `bat` got `frontend_paths: ["src/client/", ...]` even though they have no frontend. Now pure Rust projects (no Vue/React/Svelte detected) get empty `frontend_paths`.
+- **MEDIUM: PHP route detection false positives** — `$this->get('config_key')` and `$settings->get('var_name')` were incorrectly detected as HTTP routes. Now the generic PHP pattern requires the path to start with `/` or contain `/` to be considered a route.
+
+### Test Target Documentation
+
+- **sharkdp/bat** (GitHub): Rust CLI tool (cat clone with syntax highlighting). 14MB repo, 67 Rust files, 7 Python files. Tests: Rust parser, CLI entrypoint detection, framework false-positive prevention (vue/svelte test fixtures), pure Rust project config. Results: 1716 backend nodes, 10400 edges, 65 critical smells, 47 circular deps, correct `rust-project` type.
+- **mingrammer/diagrams** (GitHub): Python diagram-as-code generator. 119MB repo, 265 Python files. Tests: Python parser, API mapping (non-REST), dead code detection. Results: 2867 backend nodes, 607 edges, correct `python-library` type, 100 health score.
+- **pocketbase/pocketbase** (GitHub): Go backend-as-a-service. 22MB repo, 452 Go files + 249 JS files. Tests: Go parser, Go API route extraction (Gin-style), Go framework detection (cobra), Go project type. Results: 474 backend nodes, 7144 edges, 30+ Go API routes detected, correct `go-cli` type.
+- **flarum/framework** (GitHub): PHP forum framework (monorepo). 37MB repo, 1452 PHP files + 1077 JS files + 54 Blade templates. Tests: PHP/Blade parser, PHP route extraction, PHP framework detection (flarum), polyglot type detection. Results: 6336 backend nodes, 47222 edges, correct `php-js-polyglot` type, Flarum framework detected.
+
 ## [5.8.1] — 2026-06-12
 
 ### Added
