@@ -35,7 +35,7 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5
+# CodeLens v5.7.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 

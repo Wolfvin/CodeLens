@@ -652,7 +652,8 @@ class GraphStore {
       }
       this.selectedNodeId = data.selectedNodeId ?? null
       return true
-    } catch {
+    } catch (err) {
+      console.error('[CodeLens] Failed to load graph from JSON:', err)
       return false
     }
   }

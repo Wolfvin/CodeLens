@@ -999,10 +999,13 @@ function replaceGraphFromScan(nodes: GraphNode[], edges: GraphEdge[], clusters: 
 // ─── WebSocket Server ───────────────────────────────────────
 
 const httpServer = createServer()
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+  : ['http://localhost:3000', 'http://localhost:81']
 const io = new Server(httpServer, {
   path: '/',
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST'],
   },
   pingTimeout: 60000,

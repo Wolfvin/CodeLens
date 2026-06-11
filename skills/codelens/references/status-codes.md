@@ -4,65 +4,65 @@
 
 ### `active`
 - ref_count > 0
-- Digunakan di setidaknya 1 tempat
-- **AI action:** Normal, lanjut. Hati-hati saat edit (cek callers dulu)
+- Referenced in at least 1 location
+- **AI action:** Normal, proceed. Exercise caution when editing (check callers first)
 
 ### `dead`
 - ref_count = 0
-- Tidak ada yang reference
-- Kandidat legacy code atau sisa refactor
-- **AI action:** Flag ke user. Jangan extend. Tanya: reuse atau hapus?
+- Not referenced anywhere
+- Candidate for legacy code or leftover from refactoring
+- **AI action:** Flag to user. Do not extend. Ask: reuse or delete?
 
 ### `duplicate_ref`
-- Referenced dari 2+ file yang berbeda
-- Dipakai di banyak tempat — bukan error, tapi hati-hati
-- **AI action:** Sebelum edit, list semua referrers ke user. Perubahan berdampak luas.
+- Referenced from 2+ different files
+- Used in many places — not an error, but proceed with caution
+- **AI action:** Before editing, list all referrers to the user. Changes will have broad impact.
 
 ### `collision`
-- Khusus HTML `id`
-- ID yang sama ditemukan di >1 elemen HTML
-- Ini **bug aktif** — HTML spec melarang duplicate ID
-- **AI action:** Hentikan task saat ini. Report collision ke user. Jangan lanjut sebelum fix.
+- Specific to HTML `id`
+- Same ID found in >1 HTML element
+- This is an **active bug** — the HTML spec forbids duplicate IDs
+- **AI action:** Stop the current task. Report the collision to the user. Do not proceed until fixed.
 
 ---
 
-## Per-Referensi Flag (level path entry)
+## Per-Reference Flag (level path entry)
 
 ### `duplicate_define`
-- CSS: selector di-define >1x
-- JS/Rust: function dengan nama sama di >1 file
-- Yang terakhir override yang pertama (CSS cascade)
-- **AI action:** Tunjukkan ke user semua lokasi define. Minta konfirmasi mana yang intended.
+- CSS: selector defined >1x
+- JS/Rust: function with the same name in >1 file
+- The latter overrides the former (CSS cascade)
+- **AI action:** Show the user all definition locations. Ask for confirmation on which is intended.
 
 ### `null`
-- Tidak ada masalah
-- Normal, tidak perlu action
+- No issues
+- Normal, no action needed
 
 ---
 
 ## Backend-specific Status
 
 ### Component flag (`component: true`)
-- TSX/JSX: function yang namanya diawali huruf besar (React convention)
-- Menandakan ini adalah React component, bukan utility function
-- **AI action:** Saat edit component, pertimbangkan impact ke render cycle
+- TSX/JSX: function whose name starts with an uppercase letter (React convention)
+- Indicates this is a React component, not a utility function
+- **AI action:** When editing a component, consider the impact on the render cycle
 
 ### `impl_for` / `trait_name`
-- Rust: function dalam impl block
-- Menandakan function ini milik struct/trait tertentu
-- **AI action:** Saat edit, pertimbangkan semua caller yang pakai method ini via struct instance
+- Rust: function within an impl block
+- Indicates this function belongs to a specific struct/trait
+- **AI action:** When editing, consider all callers that use this method via a struct instance
 
 ### `via_self: true`
-- Edge yang melalui self.method() call
-- Menandakan internal method call dalam impl block
-- **AI action:** Perubahan method ini mempengaruhi semua method dalam impl yang sama
+- Edge that goes through a self.method() call
+- Indicates an internal method call within an impl block
+- **AI action:** Changing this method affects all methods within the same impl
 
 ---
 
 ## Frontend-specific Metadata
 
 ### `source` field
-Menandakan dari mana reference ini berasal:
+Indicates where this reference originates from:
 - `vue_class` — static Vue template class
 - `vue_binding` — dynamic :class binding
 - `vue_scoped_style` — Vue scoped CSS
@@ -79,22 +79,22 @@ Menandakan dari mana reference ini berasal:
 ## ref_count Logic
 
 ```
-ref_count = total referensi ke class/id/function ini
-            dari CSS + JS (frontend)
-            atau incoming edges (backend)
+ref_count = total references to this class/id/function
+            from CSS + JS (frontend)
+            or incoming edges (backend)
 
 ref_count: 0 → dead
 ref_count: 1 → active, single use
-ref_count: 2+ → active, multiple use → cek duplicate_ref
+ref_count: 2+ → active, multiple use → check duplicate_ref
 ```
 
 ---
 
-## Prioritas Action untuk AI
+## Priority Action for AI
 
-1. `collision` → **STOP, fix dulu**
-2. `duplicate_define` → **WARNING, tunjukkan ke user**
-3. `dead` + user mau edit → **TANYA dulu: reuse atau hapus?**
-4. `duplicate_ref` + user mau edit → **LIST semua caller dulu**
-5. `active` → **Normal, lanjut**
-6. `found: false` → **Aman, lanjut buat**
+1. `collision` → **STOP, fix first**
+2. `duplicate_define` → **WARNING, show to user**
+3. `dead` + user wants to edit → **ASK first: reuse or delete?**
+4. `duplicate_ref` + user wants to edit → **LIST all callers first**
+5. `active` → **Normal, proceed**
+6. `found: false` → **Safe, proceed to create**

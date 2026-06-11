@@ -354,6 +354,7 @@ def analyze_impact(
         "workspace": workspace,
         "action": action,
         "risk": risk,
+        "risk_level": risk,
         "affected": affected,
         "stats": {
             "direct_dependents": direct_count,
