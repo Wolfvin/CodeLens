@@ -34,23 +34,28 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    max_files = getattr(args, 'max_files', 5000)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, max_files=max_files)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    max_files caps the total number of files scanned to prevent timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -65,6 +70,22 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
 
     # Discover files
     files = discover_files(workspace, config)
+
+    # v5.8: Enforce max-files limit to prevent timeout on huge repos
+    total_files = sum(len(v) for v in files.values())
+    files_truncated = False
+    if total_files > max_files:
+        files_truncated = True
+        logger.warning(
+            f"Found {total_files} source files, exceeding --max-files={max_files}. "
+            f"Truncating scan to {max_files} files. Use --max-files 0 to scan all."
+        )
+        # Proportionally truncate each category
+        if max_files > 0:
+            ratio = max_files / total_files
+            for key in files:
+                cap = max(1, int(len(files[key]) * ratio))
+                files[key] = files[key][:cap]
 
     # Check if incremental scan is possible
     changed_files = None
@@ -506,7 +527,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "files_truncated": files_truncated,
+        "max_files_limit": max_files if max_files > 0 else None,
     }
 
 

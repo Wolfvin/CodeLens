@@ -40,6 +40,14 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v5.8 — Tested on elizaOS/eliza (5000+ file TypeScript AI agent framework)
+
+- **State map false positive reduction**: Expanded skip lists for Node.js globals (__dirname, __filename, process, Buffer, etc.), CLI argument constants, path aliases (ROOT, HOME, CWD), environment variable references, and import-like assignments. ALL_CAPS single-word constants (VERBOSE, CLI, CHECK, PRUNE) now correctly skipped. Python global filtering also improved with builtin/dunder/path skips. State stores dropped from ~1493 false positives to significantly fewer real ones.
+- **Entrypoints markdown fix (v2)**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers, silently consumed. Now uses backticks for reliable rendering: `module_export`, `main`.
+- **Performance: --max-files limit**: Scan and handbook commands now accept `--max-files` (default: 5000) to prevent timeout on very large repos. Proportionally truncates file categories with a warning. Use `--max-files 0` to scan all files.
+- **Debug leak output improvement**: Each leak item now includes `pattern` (the detected pattern name), `message` (human-readable description), and `content` (the matched line content). Markdown formatter shows descriptive messages like "Debug console statement: console.log()" instead of raw category names.
+- **Python global state filtering**: Skips ALL_CAPS constants, dunder attributes (__name__, __file__, __all__), and path/env references (os.path, Path, os.getenv). Reduces false positives in Python projects.
+
 ## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
 
 - **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find Next.js, React, etc. in workspace packages, not just root. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
@@ -49,7 +57,7 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references. Skips main(), pub functions, and test fixtures. Found 200+ genuine dead items that the text-only scanner missed.
 - **State map constant/component filtering**: Skips ALL_CAPS constants (MAX_FILES, etc.), React components (arrow functions, forwardRef, memo, styled), and immutable values. State stores dropped from 825 false positives to ~150 real ones. Removed module.exports scanning that classified every exported function as a store.
 - **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist. No longer defaults to `node-project` for Rust+TS monorepos.
-- **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses angle brackets instead.
+- **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses backticks instead (v5.8: angle brackets were still broken — `<main>` treated as HTML tag).
 
 ## What's New in v5
 

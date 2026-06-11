@@ -206,6 +206,87 @@ def map_state(
 
     # ─── Apply filters ────────────────────────────────────────
 
+    # v5.8.1: Post-filter false positives that slip through per-extraction skip lists.
+    # Some engines (e.g., XState, MobX, module-level) may emit items whose names
+    # are Node.js globals, common CLI constants, or dunder attributes.
+    _POST_FILTER_SKIP_NAMES = {
+        # Node.js / browser globals
+        '__dirname', '__filename', '__proto__', 'process', 'global', 'globalThis',
+        'Buffer', 'console', 'module', 'exports', 'require',
+        'window', 'document', 'navigator', 'location', 'history',
+        'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest',
+        # Common framework/CLI constants that are not mutable state
+        'CLI', 'ROOT', 'HOME', 'CWD', 'PWD', 'VERBOSE', 'DEBUG', 'CHECK', 'PRUNE',
+        'SRC', 'DIST', 'BUILD', 'OUT', 'OUTPUT', 'PUBLIC', 'STATIC', 'ASSETS',
+        'ENV', 'CONFIG', 'CONF', 'OPTS', 'ARGS', 'ARGV',
+        # Common import aliases that get misclassified
+        'APP', 'SERVER', 'ROUTER', 'DB', 'CLIENT', 'HANDLER',
+        # Python dunder attributes
+        '__name__', '__file__', '__doc__', '__package__', '__all__',
+        '__builtins__', '__path__', '__spec__', '__loader__', '__cached__',
+    }
+    stores = [s for s in stores if s.get("name", "") not in _POST_FILTER_SKIP_NAMES]
+
+    # v5.8.1: Also filter stores where the name is ALL_CAPS with no underscore
+    # and looks like a simple constant (3+ uppercase letters only = config constant).
+    # e.g., "ROOT", "CLI", "LOG" — not state, just module-level constants.
+    def _is_likely_constant(name: str) -> bool:
+        """Check if a name looks like a simple constant, not state."""
+        if not name:
+            return False
+        # Pure uppercase with no underscore and length >= 3 → likely constant
+        if name == name.upper() and len(name) >= 3 and name.isalpha():
+            return True
+        # ALL_CAPS with underscores → definitely a constant
+        if name == name.upper() and '_' in name:
+            return True
+        return False
+
+    stores = [s for s in stores if not _is_likely_constant(s.get("name", ""))]
+
+    # v5.8.1: Filter likely React components — PascalCase names that end with
+    # common component suffixes. These are UI components, not state stores.
+    # e.g., "CompanionShell", "ApprovalQueue", "TransactionHistory"
+    _COMPONENT_SUFFIXES = (
+        'Button', 'Card', 'Modal', 'Dialog', 'Panel', 'Form', 'Input',
+        'List', 'Table', 'Grid', 'Menu', 'Tab', 'Page', 'View', 'Screen',
+        'Layout', 'Header', 'Footer', 'Sidebar', 'Navbar', 'Toolbar',
+        'Badge', 'Chip', 'Tag', 'Tooltip', 'Popover', 'Dropdown',
+        'Overlay', 'Alert', 'Toast', 'Notification', 'Banner',
+        'Icon', 'Logo', 'Avatar', 'Image', 'Thumbnail',
+        'Loader', 'Spinner', 'Skeleton', 'Progress',
+        'Shell', 'Wrapper', 'Container', 'Provider', 'Consumer',
+        'Widget', 'Block', 'Section', 'Divider', 'Separator',
+        'Handler', 'Controller', 'Manager', 'Service', 'Client',
+        'Queue', 'History', 'Settings', 'Config', 'Profile',
+        'Monitor', 'Tracker', 'Watcher', 'Listener',
+        'Store', 'Reducer', 'Action',  # But NOT if framework is redux/mobx
+    )
+
+    def _is_likely_react_component(name: str, framework: str) -> bool:
+        """Check if a name looks like a React component, not a state store."""
+        if not name:
+            return False
+        # Skip if this came from a known state management framework
+        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate'):
+            return False
+        # PascalCase name that ends with a common component suffix
+        if name[0].isupper() and any(name.endswith(s) for s in _COMPONENT_SUFFIXES):
+            return True
+        # Multi-word PascalCase with 3+ uppercase letters — very likely a component
+        # e.g., "CodingAgentControlChip" has 4 uppercase chars
+        upper_count = sum(1 for c in name if c.isupper())
+        if upper_count >= 3 and len(name) >= 10:
+            return True
+        return False
+
+    stores = [s for s in stores if not _is_likely_react_component(
+        s.get("name", ""), s.get("framework", ""))]
+
+    # v5.8.1: Filter stores with missing/empty defined_in — these are usually
+    # artifacts from cross-file resolution that couldn't find a source.
+    stores = [s for s in stores if s.get("defined_in", "")]
+
     if store_name:
         stores = [s for s in stores if store_name.lower() in s.get("name", "").lower()]
         state_flow = [
@@ -1015,7 +1096,7 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
         return {"stores": [], "flow": []}
 
-    # v6: Expanded skip list for constants that are NOT mutable state.
+    # v6→v5.8: Expanded skip list for constants that are NOT mutable state.
     # ALL_CAPS patterns are immutable constants, not state stores.
     # PascalCase patterns that are React components or class instantiations
     # are also not state.
@@ -1031,7 +1112,58 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         'WIDTH', 'HEIGHT', 'DEPTH', 'OFFSET', 'INDEX', 'COUNT',
         'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
         'PATTERN', 'REGEX', 'MASK', 'TEMPLATE', 'SCHEMA',
+        # v5.8: Node.js globals and built-in aliases
+        'ROOT', 'HOME', 'DIR', 'DIRNAME', 'FILENAME', 'BASENAME',
+        'EXTNAME', 'JOIN', 'RESOLVE', 'NORMALIZE', 'RELATIVE',
+        'CLI', 'VERBOSE', 'CHECK', 'PRUNE', 'DEBUG', 'LOG',
+        'WARN', 'ERROR', 'INFO', 'TRACE', 'FATAL',
+        # v5.8: Common path/config constants that are just aliases
+        'CWD', 'PWD', 'TMP', 'TEMP', 'CACHE', 'CONFIG', 'CONF',
+        'OPT', 'OPTS', 'ARGS', 'ARGV', 'ENV_PATH',
+        'SRC', 'DIST', 'BUILD', 'OUT', 'OUTPUT', 'PUBLIC',
+        'STATIC', 'ASSETS', 'LIB', 'VENDOR', 'PKG',
+        # v5.8: Import aliases and re-exports
+        'APP', 'SERVER', 'ROUTER', 'DB', 'CLIENT', 'HANDLER',
+        'MIDDLEWARE', 'SERVICE', 'CONTROLLER', 'MODEL', 'SCHEMA_OBJ',
+        'VALIDATOR', 'PARSER', 'RENDERER', 'PROVIDER',
     }
+
+    # v5.8: Node.js global names that should never be classified as state stores.
+    # These are built-in globals (__dirname, __filename, process, etc.)
+    # and common CLI/framework constants that are just references, not state.
+    NODEJS_GLOBAL_SKIP = {
+        '__dirname', '__filename', '__proto__', '__defineGetter__',
+        '__defineSetter__', '__lookupGetter__', '__lookupSetter__',
+        'process', 'global', 'globalThis', 'Buffer', 'console',
+        'module', 'exports', 'require', 'arguments', 'this',
+        'window', 'document', 'navigator', 'location', 'history',
+        'localStorage', 'sessionStorage', 'fetch', 'XMLHttpRequest',
+        'Promise', 'Symbol', 'Map', 'Set', 'WeakMap', 'WeakSet',
+        'Proxy', 'Reflect', 'Array', 'Object', 'String', 'Number',
+        'Boolean', 'Function', 'Date', 'RegExp', 'Error',
+        'EvalError', 'RangeError', 'ReferenceError', 'SyntaxError',
+        'TypeError', 'URIError', 'ArrayBuffer', 'DataView',
+        'Float32Array', 'Float64Array', 'Int8Array', 'Int16Array',
+        'Int32Array', 'Uint8Array', 'Uint16Array', 'Uint32Array',
+        'Uint8ClampedArray', 'BigInt', 'BigInt64Array', 'BigUint64Array',
+    }
+
+    # v5.8: Skip variables whose value is a path.resolve/path.join call
+    # or a simple environment variable reference — these are config, not state.
+    VALUE_SKIP_PATTERNS = [
+        r'^path\.(resolve|join|normalize|dirname|basename|extname|relative)\s*\(',
+        r'^process\.env\.',
+        r'^import\.meta\.',
+        r'^require\.(resolve|cache|main)',
+        r'^os\.(homedir|tmpdir|platform|arch|cpus|networkInterfaces)',
+        r'^__dirname',
+        r'^__filename',
+        r'^process\.cwd\s*\(\)',
+        r'^fileURLToPath',
+        r'^dirname\s*\(',
+        r'^basename\s*\(',
+        r'^extname\s*\(',
+    ]
 
     lines = content.split('\n')
     for i, line in enumerate(lines):
@@ -1050,6 +1182,31 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             # Skip common non-state constants
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
+                continue
+
+            # v5.8: Skip Node.js built-in globals
+            if var_name in NODEJS_GLOBAL_SKIP:
+                continue
+
+            # v5.8: Skip ALL_CAPS constants even without underscore
+            # (e.g., VERBOSE, CLI, ROOT are all-caps single-word constants)
+            if var_name == var_name.upper() and len(var_name) >= 3:
+                continue
+
+            # v5.8: Skip variables whose value is a path/env reference
+            # (e.g., ROOT = path.resolve(...), PORT = process.env.PORT)
+            is_path_or_env = False
+            for pat in VALUE_SKIP_PATTERNS:
+                if re.match(pat, value_part):
+                    is_path_or_env = True
+                    break
+            if is_path_or_env:
+                continue
+
+            # v5.8: Skip import-like assignments
+            # (e.g., const Router = express.Router(), const db = mongoose.connection)
+            if re.match(r'^[a-zA-Z]+\.[A-Z]', value_part):
+                # Like express.Router(), mongoose.connection — not state
                 continue
 
             # v6: Skip React components — PascalCase + arrow function or function
@@ -1140,17 +1297,51 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     if any(x in rel_path for x in ['test_', 'conftest', 'settings.py', 'config.py']):
         return {"stores": [], "flow": []}
 
+    # v5.8: Expanded skip list for Python constants that are NOT mutable state.
+    PY_CONSTANT_SKIP = {
+        'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN', 'DEBUG', 'LOG',
+        'ROOT', 'HOME', 'BASE_DIR', 'BASE_PATH', 'PROJECT_ROOT', 'SRC_DIR',
+        'CLI', 'VERBOSE', 'CHECK', 'PRUNE', 'INFO', 'WARN', 'ERROR', 'TRACE',
+        'CWD', 'PWD', 'TMP', 'TEMP', 'CACHE', 'CONFIG', 'CONF',
+        'APP', 'SERVER', 'DB', 'CLIENT', 'NAME', 'TITLE', 'PATH',
+        'KEY', 'ID', 'TOKEN', 'SECRET', 'TYPE', 'STATUS', 'DEFAULT',
+        'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
+        'PATTERN', 'REGEX', 'SCHEMA', 'TIMEOUT', 'DELAY', 'LIMIT',
+    }
+
+    # v5.8: Python builtins and common stdlib aliases
+    PY_BUILTIN_SKIP = {
+        'True', 'False', 'None', 'NotImplemented', 'Ellipsis',
+        '__name__', '__file__', '__doc__', '__package__',
+        '__builtins__', '__all__', '__path__', '__spec__',
+        '__loader__', '__cached__', '__version__',
+    }
+
     lines = content.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
 
         # Module-level assignments (not inside functions/classes)
         if not stripped.startswith((' ', '\t')):  # Top-level
-            m = re.match(r'^([A-Z_]\w+)\s*=\s*', stripped)
+            m = re.match(r'^([A-Z_]\w+)\s*=\s*(.*)', stripped)
             if m:
                 var_name = m.group(1)
-                skip = {'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN', 'DEBUG', 'LOG'}
-                if var_name in skip or len(var_name) <= 2:
+                value_part = m.group(2).strip() if m.group(2) else ""
+
+                if var_name in PY_CONSTANT_SKIP or len(var_name) <= 2:
+                    continue
+
+                # v5.8: Skip Python builtins and dunder attributes
+                if var_name in PY_BUILTIN_SKIP:
+                    continue
+
+                # v5.8: Skip ALL_CAPS constants
+                # (e.g., VERBOSE, CLI, ROOT are all-caps single-word constants)
+                if var_name == var_name.upper() and len(var_name) >= 3:
+                    continue
+
+                # v5.8: Skip path references and env var lookups
+                if re.match(r'^(os\.path|Path|pathlib|os\.getenv|os\.environ)', value_part):
                     continue
 
                 stores.append({

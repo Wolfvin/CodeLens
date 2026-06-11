@@ -158,4 +158,17 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.1"
+
+
+# ─── File Read Utility ──────────────────────────────────────
+
+def safe_read_file(filepath: str, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file, returning None on any error."""
+    try:
+        if not os.path.isfile(filepath):
+            return None
+        with open(filepath, 'r', encoding=encoding, errors='replace') as f:
+            return f.read()
+    except (OSError, IOError, UnicodeDecodeError):
+        return None

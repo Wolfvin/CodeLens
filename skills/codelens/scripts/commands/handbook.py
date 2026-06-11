@@ -25,17 +25,22 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace)
+    max_files = getattr(args, 'max_files', 5000)
+    return cmd_handbook(workspace, max_files=max_files)
 
 
-def cmd_handbook(workspace: str) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
+    max_files caps the scan file count to prevent timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -69,7 +74,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
-        scan_result = cmd_scan(workspace)
+        scan_result = cmd_scan(workspace, max_files=max_files)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
