@@ -2,6 +2,7 @@
 // GET /api/graph?workspace=/path/to/workspace
 // Runs codelens scan on the workspace and returns normalized graph data
 // Also computes and returns health score, coupling, and heatmap
+// Supports TTL-based caching (30s) with ?refresh=true to bypass
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,6 +10,31 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
+
+// ─── Simple TTL Cache ──────────────────────────────────────
+const CACHE_TTL_MS = 30_000 // 30 seconds
+const graphCache = new Map<string, { data: any; timestamp: number }>()
+
+function getCached(key: string): any | null {
+  const entry = graphCache.get(key)
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    graphCache.delete(key)
+    return null
+  }
+  return entry.data
+}
+
+function setCache(key: string, data: any): void {
+  graphCache.set(key, { data, timestamp: Date.now() })
+  // Evict stale entries when cache grows too large
+  if (graphCache.size > 100) {
+    const now = Date.now()
+    for (const [k, v] of graphCache) {
+      if (now - v.timestamp > CACHE_TTL_MS) graphCache.delete(k)
+    }
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -20,6 +46,14 @@ export async function GET(request: NextRequest) {
         { error: 'Missing required query parameter: workspace' },
         { status: 400 }
       )
+    }
+
+    // Check cache (skip if refresh=true)
+    if (searchParams.get('refresh') !== 'true') {
+      const cached = getCached(workspace)
+      if (cached) {
+        return NextResponse.json(cached)
+      }
     }
 
     // Run the scan command to build the registry and get all data
@@ -82,14 +116,19 @@ export async function GET(request: NextRequest) {
     // Compute heatmap (inspired by Emerge)
     const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
 
-    return NextResponse.json({
+    const result = {
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
       healthScore,
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
-    })
+    }
+
+    // Cache the result
+    setCache(workspace, result)
+
+    return NextResponse.json(result)
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)
     return NextResponse.json(
