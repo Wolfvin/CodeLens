@@ -38,6 +38,37 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+
+def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS (plus any
+    caller-supplied extra set) to avoid false positives from substring matches.
+    For example, 'target' matches 'src/target/debug' but NOT 'test-target/src'.
+
+    Args:
+        rel_path: Relative path from workspace root (e.g. 'src/node_modules/pkg').
+        extra_ignore: Optional additional directory names to ignore.
+
+    Returns:
+        True if the path contains an ignored directory segment, False otherwise.
+    """
+    # Normalize to forward slashes for consistent matching
+    normalized = rel_path.replace('\\', '/')
+
+    # Merge default + extra ignore sets
+    ignore_dirs = DEFAULT_IGNORE_DIRS
+    if extra_ignore:
+        ignore_dirs = ignore_dirs | extra_ignore
+
+    # Split the path into segments and check each against the ignore set
+    segments = normalized.split('/')
+    for segment in segments:
+        if segment in ignore_dirs:
+            return True
+
+    return False
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result) -> dict:
@@ -157,7 +188,7 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.0"
+CODELENS_VERSION = "5.8.0"
 
 
 # ─── Safe File Reading ──────────────────────────────────────

@@ -1007,13 +1007,49 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
 # ─── Module-level State (JS) ───────────────────────────────────
 
 def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract module-level global variables and singletons in JS/TS."""
+    """Extract module-level global variables and singletons in JS/TS.
+
+    Filters out common false positives:
+    - ALL_CAPS constants (enums, config) that are primitive values
+    - i18n/locale translation objects
+    - Type/Interface declarations
+    - React component exports (functional components)
+    - CSS/style objects
+    """
     stores = []
     flow = []
 
-    # Skip obvious config files and test files
-    if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
+    # Skip obvious config files, test files, and locale/i18n files
+    skip_path_patterns = [
+        '.test.', '.spec.', '.config.', 'jest.', 'webpack.',
+        '/locales/', '/locale/', '/i18n/', '/intl/', '/lang/',
+        '/translations/', '/l10n/', '/messages/',
+        '.d.ts',  # TypeScript declaration files
+    ]
+    if any(x in rel_path for x in skip_path_patterns):
         return {"stores": [], "flow": []}
+
+    # Extended skip list for ALL_CAPS names that are clearly constants, not state
+    skip = {
+        'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN',
+        'DEFAULT', 'NULL', 'UNDEFINED', 'TRUE', 'FALSE', 'PI',
+        # Common config constant prefixes/suffixes
+        'BASE_URL', 'BASE_PATH', 'API_URL', 'API_KEY', 'API_BASE',
+        'NODE_ENV', 'APP_ENV', 'APP_NAME', 'APP_VERSION',
+        'TIMEOUT', 'RETRY', 'MAX_RETRIES', 'MAX_LENGTH', 'MAX_SIZE',
+        # Color / theme constants
+        'COLORS', 'THEME', 'BREAKPOINTS', 'Z_INDEX',
+        # Type/enum-like suffixes
+    }
+
+    # Names that are likely config/enums (contain common suffixes)
+    config_suffixes = ('_URL', '_URI', '_PATH', '_PORT', '_HOST', '_KEY',
+                       '_SECRET', '_TOKEN', '_ENV', '_VERSION', '_NAME',
+                       '_TYPE', '_STATUS', '_CODE', '_ID', '_COLOR',
+                       '_SIZE', '_WIDTH', '_HEIGHT', '_TIMEOUT', '_RETRY',
+                       '_MAX', '_MIN', '_DEFAULT', '_CONFIG', '_ENABLED',
+                       '_DISABLED', '_PREFIX', '_SUFFIX', '_LABEL',
+                       '_TITLE', '_DESC', '_DESCRIPTION', '_MSG', '_TEXT')
 
     lines = content.split('\n')
     for i, line in enumerate(lines):
@@ -1023,10 +1059,20 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*', stripped)
         if m:
             var_name = m.group(1)
-            # Skip common non-state constants
-            skip = {'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN',
-                    'DEFAULT', 'NULL', 'UNDEFINED', 'TRUE', 'FALSE', 'PI'}
             if var_name in skip or len(var_name) <= 2:
+                continue
+
+            # Skip names ending with config/enum suffixes
+            if any(var_name.endswith(s) for s in config_suffixes):
+                continue
+
+            # Skip if the value is a primitive (string, number, boolean) — it's a constant, not state
+            value_part = stripped[m.end():].strip()
+            if value_part.startswith(('"', "'", '`')):  # String literal
+                continue
+            if re.match(r'^\d+(\.\d+)?', value_part):  # Numeric literal
+                continue
+            if value_part.startswith(('true', 'false', 'null', 'undefined')):  # Boolean/null
                 continue
 
             stores.append({
@@ -1061,12 +1107,21 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     # module.exports = { stateful_obj }
+    # Only flag exports that look like stateful objects (not pure utility functions)
     for m in re.finditer(r'module\.exports\s*=\s*\{([^}]+)\}', content):
         exports_body = m.group(1)
         for em in re.finditer(r'(\w+)\s*:', exports_body):
+            export_name = em.group(1)
+            # Skip common utility exports
+            if export_name in ('format', 'parse', 'validate', 'transform',
+                               'encode', 'decode', 'serialize', 'deserialize',
+                               'create', 'build', 'generate', 'compute',
+                               'helpers', 'utils', 'constants', 'config',
+                               'default', 'version', 'name', 'description'):
+                continue
             line_num = content[:m.start()].count('\n') + 1
             stores.append({
-                "name": em.group(1),
+                "name": export_name,
                 "type": "global",
                 "framework": "module_level_js",
                 "defined_in": rel_path,

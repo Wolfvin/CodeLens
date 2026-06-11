@@ -191,6 +191,20 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── Tauri IPC Commands ────────────────────────────
+            elif ext == ".rs":
+                tauri_routes = _extract_tauri_commands(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
+
+            # ─── Tauri invoke() calls (frontend) ──────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                invoke_routes = _extract_tauri_invokes(content, rel_path)
+                if invoke_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(invoke_routes)
+
     # ─── Post-processing ──────────────────────────────────────
 
     # Attach middleware to routes
@@ -281,7 +295,7 @@ def _extract_js_routes(
     # Detect which framework by import/require patterns
     is_express = bool(re.search(r'(?:require|import).*[\'\"]express[\'\"]', content))
     is_fastify = bool(re.search(r'(?:require|import).*[\'\"]fastify[\'\"]', content))
-    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|ko[\'\"]koa[\'\"]', content))
+    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|[\'\"]koa[\'\"]', content))
     is_hono = bool(re.search(r'(?:require|import).*[\'\"]hono[\'\"]', content))
 
     if is_express:
@@ -1805,3 +1819,165 @@ def _generate_recommendations(
         })
 
     return recommendations
+
+
+# ─── Tauri IPC Command Extraction ────────────────────────────────
+
+def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC command handlers from Rust source files.
+
+    Detects functions annotated with #[tauri::command] which are exposed
+    to the frontend via invoke('command_name'). These form the IPC API
+    layer of a Tauri application.
+
+    Handles:
+    - #[tauri::command] fn name(...) → IPC command
+    - #[tauri::command(rename_all = "snake_case")] → respects rename
+    - Multiple commands per file
+    - Async commands: async fn name(...)
+    """
+    routes = []
+    lines = content.split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Detect #[tauri::command] attribute
+        if '#[tauri::command' in line:
+            # Collect the full attribute (may span multiple lines)
+            attr_text = line
+            while i < len(lines) - 1 and not lines[i].rstrip().endswith(']'):
+                i += 1
+                attr_text += lines[i]
+
+            # Look for the function definition after the attribute
+            # It may be on the same line or a few lines after
+            fn_line_idx = i
+            fn_name = None
+            is_async = False
+            is_pub = False
+
+            # Search forward for the fn declaration (up to 5 lines)
+            for offset in range(0, 6):
+                search_idx = fn_line_idx + offset
+                if search_idx >= len(lines):
+                    break
+                search_line = lines[search_idx]
+
+                # Check for async and pub modifiers
+                if 'async' in search_line and 'fn' in search_line:
+                    is_async = True
+                if search_line.strip().startswith('pub '):
+                    is_pub = True
+
+                # Match the function name
+                fn_match = _rust_fn_name_regex().search(search_line)
+                if fn_match:
+                    fn_name = fn_match.group(1)
+                    fn_line_idx = search_idx
+                    break
+
+            if fn_name:
+                # Convert snake_case Rust fn name to camelCase for the IPC command name
+                # (Tauri default: snake_case Rust names are converted to camelCase in JS)
+                ipc_name = _snake_to_camel(fn_name)
+
+                # Check for rename_all attribute
+                rename_match = re.search(r'rename_all\s*=\s*"([^"]+)"', attr_text)
+                if rename_match:
+                    rename_style = rename_match.group(1)
+                    if rename_style == "camelCase":
+                        ipc_name = _snake_to_camel(fn_name)
+                    elif rename_style == "snake_case":
+                        ipc_name = fn_name
+                    elif rename_style == "PascalCase":
+                        ipc_name = fn_name.capitalize()
+
+                # Check for individual rename = "..."
+                rename_single = re.search(r'rename\s*=\s*"([^"]+)"', attr_text)
+                if rename_single:
+                    ipc_name = rename_single.group(1)
+
+                routes.append({
+                    "method": "IPC",
+                    "path": f"invoke('{ipc_name}')",
+                    "handler_name": fn_name,
+                    "handler_name_ipc": ipc_name,
+                    "file": rel_path,
+                    "line": fn_line_idx + 1,
+                    "middleware_chain": [],
+                    "request_type": "TauriIPC",
+                    "response_type": "TauriResult",
+                    "framework": "tauri",
+                    "auth_protected": False,
+                    "deprecated": False,
+                    "is_async": is_async,
+                    "is_pub": is_pub,
+                })
+
+        i += 1
+
+    return routes
+
+
+def _extract_tauri_invokes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri invoke() calls from frontend JS/TS source files.
+
+    Detects patterns like:
+    - invoke('command_name', { args })
+    - invoke<string>('command_name')
+    - const { invoke } = window.__TAURI__.core
+    - import { invoke } from '@tauri-apps/api/core'
+    """
+    routes = []
+
+    # Match invoke('commandName', ...) calls
+    invoke_patterns = [
+        r"""invoke\s*(?:<[^>]+>)?\s*\(\s*['"`]([\w]+)['"`]""",  # invoke('name') or invoke<Type>('name')
+    ]
+
+    for pattern in invoke_patterns:
+        for match in re.finditer(pattern, content):
+            command_name = match.group(1)
+            line_num = content[:match.start()].count('\n') + 1
+
+            routes.append({
+                "method": "IPC_CALL",
+                "path": f"invoke('{command_name}')",
+                "handler_name": command_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": "TauriInvoke",
+                "response_type": None,
+                "framework": "tauri",
+                "auth_protected": False,
+                "deprecated": False,
+            })
+
+    return routes
+
+
+# ─── Rust / Tauri Helpers ────────────────────────────────────────
+
+_rust_fn_re = None
+
+
+def _rust_fn_name_regex():
+    """Lazy-compiled regex for Rust function name extraction."""
+    global _rust_fn_re
+    if _rust_fn_re is None:
+        _rust_fn_re = re.compile(r'\bfn\s+(\w+)\s*[<(]')
+    return _rust_fn_re
+
+
+def _snake_to_camel(name: str) -> str:
+    """Convert a snake_case name to camelCase.
+
+    Tauri's default IPC naming convention converts Rust snake_case
+    function names to camelCase for the JavaScript side.
+    Example: get_user_profile → getUserProfile
+    """
+    parts = name.split('_')
+    return parts[0] + ''.join(word.capitalize() for word in parts[1:])

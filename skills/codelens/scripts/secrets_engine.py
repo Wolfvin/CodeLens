@@ -33,7 +33,18 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".env", ".yaml", ".yml",
-    ".json", ".toml", ".cfg", ".ini", ".conf",
+    ".toml", ".cfg", ".ini", ".conf",
+}
+
+# JSON files are only scanned for explicitly sensitive filenames.
+# General .json scanning causes massive false positives on i18n/locale
+# files where UI labels like "password": "Enter your password" trigger
+# secret pattern matches.  Only scan JSON files whose names suggest
+# they hold credentials or configuration.
+SENSITIVE_JSON_PATTERNS = {
+    'credentials', 'credential', 'secret', 'secrets',
+    'auth', 'keys', 'tokens', 'config.local', 'config.prod',
+    'config.production', 'config.staging', '.env',
 }
 
 # ─── Secret Pattern Definitions ────────────────────────────────
@@ -321,7 +332,15 @@ def detect_secrets(
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
-                continue
+                # Special handling for JSON files: only scan if the filename
+                # suggests it holds credentials/secrets (e.g., credentials.json).
+                # This avoids false positives on i18n/locale JSON files.
+                if ext == '.json':
+                    base_lower = filename.lower()
+                    if not any(pat in base_lower for pat in SENSITIVE_JSON_PATTERNS):
+                        continue
+                else:
+                    continue
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -710,6 +729,11 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         '/changelog/', '/changes/', '/news/',
         # Playwright snapshot directories (auto-generated screenshots)
         '/playwright/',
+        # i18n / locale directories — translation strings like
+        # "password": "Enter your password" are NOT secrets
+        '/locales/', '/locale/', '/i18n/', '/intl/',
+        '/lang/', '/langs/', '/translations/', '/l10n/',
+        '/messages/',
     ]
     # Also match paths that START with these directory names
     start_indicators = [
@@ -719,6 +743,9 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'tutorial/', 'tutorials/', 'guides/',
         'fixtures/', 'fixture/',
         'changelog/', 'changes/', 'news/',
+        'locales/', 'locale/', 'i18n/', 'intl/',
+        'lang/', 'langs/', 'translations/', 'l10n/',
+        'messages/',
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
