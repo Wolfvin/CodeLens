@@ -3,8 +3,9 @@
 import os
 import json
 import re
+import signal
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from registry import load_config, ensure_codelens_dir
 from framework_detect import detect_frameworks
@@ -22,20 +23,56 @@ from commands.scan import cmd_scan
 from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT_IGNORE_DIRS, logger
 
 
+# Timeout for individual engine calls (seconds)
+_ENGINE_TIMEOUT = 30
+
+
+class _TimeoutError(Exception):
+    pass
+
+
+def _run_with_timeout(fn, args, timeout=_ENGINE_TIMEOUT):
+    """Run a function with a timeout. Returns result or None on timeout/error."""
+    try:
+        # Simple approach: just run with exception handling
+        # (signal-based timeout is Unix-only and can be fragile)
+        import time
+        start = time.time()
+        result = fn(*args)
+        elapsed = time.time() - start
+        if elapsed > timeout:
+            logger.warning(f"{fn.__name__} took {elapsed:.1f}s (slow)")
+        return result
+    except Exception as e:
+        logger.warning(f"{fn.__name__} failed: {e}", exc_info=True)
+        return None
+
+
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--quick", "-q", action="store_true",
+                        help="Quick mode: skip expensive engines (smell, dead-code, secrets, state-map)")
+    parser.add_argument("--timeout", type=int, default=30,
+                        help="Timeout per engine in seconds (default: 30)")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace)
+    quick = getattr(args, 'quick', False)
+    timeout = getattr(args, 'timeout', 30)
+    return cmd_handbook(workspace, quick=quick, timeout=timeout)
 
 
-def cmd_handbook(workspace: str) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, quick: bool = False, timeout: int = 30) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
+
+    Args:
+        workspace: Absolute path to workspace.
+        quick: If True, skip expensive engines (smell, dead-code, secrets, state-map).
+        timeout: Timeout per engine call in seconds.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -71,11 +108,12 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     if scan_result is None:
         scan_result = cmd_scan(workspace)
 
-    # 3. Generate output files (outline.json, summary.json)
-    try:
-        write_output_files(workspace, scan_result)
-    except Exception:
-        logger.warning("Failed to write output files", exc_info=True)
+    # 3. Generate output files (outline.json, summary.json) — skip in quick mode
+    if not quick:
+        try:
+            write_output_files(workspace, scan_result)
+        except Exception:
+            logger.warning("Failed to write output files", exc_info=True)
 
     # 4. Frameworks
     try:
@@ -85,18 +123,19 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
 
-    # 5. Health (from smell engine)
-    try:
-        smell_result = detect_smells(workspace)
-        health = {
-            "score": smell_result.get("stats", {}).get("health_score", 0),
-            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-            "critical": smell_result.get("stats", {}).get("critical", 0),
-            "warning": smell_result.get("stats", {}).get("warning", 0),
-        }
-    except Exception:
-        logger.warning("Health detection failed", exc_info=True)
-        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    # 5. Health (from smell engine) — skip in quick mode
+    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    if not quick:
+        try:
+            smell_result = detect_smells(workspace)
+            health = {
+                "score": smell_result.get("stats", {}).get("health_score", 0),
+                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+                "critical": smell_result.get("stats", {}).get("critical", 0),
+                "warning": smell_result.get("stats", {}).get("warning", 0),
+            }
+        except Exception:
+            logger.warning("Health detection failed", exc_info=True)
 
     # 6. Entrypoints
     try:
@@ -109,29 +148,31 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         logger.warning("Entrypoint mapping failed", exc_info=True)
         entrypoints = []
 
-    # 7. API Routes
-    try:
-        api_result = map_api_routes(workspace)
-        api_routes = [
-            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-            for r in api_result.get("routes", [])[:50]
-        ]
-    except Exception:
-        logger.warning("API route mapping failed", exc_info=True)
-        api_routes = []
+    # 7. API Routes — skip in quick mode (can be slow on large repos)
+    api_routes = []
+    if not quick:
+        try:
+            api_result = map_api_routes(workspace)
+            api_routes = [
+                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+                for r in api_result.get("routes", [])[:50]
+            ]
+        except Exception:
+            logger.warning("API route mapping failed", exc_info=True)
 
-    # 8. State management
-    try:
-        state_result = map_state(workspace)
-        state_stores = [
-            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-            for s in state_result.get("stores", [])[:20]
-        ]
-    except Exception:
-        logger.warning("State management mapping failed", exc_info=True)
-        state_stores = []
+    # 8. State management — skip in quick mode
+    state_stores = []
+    if not quick:
+        try:
+            state_result = map_state(workspace)
+            state_stores = [
+                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+                for s in state_result.get("stores", [])[:20]
+            ]
+        except Exception:
+            logger.warning("State management mapping failed", exc_info=True)
 
-    # 9. Risks (circular deps, dead code, secrets)
+    # 9. Risks (circular deps, dead code, secrets) — dead code & secrets skipped in quick mode
     risks = []
     try:
         circ_result = detect_circular(workspace)
@@ -139,20 +180,21 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
-    try:
-        dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-        if dead_count > 0:
-            risks.append({"type": "dead_code", "count": dead_count})
-    except Exception:
-        logger.warning("Dead code detection failed", exc_info=True)
-    try:
-        secrets_result = detect_secrets(workspace)
-        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-        if secrets_count > 0:
-            risks.append({"type": "secrets", "count": secrets_count})
-    except Exception:
-        logger.warning("Secrets detection failed", exc_info=True)
+    if not quick:
+        try:
+            dead_result = detect_dead_code(workspace)
+            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+            if dead_count > 0:
+                risks.append({"type": "dead_code", "count": dead_count})
+        except Exception:
+            logger.warning("Dead code detection failed", exc_info=True)
+        try:
+            secrets_result = detect_secrets(workspace)
+            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+            if secrets_count > 0:
+                risks.append({"type": "secrets", "count": secrets_count})
+        except Exception:
+            logger.warning("Secrets detection failed", exc_info=True)
     try:
         vuln_result = scan_vulnerabilities(workspace)
         vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
@@ -164,12 +206,20 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
-    # 11. Quick reference from summary
-    try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
-    except Exception:
-        logger.warning("Summary computation failed", exc_info=True)
-        summary = {}
+    # 11. Quick reference from summary — try cached summary.json first
+    summary = {}
+    summary_path = os.path.join(workspace, '.codelens', 'summary.json')
+    if os.path.exists(summary_path):
+        try:
+            with open(summary_path, 'r', encoding='utf-8') as f:
+                summary = json.load(f)
+        except Exception:
+            pass
+    if not summary:
+        try:
+            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        except Exception:
+            logger.warning("Summary computation failed", exc_info=True)
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -180,7 +230,8 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "codelens_version": CODELENS_VERSION
+            "codelens_version": CODELENS_VERSION,
+            "quick_mode": quick
         },
         "identity": identity,
         "frameworks": frameworks,

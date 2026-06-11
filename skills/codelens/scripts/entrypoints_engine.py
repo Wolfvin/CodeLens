@@ -708,6 +708,8 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
+    MAX_FILES = 3000  # Cap to prevent timeout on large repos
+    MAX_ENTRIES = 1000  # Cap total entrypoints to collect
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -717,12 +719,26 @@ def map_entrypoints(
             continue
 
         for filename in filenames:
+            if files_scanned >= MAX_FILES or len(entrypoints) >= MAX_ENTRIES:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # Skip minified and declaration files
+            if any(filename.endswith(ig) for ig in ('.min.js', '.min.css', '.map', '.d.ts')):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > 500 * 1024:
+                    continue
+            except OSError:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:

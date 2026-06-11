@@ -107,6 +107,59 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    # Mobile/native frameworks
+    "nativescript": {
+        "packages": ["@nativescript/core"],
+        "config_files": ["nativescript.config.ts", "nativescript.config.js"],
+        "indicators": ["tns_modules"]
+    },
+    "capacitor": {
+        "packages": ["@capacitor/core"],
+        "config_files": ["capacitor.config.ts", "capacitor.config.json"],
+        "indicators": []
+    },
+    "cordova": {
+        "packages": ["cordova"],
+        "config_files": ["config.xml"],
+        "indicators": ["www"]
+    },
+    "expo": {
+        "packages": ["expo"],
+        "config_files": ["app.json", "app.config.js", "app.config.ts"],
+        "indicators": []
+    },
+    "react-native": {
+        "packages": ["react-native"],
+        "config_files": [],
+        "indicators": []
+    },
+    "ionic": {
+        "packages": ["@ionic/react", "@ionic/angular", "@ionic/vue"],
+        "config_files": ["ionic.config.json"],
+        "indicators": []
+    },
+    # Monorepo tools
+    "nx": {
+        "packages": ["nx"],
+        "config_files": ["nx.json"],
+        "indicators": []
+    },
+    "turborepo": {
+        "packages": ["turbo"],
+        "config_files": ["turbo.json"],
+        "indicators": []
+    },
+    # Desktop frameworks
+    "tauri": {
+        "packages": ["@tauri-apps/api"],
+        "config_files": ["src-tauri/tauri.conf.json"],
+        "indicators": []
+    },
+    "electron": {
+        "packages": ["electron"],
+        "config_files": ["electron-builder.yml", "electron-builder.json"],
+        "indicators": []
     }
 }
 
@@ -156,6 +209,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_nativescript": False,
+        "has_capacitor": False,
+        "has_expo": False,
+        "has_react_native": False,
+        "has_nx": False,
+        "has_tauri": False,
+        "has_electron": False,
+        "has_rust_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -198,6 +259,20 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "nativescript":
+                        detected["has_nativescript"] = True
+                    elif fw_name == "capacitor":
+                        detected["has_capacitor"] = True
+                    elif fw_name == "expo":
+                        detected["has_expo"] = True
+                    elif fw_name == "react-native":
+                        detected["has_react_native"] = True
+                    elif fw_name == "nx":
+                        detected["has_nx"] = True
+                    elif fw_name == "tauri":
+                        detected["has_tauri"] = True
+                    elif fw_name == "electron":
+                        detected["has_electron"] = True
                     break
 
         # Detect CSS preprocessor
@@ -226,10 +301,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "tauri":
+                    detected["has_tauri"] = True
+                elif fw_name == "electron":
+                    detected["has_electron"] = True
                 break
-            # Check one level deep for monorepo (apps/*, packages/*)
+            # Check one level deep for monorepo (apps/*, packages/*, src-tauri/*)
             found_in_subdir = False
-            for subdir in ('apps', 'packages', 'projects', 'services'):
+            for subdir in ('apps', 'packages', 'projects', 'services', 'src-tauri'):
                 subdir_path = os.path.join(workspace, subdir)
                 if not os.path.isdir(subdir_path):
                     continue
@@ -301,31 +380,59 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 4. Check file patterns (for Vue, Svelte)
-    for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+    # 3d. Check Cargo.toml for Rust dependencies (Tauri, Axum, Actix, etc.)
+    cargo_deps = set()
+    _find_cargo_toml = lambda ws: [
+        os.path.join(ws, "Cargo.toml"),
+        os.path.join(ws, "src-tauri", "Cargo.toml"),
+    ]
+
+    for cargo_path in _find_cargo_toml(workspace):
+        if not os.path.exists(cargo_path):
             continue
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            # Parse [dependencies] section — extract crate names
+            in_deps = False
+            for line in cargo_content.split('\n'):
+                stripped = line.strip()
+                if stripped == '[dependencies]':
+                    in_deps = True
+                    continue
+                if stripped.startswith('[') and in_deps:
+                    break  # End of [dependencies] section
+                if in_deps and '=' in stripped:
+                    crate_name = stripped.split('=')[0].strip().lower()
+                    if crate_name:
+                        cargo_deps.add(crate_name)
+        except IOError:
+            logger.debug("Failed to parse Cargo.toml", exc_info=True)
 
-        for f in files:
-            if f.endswith('.vue') and not detected["has_vue"]:
-                if "vue" not in detected["frameworks"]:
-                    detected["frameworks"].append("vue")
-                detected["has_vue"] = True
-            elif f.endswith('.svelte') and not detected["has_svelte"]:
-                if "svelte" not in detected["frameworks"]:
-                    detected["frameworks"].append("svelte")
-                detected["has_svelte"] = True
+    if cargo_deps:
+        detected["has_rust_backend"] = True
+        # Detect Tauri from Cargo dependency
+        if "tauri" in cargo_deps:
+            if "tauri" not in detected["frameworks"]:
+                detected["frameworks"].append("tauri")
+            detected["has_tauri"] = True
+        # Detect other Rust frameworks
+        rust_framework_map = {
+            "axum": "axum",
+            "actix-web": "actix",
+            "rocket": "rocket",
+            "warp": "warp",
+        }
+        for crate, fw_name in rust_framework_map.items():
+            if crate in cargo_deps and fw_name not in detected["frameworks"]:
+                detected["frameworks"].append(fw_name)
 
-    # 5. Detect Tailwind from CSS content
-    if not detected["has_tailwind"]:
-        tailwind_indicators = ['@tailwind', '@apply']
+    # 4. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
+    need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
+    if need_file_scan:
         for root, dirs, files in os.walk(workspace):
+            # Skip ignored dirs
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
             skip = False
             for ignore in DEFAULT_IGNORE_DIRS:
                 if ignore in root:
@@ -333,23 +440,38 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
             if skip:
                 continue
+
+            # Check Vue/Svelte file patterns
             for f in files:
-                if f.endswith(('.css', '.scss', '.pcss')):
-                    try:
-                        fpath = os.path.join(root, f)
-                        with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
-                            content = fh.read(4096)  # Read first 4KB
-                            for indicator in tailwind_indicators:
-                                if indicator in content:
+                if f.endswith('.vue') and not detected["has_vue"]:
+                    if "vue" not in detected["frameworks"]:
+                        detected["frameworks"].append("vue")
+                    detected["has_vue"] = True
+                elif f.endswith('.svelte') and not detected["has_svelte"]:
+                    if "svelte" not in detected["frameworks"]:
+                        detected["frameworks"].append("svelte")
+                    detected["has_svelte"] = True
+
+            # Check Tailwind from CSS content
+            if not detected["has_tailwind"]:
+                for f in files:
+                    if f.endswith(('.css', '.scss', '.pcss')):
+                        try:
+                            fpath = os.path.join(root, f)
+                            with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                                content = fh.read(4096)  # Read first 4KB
+                                if '@tailwind' in content or '@apply' in content:
                                     if "tailwind" not in detected["frameworks"]:
                                         detected["frameworks"].append("tailwind")
                                     detected["has_tailwind"] = True
                                     break
-                            if detected["has_tailwind"]:
-                                break
-                    except IOError:
-                        pass
-            if detected["has_tailwind"]:
+                        except IOError:
+                            pass
+                if detected["has_tailwind"]:
+                    pass  # Continue walking for Vue/Svelte if not found yet
+
+            # Early exit if all targets found
+            if detected["has_vue"] and detected["has_svelte"] and detected["has_tailwind"]:
                 break
 
     return detected
@@ -397,6 +519,21 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    if fw.get("has_tauri"):
+        config["frontend_paths"].extend(["src/", "src-tauri/"])
+        config["backend_paths"].extend(["src-tauri/src/"])
+        # Remove generic src/ from backend_paths since it's frontend in Tauri
+        if "src/" in config["backend_paths"]:
+            config["backend_paths"].remove("src/")
+
+    if fw.get("has_nativescript"):
+        config["frontend_paths"].extend(["app/", "src/app/"])
+        config["backend_paths"].extend(["src/"])
+
+    if fw.get("has_capacitor"):
+        config["frontend_paths"].extend(["src/", "www/"])
+        config["backend_paths"].extend(["android/", "ios/"])
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

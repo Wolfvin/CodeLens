@@ -319,6 +319,8 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
+    MAX_FILES = 3000  # Cap to prevent timeout on large repos
+    MAX_FILE_SIZE = 500 * 1024  # Skip files larger than 500KB
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -328,12 +330,26 @@ def detect_secrets(
             continue
 
         for filename in filenames:
+            if files_scanned >= MAX_FILES:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # Skip minified and declaration files
+            if any(filename.endswith(ig) for ig in ('.min.js', '.min.css', '.map', '.d.ts')):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -504,79 +520,79 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, 
 # ─── .env File Scanner ─────────────────────────────────────────
 
 def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
-    """Find and scan all .env files in the workspace."""
+    """Find and scan all .env files in the workspace.
+
+    Uses glob instead of full workspace walk for efficiency.
+    """
+    import glob as glob_module
     env_files = []
 
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
+    # Use glob to find .env files — much faster than walking the entire tree
+    env_pattern = os.path.join(workspace, '**', '.env*')
+    for file_path in glob_module.glob(env_pattern, recursive=True):
+        # Skip files in ignored directories
+        rel_path = os.path.relpath(file_path, workspace)
+        parts = rel_path.replace('\\', '/').split('/')
+        if any(part in DEFAULT_IGNORE_DIRS for part in parts):
             continue
 
-        for filename in filenames:
-            if not filename.startswith('.env'):
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        env_findings = []
+        lines = content.split('\n')
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # Skip comments and empty lines
+            if not stripped or stripped.startswith('#'):
                 continue
 
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+            # Parse KEY=VALUE format
+            m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$', stripped)
+            if not m:
                 continue
 
-            env_findings = []
-            lines = content.split('\n')
+            key_name = m.group(1)
+            raw_value = m.group(2).strip().strip('"').strip("'")
 
-            for i, line in enumerate(lines):
-                stripped = line.strip()
+            # Skip empty values and placeholder values
+            if not raw_value or _is_safe_value(raw_value):
+                continue
 
-                # Skip comments and empty lines
-                if not stripped or stripped.startswith('#'):
-                    continue
+            # Check if key name looks like a secret
+            is_secret_key = any(
+                re.match(pat, key_name) for pat in ENV_SECRET_PATTERNS
+            )
 
-                # Parse KEY=VALUE format
-                m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$', stripped)
-                if not m:
-                    continue
+            # Check entropy of the value
+            entropy = _shannon_entropy(raw_value)
 
-                key_name = m.group(1)
-                raw_value = m.group(2).strip().strip('"').strip("'")
+            if is_secret_key or entropy > ENTROPY_THRESHOLD:
+                masked = _mask_value(raw_value)
+                category = _category_from_env_key(key_name)
 
-                # Skip empty values and placeholder values
-                if not raw_value or _is_safe_value(raw_value):
-                    continue
+                env_findings.append({
+                    "type": "env_secret",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "match": masked,
+                    "severity": _severity_for_category(category),
+                    "category": category,
+                    "env_key": key_name,
+                    "entropy": round(entropy, 2) if entropy > ENTROPY_THRESHOLD else None,
+                })
 
-                # Check if key name looks like a secret
-                is_secret_key = any(
-                    re.match(pat, key_name) for pat in ENV_SECRET_PATTERNS
-                )
-
-                # Check entropy of the value
-                entropy = _shannon_entropy(raw_value)
-
-                if is_secret_key or entropy > ENTROPY_THRESHOLD:
-                    masked = _mask_value(raw_value)
-                    category = _category_from_env_key(key_name)
-
-                    env_findings.append({
-                        "type": "env_secret",
-                        "file": rel_path,
-                        "line": i + 1,
-                        "match": masked,
-                        "severity": _severity_for_category(category),
-                        "category": category,
-                        "env_key": key_name,
-                        "entropy": round(entropy, 2) if entropy > ENTROPY_THRESHOLD else None,
-                    })
-
-            env_files.append({
-                "path": rel_path,
-                "findings": env_findings,
-                "variable_count": sum(1 for l in lines if re.match(r'^[A-Za-z_]', l.strip())),
-                "secret_count": len(env_findings),
-            })
+        env_files.append({
+            "path": rel_path,
+            "findings": env_findings,
+            "variable_count": sum(1 for l in lines if re.match(r'^[A-Za-z_]', l.strip())),
+            "secret_count": len(env_findings),
+        })
 
     return env_files
 
