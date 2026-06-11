@@ -332,10 +332,29 @@ def _outline_vue(content: str, detail: str) -> Dict:
         for line_num_offset, line in enumerate(tmpl.split('\n'), 1):
             for m in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', line):
                 outline["template"]["ids"].append({"name": m.group(1)})
-            for m in re.finditer(r'\bclass\s*=\s*["\']([^"\']+)["\']', line):
+            # Static class attribute: class="xxx" (NOT :class or v-bind:class)
+            for m in re.finditer(r'(?<![:(\w])class\s*=\s*["\']([^"\']+)["\']', line):
                 for cls in m.group(1).split():
-                    if cls.strip():
-                        outline["template"]["classes"].append({"name": cls.strip()})
+                    cls = cls.strip()
+                    if cls and re.match(r'^[a-zA-Z_][\w-]*$', cls):
+                        outline["template"]["classes"].append({"name": cls})
+            # Dynamic :class binding — extract only string-literal class names
+            for m in re.finditer(r'(?:v-bind:|:)class\s*=\s*["\']([^"\']+)["\']', line):
+                binding = m.group(1)
+                # Extract class names from string literals inside the binding expression
+                for str_m in re.finditer(r'["\']([^"\']+)["\']', binding):
+                    for cls in str_m.group(1).split():
+                        cls = cls.strip()
+                        if cls and re.match(r'^[a-zA-Z_][\w-]*$', cls):
+                            outline["template"]["classes"].append({"name": cls})
+                # Also extract shorthand property names from object syntax: { loading, inline, disabled }
+                # These are the variable names used as class names in :class="{ active, disabled }"
+                for obj_m in re.finditer(r'\{([^}]+)\}', binding):
+                    for prop_m in re.finditer(r'(?<![.\w])([a-zA-Z_][\w-]*)\s*[,\s}]', obj_m.group(1)):
+                        prop_name = prop_m.group(1)
+                        # Skip JS keywords and operators that look like properties
+                        if prop_name not in ('true', 'false', 'null', 'undefined', 'if', 'else', 'return'):
+                            outline["template"]["classes"].append({"name": prop_name, "source": "vue_dynamic_class"})
 
     if script_match:
         scr = script_match.group(1)

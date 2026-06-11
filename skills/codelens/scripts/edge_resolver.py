@@ -158,6 +158,19 @@ def resolve_edges(
                     same_file = [c for c in candidates if c.get("file", "") == from_file]
                     target_node = same_file[0] if same_file else candidates[0]
 
+        # 4. Pinia store usage: "useXxxStore" → match store node with fn="useXxxStore"
+        if not target_node and to_fn.startswith('use') and to_fn.endswith('Store'):
+            if to_fn in fn_name_to_nodes:
+                candidates = fn_name_to_nodes[to_fn]
+                # Prefer pinia_store type nodes
+                pinia_nodes = [c for c in candidates if c.get("type") == "pinia_store"]
+                if pinia_nodes:
+                    target_node = pinia_nodes[0]
+                else:
+                    from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                    same_file = [c for c in candidates if c.get("file", "") == from_file]
+                    target_node = same_file[0] if same_file else candidates[0]
+
         # Build resolved edge
         if target_node:
             resolved_edge = {

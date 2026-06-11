@@ -174,10 +174,11 @@ class TSBackendParser(BaseParser):
 
     def _parse_variable_declarator(self, node: Node, source: bytes,
                                     file_path: str) -> Optional[Dict]:
-        """Parse a variable_declarator that contains an arrow function or function expression."""
+        """Parse a variable_declarator that contains an arrow function, function expression, or Pinia store."""
         name_node = None
         value_node = None
         is_async = False
+        is_pinia_store = False
 
         for child in node.children:
             if child.type == 'identifier':
@@ -188,13 +189,56 @@ class TSBackendParser(BaseParser):
                 for vc in child.children:
                     if vc.type == 'async':
                         is_async = True
+            elif child.type == 'call_expression':
+                # Check if this is a defineStore() call (Pinia store)
+                func_node = child.child_by_field_name('function')
+                if func_node and self.get_text(func_node, source) == 'defineStore':
+                    is_pinia_store = True
+                    value_node = child
 
-        if not name_node or not value_node:
+        if not name_node:
             return None
 
         fn_name = self.get_text(name_node, source)
         line = self.get_line(node)
         node_id = f"{file_path}:{line}"
+
+        if is_pinia_store:
+            # Pinia store: const useXxxStore = defineStore('name', () => {...})
+            # The body is the arrow function argument of defineStore
+            body_node = None
+            if value_node:
+                # Find the arrow_function argument within the call_expression
+                for arg in value_node.children:
+                    if arg.type == 'arrow_function':
+                        for ac in arg.children:
+                            if ac.type in ('statement_block', 'expression'):
+                                body_node = ac
+                                break
+                        break
+                    elif arg.type == 'function_expression':
+                        for ac in arg.children:
+                            if ac.type == 'statement_block':
+                                body_node = ac
+                                break
+                        break
+
+            return {
+                "node": {
+                    "id": node_id,
+                    "fn": fn_name,
+                    "file": file_path,
+                    "line": line,
+                    "async": is_async,
+                    "type": "pinia_store"
+                },
+                "body_node": body_node,
+                "scope_start": node.start_point.row,
+                "scope_end": node.end_point.row
+            }
+
+        if not value_node:
+            return None
 
         # Find the body
         body_node = None

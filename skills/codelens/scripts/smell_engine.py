@@ -81,6 +81,7 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
+    smell_checked_files = 0  # Track files that were actually checked for smells
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -110,6 +111,13 @@ def detect_smells(
             is_docs_or_example = _is_docs_or_example(rel_path)
             if not is_docs_or_example:
                 production_files_scanned += 1
+
+            # Track if this file type was actually smell-checked (not just counted)
+            # Vue files have script sections that get smell-checked via _detect_long_functions etc.
+            ext_has_smell_detectors = ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+                                              ".py", ".rs", ".vue", ".svelte"}
+            if ext_has_smell_detectors and not is_docs_or_example:
+                smell_checked_files += 1
 
             # Large file detection
             if "large_file" in categories:
@@ -203,7 +211,10 @@ def detect_smells(
     # Weight info-level smells less so they don't inflate density
     # Use production_files_scanned for health score (exclude docs/examples/tests)
     # so that documentation code doesn't penalize the project health
-    score_files = max(production_files_scanned, 1)
+    # Use smell_checked_files (files actually checked by smell detectors)
+    # instead of production_files_scanned to avoid denominator inflation
+    # from file types that are counted but never produce smells
+    score_files = max(smell_checked_files, 1)
     # Count smells in production code only for health score
     prod_smells = 0
     prod_critical = 0
@@ -315,6 +326,22 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)', line.strip())
                 if m:
                     fn_starts.append((i, m.group(1)))
+
+    elif ext == ".vue":
+        # Extract <script> section from Vue SFC and parse it as JS/TS
+        script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+        if script_match:
+            script_content = script_match.group(1)
+            script_lines = script_content.split('\n')
+            for i, line in enumerate(script_lines):
+                if re.match(r'(?:export\s+)?(?:async\s+)?function\s+\w+', line.strip()):
+                    fn_starts.append((i, _extract_fn_name_js(line)))
+                elif re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(', line.strip()):
+                    m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)', line.strip())
+                    if m:
+                        fn_starts.append((i, m.group(1)))
+            # Override lines with script section for length calculation
+            lines = script_lines
 
     elif ext == ".py":
         for i, line in enumerate(lines):

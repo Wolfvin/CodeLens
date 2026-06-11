@@ -442,6 +442,34 @@ def _parse_script_section(script_content: str, file_path: str,
             })
             continue
 
+        # Pinia store: const useXxxStore = defineStore('name', ...)
+        pinia_match = re.match(
+            r'(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*defineStore\s*\(',
+            stripped
+        )
+        if pinia_match:
+            store_var = pinia_match.group(1)
+            node_id = f"{file_path}:{line_num}"
+            nodes.append({
+                "id": node_id,
+                "fn": store_var,
+                "file": file_path,
+                "line": line_num,
+                "type": "pinia_store",
+            })
+            # Extract store name from defineStore('name', ...)
+            name_match = re.search(r'defineStore\s*\(\s*[\'"](\w+)[\'"]', stripped)
+            if name_match:
+                edges.append({
+                    "from": node_id,
+                    "to": "defineStore",
+                    "type": "pinia_define",
+                    "label": name_match.group(1),
+                })
+            # Scan next few lines for store body calls (useXxxStore, etc.)
+            _extract_calls_from_line(stripped, store_var, node_id, file_path, line_num, edges)
+            continue
+
         # defineProps / defineEmits (script setup macros)
         define_match = re.match(
             r'(?:const\s+)?(\w+)?\s*=?\s*(defineProps|defineEmits|defineExpose|defineOptions|defineSlots|defineModel)\s*\(',

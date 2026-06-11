@@ -147,6 +147,60 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    # Vue ecosystem state management
+    "pinia": {
+        "packages": ["pinia"],
+        "config_files": [],
+        "indicators": ["defineStore"]
+    },
+    "vuex": {
+        "packages": ["vuex"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Vue ecosystem routing
+    "vue-router": {
+        "packages": ["vue-router"],
+        "config_files": [],
+        "indicators": ["createRouter", "useRouter"]
+    },
+    # Node.js backend frameworks
+    "express": {
+        "packages": ["express"],
+        "config_files": [],
+        "indicators": []
+    },
+    "koa": {
+        "packages": ["koa"],
+        "config_files": [],
+        "indicators": []
+    },
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
+        "indicators": []
+    },
+    "nestjs": {
+        "packages": ["@nestjs/core"],
+        "config_files": ["nest-cli.json"],
+        "indicators": []
+    },
+    # UI component libraries
+    "vuetify": {
+        "packages": ["vuetify"],
+        "config_files": [],
+        "indicators": []
+    },
+    "element-plus": {
+        "packages": ["element-plus"],
+        "config_files": [],
+        "indicators": []
+    },
+    "ant-design-vue": {
+        "packages": ["ant-design-vue"],
+        "config_files": [],
+        "indicators": []
+    },
     # Build tools
     "vite": {
         "packages": ["vite"],
@@ -326,6 +380,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_rust_backend": False,
+        "has_pinia": False,
+        "has_vue_router": False,
+        "has_express": False,
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
@@ -371,6 +428,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tailwind"] = True
                 elif fw_name == "angular":
                     detected["has_angular"] = True
+                elif fw_name == "pinia":
+                    detected["has_pinia"] = True
+                elif fw_name == "vue-router":
+                    detected["has_vue_router"] = True
+                elif fw_name == "express":
+                    detected["has_express"] = True
                 break
 
     # 2. Check config files

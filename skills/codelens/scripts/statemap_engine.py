@@ -91,6 +91,14 @@ def map_state(
                 _collect_js_imports(content, rel_path, all_imports_by_file)
                 _collect_js_exports(content, rel_path, all_exports_by_file)
 
+            elif ext == ".vue":
+                # Extract script section from Vue SFC for import/export collection
+                script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+                if script_match:
+                    script_content = script_match.group(1)
+                    _collect_js_imports(script_content, rel_path, all_imports_by_file)
+                    _collect_js_exports(script_content, rel_path, all_exports_by_file)
+
             elif ext == ".py":
                 _collect_py_imports(content, rel_path, all_imports_by_file)
 
@@ -694,6 +702,60 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
             "actions": actions,
             "getters": getters,
             "consumers": [],
+        })
+
+    # Setup Stores: defineStore('name', () => { ... }) — Pinia's recommended pattern since v2
+    for m in re.finditer(
+        r'defineStore\s*\(\s*[\'"](\w+)[\'"]\s*,\s*(?:\([^)]*\)\s*=>|function\s*\([^)]*\))',
+        content
+    ):
+        store_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Avoid duplicating if already matched by Options API regex above
+        if any(s["name"] == store_name and s.get("framework") == "pinia" for s in stores):
+            continue
+
+        # Extract reactive variables as state slices
+        store_body = content[m.end():m.end() + 5000]
+        store_end = _find_matching_brace(store_body)
+        store_body = store_body[:store_end]
+
+        slices = []
+        for prop_m in re.finditer(
+            r'(?:const|let)\s+(\w+)\s*=\s*(?:ref|reactive|computed)\s*\(',
+            store_body
+        ):
+            slices.append({"name": prop_m.group(1)})
+
+        # Extract return values as the public API / actions
+        actions = []
+        return_match = re.search(r'return\s*\{([^}]+)\}', store_body, re.DOTALL)
+        if return_match:
+            for prop_m in re.finditer(r'(\w+)', return_match.group(1)):
+                name = prop_m.group(1)
+                if name not in {s["name"] for s in slices} and not name.startswith('_'):
+                    actions.append(name)
+
+        # Also look for function declarations inside the setup store body (these are actions)
+        for fn_m in re.finditer(
+            r'(?:async\s+)?(?:function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>)',
+            store_body
+        ):
+            fn_name = fn_m.group(1) or fn_m.group(2)
+            if fn_name and fn_name not in actions and not fn_name.startswith('_'):
+                actions.append(fn_name)
+
+        stores.append({
+            "name": store_name,
+            "type": "store",
+            "framework": "pinia",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": slices,
+            "actions": actions,
+            "consumers": [],
+            "store_type": "setup",
         })
 
     # useStoreName()
