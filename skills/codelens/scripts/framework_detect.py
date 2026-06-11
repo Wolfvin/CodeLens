@@ -8,7 +8,7 @@ import json
 import os
 import re
 from typing import Dict, List, Any, Optional
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir
 
 
 # Known framework signatures
@@ -95,6 +95,31 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    # Rust / Tauri frameworks
+    "tauri": {
+        "packages": [],
+        "cargo_packages": ["tauri"],
+        "config_files": ["src-tauri/tauri.conf.json"],
+        "indicators": []
+    },
+    "actix-web": {
+        "packages": [],
+        "cargo_packages": ["actix-web"],
+        "config_files": [],
+        "indicators": []
+    },
+    "axum": {
+        "packages": [],
+        "cargo_packages": ["axum"],
+        "config_files": [],
+        "indicators": []
+    },
+    "rocket": {
+        "packages": [],
+        "cargo_packages": ["rocket"],
+        "config_files": [],
+        "indicators": []
     }
 }
 
@@ -116,6 +141,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
+        "has_tauri": False,
+        "has_rust_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -233,15 +260,95 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 4. Check file patterns (for Vue, Svelte)
+    # 4. Check Cargo.toml for Rust dependencies
+    cargo_deps = set()
+    cargo_paths = []
+
+    # Check root Cargo.toml
+    root_cargo = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(root_cargo):
+        cargo_paths.append(root_cargo)
+
+    # Check src-tauri/Cargo.toml (Tauri project structure)
+    tauri_cargo = os.path.join(workspace, "src-tauri", "Cargo.toml")
+    if os.path.exists(tauri_cargo):
+        cargo_paths.append(tauri_cargo)
+
+    # Also scan for any Cargo.toml in subdirectories (Rust workspaces)
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
+        rel_root = os.path.relpath(root, workspace)
+        if should_ignore_dir(rel_root):
+            dirs.clear()
+            continue
+        if 'Cargo.toml' in files:
+            cpath = os.path.join(root, 'Cargo.toml')
+            if cpath not in cargo_paths:
+                cargo_paths.append(cpath)
+
+    for cargo_path in cargo_paths:
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Parse [dependencies] section — extract crate names
+            in_deps = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped == '[dependencies]' or stripped == '[dev-dependencies]':
+                    in_deps = True
+                    continue
+                if stripped.startswith('[') and in_deps:
+                    in_deps = False
+                    continue
+                if in_deps and '=' in stripped:
+                    crate_name = stripped.split('=')[0].strip().lower()
+                    if crate_name:
+                        cargo_deps.add(crate_name)
+                elif in_deps and stripped and not stripped.startswith('#'):
+                    # Handle version shorthand: crate_name = "version"
+                    parts = stripped.split('=')
+                    if len(parts) >= 2:
+                        crate_name = parts[0].strip().lower()
+                        if crate_name:
+                            cargo_deps.add(crate_name)
+        except IOError:
+            pass
+
+    # Check cargo deps against framework signatures
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        cargo_pkgs = sig.get("cargo_packages", [])
+        for pkg_name in cargo_pkgs:
+            if pkg_name.lower() in cargo_deps:
+                detected["frameworks"].append(fw_name)
+                if fw_name == "tauri":
+                    detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                 break
-        if skip:
+
+    # Also detect Tauri from config file presence
+    if not detected["has_tauri"]:
+        tauri_conf_paths = [
+            os.path.join(workspace, "src-tauri", "tauri.conf.json"),
+            os.path.join(workspace, "src-tauri", "tauri.conf.json5"),
+        ]
+        for tpath in tauri_conf_paths:
+            if os.path.exists(tpath):
+                if "tauri" not in detected["frameworks"]:
+                    detected["frameworks"].append("tauri")
+                detected["has_tauri"] = True
+                detected["has_rust_backend"] = True
+                break
+
+    # Detect any Rust project (even without Tauri)
+    if not detected["has_rust_backend"] and cargo_deps:
+        detected["has_rust_backend"] = True
+
+    # 5. Check file patterns (for Vue, Svelte)
+    for root, dirs, files in os.walk(workspace):
+        rel_root = os.path.relpath(root, workspace)
+        if should_ignore_dir(rel_root):
+            dirs.clear()
             continue
 
         for f in files:
@@ -254,16 +361,13 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
 
-    # 5. Detect Tailwind from CSS content
+    # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip:
+            rel_root = os.path.relpath(root, workspace)
+            if should_ignore_dir(rel_root):
+                dirs.clear()
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
@@ -308,6 +412,19 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     }
 
     # Adjust paths based on framework
+    # Tauri: src/ is frontend, src-tauri/src/ is Rust backend
+    if fw.get("has_tauri"):
+        # For Tauri projects, src/ is the web frontend, not backend
+        # Remove src/ from backend_paths to prevent misclassification
+        config["backend_paths"] = [p for p in config["backend_paths"] if p != "src/"]
+        # Add Tauri-specific paths
+        config["frontend_paths"].extend(["src/", "src/components/", "src/pages/", "src/views/"])
+        config["backend_paths"].extend(["src-tauri/src/"])
+        config["jsx_mode"] = True
+        # Add src-tauri/target to ignore (Rust build artifacts)
+        if "src-tauri/target/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("src-tauri/target/")
+
     if fw["has_nextjs"]:
         config["frontend_paths"].extend(["app/", "src/app/", "pages/", "src/pages/"])
         config["backend_paths"].extend(["app/api/", "src/app/api/"])
@@ -315,7 +432,7 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         # Next.js app router — everything under app/ could be frontend
         config["frontend_paths"] = list(set(config["frontend_paths"]))
 
-    if fw["has_react"]:
+    if fw["has_react"] and not fw.get("has_tauri"):
         config["jsx_mode"] = True
         config["frontend_paths"].extend(["src/components/", "src/views/"])
 

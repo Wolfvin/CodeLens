@@ -518,7 +518,11 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
-        if should_ignore(rel_root + "/", config) or should_ignore(root, config):
+        
+        # Use only relative path for ignore checking to avoid false positives
+        # when the workspace directory name contains an ignore pattern substring
+        # (e.g., workspace named "test-target" would falsely match "target/")
+        if should_ignore(rel_root, config):
             dirs.clear()
             continue
 
@@ -592,10 +596,46 @@ def is_backend_file(file_path: str, config: Dict) -> bool:
 
 
 def should_ignore(file_path: str, config: Dict) -> bool:
-    """Check if a file should be ignored."""
+    """Check if a file should be ignored.
+    
+    Uses path-segment-aware matching to avoid false positives.
+    For example, pattern "target/" matches "project/target/" but NOT
+    "project/test-target/" because "target" must be a complete path segment.
+    
+    The pattern is expected to have a trailing slash (e.g., "node_modules/").
+    Matching checks if any path segment starts with the pattern prefix.
+    """
+    # Normalize to forward slashes for consistent matching
+    normalized = file_path.replace('\\', '/')
+    
     for pattern in config.get("ignore", []):
-        if pattern in file_path:
+        # Normalize pattern too
+        pat = pattern.replace('\\', '/')
+        
+        # Strip trailing slash for segment matching
+        pat_prefix = pat.rstrip('/')
+        
+        # Check if the pattern appears as a path segment
+        # A segment is preceded by '/' or is at the start of the path
+        # Pattern "target" should match "/target/" or start with "target/"
+        # but NOT "/test-target/" or "/my_target/"
+        
+        # Check 1: pattern is at the start of the path (e.g., "node_modules/pkg/")
+        if normalized.startswith(pat_prefix + '/'):
             return True
+        
+        # Check 2: pattern appears as a full segment (preceded by '/')
+        if '/' + pat_prefix + '/' in normalized:
+            return True
+        
+        # Check 3: pattern matches the entire last segment (e.g., path ends with "/.git")
+        if normalized.endswith('/' + pat_prefix):
+            return True
+        
+        # Check 4: exact match
+        if normalized == pat_prefix:
+            return True
+    
     return False
 
 

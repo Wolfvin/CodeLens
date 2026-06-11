@@ -38,6 +38,43 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+
+# ─── Path-Segment-Aware Ignore Check ──────────────────────────
+
+def should_ignore_dir(rel_root: str, ignore_dirs: frozenset = DEFAULT_IGNORE_DIRS) -> bool:
+    """Check if a relative directory path should be ignored.
+    
+    Uses path-segment-aware matching to avoid false positives.
+    For example, "target" matches "project/target/" but NOT
+    "project/test-target/" because the ignore name must be a
+    complete path segment.
+    
+    Args:
+        rel_root: Relative path from workspace root (e.g., "src", "node_modules/pkg")
+        ignore_dirs: Set of directory names to ignore (without trailing slash)
+    
+    Returns:
+        True if the directory should be ignored.
+    """
+    normalized = rel_root.replace('\\', '/')
+    
+    for ignore in ignore_dirs:
+        # Check if any path segment matches the ignore name
+        # Segment at start: "node_modules/pkg" starts with "node_modules/"
+        if normalized.startswith(ignore + '/'):
+            return True
+        # Segment in middle: "src/node_modules/pkg" contains "/node_modules/"
+        if '/' + ignore + '/' in normalized:
+            return True
+        # Segment at end: "src/target" ends with "/target"
+        if normalized.endswith('/' + ignore):
+            return True
+        # Exact match: "node_modules" == "node_modules"
+        if normalized == ignore:
+            return True
+    
+    return False
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result) -> dict:
