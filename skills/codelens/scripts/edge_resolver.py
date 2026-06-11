@@ -10,20 +10,34 @@ from collections import defaultdict
 
 # ─── Cached Index for O(1) lookups ────────────────────────────
 # Built lazily on first call to get_callers/get_callees, invalidated
-# when edges list changes (via _edge_list_id).
+# when edges list changes (via _edge_list_fingerprint).
+# NOTE: We use len(edges) + first/last edge IDs as a fingerprint
+# instead of id() because Python can reuse memory addresses for
+# different list objects, causing stale cache hits.
 
 _edge_cache: Dict[str, Any] = {
-    "edges_id": None,      # id() of the edges list — detects replacement
-    "to_index": None,      # node_id → List[edge]  (incoming)
-    "from_index": None,    # node_id → List[edge]  (outgoing)
-    "node_map": None,      # node_id → node dict
+    "fingerprint": None,  # Content-based fingerprint of edges list
+    "to_index": None,     # node_id → List[edge]  (incoming)
+    "from_index": None,   # node_id → List[edge]  (outgoing)
+    "node_map": None,     # node_id → node dict
 }
+
+
+def _compute_fingerprint(edges: List[Dict]) -> str:
+    """Compute a content-based fingerprint for the edges list.
+    Uses length + first/last edge IDs to detect changes efficiently.
+    This avoids the id() pitfall where Python reuses memory addresses."""
+    if not edges:
+        return "empty"
+    first = edges[0]
+    last = edges[-1]
+    return f"len={len(edges)}|first_from={first.get('from','')}|first_to={first.get('to','')}|last_from={last.get('from','')}|last_to={last.get('to','')}"
 
 
 def _build_index(edges: List[Dict], nodes: Optional[List[Dict]] = None) -> None:
     """Build or rebuild the caller/callee index if the edges list changed."""
-    edges_id = id(edges)
-    if _edge_cache["edges_id"] == edges_id and _edge_cache["to_index"] is not None:
+    fingerprint = _compute_fingerprint(edges)
+    if _edge_cache["fingerprint"] == fingerprint and _edge_cache["to_index"] is not None:
         return  # Cache is fresh
 
     to_index: Dict[str, List[Dict]] = defaultdict(list)
@@ -42,7 +56,7 @@ def _build_index(edges: List[Dict], nodes: Optional[List[Dict]] = None) -> None:
         if from_id:
             from_index[from_id].append(edge)
 
-    _edge_cache["edges_id"] = edges_id
+    _edge_cache["fingerprint"] = fingerprint
     _edge_cache["to_index"] = dict(to_index)
     _edge_cache["from_index"] = dict(from_index)
     _edge_cache["node_map"] = node_map
@@ -149,7 +163,7 @@ def resolve_edges(
                     node["duplicate_define"] = True
 
     # Invalidate the edge index cache since we produced new resolved_edges
-    _edge_cache["edges_id"] = None
+    _edge_cache["fingerprint"] = None
 
     return all_nodes, resolved_edges
 

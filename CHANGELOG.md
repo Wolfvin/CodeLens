@@ -2,6 +2,28 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.8.1] — 2026-06-12
+
+### Security
+
+- **CRITICAL: Rate limiters wired up in all API routes**: `apiRateLimiter`, `scanRateLimiter`, and `commandRateLimiter` were imported but never used. All 6 API routes now enforce rate limits with proper 429 responses and `retryAfterMs` headers.
+- **CRITICAL: Consolidated workspace validation**: Merged duplicate `validateWorkspace()` from `constants.ts` and `workspaceValidator.ts` into a single canonical implementation with consistent blocklist (added `/sbin`, `/usr/sbin`, `/var/run`). Old `workspaceValidator.ts` now re-exports from `constants.ts` for backward compatibility.
+- **CRITICAL: Scan cache invalidation on scan command**: `POST /api/command` with `scan` now calls `scanCache.invalidate()` so subsequent `GET /api/graph` and `GET /api/health` requests return fresh data instead of stale cached results.
+
+### Fixed
+
+- **CRITICAL: node-detail and search endpoints re-run scan on every request**: Both `/api/node-detail` and `/api/search` now use `scanCache.getScan()` first, only falling back to CLI execution when cache is empty. Eliminates a major DoS vector.
+- **HIGH: O(n²) Gini coefficient → O(n log n)**: Replaced double-loop `computeGini()` with sort-based algorithm. Performance improvement for large codebases with many owners.
+- **HIGH: Circular dependency count over-counting**: DFS cycle detection now deduplicates cycles by normalizing back-edge signatures, preventing the same cycle from being counted multiple times from different starting nodes.
+- **HIGH: Edge resolver id()-based caching**: Replaced `id(edges)` memory address check with content-based fingerprinting (`len + first/last edge IDs`). Python can reuse memory addresses for different list objects, causing stale cache hits.
+- **MEDIUM: Entrypoints markdown formatter truncation**: `[module_export]` was truncated to `odule_export` because `[m` was interpreted as ANSI escape sequence ESC[m. Changed to `**module_export**` bold format which is immune to terminal escape interpretation.
+- **MEDIUM: Entrypoints formatter missing handler info**: HTTP handler entries now show method, path, and handler name; module exports show handler name when available.
+
+### Changed
+
+- **Data-driven command → state mapping in analysisStore**: Replaced 35+ case switch statement with declarative `COMMAND_TO_STATE` map and `applyCommandToState()` function. Special commands (scan, init, detect, watch) still use targeted switch logic, but all standard analysis commands are now mapped via the data-driven approach. Adding new commands only requires a single map entry.
+- **validateWorkspace return type**: Now returns `ValidationResult { valid, resolved, error? }` instead of throwing. Added `validateWorkspaceOrThrow()` convenience wrapper for routes that prefer exception-based control flow.
+
 ## [5.8.0] — 2026-06-11
 
 ### Security

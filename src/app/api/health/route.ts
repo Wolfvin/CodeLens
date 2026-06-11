@@ -11,10 +11,21 @@ import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
 import { scanCache } from '@/lib/scanCache'
 import { validateWorkspace } from '@/lib/constants'
+import { apiRateLimiter, getClientIp } from '@/lib/rateLimiter'
 import { GraphNode, GraphEdge } from '@/types/neural'
 
 export async function GET(request: NextRequest) {
   try {
+    // ─── Rate limiting ───────────────────────────────────
+    const clientIp = getClientIp(request)
+    const rateResult = apiRateLimiter.check(clientIp)
+    if (!rateResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded', retryAfterMs: rateResult.retryAfterMs },
+        { status: 429 }
+      )
+    }
+
     const { searchParams } = new URL(request.url)
     const workspace = searchParams.get('workspace')
     const nodeId = searchParams.get('nodeId')  // Optional: compute impact radius for specific node
@@ -27,17 +38,18 @@ export async function GET(request: NextRequest) {
     }
 
     // Validate workspace path to prevent directory traversal
-    try {
-      validateWorkspace(workspace)
-    } catch (err: any) {
+    const validation = validateWorkspace(workspace)
+    if (!validation.valid) {
       return NextResponse.json(
-        { error: err.message },
+        { error: validation.error },
         { status: 400 }
       )
     }
 
+    const resolvedWorkspace = validation.resolved
+
     // Check health cache first to avoid re-running the CLI
-    const cached = scanCache.getHealth(workspace)
+    const cached = scanCache.getHealth(resolvedWorkspace)
 
     if (cached && !nodeId) {
       // Return cached health result — skip CLI execution
@@ -52,7 +64,7 @@ export async function GET(request: NextRequest) {
 
     // If nodeId is requested, we need graph data for impact radius
     // Check scan cache for the graph data first
-    const cachedScan = scanCache.getScan(workspace)
+    const cachedScan = scanCache.getScan(resolvedWorkspace)
 
     let nodes: GraphNode[]
     let edges: GraphEdge[]
@@ -63,7 +75,7 @@ export async function GET(request: NextRequest) {
       edges = cachedScan.edges
     } else {
       // Run the scan to get current graph state
-      const scanOutput = await commandRunner.scan(workspace)
+      const scanOutput = await commandRunner.scan(resolvedWorkspace)
 
       if (scanOutput.status === 'error') {
         return NextResponse.json(
@@ -95,7 +107,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Store in cache for subsequent requests (cache the base health data)
-    scanCache.setHealth(workspace, healthScore as unknown as Record<string, unknown>, coupling, heatmap, impactRadius)
+    scanCache.setHealth(resolvedWorkspace, healthScore as unknown as Record<string, unknown>, coupling, heatmap, impactRadius)
 
     return NextResponse.json({
       healthScore,

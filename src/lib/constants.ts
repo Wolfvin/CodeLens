@@ -7,27 +7,90 @@
 // ============================================================
 
 import path from 'path'
+import fs from 'fs'
 
 // ---- Forbidden Workspace Paths ----
 // Prevents directory traversal attacks by blocking access to
 // system directories that should never be treated as workspaces.
+// Consolidated from workspaceValidator.ts to be the single source of truth.
 
-export const FORBIDDEN_PATHS = ['/etc', '/root', '/proc', '/sys', '/dev', '/boot'] as const
+export const FORBIDDEN_PATHS = [
+  '/etc', '/root', '/proc', '/sys', '/dev', '/boot',
+  '/sbin', '/usr/sbin', '/var/run',
+] as const
 
 /**
- * Validate that a workspace path does not resolve to a forbidden
- * system directory. Throws an Error if the path is not allowed.
- *
- * @param workspace - Raw workspace path from user input
- * @throws Error if the resolved path starts with a forbidden prefix
+ * ValidationResult returned by validateWorkspace.
+ * Provides both a throw-based and a return-based API for flexibility.
  */
-export function validateWorkspace(workspace: string): void {
-  const resolved = path.resolve(workspace)
+export interface ValidationResult {
+  valid: boolean
+  resolved: string
+  error?: string
+}
+
+/**
+ * Validate and resolve a workspace path.
+ * Prevents path traversal by ensuring the path:
+ * 1. Is a non-empty string
+ * 2. Does not contain directory traversal sequences (../)
+ * 3. Is an absolute path
+ * 4. Is not a system-critical directory
+ * 5. Is an existing directory
+ *
+ * @param rawWorkspace - Raw workspace path from user input
+ * @returns ValidationResult with valid/resolved/error fields
+ */
+export function validateWorkspace(rawWorkspace: string): ValidationResult {
+  // Must be a non-empty string
+  if (!rawWorkspace || typeof rawWorkspace !== 'string') {
+    return { valid: false, resolved: '', error: 'Workspace path is required' }
+  }
+
+  // Reject paths with traversal sequences
+  const normalized = path.normalize(rawWorkspace)
+  if (normalized.includes('..')) {
+    return { valid: false, resolved: '', error: 'Workspace path must not contain directory traversal sequences (../)' }
+  }
+
+  // Must be an absolute path
+  if (!path.isAbsolute(normalized)) {
+    return { valid: false, resolved: '', error: 'Workspace path must be absolute' }
+  }
+
+  // Block system-critical directories
   for (const prefix of FORBIDDEN_PATHS) {
-    if (resolved.startsWith(prefix)) {
-      throw new Error(`Workspace path '${resolved}' is not allowed.`)
+    if (normalized === prefix || normalized.startsWith(prefix + '/')) {
+      return { valid: false, resolved: normalized, error: `Workspace path cannot be within ${prefix}` }
     }
   }
+
+  // Check the directory exists
+  try {
+    const stat = fs.statSync(normalized)
+    if (!stat.isDirectory()) {
+      return { valid: false, resolved: normalized, error: 'Workspace path must be a directory, not a file' }
+    }
+  } catch {
+    return { valid: false, resolved: normalized, error: 'Workspace directory does not exist' }
+  }
+
+  return { valid: true, resolved: normalized }
+}
+
+/**
+ * Validate workspace and throw on failure.
+ * Convenience wrapper for routes that prefer throw-based error handling.
+ *
+ * @param rawWorkspace - Raw workspace path from user input
+ * @throws Error if the workspace path is invalid
+ */
+export function validateWorkspaceOrThrow(rawWorkspace: string): string {
+  const result = validateWorkspace(rawWorkspace)
+  if (!result.valid) {
+    throw new Error(result.error)
+  }
+  return result.resolved
 }
 
 // ---- Allowed CLI Commands ----

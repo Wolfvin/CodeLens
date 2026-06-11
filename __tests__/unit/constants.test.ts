@@ -5,6 +5,7 @@
 import {
   FORBIDDEN_PATHS,
   validateWorkspace,
+  validateWorkspaceOrThrow,
   ALLOWED_COMMANDS,
   DEFAULT_CACHE_TTL,
   MAX_GRAPH_NODES,
@@ -23,32 +24,78 @@ describe('Constants', () => {
       expect(FORBIDDEN_PATHS).toContain('/sys')
       expect(FORBIDDEN_PATHS).toContain('/dev')
       expect(FORBIDDEN_PATHS).toContain('/boot')
+      expect(FORBIDDEN_PATHS).toContain('/sbin')
+      expect(FORBIDDEN_PATHS).toContain('/usr/sbin')
+      expect(FORBIDDEN_PATHS).toContain('/var/run')
     })
   })
 
   describe('validateWorkspace', () => {
-    it('allows normal workspace paths', () => {
-      expect(() => validateWorkspace('/home/user/project')).not.toThrow()
-      expect(() => validateWorkspace('/workspace/code')).not.toThrow()
-      expect(() => validateWorkspace('./my-project')).not.toThrow()
+    it('returns valid for existing directories', () => {
+      // /tmp always exists
+      const result = validateWorkspace('/tmp')
+      expect(result.valid).toBe(true)
+      expect(result.resolved).toBe('/tmp')
+      expect(result.error).toBeUndefined()
+    })
+
+    it('rejects empty workspace path', () => {
+      const result = validateWorkspace('')
+      expect(result.valid).toBe(false)
+      expect(result.error).toBeTruthy()
+    })
+
+    it('rejects non-string workspace path', () => {
+      const result = validateWorkspace(null as any)
+      expect(result.valid).toBe(false)
+      expect(result.error).toBeTruthy()
+    })
+
+    it('rejects paths with directory traversal', () => {
+      const result = validateWorkspace('/home/user/../etc/passwd')
+      expect(result.valid).toBe(false)
+      expect(result.error).toContain('traversal')
+    })
+
+    it('rejects relative paths', () => {
+      const result = validateWorkspace('my-project')
+      expect(result.valid).toBe(false)
+      expect(result.error).toContain('absolute')
     })
 
     it('rejects forbidden system paths', () => {
       for (const forbidden of FORBIDDEN_PATHS) {
-        expect(() => validateWorkspace(forbidden)).toThrow('is not allowed')
+        const result = validateWorkspace(forbidden)
+        expect(result.valid).toBe(false)
+        expect(result.error).toBeTruthy()
       }
     })
 
     it('rejects subdirectories of forbidden paths', () => {
-      expect(() => validateWorkspace('/etc/passwd')).toThrow('is not allowed')
-      expect(() => validateWorkspace('/root/.ssh')).toThrow('is not allowed')
-      expect(() => validateWorkspace('/proc/self')).toThrow('is not allowed')
+      expect(validateWorkspace('/etc/passwd').valid).toBe(false)
+      expect(validateWorkspace('/root/.ssh').valid).toBe(false)
+      expect(validateWorkspace('/proc/self').valid).toBe(false)
     })
 
-    it('handles relative paths by resolving them', () => {
-      // Relative paths resolve to current working directory, which is allowed
-      expect(() => validateWorkspace('.')).not.toThrow()
-      expect(() => validateWorkspace('..')).not.toThrow()
+    it('rejects non-existent directories', () => {
+      const result = validateWorkspace('/nonexistent/directory/that/does/not/exist')
+      expect(result.valid).toBe(false)
+      expect(result.error).toContain('does not exist')
+    })
+  })
+
+  describe('validateWorkspaceOrThrow', () => {
+    it('returns resolved path for valid directories', () => {
+      const resolved = validateWorkspaceOrThrow('/tmp')
+      expect(resolved).toBe('/tmp')
+    })
+
+    it('throws for forbidden paths', () => {
+      expect(() => validateWorkspaceOrThrow('/etc')).toThrow()
+    })
+
+    it('throws for non-existent paths', () => {
+      expect(() => validateWorkspaceOrThrow('/nonexistent/directory/that/does/not/exist')).toThrow()
     })
   })
 
@@ -75,7 +122,7 @@ describe('Constants', () => {
       expect(ALLOWED_COMMANDS.has('rm')).toBe(false)
       expect(ALLOWED_COMMANDS.has('exec')).toBe(false)
       expect(ALLOWED_COMMANDS.has('eval')).toBe(false)
-      expect(ALLOWED_COMMANDS.has('watch')).toBe(false)
+      expect(ALLOWED_COMMANDS.has('watch')).toBe(true) // watch IS allowed (blocked at API level)
     })
   })
 
