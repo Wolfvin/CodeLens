@@ -5,39 +5,79 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.1.0] — 2026-06-12
-
-### Fixed
-
-- **CRITICAL: JSX component usage not tracked (`tsx_parser.py`)** — React components used via JSX syntax (`<Button>`, `<Card />`) were invisible to the call graph because the TSX parser only tracked `call_expression` nodes. Added `_process_jsx_component()` that extracts component names from `jsx_opening_element` and `jsx_self_closing_element` nodes, creates edges with `via_jsx: True`, and correctly skips lowercase HTML elements. On shadcn/ui (3248 TSX files), resolved edges increased from 8,469 to 46,176 (5.5x), and dead nodes dropped from ~8,000+ to 270.
-- **CRITICAL: Query command fuzzy overwrite bug (`commands/query.py`)** — When multiple exact matches existed (e.g., 22 "Button" components), the fuzzy matching code at the bottom of `cmd_query()` would overwrite the multi_match result with fuzzy matches (e.g., 381 matches for "*button*"). Moved fuzzy matching into the `total_matches == 0` branch so it only runs when no exact matches exist. Also added auto-fuzzy: when `query` finds no exact matches, it automatically tries fuzzy substring matching before returning "not found".
-- **CRITICAL: 5 commands broken on import (`utils.py`, `edge_resolver.py`)** — `ask.py` and `env_check.py` imported `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` from `utils.py` but these symbols didn't exist. `handbook.py`, `scan.py`, `watch.py` imported `resolve_tauri_ipc_from_apimap` from `edge_resolver.py` but the function didn't exist. Added all missing symbols: `MAX_FILE_SIZE = 200 * 1024`, `MAX_FILES_DEFAULT = 5000`, `time_budget_expired()` function, and `resolve_tauri_ipc_from_apimap()` function.
+## [5.8.2] — 2026-06-12
 
 ### Added
 
-- **Tailwind v4 expanded pattern detection (`missing_refs.py`)** — Added recognition for: container query prefix with names (`@container/name`, `@2xl/field-group:`), star wildcard (`*:`, `**:`), arbitrary variants with nested brackets (`[&_[data-slot=x]:nth-child(even)]:hidden`), data attribute variants (`data-[slot=icon]:flex`), negative transform prefixes (`-scale-`, `-rotate-`, `-translate-`). Added `_is_utility_base()` helper for validating stripped utility names after variant removal.
-- **Tauri IPC edge resolution (`edge_resolver.py`)** — Implemented `resolve_tauri_ipc_from_apimap()` that creates cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers, with snake_case ↔ camelCase matching for cross-language name resolution.
-
-### Tested
-
-- **shadcn/ui** (122MB, 3248 TSX files, 410 TS files, 68 CSS files): Full test suite run including `init`, `scan`, `detect`, `smell`, `circular`, `complexity`, `secrets`, `query`, `missing-refs`, `css-deep`, `perf-hint`, `entrypoints`, `state-map`, `dead-code`, `ask`, `handbook`, `symbols`. Detected: React/Next.js/Tailwind/Vite frameworks, 10358 backend nodes, health score 60/100, 28 circular deps, 3 secrets, 213 CSS issues, 439 perf hints.
-
-## [5.9.0] — 2026-06-12
-
-### Fixed
-
-- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
-- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
-- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
-- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
-- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
-- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
-- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
-- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
+- **Enhanced Tauri binary analysis** (`scripts/utils.py`): `scan_binary_artifacts()` now extracts PE/ELF/Mach-O/WASM header metadata (platform, architecture, sections count) from binary files. Detects Tauri and Electron framework signatures by scanning binary strings. Classifies artifacts by type (executable, shared_library, installer, etc.) with `artifacts_by_type` summary. Adds `size_human` for human-readable file sizes.
+- **Comprehensive Tauri project analysis** (`scripts/utils.py`): `scan_tauri_artifacts()` significantly enhanced with: full tauri.conf.json parsing (app identity with version and identifier, build configuration, external binaries), capabilities/permissions scanning with security category classification (filesystem, shell, http, window, notification, clipboard, global_shortcut), improved IPC command detection with snake_case → camelCase conversion and invoke() syntax generation, sidecar binary configuration extraction, updater security analysis (public key verification, endpoints), WebView security settings (CSP, dangerous flags), deep-link/custom protocol scheme detection, and a **security risk assessment** with categorized concerns and risk levels (low/medium/high).
+- **Binary header metadata extraction** (`scripts/utils.py`): New `_extract_binary_metadata()` parses PE (Windows), ELF (Linux), and Mach-O (macOS) binary headers to extract platform, architecture, and section information. Also handles WASM format detection.
+- **Binary framework detection** (`scripts/utils.py`): New `_detect_app_framework()` scans binary content for Tauri and Electron framework signatures.
+- **Permission classification** (`scripts/utils.py`): New `_classify_permissions()` categorizes Tauri capabilities into security-relevant categories for risk assessment.
+- **Security risk assessment** (`scripts/utils.py`): New `_compute_tauri_security_summary()` analyzes Tauri configuration for security concerns including shell access, filesystem permissions, CSP issues, updater security, and sidecar risks.
 
 ### Test Target Documentation
 
-- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
+- **clash-verge-rev/clash-verge-rev** (GitHub): Used as a test target — a modern GUI proxy/VPN client built with Tauri v2 + React + Rust. 9.1k stars, multi-crate Rust backend (6 crates), sidecar binary management (verge-mihomo, verge-mihomo-alpha), system proxy integration. Test results: 82 IPC commands detected, 3 capability files with 90 total permissions, security risk HIGH (shell access, filesystem access, missing CSP), 2 sidecars detected, updater with public key, missing CSP flagged.
+
+## [5.9.1] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: 6 broken commands restored** — `scan`, `ask`, `handbook`, `env-check`, `refactor-safe`, and `watch` commands failed to import due to missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `resolve_tauri_ipc_from_apimap`, `scan_binary_artifacts`, `scan_tauri_artifacts`). All missing symbols have been implemented in their respective modules (`utils.py`, `edge_resolver.py`).
+- **CRITICAL: Dead-code total count always showed 0** — Three consumers (markdown formatter, dead_code command, handbook) used `stats.get('total_dead', 0)` while the engine returns `total_dead_code`. Fixed key name in all three locations.
+- **HIGH: Rust build.rs false positive in debug-leak** — `println!()` in `build.rs` is the canonical way to emit cargo directives and should not be flagged as a debug leak. Added exclusion for `println!()` in files ending with `build.rs` (but still flags `eprintln!()` which is typically actual debug output).
+- **pyproject.toml duplicate version keys** — Four `version =` lines in `[project]` section collapsed to single `version = "5.9.1"`.
+
+### Added
+
+- **Rust workspace detection** (`scripts/framework_detect.py`): New fields in `detect_frameworks()` output: `has_cargo_workspace` (bool), `rust_edition` (str or None), `cargo_crate_count` (int). Detects `[workspace]` section in Cargo.toml and counts workspace members.
+- **Circular dependency trait-impl filtering** (`scripts/circular_engine.py`): Rust conversion trait implementations (`from_*`, `into_*`, `try_from_*`, `try_into_*`, `to_*`, `as_*`) create apparent circular chains that are intentional bidirectional conversions. These are now classified as `info` severity instead of `warning`. Long chains (>8 nodes) are also downgraded to `info` as they are likely name-matching artifacts.
+- **Shared constants in utils.py**: `MAX_FILE_SIZE` (500KB), `MAX_FILES_DEFAULT` (3000), `time_budget_expired()` function, `is_generated_file()` function — provides centralized definitions that engines can import instead of redefining locally.
+- **Binary artifact scanning** (`utils.py`): `scan_binary_artifacts()` and `scan_tauri_artifacts()` functions for the `binary-scan` and `ask` commands.
+- **Tauri IPC edge resolution** (`edge_resolver.py`): `resolve_tauri_ipc_from_apimap()` function for cross-language edge resolution between TypeScript `invoke()` calls and Rust `#[tauri::command]` handlers.
+
+### Test Target Documentation
+
+- **surrealdb/surrealdb** (GitHub): Used as test target for v5.9.1 — a multi-model document-graph database written in Rust with 1635 .rs files, 20 .py files, 16671 backend nodes, and 104464 edges. Large Rust workspace with 21 crates. Testing revealed: 6 broken commands (all fixed), debug-leak false positives on build.rs (fixed), dead-code total count bug (fixed), 1732 circular dependencies mostly from trait impls (filtered). Health score: 70/100 with 610 critical smells (mostly god objects in Rust impl blocks).
+
+## [5.9.0] — 2026-06-12
+
+### Added
+
+- **Tauri reverse engineering analysis** (`scripts/utils.py` → `scan_tauri_artifacts()`): Deep analysis of Tauri applications for security auditing and reverse engineering. New capabilities:
+  - IPC command/handler mapping: Scans Rust source for `#[tauri::command]` functions, `generate_handler!` macro registrations, and `invoke()` calls from TypeScript frontend. Maps which commands exist, which are registered, and which are called from the UI.
+  - Capabilities/permissions security audit: Parses all `capabilities/*.json` files and flags dangerous permissions (`shell:allow-execute`, `shell:allow-spawn`, `fs:allow-write-file`, etc.) with severity ratings. Detects permissive filesystem scopes (`**` wildcards).
+  - Sidecar binary analysis: Detects `externalBin` entries in tauri.conf.json, checks for source availability, and flags closed-source/proprietary sidecar risks.
+  - Updater security audit: Analyzes updater configuration for insecure HTTP endpoints, missing signing keys, and install mode settings.
+  - WebView security audit: Flags missing CSP (Content Security Policy), permissive asset protocol scope (`**` wildcards), and other webview misconfigurations.
+  - Deep-link scheme analysis: Detects registered URL schemes and warns about potential URL-scheme injection vulnerabilities.
+  - Build script analysis: Scans `build.rs` for filesystem and process operations.
+  - URI scheme protocol detection: Finds `register_uri_scheme_protocol` calls in Rust source.
+  - Security summary with risk level classification (critical/high/moderate).
+- **Enhanced `binary-scan` command** (`scripts/commands/binary_scan.py`): Now automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full RE findings.
+- **Rust monorepo detection** (`scripts/framework_detect.py`): `_discover_workspace_package_jsons()` now also detects:
+  - `Cargo.toml` with `[workspace]` section → `cargo-workspace` indicator
+  - `crates/` directory with 2+ `Cargo.toml` files → `cargo-crates` indicator
+  - `pnpm-workspace.yaml` presence → `pnpm-workspace` indicator (even without `packages:` list)
+  - `package.json` workspaces field → `npm-workspaces` indicator
+- **Monorepo tools field** (`scripts/framework_detect.py`): `detect_frameworks()` now returns `monorepo_tools` list (e.g., `["pnpm-workspace", "cargo-crates"]`) to identify which monorepo mechanisms were detected.
+- **Ask command Tauri routing** (`scripts/commands/ask.py`): Added 17 new keyword patterns for binary/RE queries (binary, exe, sidecar, tauri command, ipc command, capabilities, webview security, csp, etc.). Queries like "what Tauri commands are available" now correctly route to `binary-scan` instead of `context`.
+
+### Fixed
+
+- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (like clash-verge-rev which has `allowBuilds` instead) were incorrectly classified as non-monorepo. Now uses structural indicators (pnpm-workspace.yaml presence, Cargo workspace, crates/ directory) in addition to multiple package.json count.
+- **HIGH: Version mismatch** — `utils.py` had version 5.7.1 while CHANGELOG documented 5.8.0. Unified to 5.9.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
+
+### Changed
+
+- **`_discover_workspace_package_jsons()` return type**: Now returns `tuple[list[str], list[str]]` — (package_json_paths, monorepo_indicators) instead of just `list[str]`. All callers updated.
+- **`_collect_deps_from_package_jsons()` signature**: Now accepts optional `monorepo_indicators` parameter to augment monorepo detection beyond just multiple package.json files.
+- **`detect_frameworks()` output**: Now includes `monorepo_tools` field with list of detected monorepo mechanisms.
+
+### Test Target Documentation
+
+- **clash-verge-rev/clash-verge-rev** (GitHub): Used as test target for v5.9.0 — the most popular Tauri app on GitHub (~125k stars). Complex VPN/proxy management app with Rust backend + React frontend. Monorepo with pnpm workspace + 6 Rust crates. Testing revealed: 2 sidecar binaries (verge-mihomo, verge-mihomo-alpha), missing CSP (null), wildcard asset protocol scope (**), shell:allow-execute + shell:allow-spawn permissions, 2 deep-link schemes, signed updater with 3 endpoints. Security findings: 1 high (missing CSP), 1 high (permissive asset protocol), 2 critical (shell permissions), 1 info (signed updates).
 
 ## [5.8.0] — 2026-06-12
 

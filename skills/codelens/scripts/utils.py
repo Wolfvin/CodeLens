@@ -3,8 +3,11 @@
 import os
 import json
 import logging
+import re
+import struct
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 # ─── Logging ─────────────────────────────────────────────────
 
@@ -33,90 +36,10 @@ DEFAULT_IGNORE_DIRS = frozenset({
     'storybook-static', '.storybook',
 })
 
-# Generated/lock files that should be excluded from analysis engines
-# (refactor-safe, smell, dead-code, etc.) but NOT from file walking.
-# These are committed but not human-written source code.
-GENERATED_FILE_PATTERNS = frozenset({
-    'Cargo.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-    'bun.lock', 'bun.lockb', 'go.sum', 'poetry.lock', 'uv.lock',
-    'Gemfile.lock', 'composer.lock', 'pip-wheel-metadata',
-    '.pnp.cjs', '.pnp.js',
-})
-
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
 })
-
-# ─── Performance Limits ──────────────────────────────────────
-
-MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
-MAX_FILES_DEFAULT = 5000    # Max files to scan per engine run
-
-
-def time_budget_expired(start_time: float, budget_sec: float) -> bool:
-    """Check if the time budget has expired.
-
-    Used by engines to bail out early on large codebases.
-
-    Args:
-        start_time: time.time() when the operation started.
-        budget_sec: Maximum seconds allowed.
-
-    Returns:
-        True if the budget has been exceeded, False otherwise.
-    """
-    import time as _time
-    return (_time.time() - start_time) > budget_sec
-
-
-def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
-    """Check if a relative directory path should be ignored.
-
-    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS (plus any
-    caller-supplied extra set) to avoid false positives from substring matches.
-    For example, 'target' matches 'src/target/debug' but NOT 'test-target/src'.
-
-    Args:
-        rel_path: Relative path from workspace root (e.g. 'src/node_modules/pkg').
-        extra_ignore: Optional additional directory names to ignore.
-
-    Returns:
-        True if the path contains an ignored directory segment, False otherwise.
-    """
-    # Normalize to forward slashes for consistent matching
-    normalized = rel_path.replace('\\', '/')
-
-    # Merge default + extra ignore sets
-    ignore_dirs = DEFAULT_IGNORE_DIRS
-    if extra_ignore:
-        ignore_dirs = ignore_dirs | extra_ignore
-
-    # Split the path into segments and check each against the ignore set
-    segments = normalized.split('/')
-    for segment in segments:
-        if segment in ignore_dirs:
-            return True
-
-    return False
-
-
-def is_generated_file(file_path: str) -> bool:
-    """Check if a file is a generated/lock file that should be excluded from analysis.
-
-    These files (Cargo.lock, package-lock.json, etc.) are committed to VCS
-    but are not human-written source code. Analysis engines like refactor-safe,
-    smell, and dead-code should skip them.
-
-    Args:
-        file_path: Absolute or relative path to the file.
-
-    Returns:
-        True if the file is a generated/lock file, False otherwise.
-    """
-    basename = os.path.basename(file_path)
-    return basename in GENERATED_FILE_PATTERNS
-
 
 # ─── Output File Generation ─────────────────────────────────
 
@@ -197,6 +120,56 @@ def compute_summary(workspace, outline_data, scan_result):
     }
 
 
+# ─── File I/O Utilities ────────────────────────────────────────
+
+def safe_read_file(filepath: str, max_size: int = 500 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file with size limit and error handling.
+
+    Args:
+        filepath: Path to the file to read.
+        max_size: Maximum file size in bytes to read (default 500KB).
+        encoding: File encoding (default utf-8).
+
+    Returns:
+        File contents as string, or None if the file cannot be read
+        (too large, missing, encoding error, etc.).
+    """
+    try:
+        if not os.path.isfile(filepath):
+            return None
+        file_size = os.path.getsize(filepath)
+        if file_size > max_size:
+            logger.debug(f"Skipping large file ({file_size} bytes): {filepath}")
+            return None
+        with open(filepath, 'r', encoding=encoding, errors='ignore') as f:
+            return f.read()
+    except (IOError, OSError, PermissionError):
+        logger.debug(f"Cannot read file: {filepath}")
+        return None
+
+
+def should_ignore_dir(rel_path: str) -> bool:
+    """Check if a directory path should be ignored during scanning.
+
+    Uses path-segment-aware matching to avoid false positives
+    (e.g., a workspace named "test-dist" should not match "dist").
+
+    Args:
+        rel_path: Relative path from workspace root (use '.' for workspace root).
+
+    Returns:
+        True if the path should be ignored.
+    """
+    if rel_path == '.':
+        return False
+    # Normalize path separators
+    parts = rel_path.replace('\\', '/').split('/')
+    for part in parts:
+        if part in DEFAULT_IGNORE_DIRS:
+            return True
+    return False
+
+
 # ─── Path and Caller Utilities ───────────────────────────────
 
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
@@ -236,276 +209,798 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
-# ─── File Reading Utility ──────────────────────────────────
-
-def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = 'utf-8') -> Optional[str]:
-    """Safely read a file's contents with error handling and size limit.
-
-    Args:
-        file_path: Absolute or relative path to the file.
-        max_size: Maximum file size in bytes to read (default 200KB).
-                  Files larger than this are skipped to avoid memory issues.
-        encoding: File encoding (default utf-8).
-
-    Returns:
-        File contents as string, or None if the file cannot be read,
-        doesn't exist, is too large, or is a binary file.
-    """
-    try:
-        if not os.path.isfile(file_path):
-            return None
-
-        file_size = os.path.getsize(file_path)
-        if file_size > max_size:
-            logger.debug(f"Skipping large file ({file_size} bytes): {file_path}")
-            return None
-
-        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
-            return f.read()
-    except (IOError, OSError, UnicodeDecodeError):
-        logger.debug(f"Failed to read file: {file_path}", exc_info=True)
-        return None
-
-
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"
 
+# ─── Shared Limits ───────────────────────────────────────────
 
-# ─── Binary Artifact Scanning ──────────────────────────────────
+MAX_FILE_SIZE = 500 * 1024  # 500KB — skip files larger than this
+MAX_FILES_DEFAULT = 3000    # Default max files to scan per engine
 
-def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
-    """Scan workspace for binary/compiled artifacts.
 
-    Detects:
-    - Executable files (.exe, .msi, .dmg, .AppImage, .deb)
-    - Shared libraries (.dll, .so, .dylib)
-    - Compiled objects (.o, .pyc, .class)
-    - Build output directories (dist/, target/release/)
-    - Bundled resources (assets/, resources/)
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
 
     Args:
-        workspace: Absolute path to workspace
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
 
     Returns:
-        Dict with binary artifact findings and metadata
+        True if the budget has been exceeded.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is a generated/lock file that should be skipped.
+
+    Covers lock files, generated output, and vendored artifacts.
+
+    Args:
+        filename: Just the filename (not the full path).
+
+    Returns:
+        True if the file should be skipped as generated.
+    """
+    generated_patterns = (
+        # Lock files
+        'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+        'cargo.lock', 'gemfile.lock', 'composer.lock', 'poetry.lock',
+        'pdm.lock', 'uv.lock',
+        # Generated files
+        'go.sum', 'mix.lock', 'conan.lock', 'pip-wheel-metadata',
+        # Minified / bundled
+        '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+    )
+    fl = filename.lower()
+    for pattern in generated_patterns:
+        if fl.endswith(pattern) or fl == pattern:
+            return True
+    # Auto-generated suffixes
+    if fl.endswith('.generated.ts') or fl.endswith('.generated.js'):
+        return True
+    if fl.endswith('.g.dart') or fl.endswith('.g.py'):
+        return True
+    if fl.endswith('.pb.go') or fl.endswith('_pb2.py'):
+        return True
+    # snapshot files
+    if fl.endswith('.snap') or fl.endswith('.snapshot'):
+        return True
+    return False
+
+
+# ─── Binary Artifact Scanning ────────────────────────────────
+
+_BINARY_EXTENSIONS = frozenset({
+    '.so', '.dylib', '.dll', '.exe', '.bin', '.o', '.obj',
+    '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
+    '.node', '.efi', '.app', '.dmg', '.iso', '.msi',
+    '.nupkg', '.deb', '.rpm', '.apk', '.aab',
+})
+
+_ELECTRON_MARKERS = frozenset({
+    'electron', 'electron.exe', 'Electron Framework.framework',
+})
+
+_TAURI_CONFIG_FILES = frozenset({
+    'tauri.conf.json', 'tauri.conf.json5', 'tauri.config.json',
+})
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/compiled artifacts with RE analysis.
+
+    Detects shared libraries, executables, WASM modules, and other
+    compiled files. For each artifact, extracts:
+    - File size and type classification
+    - PE/Mach-O/ELF header info (platform, architecture)
+    - Whether it's likely a Tauri/Electron app based on binary signatures
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with findings, stats, and recommendations.
     """
     workspace = os.path.abspath(workspace)
+    artifacts = []
+    total_size = 0
+    electron_detected = False
+    artifacts_by_type: Dict[str, int] = {}
 
-    EXECUTABLE_EXTS = {'.exe', '.msi', '.dmg', '.app', '.deb', '.rpm',
-                       '.AppImage', '.snap', '.flatpak', '.bin'}
-    LIBRARY_EXTS = {'.dll', '.so', '.dylib', '.ko'}
-    COMPILED_EXTS = {'.o', '.obj', '.pyc', '.pyo', '.class', '.jar',
-                     '.wasm', '.node'}
-
-    BINARY_EXTENSIONS_ALL = EXECUTABLE_EXTS | LIBRARY_EXTS | COMPILED_EXTS
-
-    # Known build output directories
-    BUILD_DIRS = {
-        'dist', 'target/release', 'target/debug', 'build', 'out',
-        'bin', 'output', 'release', 'Debug', 'Release',
-    }
-
-    executables = []
-    libraries = []
-    compiled = []
-    build_dirs_found = []
-    total_binary_size = 0
-
-    for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
+    for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
             continue
 
-        rel_root = os.path.relpath(root, workspace)
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in _BINARY_EXTENSIONS:
+                path = os.path.join(root, fn)
+                rel_path = os.path.relpath(path, workspace)
+                try:
+                    size = os.path.getsize(path)
+                    total_size += size
 
-        # Check for known build output directories
-        for build_dir in BUILD_DIRS:
-            if rel_root == build_dir or rel_root.replace('\\', '/').startswith(build_dir + '/'):
-                build_dirs_found.append({
-                    'path': rel_root,
-                    'type': 'build_output',
-                })
+                    # Classify artifact type
+                    artifact_type = _classify_binary(ext)
+                    artifacts_by_type[artifact_type] = artifacts_by_type.get(artifact_type, 0) + 1
 
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext not in BINARY_EXTENSIONS_ALL:
-                continue
+                    # Extract binary header metadata
+                    metadata = _extract_binary_metadata(path, ext)
 
-            file_path = os.path.join(root, f)
-            rel_path = os.path.relpath(file_path, workspace)
+                    # Detect Tauri/Electron framework signatures
+                    app_framework = _detect_app_framework(path, ext, metadata)
+                    if app_framework == "electron":
+                        electron_detected = True
 
-            try:
-                file_size = os.path.getsize(file_path)
-            except OSError:
-                file_size = 0
+                    artifact_info = {
+                        "file": rel_path,
+                        "type": artifact_type,
+                        "extension": ext,
+                        "size_bytes": size,
+                        "size_human": _human_readable_size(size),
+                        "platform": metadata.get("platform", "unknown"),
+                        "architecture": metadata.get("architecture", "unknown"),
+                        "app_framework": app_framework,
+                    }
 
-            total_binary_size += file_size
+                    if metadata.get("sections"):
+                        artifact_info["sections_count"] = len(metadata["sections"])
 
-            artifact = {
-                'name': f,
-                'path': rel_path,
-                'size': file_size,
-                'size_human': _human_size(file_size),
-                'extension': ext,
-            }
+                    artifacts.append(artifact_info)
+                except OSError:
+                    pass
 
-            if ext in EXECUTABLE_EXTS:
-                artifact['type'] = 'executable'
-                executables.append(artifact)
-            elif ext in LIBRARY_EXTS:
-                artifact['type'] = 'shared_library'
-                libraries.append(artifact)
-            elif ext in COMPILED_EXTS:
-                artifact['type'] = 'compiled_object'
-                compiled.append(artifact)
-
-    total = len(executables) + len(libraries) + len(compiled)
-
-    # Determine build system
-    build_system = _detect_build_system(workspace)
+            # Detect Electron markers
+            if fn.lower() in _ELECTRON_MARKERS:
+                electron_detected = True
 
     return {
-        'status': 'ok',
-        'workspace': workspace,
-        'build_system': build_system,
-        'stats': {
-            'total_artifacts': total,
-            'executables': len(executables),
-            'shared_libraries': len(libraries),
-            'compiled_objects': len(compiled),
-            'build_dirs': len(build_dirs_found),
-            'total_binary_size': total_binary_size,
-            'total_binary_size_human': _human_size(total_binary_size),
-        },
-        'executables': executables,
-        'shared_libraries': libraries,
-        'compiled_objects': compiled,
-        'build_dirs': build_dirs_found,
-        'recommendations': _generate_binary_recommendations(
-            executables, libraries, compiled, build_dirs_found, build_system
+        "status": "ok",
+        "workspace": workspace,
+        "total_artifacts": len(artifacts),
+        "total_size_bytes": total_size,
+        "total_size_human": _human_readable_size(total_size),
+        "artifacts_by_type": artifacts_by_type,
+        "electron_detected": electron_detected,
+        "artifacts": artifacts[:200],
+        "recommendation": (
+            "Consider adding binary files to .gitignore to keep the repo clean."
+            if artifacts else "No binary artifacts found in source directories."
         ),
     }
 
 
-def _human_size(size_bytes: int) -> str:
-    """Convert bytes to human-readable size."""
-    for unit in ('B', 'KB', 'MB', 'GB'):
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and configuration.
+
+    Detects and analyzes:
+    - tauri.conf.json configuration (app identity, window settings, security)
+    - Tauri capabilities/permissions (filesystem, shell, http, etc.)
+    - Tauri IPC command definitions (#[tauri::command] handlers)
+    - Sidecar binary configuration
+    - Updater configuration and security
+    - WebView security settings (CSP, asset protocol)
+    - Build configuration (targets, bundler settings)
+    - Deep-link/custom protocol schemes
+    - Security risk assessment
+
+    Args:
+        workspace: Absolute path to workspace.
+
+    Returns:
+        Dict with Tauri analysis, or None if not a Tauri project.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Find all tauri config files
+    tauri_config_paths = []
+    is_tauri = False
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            if fn in _TAURI_CONFIG_FILES:
+                is_tauri = True
+                tauri_config_paths.append(os.path.join(root, fn))
+
+    # Also check Cargo.toml for tauri dependency
+    if not is_tauri:
+        cargo_path = os.path.join(workspace, 'Cargo.toml')
+        if os.path.isfile(cargo_path):
+            try:
+                with open(cargo_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'tauri' in content.lower():
+                    is_tauri = True
+            except IOError:
+                pass
+
+    if not is_tauri:
+        return None
+
+    result: Dict[str, Any] = {
+        "is_tauri_project": True,
+        "config_files": tauri_config_paths,
+        "app_identity": {},
+        "capabilities": [],
+        "ipc_commands": [],
+        "sidecars": [],
+        "updater": {},
+        "webview_security": {},
+        "build_config": {},
+        "deep_links": [],
+    }
+
+    for conf_path in tauri_config_paths:
+        config_data = _parse_json_file(conf_path)
+        if config_data:
+            result["app_identity"] = _extract_tauri_identity(config_data)
+            result["build_config"] = _extract_tauri_build_config(config_data)
+            result["updater"] = _extract_tauri_updater(config_data)
+            result["webview_security"] = _extract_tauri_webview_security(config_data)
+            result["deep_links"] = _extract_tauri_deep_links(config_data)
+            result["sidecars"] = _extract_tauri_sidecars(config_data)
+
+    # Scan for capabilities
+    result["capabilities"] = _scan_tauri_capabilities(workspace)
+
+    # Scan for IPC command definitions in Rust source
+    result["ipc_commands"] = _scan_tauri_ipc_commands(workspace)
+
+    # Compute security summary
+    result["security_summary"] = _compute_tauri_security_summary(result)
+
+    return result
+
+
+# ─── Binary & Tauri Helper Functions ────────────────────────
+
+def _parse_json_file(path: str) -> Optional[Dict]:
+    """Parse a JSON file safely."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (IOError, json.JSONDecodeError):
+        return None
+
+
+def _classify_binary(ext: str) -> str:
+    """Classify a binary file by its extension."""
+    classification = {
+        '.exe': 'executable', '.dll': 'shared_library', '.so': 'shared_library',
+        '.dylib': 'shared_library', '.a': 'static_library', '.o': 'object_file',
+        '.obj': 'object_file', '.wasm': 'webassembly', '.pyc': 'python_compiled',
+        '.pyo': 'python_compiled', '.class': 'java_compiled', '.jar': 'java_archive',
+        '.war': 'java_archive', '.node': 'native_addon', '.efi': 'firmware',
+        '.app': 'application_bundle', '.dmg': 'installer', '.iso': 'disk_image',
+        '.msi': 'installer', '.nupkg': 'nuget_package', '.deb': 'package',
+        '.rpm': 'package', '.apk': 'android_package', '.aab': 'android_bundle',
+        '.bin': 'raw_binary',
+    }
+    return classification.get(ext, 'unknown_binary')
+
+
+def _extract_binary_metadata(file_path: str, ext: str) -> Dict[str, Any]:
+    """Extract metadata from binary file headers (PE, ELF, Mach-O, WASM)."""
+    metadata: Dict[str, Any] = {}
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(512)
+            if len(header) < 4:
+                return metadata
+
+            # PE format (Windows .exe, .dll)
+            if header[:2] == b'MZ':
+                metadata["platform"] = "windows"
+                metadata["format"] = "PE"
+                try:
+                    pe_offset = struct.unpack_from('<I', header, 0x3C)[0]
+                    if pe_offset < len(header) - 4 and header[pe_offset:pe_offset+4] == b'PE\x00\x00':
+                        machine = struct.unpack_from('<H', header, pe_offset + 4)[0]
+                        arch_map = {0x14c: "x86", 0x8664: "x86_64", 0xaa64: "arm64", 0x1c0: "arm"}
+                        metadata["architecture"] = arch_map.get(machine, f"unknown(0x{machine:x})")
+                        num_sections = struct.unpack_from('<H', header, pe_offset + 6)[0]
+                        metadata["sections"] = [{"index": i} for i in range(min(num_sections, 50))]
+                except (struct.error, IndexError):
+                    pass
+
+            # ELF format (Linux)
+            elif header[:4] == b'\x7fELF':
+                metadata["format"] = "ELF"
+                ei_class = header[4]
+                metadata["platform"] = "linux"
+                metadata["architecture"] = {1: "x86", 2: "x86_64"}.get(ei_class, "unknown")
+                if len(header) >= 20:
+                    e_machine = struct.unpack_from('<H', header, 18)[0]
+                    machine_map = {0x03: "x86", 0x3E: "x86_64", 0xB7: "arm64", 0x28: "arm", 0xF3: "riscv"}
+                    if e_machine in machine_map:
+                        metadata["architecture"] = machine_map[e_machine]
+
+            # Mach-O format (macOS)
+            elif header[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                                b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe'):
+                metadata["format"] = "Mach-O"
+                metadata["platform"] = "macos"
+                magic = struct.unpack_from('<I', header, 0)[0]
+                if magic in (0xfeedface, 0xcefaedfe):
+                    metadata["architecture"] = "x86"
+                elif magic in (0xfeedfacf, 0xcffaedfe):
+                    metadata["architecture"] = "x86_64"
+
+            # WASM
+            elif header[:4] == b'\x00asm':
+                metadata["format"] = "WASM"
+                metadata["platform"] = "web"
+                metadata["architecture"] = "wasm"
+
+    except (IOError, OSError):
+        pass
+    return metadata
+
+
+def _detect_app_framework(file_path: str, ext: str, metadata: Dict) -> Optional[str]:
+    """Detect if a binary is a Tauri or Electron application by scanning for signatures."""
+    if ext not in ('.exe', '.dll', '.so', '.dylib', '.app', '.bin'):
+        return None
+    try:
+        with open(file_path, 'rb') as f:
+            chunk_size = min(os.path.getsize(file_path), 2 * 1024 * 1024)
+            data = f.read(chunk_size)
+            text = data.decode('ascii', errors='ignore')
+            has_tauri = 'tauri' in text.lower()
+            has_webview2 = 'webview2' in text.lower() or 'WebView2' in text
+            has_electron = 'electron' in text.lower() or 'chrome.dll' in text.lower()
+            has_node = 'node.dll' in text.lower() or 'libnode' in text.lower()
+            if has_tauri:
+                return "tauri"
+            if has_electron or has_node:
+                return "electron"
+    except (IOError, OSError):
+        pass
+    return None
+
+
+def _human_readable_size(size_bytes: float) -> str:
+    """Convert bytes to human-readable size string."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
         if size_bytes < 1024:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
 
 
-def _detect_build_system(workspace: str) -> Dict[str, Any]:
-    """Detect the build system and packaging tools used."""
-    systems = []
-
-    # Tauri
-    if os.path.exists(os.path.join(workspace, 'src-tauri', 'Cargo.toml')):
-        systems.append({'name': 'tauri', 'config': 'src-tauri/Cargo.toml'})
-    elif os.path.exists(os.path.join(workspace, 'Cargo.toml')):
-        cargo_path = os.path.join(workspace, 'Cargo.toml')
-        try:
-            with open(cargo_path, 'r', encoding='utf-8', errors='replace') as f:
-                if 'tauri' in f.read().lower():
-                    systems.append({'name': 'tauri', 'config': 'Cargo.toml'})
-        except IOError:
-            pass
-
-    # Electron
-    if os.path.exists(os.path.join(workspace, 'electron', 'main.js')) or \
-       os.path.exists(os.path.join(workspace, 'electron', 'main.ts')):
-        systems.append({'name': 'electron', 'config': 'electron/'})
-    else:
-        pkg_path = os.path.join(workspace, 'package.json')
-        if os.path.exists(pkg_path):
-            try:
-                with open(pkg_path, 'r', encoding='utf-8') as f:
-                    pkg = json.load(f)
-                deps = {**pkg.get('dependencies', {}), **pkg.get('devDependencies', {})}
-                if 'electron' in deps or 'electron-builder' in deps:
-                    systems.append({'name': 'electron', 'config': 'package.json'})
-            except (json.JSONDecodeError, IOError):
-                pass
-
-    # Cargo (Rust)
-    if os.path.exists(os.path.join(workspace, 'Cargo.toml')):
-        systems.append({'name': 'cargo', 'config': 'Cargo.toml'})
-
-    # npm/yarn/pnpm/bun
-    pkg_path = os.path.join(workspace, 'package.json')
-    if os.path.exists(pkg_path):
-        if os.path.exists(os.path.join(workspace, 'yarn.lock')):
-            systems.append({'name': 'yarn', 'config': 'yarn.lock'})
-        elif os.path.exists(os.path.join(workspace, 'pnpm-lock.yaml')):
-            systems.append({'name': 'pnpm', 'config': 'pnpm-lock.yaml'})
-        elif os.path.exists(os.path.join(workspace, 'bun.lock')) or os.path.exists(os.path.join(workspace, 'bun.lockb')):
-            systems.append({'name': 'bun', 'config': 'bun.lock'})
-        else:
-            systems.append({'name': 'npm', 'config': 'package-lock.json'})
-
-    # Python
-    if os.path.exists(os.path.join(workspace, 'pyproject.toml')):
-        systems.append({'name': 'python', 'config': 'pyproject.toml'})
-    elif os.path.exists(os.path.join(workspace, 'setup.py')):
-        systems.append({'name': 'python', 'config': 'setup.py'})
-
+def _extract_tauri_identity(conf: Dict) -> Dict[str, Any]:
+    """Extract app identity from Tauri configuration."""
     return {
-        'detected': [s['name'] for s in systems],
-        'details': systems,
+        "name": conf.get("productName", conf.get("name", "unknown")),
+        "version": conf.get("version", "unknown"),
+        "identifier": conf.get("identifier", ""),
     }
 
 
-def _generate_binary_recommendations(
-    executables, libraries, compiled, build_dirs, build_system
-) -> List[str]:
-    """Generate recommendations based on binary artifact findings."""
-    recs = []
+def _extract_tauri_build_config(conf: Dict) -> Dict[str, Any]:
+    """Extract build configuration from Tauri configuration."""
+    build = conf.get("build", {})
+    bundle = conf.get("bundle", {})
+    return {
+        "dev_path": build.get("devPath", build.get("devUrl", "")),
+        "dist_dir": build.get("distDir", build.get("frontendDist", "")),
+        "before_dev_command": build.get("beforeDevCommand", ""),
+        "before_build_command": build.get("beforeBuildCommand", ""),
+        "targets": bundle.get("targets", []),
+        "external_bin": bundle.get("externalBin", []),
+    }
 
-    if executables:
-        recs.append(
-            f"Found {len(executables)} executable(s). "
-            f"Ensure these are not committed to version control — "
-            f"use CI/CD to build and distribute via releases."
-        )
 
-    if libraries:
-        recs.append(
-            f"Found {len(libraries)} shared library/libraries. "
-            f"Verify these are not proprietary or need separate licensing."
-        )
+def _extract_tauri_updater(conf: Dict) -> Dict[str, Any]:
+    """Extract updater configuration from Tauri configuration."""
+    updater = conf.get("updater", {})
+    if not updater:
+        plugins = conf.get("plugins", {})
+        updater = plugins.get("updater", {})
+    if not updater:
+        return {"enabled": False}
+    return {
+        "enabled": updater.get("active", updater.get("enabled", False)),
+        "endpoints": updater.get("endpoints", []),
+        "pubkey": bool(updater.get("pubkey", "")),
+    }
 
-    if compiled:
-        total_pyc = sum(1 for c in compiled if c['extension'] in ('.pyc', '.pyo'))
-        if total_pyc:
-            recs.append(
-                f"Found {total_pyc} .pyc/.pyo files. "
-                f"Add '**/__pycache__/' to .gitignore."
-            )
 
-    if build_dirs:
-        recs.append(
-            f"Found {len(build_dirs)} build output directories. "
-            f"Ensure these are in .gitignore and not committed."
-        )
+def _extract_tauri_webview_security(conf: Dict) -> Dict[str, Any]:
+    """Extract WebView security settings from Tauri configuration."""
+    security = conf.get("security", {})
+    if not security:
+        app = conf.get("app", {})
+        security = app.get("security", {})
+    if not security:
+        tauri = conf.get("tauri", {})
+        security = tauri.get("security", {})
+    return {
+        "csp": security.get("csp", None),
+        "dangerous_disable_asset_csp_modification": security.get(
+            "dangerousDisableAssetCspModification",
+            security.get("dangerous_disable_asset_csp_modification", False)
+        ),
+    }
 
-    tauri_detected = any(s['name'] == 'tauri' for s in build_system.get('details', []))
-    electron_detected = any(s['name'] == 'electron' for s in build_system.get('details', []))
 
-    if tauri_detected:
-        recs.append(
-            "TAURI: Use 'tauri build' for production builds. "
-            "Output goes to src-tauri/target/release/bundle/. "
-            "Distribute via GitHub Releases."
-        )
+def _extract_tauri_deep_links(conf: Dict) -> List[Dict[str, Any]]:
+    """Extract deep-link/custom protocol schemes from Tauri configuration."""
+    deep_links = []
+    plugins = conf.get("plugins", {})
+    deep_link_config = plugins.get("deep-link", {})
+    if deep_link_config:
+        for scheme in deep_link_config.get("schemes", []):
+            deep_links.append({
+                "scheme": scheme if isinstance(scheme, str) else scheme.get("scheme", ""),
+                "source": "plugins.deep-link",
+            })
+    tauri = conf.get("tauri", {})
+    protocol = tauri.get("bundle", {}).get("protocol", {})
+    if protocol:
+        scheme = protocol.get("scheme", "")
+        if scheme:
+            deep_links.append({"scheme": scheme, "source": "tauri.bundle.protocol"})
+    return deep_links
 
-    if electron_detected:
-        recs.append(
-            "ELECTRON: Use 'electron-builder' or 'electron-forge' for packaging. "
-            "Add 'dist/' and '*.exe' to .gitignore."
-        )
 
-    return recs
+def _extract_tauri_sidecars(conf: Dict) -> List[Dict[str, Any]]:
+    """Extract sidecar binary configurations from Tauri configuration."""
+    sidecars = []
+    tauri = conf.get("tauri", {})
+    external_bin = tauri.get("bundle", {}).get("externalBin", conf.get("bundle", {}).get("externalBin", []))
+    for sb in external_bin:
+        if isinstance(sb, str):
+            sidecars.append({"name": sb, "source": "bundle.externalBin"})
+    return sidecars
+
+
+def _scan_tauri_capabilities(workspace: str) -> List[Dict[str, Any]]:
+    """Scan for Tauri capability/permission definitions."""
+    capabilities = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if os.path.basename(root) == 'capabilities':
+            for filename in filenames:
+                if filename.endswith('.json'):
+                    file_path = os.path.join(root, filename)
+                    cap_data = _parse_json_file(file_path)
+                    if cap_data:
+                        permissions = cap_data.get("permissions", [])
+                        capabilities.append({
+                            "file": os.path.relpath(file_path, workspace),
+                            "identifier": cap_data.get("identifier", ""),
+                            "description": cap_data.get("description", ""),
+                            "windows": cap_data.get("windows", []),
+                            "permissions": permissions,
+                            "permission_count": len(permissions),
+                            "permission_categories": _classify_permissions(permissions),
+                        })
+    return capabilities
+
+
+def _classify_permissions(permissions: List) -> Dict[str, List[str]]:
+    """Classify Tauri permissions by security category."""
+    categories: Dict[str, List[str]] = {
+        "filesystem": [], "shell": [], "http": [], "window": [],
+        "notification": [], "clipboard": [], "global_shortcut": [], "other": [],
+    }
+    for perm in permissions:
+        if isinstance(perm, str):
+            perm_str = perm.lower()
+            if any(k in perm_str for k in ('fs', 'file', 'path', 'directory')):
+                categories["filesystem"].append(perm)
+            elif any(k in perm_str for k in ('shell', 'execute', 'process')):
+                categories["shell"].append(perm)
+            elif any(k in perm_str for k in ('http', 'request', 'fetch')):
+                categories["http"].append(perm)
+            elif any(k in perm_str for k in ('window', 'webview')):
+                categories["window"].append(perm)
+            elif 'notif' in perm_str:
+                categories["notification"].append(perm)
+            elif 'clip' in perm_str:
+                categories["clipboard"].append(perm)
+            elif any(k in perm_str for k in ('shortcut', 'global')):
+                categories["global_shortcut"].append(perm)
+            else:
+                categories["other"].append(perm)
+        elif isinstance(perm, dict):
+            categories["other"].append(perm.get("identifier", ""))
+    return {k: v for k, v in categories.items() if v}
+
+
+def _scan_tauri_ipc_commands(workspace: str) -> List[Dict[str, Any]]:
+    """Scan Rust source files for Tauri IPC command definitions."""
+    commands = []
+    tauri_cmd_pattern = re.compile(
+        r'#\[tauri::command\s*(?:\([^)]*\))?\s*\]'
+        r'(?:\s*#\[[^\]]*\])*'
+        r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)',
+        re.MULTILINE
+    )
+    invoke_handler_pattern = re.compile(
+        r'\.invoke_handler\s*\(\s*tauri::generate_handler\s*!\s*\[([^\]]+)\]',
+        re.DOTALL
+    )
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            if not fn.endswith('.rs'):
+                continue
+            path = os.path.join(root, fn)
+            content = safe_read_file(path)
+            if content is None:
+                continue
+            for m in tauri_cmd_pattern.finditer(content):
+                fn_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                parts = fn_name.split('_')
+                cmd_name = parts[0] + ''.join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else fn_name
+                commands.append({
+                    "rust_fn": fn_name,
+                    "ipc_command": cmd_name,
+                    "file": os.path.relpath(path, workspace),
+                    "line": line_num,
+                    "invoke_syntax": f"invoke('{cmd_name}')",
+                })
+            for m in invoke_handler_pattern.finditer(content):
+                for cmd_match in re.finditer(r'(\w+::)*(\w+)', m.group(1)):
+                    cmd_name = cmd_match.group(2)
+                    if cmd_name in ('tauri', 'generate_handler', 'Box', 'Fn'):
+                        continue
+                    if not any(c.get("rust_fn") == cmd_name for c in commands):
+                        parts = cmd_name.split('_')
+                        ipc_name = parts[0] + ''.join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else cmd_name
+                        commands.append({
+                            "rust_fn": cmd_name,
+                            "ipc_command": ipc_name,
+                            "file": os.path.relpath(path, workspace),
+                            "line": content[:m.start()].count('\n') + 1,
+                            "invoke_syntax": f"invoke('{ipc_name}')",
+                            "registered_in": "generate_handler!",
+                        })
+    return commands
+
+
+def _compute_tauri_security_summary(analysis: Dict) -> Dict[str, Any]:
+    """Compute a security summary from Tauri analysis results."""
+    concerns: List[Dict[str, str]] = []
+    risk_level = "low"
+    for cap in analysis.get("capabilities", []):
+        categories = cap.get("permission_categories", {})
+        if categories.get("shell"):
+            concerns.append({
+                "category": "shell_access", "severity": "high",
+                "detail": f"Shell execution permission in {cap['file']}: {', '.join(categories['shell'][:5])}",
+            })
+            risk_level = "high"
+        if categories.get("filesystem"):
+            concerns.append({
+                "category": "filesystem_access", "severity": "medium",
+                "detail": f"Filesystem permission in {cap['file']}: {len(categories['filesystem'])} permissions",
+            })
+            if risk_level == "low":
+                risk_level = "medium"
+    webview = analysis.get("webview_security", {})
+    if webview.get("dangerous_disable_asset_csp_modification"):
+        concerns.append({"category": "csp_bypass", "severity": "high",
+                        "detail": "CSP modification is disabled — potential security risk"})
+        risk_level = "high"
+    if not webview.get("csp"):
+        concerns.append({"category": "missing_csp", "severity": "medium",
+                        "detail": "No Content Security Policy (CSP) configured"})
+        if risk_level == "low":
+            risk_level = "medium"
+    updater = analysis.get("updater", {})
+    if updater.get("enabled") and not updater.get("pubkey"):
+        concerns.append({"category": "insecure_updater", "severity": "high",
+                        "detail": "Updater is enabled without public key — susceptible to MITM attacks"})
+        risk_level = "high"
+    sidecars = analysis.get("sidecars", [])
+    if sidecars:
+        concerns.append({"category": "sidecar_binaries", "severity": "medium",
+                        "detail": f"{len(sidecars)} sidecar binary(ies) bundled — verify their security"})
+        if risk_level == "low":
+            risk_level = "medium"
+    return {"risk_level": risk_level, "concern_count": len(concerns), "concerns": concerns}
+
+
+# ─── File Cache (Single-Pass Workspace Scanner) ──────────────
+
+# Source extensions used across engines for file filtering
+SOURCE_EXTENSIONS = {
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".rs", ".vue", ".svelte", ".html", ".htm",
+    ".css", ".scss", ".pcss", ".less",
+}
+
+# Max file size to read into cache (500KB)
+_MAX_CACHED_FILE_SIZE = 500 * 1024
+
+
+class FileCache:
+    """Single-pass workspace scanner that caches file contents.
+
+    Instead of each engine doing its own os.walk + f.read(), a shared
+    FileCache reads every source file once and provides content to all
+    engines. This collapses 20+ workspace walks into 1 for commands
+    like `handbook`.
+
+    Usage:
+        cache = FileCache(workspace)
+        for rel_path, ext, content in cache.iter_files():
+            # process file
+        # Or:
+        files = cache.get_files()  # Dict[rel_path, content]
+    """
+
+    def __init__(self, workspace: str, max_files: int = 3000,
+                 extensions: Optional[Set[str]] = None,
+                 config: Optional[Dict] = None):
+        self.workspace = os.path.abspath(workspace)
+        self.max_files = max_files
+        self.extensions = extensions or SOURCE_EXTENSIONS
+        self.config = config or {}
+        self.truncated = False
+
+        self._files: Optional[Dict[str, str]] = None  # {rel_path: content}
+        self._file_meta: Optional[List[Tuple[str, str]]] = None  # [(rel_path, ext)]
+
+    def scan(self) -> Dict[str, str]:
+        """Single os.walk pass. Returns {rel_path: content}."""
+        if self._files is not None:
+            return self._files
+
+        self._files = {}
+        self._file_meta = []
+        count = 0
+
+        for root, dirs, filenames in os.walk(self.workspace):
+            # Filter ignored directories
+            dirs[:] = [
+                d for d in dirs
+                if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')
+            ]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+
+            for fn in filenames:
+                if count >= self.max_files:
+                    self.truncated = True
+                    logger.info(f"FileCache: truncated at {self.max_files} files")
+                    return self._files
+
+                # Skip ignored extensions
+                if any(fn.endswith(ext) for ext in DEFAULT_IGNORE_EXTENSIONS):
+                    continue
+
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in self.extensions:
+                    continue
+
+                path = os.path.join(root, fn)
+                rel = os.path.relpath(path, self.workspace)
+
+                # Skip large files
+                try:
+                    file_size = os.path.getsize(path)
+                    if file_size > _MAX_CACHED_FILE_SIZE:
+                        continue
+                except OSError:
+                    continue
+
+                try:
+                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        self._files[rel] = f.read()
+                    self._file_meta.append((rel, ext))
+                except (IOError, OSError):
+                    continue
+
+                count += 1
+
+        logger.info(f"FileCache: scanned {count} files from {self.workspace}")
+        return self._files
+
+    def iter_files(self, extensions: Optional[Set[str]] = None) -> List[Tuple[str, str, str]]:
+        """Returns [(rel_path, ext, content)] for cached files.
+
+        Args:
+            extensions: Optional filter by file extensions (e.g., {'.ts', '.tsx'}).
+        """
+        self.scan()
+        results = []
+        for rel, ext in (self._file_meta or []):
+            if extensions and ext not in extensions:
+                continue
+            content = self._files.get(rel)
+            if content is not None:
+                results.append((rel, ext, content))
+        return results
+
+    def get_files(self, extensions: Optional[Set[str]] = None) -> Dict[str, str]:
+        """Returns {rel_path: content} for cached files, optionally filtered by extension."""
+        self.scan()
+        if not extensions:
+            return dict(self._files)
+        return {
+            rel: content for rel, content in self._files.items()
+            if os.path.splitext(rel)[1].lower() in extensions
+        }
+
+    def get_file_count(self) -> int:
+        """Return number of cached files."""
+        self.scan()
+        return len(self._files)
+
+    def get_content(self, rel_path: str) -> Optional[str]:
+        """Get content for a specific file by relative path."""
+        self.scan()
+        return self._files.get(rel_path)
+
+
+def walk_source_files(workspace: str, extensions: Optional[Set[str]] = None,
+                      max_files: int = 3000) -> List[Tuple[str, str, str]]:
+    """Convenience function: walk workspace and return [(rel_path, ext, content)].
+
+    This is a lightweight alternative to FileCache for engines that only
+    need a single pass and don't need caching across calls.
+
+    Args:
+        workspace: Absolute path to workspace.
+        extensions: Source file extensions to include (default: SOURCE_EXTENSIONS).
+        max_files: Maximum number of files to scan (default: 3000).
+
+    Returns:
+        List of (rel_path, ext, content) tuples.
+    """
+    workspace = os.path.abspath(workspace)
+    exts = extensions or SOURCE_EXTENSIONS
+    results = []
+    count = 0
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [
+            d for d in dirs
+            if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')
+        ]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for fn in filenames:
+            if count >= max_files:
+                return results
+
+            if any(fn.endswith(ext) for ext in DEFAULT_IGNORE_EXTENSIONS):
+                continue
+
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in exts:
+                continue
+
+            path = os.path.join(root, fn)
+            rel = os.path.relpath(path, workspace)
+
+            try:
+                file_size = os.path.getsize(path)
+                if file_size > _MAX_CACHED_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                results.append((rel, ext, content))
+                count += 1
+            except (IOError, OSError):
+                continue
+
+    return results
