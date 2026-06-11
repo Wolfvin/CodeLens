@@ -11,7 +11,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import logger
+from utils import logger, DEFAULT_IGNORE_DIRS
 
 
 def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
@@ -167,8 +167,7 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
 
     # Scan for import statements
     extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'}
-    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
-                   "__pycache__", ".codelens", ".next", ".cache"}
+    ignore_dirs = DEFAULT_IGNORE_DIRS
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -291,8 +290,7 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
     """Detect circular CSS @import chains."""
     import_graph: Dict[str, Set[str]] = defaultdict(set)
 
-    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
-                   "__pycache__", ".codelens", ".next", ".cache"}
+    ignore_dirs = DEFAULT_IGNORE_DIRS
 
     css_extensions = {'.css', '.scss', '.less', '.sass'}
 

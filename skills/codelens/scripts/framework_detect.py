@@ -6,7 +6,7 @@ Auto-detects frameworks from package.json, config files, and file patterns.
 import json
 import os
 from typing import Dict, List, Any, Optional
-from utils import logger
+from utils import logger, DEFAULT_IGNORE_DIRS
 
 
 # Known framework signatures
@@ -133,10 +133,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 3. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
+        # Skip ignored dirs — use centralized list
         skip = False
-        for ignore in ['node_modules', '.git', 'dist', 'build', 'target', '__pycache__']:
-            if ignore in root:
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root.split(os.sep):
                 skip = True
                 break
         if skip:
@@ -157,8 +157,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
         for root, dirs, files in os.walk(workspace):
             skip = False
-            for ignore in ['node_modules', '.git', 'dist', 'build', 'target', '__pycache__']:
-                if ignore in root:
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root.split(os.sep):
                     skip = True
                     break
             if skip:

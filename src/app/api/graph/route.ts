@@ -5,10 +5,17 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { commandRunner } from '@/lib/commandRunner'
+import { commandRunner, sanitizeWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
+
+// ─── Scan Result Cache ──────────────────────────────────────
+// Prevents redundant re-scans on every GET request.
+// Cache entries expire after CACHE_TTL_MS milliseconds.
+
+const scanCache = new Map<string, { data: any; timestamp: number }>()
+const CACHE_TTL_MS = 30_000 // 30 seconds — balances freshness vs. performance
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,8 +29,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Validate workspace path to prevent path traversal
+    const safeWorkspace = sanitizeWorkspace(workspace)
+
+    // Check cache first — avoids expensive re-scan on repeated requests
+    const cacheKey = safeWorkspace
+    const cached = scanCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return NextResponse.json(cached.data)
+    }
+
     // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(workspace)
+    const scanOutput = await commandRunner.scan(safeWorkspace)
 
     // Check for CLI errors
     if (scanOutput.status === 'error') {
@@ -62,11 +79,12 @@ export async function GET(request: NextRequest) {
     // Compute clusters
     const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
-    // Assign clusterId to each node (using cloned nodes to avoid mutation)
+    // Assign clusterId to each node (using cloned nodes to avoid mutation, Map for O(n) lookup)
     const finalNodes = selectedNodes.map(n => ({ ...n }))
+    const nodeMap = new Map(finalNodes.map(n => [n.id, n]))
     for (const cluster of clusters) {
       for (const nodeId of cluster.nodeIds) {
-        const node = finalNodes.find((n) => n.id === nodeId)
+        const node = nodeMap.get(nodeId)
         if (node) {
           node.clusterId = cluster.id
         }
@@ -82,7 +100,7 @@ export async function GET(request: NextRequest) {
     // Compute heatmap (inspired by Emerge)
     const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
 
-    return NextResponse.json({
+    const responseData = {
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
@@ -90,6 +108,11 @@ export async function GET(request: NextRequest) {
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
     })
+
+    // Cache the result for subsequent requests
+    scanCache.set(cacheKey, { data: responseData, timestamp: Date.now() })
+
+    return NextResponse.json(responseData)
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)
     return NextResponse.json(

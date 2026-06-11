@@ -34,13 +34,16 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--full", action="store_true",
+                        help="Force a full re-scan, ignoring existing registry")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    # Auto-enable incremental mode if registry already exists
-    if not incremental:
+    full_scan = getattr(args, 'full', False)
+    # Auto-enable incremental mode if registry already exists (unless --full is specified)
+    if not incremental and not full_scan:
         registry_path = os.path.join(workspace, '.codelens', 'backend.json')
         if os.path.exists(registry_path):
             incremental = True

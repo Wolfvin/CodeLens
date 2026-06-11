@@ -133,7 +133,7 @@ class GraphStore {
 
     // Cap eventLog at 1000 entries to prevent unbounded memory growth
     if (this.eventLog.length > 1000) {
-      this.eventLog = this.eventLog.slice(-500)
+      this.eventLog = this.eventLog.slice(-800)
     }
 
     // Upsert nodes from event
@@ -652,7 +652,8 @@ class GraphStore {
       }
       this.selectedNodeId = data.selectedNodeId ?? null
       return true
-    } catch {
+    } catch (err: any) {
+      console.warn('[GraphStore] loadFromJSON failed:', err?.message ?? err)
       return false
     }
   }

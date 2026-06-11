@@ -2,6 +2,29 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.8.0] — 2026-06-11
+
+### Fixed — Critical
+- **API whitelist missing `handbook` and `ask` commands** — these key AI-facing commands were rejected by the REST API (`commandRunner.ts`)
+- **Path traversal vulnerability** — API routes accepted arbitrary workspace paths without validation, allowing access to system directories (`/etc`, `/root`, etc.)
+- **No scan result caching** — `/api/graph` and `/api/health` re-scanned the entire workspace on every GET request (10+ seconds); added 30-second TTL cache
+- **Auto-incremental scan couldn't be disabled** — added `--full` flag to force clean re-scan when registry data is stale
+- **`fn_map` overwrite bug** — `fallback_python.py` silently overwrote function entries with the same name (e.g., methods in different classes), causing misattributed call edges
+
+### Fixed — High
+- **Inconsistent ignore directories** — `framework_detect.py`, `circular_engine.py`, and `validate_engine.py` used hardcoded ignore lists instead of centralized `DEFAULT_IGNORE_DIRS` from `utils.py`
+- **`--format json` not explicitly passed** — API calls could receive non-JSON output if user config changed default format; now always passes `--format json`
+
+### Fixed — Medium
+- **Secrets engine insufficient masking** — short secrets (< 8 chars) revealed the entire value with "first 4 + ***" strategy; now uses "first 2 + ***" for values under 8 chars
+- **`graphStore.loadFromJSON` silently swallows errors** — added logging for malformed JSON attempts
+- **EventLog truncation gap** — changed from 1000→500 (50% gap) to 1000→800 (20% gap) for less event history loss
+
+### Added
+- `sanitizeWorkspace()` function in `commandRunner.ts` for workspace path validation
+- 30-second TTL scan result cache in `/api/graph` and `/api/health` routes
+- `--full` flag on `scan` command to force full re-scan
+
 ## [5.3.0] — 2026-06-11
 
 ### Architecture

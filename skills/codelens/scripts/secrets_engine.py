@@ -620,11 +620,15 @@ def _shannon_entropy(data: str) -> float:
 # ─── Helper Functions ──────────────────────────────────────────
 
 def _mask_value(value: str) -> str:
-    """Mask a secret value, showing only the first 4 characters.
+    """Mask a secret value, showing only a safe prefix.
 
     This prevents the engine from leaking secrets in its output.
+    For values under 8 chars, only the first 2 chars are shown to avoid
+    revealing the entire value (e.g., short tokens like "abc1").
     """
     if len(value) <= 4:
+        return value[:2] + "***"
+    if len(value) < 8:
         return value[:2] + "***"
     return value[:4] + "***"
 

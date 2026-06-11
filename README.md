@@ -279,7 +279,7 @@ Sent in response to a `select_node` event. Contains rich context for a specific 
 
 ---
 
-## 39 CLI Commands
+## 41 CLI Commands
 
 ### Core
 
@@ -437,8 +437,8 @@ CodeLens/
 ├── mini-services/
 │   └── codelens-ws/      # Socket.io WebSocket server
 │       └── index.ts
-├── skills/codelens/       # CodeLens Python CLI (v5.1)
-│   ├── scripts/           # 39 command engines + parsers
+├── skills/codelens/       # CodeLens Python CLI (v5.8)
+│   ├── scripts/           # 41 command engines + parsers
 │   ├── tests/             # Python unit tests
 │   └── setup.sh           # One-time tree-sitter setup
 ├── __tests__/             # Backend integration tests
