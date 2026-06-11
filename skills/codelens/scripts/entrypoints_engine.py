@@ -28,7 +28,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte", ".php",
 }
 
 # Performance limit for large codebases
@@ -248,6 +248,31 @@ ENTRYPOINT_PATTERNS = {
                 "path_group": 1,
                 "label": "trpc_query",
             },
+            # Laravel Route::get/post/put/delete/patch
+            {
+                "regex": r'Route::(get|post|put|patch|delete|options|any)\s*\(\s*[\'"]([^\'"]+ )[\'"]',
+                "language": {".php"},
+                "extract": "http_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "laravel_route",
+            },
+            # Laravel Route::group
+            {
+                "regex": r'Route::group\s*\(',
+                "language": {".php"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "laravel_route_group",
+            },
+            # Symfony #[Route] attribute
+            {
+                "regex": r'#\[Route\s*\(\s*[\'"]([^\'"]+ )[\'"]',
+                "language": {".php"},
+                "extract": "symfony_route_attr",
+                "path_group": 1,
+                "label": "symfony_route_attribute",
+            },
         ],
     },
 
@@ -344,6 +369,23 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "svelte_onmount",
             },
+            # Laravel Event::listen
+            {
+                "regex": r'Event::listen\s*\(\s*[\'"]([^\'" ]+)[\'"]',
+                "language": {".php"},
+                "extract": "event_name",
+                "event_group": 1,
+                "label": "laravel_event_listener",
+            },
+            # Laravel $listen property in EventServiceProvider
+            {
+                "regex": r'[\'"]([\w.]+)[\'"]\s*=>\s*\[',
+                "language": {".php"},
+                "filename_filter": {"EventServiceProvider.php"},
+                "extract": "event_name",
+                "event_group": 1,
+                "label": "laravel_event_provider",
+            },
         ],
     },
 
@@ -415,6 +457,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "structopt_parser",
+            },
+            # Laravel Artisan command signature
+            {
+                "regex": r'protected\s+\$signature\s*=\s*[\'"]([^\'" ]+)[\'"]',
+                "language": {".php"},
+                "extract": "cli_command",
+                "command_group": 1,
+                "label": "laravel_artisan_command",
+            },
+            # Laravel Artisan::command
+            {
+                "regex": r'Artisan::command\s*\(\s*[\'"]([^\'" ]+)[\'"]',
+                "language": {".php"},
+                "extract": "cli_command",
+                "command_group": 1,
+                "label": "laravel_artisan_inline",
             },
         ],
     },

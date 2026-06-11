@@ -24,6 +24,8 @@ from parsers.fallback_js_frontend import parse_js_frontend_fallback
 from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
+from parsers.fallback_php import parse_php_fallback
+from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
 
@@ -474,11 +476,66 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
+    # Parse PHP files
+    php_data = []
+    if files["php"]:
+        for path in files["php"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_php_fallback(content, os.path.relpath(path, workspace))
+                php_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read PHP file: {path}")
+
+    # Parse Blade templates
+    blade_data = []
+    blade_frontend_data = []
+    if files["blade"]:
+        for path in files["blade"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_blade_template(content, os.path.relpath(path, workspace))
+                blade_data.append(refs)
+                # Extract frontend data from blade templates
+                fe = refs.get("frontend", {})
+                if fe.get("classes") or fe.get("ids"):
+                    blade_frontend_data.append({
+                        "path": os.path.relpath(path, workspace),
+                        "classes": fe.get("classes", []),
+                        "ids": fe.get("ids", []),
+                    })
+            except IOError:
+                logger.debug(f"Failed to read Blade file: {path}")
+
+    # Merge blade frontend data into existing frontend data for registry building
+    # Blade classes/ids are treated like HTML definitions
+    html_data.extend(blade_frontend_data)
+
+    # Re-build frontend registry if blade data was added
+    if blade_frontend_data and not (incremental and changed_files):
+        # Rebuild frontend registry including blade data
+        frontend_registry = build_frontend_registry(
+            workspace, html_data, css_data, js_frontend_data,
+            tsx_data, vue_data, svelte_data,
+            tailwind_info, config.get("frameworks", [])
+        )
+        save_frontend_registry(workspace, frontend_registry)
+
     # Build backend registry with edge resolution
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data
+        new_parsed_data = rust_data + js_backend_data + python_data + php_data
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -489,7 +546,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data:
+        for item in rust_data + js_backend_data + python_data + php_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
 
@@ -551,10 +608,14 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "tsx": len(files["tsx"]),
             "rust": len(files["rust"]),
             "python": len(files["python"]),
+            "php": len(files["php"]),
+            "blade": len(files["blade"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"])
         },
         "python_parsed": len(python_data),
+        "php_parsed": len(php_data),
+        "blade_parsed": len(blade_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -582,6 +643,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "tsx": [],
         "rust": [],
         "python": [],
+        "php": [],
+        "blade": [],
         "vue": [],
         "svelte": []
     }
@@ -631,6 +694,12 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["rust"].append(file_path)
             elif ext == '.py':
                 files["python"].append(file_path)
+            elif ext == '.php':
+                # Blade templates have .blade.php extension
+                if filename.endswith('.blade.php'):
+                    files["blade"].append(file_path)
+                else:
+                    files["php"].append(file_path)
             elif ext == '.vue':
                 files["vue"].append(file_path)
             elif ext == '.svelte':
