@@ -227,9 +227,26 @@ function nodeColor(type: NodeType, status: NodeStatus): string {
 
 // ─── CodeLens CLI Execution ─────────────────────────────────
 
-const CODELENS_CLI = process.env.CODELENS_PYTHON || '/home/z/.venv/bin/python3'
-const CODELENS_SCRIPT = '/home/z/my-project/skills/codelens/scripts/codelens.py'
+const CODELENS_CLI = process.env.CODELENS_PYTHON
+const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
 const CLI_TIMEOUT_MS = 60_000
+
+if (!CODELENS_CLI) {
+  console.error(
+    '[CodeLens WS] FATAL: CODELENS_PYTHON env var is not set. ' +
+    'Set it to the path of your Python 3 interpreter (with tree-sitter). ' +
+    'Example: CODELENS_PYTHON=/home/you/.venv/bin/python3'
+  )
+  process.exit(1)
+}
+if (!CODELENS_SCRIPT) {
+  console.error(
+    '[CodeLens WS] FATAL: CODELENS_SCRIPT env var is not set. ' +
+    'Set it to the path of codelens.py. ' +
+    'Example: CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py'
+  )
+  process.exit(1)
+}
 
 async function executeCodelens(command: string, args: string[]): Promise<{ success: boolean; data: any; error?: string }> {
   const fullArgs = [CODELENS_SCRIPT, command, ...args]
