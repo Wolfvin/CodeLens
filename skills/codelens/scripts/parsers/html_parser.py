@@ -81,8 +81,8 @@ class HTMLParser(BaseParser):
         line = self.get_line(node)
 
         if attr_name == 'id':
-            # Skip template literals
-            if '{{' in attr_value or '{' in attr_value:
+            # Skip template literals (Jinja/Vue {{ }}, JS template ${ }, Jinja {% %})
+            if '{{' in attr_value or '${' in attr_value or '{%' in attr_value:
                 return
             ids.append({
                 "name": attr_value.strip(),
@@ -92,8 +92,8 @@ class HTMLParser(BaseParser):
             })
 
         elif attr_name == 'class':
-            # Skip template literals
-            if '{{' in attr_value or '{' in attr_value:
+            # Skip template literals (Jinja/Vue {{ }}, JS template ${ }, Jinja {% %})
+            if '{{' in attr_value or '${' in attr_value or '{%' in attr_value:
                 return
             # Split by whitespace
             for cls in attr_value.split():

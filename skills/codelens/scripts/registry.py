@@ -288,6 +288,11 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
                 css_paths[p] = []
             css_paths[p].append(css_ref)
 
+        # Clear stale flags before re-computing
+        for path, path_refs in css_paths.items():
+            for ref in path_refs:
+                ref.pop("flag", None)
+
         # Flag duplicate_define: same selector defined in same file 2+ times
         for path, path_refs in css_paths.items():
             if len(path_refs) > 1:

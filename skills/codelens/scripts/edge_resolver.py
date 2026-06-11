@@ -7,6 +7,17 @@ Builds a complete call graph from all parsed backend data.
 from typing import Dict, List, Any, Optional, Tuple
 
 
+# Known globals whose method calls should not be resolved as user-defined functions
+SKIP_NAMES = {
+    'console', 'Math', 'JSON', 'Object', 'Array', 'String', 'Number',
+    'Boolean', 'Date', 'RegExp', 'Error', 'Map', 'Set', 'WeakMap',
+    'WeakSet', 'Promise', 'Symbol', 'Proxy', 'Reflect',
+    'window', 'document', 'global', 'globalThis', 'process',
+    'Buffer', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+    'fetch', 'require', 'module', 'exports', '__dirname', '__filename',
+}
+
+
 def resolve_edges(
     all_nodes: List[Dict],
     all_raw_edges: List[Dict]
@@ -64,7 +75,11 @@ def resolve_edges(
 
         # 2. Method match: "obj.method" → try just "method"
         if not target_node and '.' in to_fn:
-            method_name = to_fn.split('.')[-1]
+            parts = to_fn.split('.')
+            # Skip if the object part is a known global (console, Math, etc.)
+            if parts[0] in SKIP_NAMES:
+                continue
+            method_name = parts[-1]
             if method_name in fn_name_to_nodes:
                 candidates = fn_name_to_nodes[method_name]
                 if candidates:

@@ -5,7 +5,7 @@ import re
 
 def parse_html_fallback(content, file_path):
     """Basic regex HTML parser fallback."""
-    content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
+    content = re.sub(r'<!--.*?-->', lambda m: '\n' * m.group(0).count('\n'), content, flags=re.DOTALL)
     ids, classes = [], []
     for line_num, line in enumerate(content.split('\n'), 1):
         for m in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', line):

@@ -9,6 +9,7 @@ import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
+import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,8 +24,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Validate workspace path to prevent path traversal
+    const wsValidation = validateWorkspace(workspace)
+    if (!wsValidation.valid) {
+      return NextResponse.json(
+        { error: `Invalid workspace: ${wsValidation.error}` },
+        { status: 400 }
+      )
+    }
+    const safeWorkspace = wsValidation.resolved
+
     // Run the scan to get current graph state
-    const scanOutput = await commandRunner.scan(workspace)
+    const scanOutput = await commandRunner.scan(safeWorkspace)
 
     if (scanOutput.status === 'error') {
       return NextResponse.json(

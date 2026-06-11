@@ -37,16 +37,18 @@ CodeLens uses a modular engine architecture. To add a new analysis capability:
 2. **Open a discussion issue** first describing the engine's purpose and design
 3. **Follow the naming convention**: `yourfeature_engine.py`
 4. **Implement the engine** following the pattern of existing engines
-5. **Add CLI integration** in `codelens.py`
+5. **Add a command module** in `commands/yourfeature.py` with `add_args(subparser)` and `execute(args)` functions
 6. **Add tests** in `tests/`
 7. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, and `README.md`
+
+Commands auto-register via `commands/__init__.py` — no manual wiring needed.
 
 ### Adding New Language Parsers
 
 1. **Check tree-sitter support** for the language
 2. **Create `parsers/yourlanguage_parser.py`** following the base_parser pattern
-3. **Add fallback regex parser** in `codelens.py` for when tree-sitter is unavailable
-4. **Update `discover_files()`** in `codelens.py` to recognize the file extension
+3. **Add fallback regex parser** in `parsers/fallback_yourlanguage.py` for when tree-sitter is unavailable
+4. **Update file discovery** to recognize the file extension
 5. **Update `setup.sh`** to install the tree-sitter grammar
 6. **Add tests** with sample files in the target language
 7. **Update documentation**
@@ -117,13 +119,14 @@ def your_engine(workspace: str, **kwargs) -> Dict[str, Any]:
 
 ### CLI Integration
 
-When adding a new CLI command, follow this pattern in `codelens.py`:
+When adding a new CLI command, create a new file in the `commands/` directory:
 
-1. Add a `cmd_yourfeature()` function
-2. Add argparse subparser in `main()`
-3. Add the command dispatch in the if/elif chain
-4. Update the module docstring usage section
-5. Update `skill.json` version and description
+1. Create `commands/yourfeature.py` with two functions:
+   - `add_args(subparser)` — define argparse arguments
+   - `execute(args)` — run the command and return JSON
+2. The command auto-registers via `commands/__init__.py` (no manual wiring)
+3. Update `skill.json` version and description
+4. Add a formatter in `formatters/` if markdown output is needed
 
 ### Error Handling
 

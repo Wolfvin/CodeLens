@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
+import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,7 +28,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const commandArgs: string[] = Array.isArray(args) ? args : []
+    // Validate workspace path to prevent path traversal
+    const wsValidation = validateWorkspace(workspace)
+    if (!wsValidation.valid) {
+      return NextResponse.json(
+        { error: `Invalid workspace: ${wsValidation.error}` },
+        { status: 400 }
+      )
+    }
+    const safeWorkspace = wsValidation.resolved
+
+    const commandArgs: string[] = Array.isArray(args)
+      ? args.filter((a): a is string => typeof a === 'string' && a.length <= 4096)
+      : []
 
     // Guard: watch command is not supported via REST API
     if (command === 'watch') {
@@ -42,7 +55,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Execute the command via CLI
-    const rawOutput = await commandRunner.execute(command, [...commandArgs, workspace])
+    const rawOutput = await commandRunner.execute(command, [...commandArgs, safeWorkspace])
 
     // Check for CLI errors
     if (rawOutput.status === 'error') {

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any
 
-from utils import logger
+from utils import logger, DEFAULT_IGNORE_EXTENSIONS
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -34,13 +34,16 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--full", action="store_true",
+                        help="Force full scan, bypassing auto-incremental mode")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    # Auto-enable incremental mode if registry already exists
-    if not incremental:
+    full_scan = getattr(args, 'full', False)
+    # Auto-enable incremental mode if registry already exists (unless --full)
+    if not incremental and not full_scan:
         registry_path = os.path.join(workspace, '.codelens', 'backend.json')
         if os.path.exists(registry_path):
             incremental = True
@@ -119,9 +122,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 existing_backend["nodes"] = [n for n in be_nodes if n.get("file", "") not in del_set]
                 # Clean edges that reference deleted nodes
                 remaining_ids = {n["id"] for n in existing_backend["nodes"] if "id" in n}
-                existing_backend["edges"] = [e for e in existing_backend.get("edges", [])
-                                              if e.get("from", "") in remaining_ids or e.get("to", "") in remaining_ids
-                                              or e.get("from_fn", "") or e.get("to_fn", "")]
+                existing_backend["edges"] = [
+                    e for e in existing_backend.get("edges", [])
+                    if (e.get("from", "") in remaining_ids and e.get("to", "") in remaining_ids)
+                    or (e.get("from", "") in remaining_ids and not e.get("to", "") and e.get("to_fn", ""))
+                    or (e.get("to", "") in remaining_ids and not e.get("from", "") and e.get("from_fn", ""))
+                ]
                 save_backend_registry(workspace, existing_backend)
 
             # Clean frontend data — remove entries whose only refs are from deleted files
@@ -170,8 +176,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.html_parser import HTMLParser
             html_parser = HTMLParser()
-        except Exception:
-            logger.debug("HTML tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"HTML tree-sitter parser not available, using fallback: {e}")
 
         for path in files["html"]:
             if incremental and changed_files and path not in changed_files:
@@ -198,8 +204,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.css_parser import CSSParser
             css_parser = CSSParser()
-        except Exception:
-            logger.debug("CSS tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"CSS tree-sitter parser not available, using fallback: {e}")
 
         for path in files["css"]:
             if incremental and changed_files and path not in changed_files:
@@ -226,8 +232,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.js_frontend_parser import JSFrontendParser
             js_fe_parser = JSFrontendParser()
-        except Exception:
-            logger.debug("JS frontend tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"JS frontend tree-sitter parser not available, using fallback: {e}")
 
         for path in files["js_frontend"]:
             if incremental and changed_files and path not in changed_files:
@@ -255,8 +261,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.tsx_parser import TSXParser
             tsx_parser = TSXParser()
-        except Exception:
-            logger.debug("TSX tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"TSX tree-sitter parser not available, using fallback: {e}")
 
         for path in files["tsx"]:
             if incremental and changed_files and path not in changed_files:
@@ -382,8 +388,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.js_backend_parser import JSBackendParser
             js_be_parser = JSBackendParser()
-        except Exception:
-            logger.debug("JS backend tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"JS backend tree-sitter parser not available, using fallback: {e}")
 
         for path in files["js_backend"]:
             if incremental and changed_files and path not in changed_files:
@@ -410,8 +416,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.rust_parser import RustParser
             rust_parser = RustParser()
-        except Exception:
-            logger.debug("Rust tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"Rust tree-sitter parser not available, using fallback: {e}")
 
         for path in files["rust"]:
             if incremental and changed_files and path not in changed_files:
@@ -438,8 +444,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         try:
             from parsers.python_parser import PythonParser
             py_parser = PythonParser()
-        except Exception:
-            logger.debug("Python tree-sitter parser not available, using fallback")
+        except (ImportError, RuntimeError) as e:
+            logger.debug(f"Python tree-sitter parser not available, using fallback: {e}")
 
         for path in files["python"]:
             if incremental and changed_files and path not in changed_files:
@@ -619,6 +625,10 @@ def should_ignore(file_path: str, config: Dict) -> bool:
     """Check if a file should be ignored."""
     for pattern in config.get("ignore", []):
         if pattern in file_path:
+            return True
+    # Skip common non-source file extensions (minified, source maps, type declarations)
+    for ext in DEFAULT_IGNORE_EXTENSIONS:
+        if file_path.endswith(ext):
             return True
     return False
 

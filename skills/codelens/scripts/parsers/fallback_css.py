@@ -5,8 +5,8 @@ import re
 
 def parse_css_fallback(content, file_path):
     """Basic regex CSS parser fallback."""
-    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-    content = re.sub(r'@keyframes\s+[^{]+\{[^}]*(?:\{[^}]*\}[^}]*)*\}', '', content, flags=re.DOTALL)
+    content = re.sub(r'/\*.*?\*/', lambda m: '\n' * m.group(0).count('\n'), content, flags=re.DOTALL)
+    content = re.sub(r'@keyframes\s+[^{]+\{[^}]*(?:\{[^}]*\}[^}]*)*\}', lambda m: '\n' * m.group(0).count('\n'), content, flags=re.DOTALL)
     classes, ids = [], []
     for line_num, line in enumerate(content.split('\n'), 1):
         for m in re.finditer(r'\.([a-zA-Z_][\w-]*)', line):

@@ -27,6 +27,12 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
     ids = []
     scoped_styles = []
 
+    # Compute template section offset in original file
+    template_start_line = 1
+    template_tag_match = re.search(r'<template', content)
+    if template_tag_match:
+        template_start_line = content[:template_tag_match.start()].count('\n') + 1
+
     # Extract template section
     template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
     template_content = template_match.group(1) if template_match else ""
@@ -57,7 +63,7 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
 
     # Parse template for classes and ids
     if template_content:
-        _parse_vue_template(template_content, file_path, classes, ids)
+        _parse_vue_template(template_content, file_path, classes, ids, template_start_line)
 
     # Parse scoped styles
     for style_info in scoped_styles:
@@ -74,13 +80,14 @@ def parse_vue_sfc(content: str, file_path: str) -> Dict[str, Any]:
 
 
 def _parse_vue_template(template: str, file_path: str,
-                         classes: List[Dict], ids: List[Dict]):
+                         classes: List[Dict], ids: List[Dict],
+                         template_start_line: int = 1):
     """Parse Vue template section for class and id references."""
     # Static class attribute: class="xxx"
     for match in re.finditer(r'\bclass\s*=\s*["\']([^"\']+)["\']', template):
         value = match.group(1)
-        # Find the line number in original content
-        line_num = _find_line_in_content(template, match.start())
+        # Find the line number in original content (adjusted for template offset)
+        line_num = _find_line_in_content(template, match.start()) + template_start_line - 1
         for cls in value.split():
             cls = cls.strip()
             if cls:
@@ -96,13 +103,13 @@ def _parse_vue_template(template: str, file_path: str,
     # Try to extract literal strings from the binding expression
     for match in re.finditer(r'(?:v-bind:|:)class\s*=\s*["\']([^"\']+)["\']', template):
         value = match.group(1)
-        line_num = _find_line_in_content(template, match.start())
+        line_num = _find_line_in_content(template, match.start()) + template_start_line - 1
         _extract_classes_from_binding(value, line_num, file_path, classes)
 
     # Static id attribute: id="xxx"
     for match in re.finditer(r'\bid\s*=\s*["\']([^"\']+)["\']', template):
         value = match.group(1)
-        line_num = _find_line_in_content(template, match.start())
+        line_num = _find_line_in_content(template, match.start()) + template_start_line - 1
         ids.append({
             "name": value.strip(),
             "line": line_num,
@@ -114,7 +121,7 @@ def _parse_vue_template(template: str, file_path: str,
     # Dynamic :id binding: :id="xxx"
     for match in re.finditer(r'(?:v-bind:|:)id\s*=\s*["\']([^"\']+)["\']', template):
         value = match.group(1)
-        line_num = _find_line_in_content(template, match.start())
+        line_num = _find_line_in_content(template, match.start()) + template_start_line - 1
         # Only track if it's a static string inside the binding
         if "'" in value or '"' in value:
             inner = re.search(r'["\']([^"\']+)["\']', value)

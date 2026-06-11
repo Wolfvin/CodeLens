@@ -1,5 +1,99 @@
 # CodeLens Changelog
 
+> **For the latest changelog, see [CHANGELOG.md](../CHANGELOG.md) in the skill root.**
+
+## v5.8.0 — 2026-06-11
+
+### Fixed
+
+- **CRITICAL: Version mismatch in pyproject.toml**: Version was 5.1.0 while utils.py and skill.json said 5.7.0. Now aligned to 5.8.0.
+- **CRITICAL: Broken test imports**: 5 test files imported fallback parsers from the old monolithic `codelens.py`. Updated to import from `parsers.fallback_*` modules.
+- **CRITICAL: Broken pip entry point**: Removed invalid `codelens = "codelens:main"` from `pyproject.toml`.
+- **CRITICAL: Non-standard build backend**: Changed to standard `setuptools.build_meta`.
+- **HIGH: Frontend deletion cleanup was a no-op**: Deleted files' frontend entries now properly cleaned.
+- **HIGH: CSS parser `::` triggered SCSS fallback on standard CSS**: Fixed pseudo-element detection heuristic.
+- **HIGH: Class collision detection was broken**: HTML classes now get `defined_in_html` field.
+- **HIGH: GrammarLoader was not thread-safe**: Added `threading.Lock` to singleton and dict operations.
+- **HIGH: Watch command race condition lost file changes**: Changes during rescan no longer lost.
+- **HIGH: Dead code in incremental edge processing**: Removed unreachable code block.
+- **MEDIUM: O(n²) BFS in impact_engine**: Replaced with `collections.deque` for O(1) operations.
+- **MEDIUM: O(n) path.index() per back-edge in circular_engine**: Added `path_index` dict for O(1) lookup.
+- **MEDIUM: Search engine recompiled regex per file**: Now compiled once before `os.walk`.
+- **MEDIUM: Dead-code command used wrong field name**: Now correctly iterates over all category lists.
+- **MEDIUM: state-map markdown formatter crashed on string actions**: Now handles both dicts and strings.
+- **Command count updated**: pyproject.toml description now says "41 commands" (was "39").
+
+## v5.7.0 — 2026-06-11
+
+### Added
+
+- **Shared DEFAULT_IGNORE_DIRS across 22 engines**: All engine files now import from `utils.py`. Added `.nuxt` to the shared set. Eliminated ~132 lines of duplicated configuration.
+
+### Changed
+
+- **Query command status consistency**: All 4 found-code-paths now return `status: "ok"`.
+- **Comprehensive logging across 15 files**: Replaced 26 bare `except ... pass` blocks with `logger.debug()`/`logger.warning()` calls.
+
+## v5.6.0 — 2026-06-11
+
+### Added
+
+- **TSX backend extraction**: TSX files now parsed with BOTH frontend AND backend fallback parsers (6.2x more backend nodes).
+- **Shared utils module** (`scripts/utils.py`): Centralized shared utilities. Eliminates 290+ lines of duplicated code.
+- **Proper logging**: Replaced 56 `except Exception: pass` blocks with proper logging.
+- **Fuzzy file path lookup**: `context` and `query` now match partial paths.
+- **Auto-incremental scan with registry counts**: Response now includes actual counts instead of zeros.
+- **Handbook registry freshness check**: Handbook skips re-scan if registry is less than 5 minutes old.
+
+## v5.5.0 — 2026-06-11
+
+### Added
+
+- **Auto-incremental scan**: Scan automatically uses incremental mode when registry exists.
+- **oRPC route detection**: API-map now detects oRPC-style routers.
+- **tRPC v10+ detection**: Improved tRPC extraction.
+- **Context/Query by file path**: New file-path lookup support.
+- **bun.lock support**: Vulnerability scanner now parses Bun's lock format.
+
+### Changed
+
+- **Health score calibration**: Deep nesting reports per-block instead of per-line. Typical React project health: 90 (was 25).
+
+### Fixed
+
+- **Secrets markdown truncation**: Severity "high" was truncated in markdown output. Now displays correctly.
+
+## v5.4.0 — 2026-06-11
+
+### Added
+
+- **True incremental scan**: Partial registry merge for significantly faster re-scans.
+- **Complete markdown formatters**: All 41 commands now have specific markdown formatters (was 15/41).
+- **Score-based ask routing**: Natural language query router now uses weighted scoring.
+- **8 new ask patterns**: CSS issues, accessibility, regex, etc.
+- **3 new semantic convention detectors**: CSS framework, Authentication, Deployment.
+- **Better error messages**: Command-specific error suggestions with `_suggest_fix()`.
+- **Consistent status field**: All commands now return `status: "ok"` or `status: "error"`.
+
+### Changed
+
+- `codelens.py` monolith reduced from 3504 → 307 lines (modular architecture).
+
+## v5.1.0 — 2026-05-03
+
+### Added
+
+- **Workspace Auto-Detect**: The `workspace` argument is now optional for ALL commands.
+- **Python Parser**: Full tree-sitter Python parsing.
+- **`.codelens` directory exclusion**: Scanner now skips `.codelens/` during file discovery.
+- **SCSS/Less/Sass support**: Preprocessor CSS files now discovered and parsed.
+- **Vue SFC parser**: Single-file component parser for Vue.js.
+- **Svelte parser**: Component parser for Svelte.
+- **Tailwind CSS detector**: Analyzes Tailwind utility class usage.
+- **TSX/JSX parser**: React component parser with className tracking.
+- **Open-source standards**: README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, etc.
+- **Comprehensive test suite**: Unit tests for all parsers and core engines.
+
 ## v5.0.0 — 2026-05-01
 
 ### New Tools (3)

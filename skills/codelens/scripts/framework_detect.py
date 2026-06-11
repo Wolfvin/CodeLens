@@ -10,6 +10,8 @@ from utils import logger
 
 
 # Known framework signatures
+IGNORE_DIR_BASENAMES = {'node_modules', '.git', 'dist', 'build', 'target', '__pycache__'}
+
 FRAMEWORK_SIGNATURES = {
     "react": {
         "packages": ["react", "react-dom"],
@@ -134,12 +136,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 3. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        skip = False
-        for ignore in ['node_modules', '.git', 'dist', 'build', 'target', '__pycache__']:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+        root_basename = os.path.basename(root)
+        if root_basename in IGNORE_DIR_BASENAMES:
             continue
 
         for f in files:
@@ -156,12 +154,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in ['node_modules', '.git', 'dist', 'build', 'target', '__pycache__']:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip:
+            root_basename = os.path.basename(root)
+            if root_basename in IGNORE_DIR_BASENAMES:
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
