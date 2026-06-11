@@ -1,23 +1,36 @@
 # CodeLens Changelog
 
-## v5.8.0 — 2026-06-12
+## v6.2.0 — 2026-06-12
 
-### New Features (1)
+### Added (8)
 
-- **Tauri IPC API-map detection** — `api-map` now detects `#[tauri::command]` annotated Rust functions as IPC routes with `invoke('commandName')` paths. Also detects `generate_handler![]` macro registrations. Routes include command name (auto-converted snake_case → camelCase), parameters, handler name, and framework metadata.
+- **C/C++ fallback parser** — `parsers/fallback_cpp.py`: Regex-based parser for `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`. Extracts functions, methods, structs, typedefs, preprocessor macros, and call edges.
+- **Go fallback parser** — `parsers/fallback_go.py`: Regex-based parser for `.go`. Extracts functions, methods, types, and call edges.
+- **C/C++ and Go outline support** — `outline_engine.py`: Added `_outline_cpp()` and `_outline_go()`.
+- **C/C++ and Go complexity analysis** — `complexity_engine.py`: Added `_extract_cpp_functions()`, `_extract_go_functions()`, `_count_cpp_decisions()`, `_count_go_decisions()`.
+- **C/C++ and Go scan integration** — `commands/scan.py`: C/C++ and Go data now included in backend registry.
+- **Tauri IPC edge resolver** — `edge_resolver.py`: Implemented `resolve_tauri_ipc_from_apimap()` with snake_case ↔ camelCase matching.
+- **Shared performance utilities** — `utils.py`: Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired()`.
+- **C/C++ and Go extensions in all engines** — Updated SOURCE_EXTENSIONS in 17 engine files.
 
 ### Bug Fixes (4)
 
-- **ASK "is this secure?" misroutes to context** — Added "secure", "is this secure", "hardcoded", "leaked credential" keywords to the security pattern in `ask.py`, ensuring security queries route to `secrets` command instead of `context` lookup. Also added "outdated dep", "dependency vulnerability" to vuln-scan patterns.
-- **Handbook circular deps always empty** — `handbook.py` used non-existent `chains` key from circular_engine output. Fixed to iterate `cycles.function_calls`, `cycles.import_chains`, `cycles.css_imports` with severity metadata.
-- **zombie_css shows `file="unknown"` and `line=0`** — Dead CSS class detection now properly extracts file path and line number from registry CSS references, and falls back to searching CSS files directly via `_find_css_class_in_files()`.
-- **Module system misdetected as "cjs"** — Enhanced module system detection in `framework_detect.py` to check sub-package.json files for `"type": "module"`, count `.mjs` vs `.cjs` files, and consider pnpm-workspace.yaml as ESM indicator.
+- **CRITICAL: Import error crash** — `scan.py`, `handbook.py`, `watch.py` crashed because `resolve_tauri_ipc_from_apimap` was not defined. Now implemented.
+- **CRITICAL: Import error crash** — `ask.py`, `env_check.py` crashed because `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` were not in `utils.py`. Now added.
+- **CRITICAL: C/C++ files scanned but never parsed** — Scan discovered C/C++ files but returned 0 nodes/edges. Now parsed with `fallback_cpp.py`.
+- **CRITICAL: Go files scanned but never parsed** — Same as C/C++. Now parsed with `fallback_go.py`.
 
-### Improvements (3)
+## v5.7.2 — 2026-06-12
 
-- **Rust-idiomatic smell exclusions** — `_detect_duplicate_patterns()` now excludes language-idiomatic signatures that naturally appear in many files: `fn main()`, `fn fmt()`, `fn clone()`, `fn drop()`, `fn new()`, Python `__init__`, `__str__`, `__repr__`, etc. Reduces false positives from 47+ duplicate Rust standard signatures.
-- **Tauri/hybrid project identity detection** — `handbook.py` now correctly identifies Tauri desktop apps as `"tauri-desktop-app"` and Rust+Node hybrid projects as `"rust-node-hybrid"` instead of generic `"node-project"`.
-- **ASK keyword weight tuning** — Added filler words "from", "with", "by", "at", "be" with weight 0 to prevent them from skewing routing scores.
+### Bug Fixes (7)
+
+- **CRITICAL: Trace markdown formatter displayed paths character-by-character** — `_md_trace()` treated the `path` string field as an iterable list, producing output like `p → a → c → k → a → g → e → s`. Introduced `_format_trace_chain()` helper with proper string/list handling, depth indentation, and cyclic/unresolved markers.
+- **CRITICAL: TS/JS backend parser missed arrow functions in parentheses or `as` expressions** — `const name = ((...args) => {})` and `const name = (() => {}) as Type` were not captured. Added `_unwrap_fn_from_parens()` and `as_expression` handling to both parsers.
+- **HIGH: Framework detection missed Rust/Python polyglot projects** — Ruff showed "No frameworks" and "cjs". Added `module_system` for Cargo/Python/polyglot, `languages` field, and `has_rust_backend` from `Cargo.toml` presence.
+- **HIGH: Zombie CSS false positives with invalid class names** — Class names like `.(version`, `.===`, `.\`@${...}\`` were reported. Added CSS class name regex validation and character blacklist.
+- **HIGH: God object detection massive false positives in JS/TS** — Regex matched `if(`, `for(`, etc. Rewrote to extract class bodies first via brace-depth matching, then count methods. Also scoped Rust `fn` counting to each `impl` block.
+- **MEDIUM: API map included test fixture routes** — Added filtering for `/test/`, `/fixtures/`, `*.test.*`, `*.spec.*` paths.
+- **MEDIUM: Framework detect markdown missing flags** — Added display for FastAPI, Flask, Django, Tauri, Rust, monorepo, and lockfile fields.
 
 ## v5.8.1 — 2026-06-12
 

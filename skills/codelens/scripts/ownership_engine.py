@@ -23,7 +23,8 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less", ".html"
+    ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
 }
 
 

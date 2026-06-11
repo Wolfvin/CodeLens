@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v5 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -31,33 +31,39 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
-  v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  v6.2 adds: Full C/C++ and Go language support — fallback parsers, outline extraction, complexity analysis, all engines now scan C/C++ and Go files. Tauri IPC edge resolver implemented. Critical import errors fixed.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, C/C++, Go, PHP, Blade.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v6.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8 — Tested on elizaOS/eliza (5000+ file TypeScript AI agent framework)
+## What's New in v6.2
 
-- **State map false positive reduction**: Expanded skip lists for Node.js globals (__dirname, __filename, process, Buffer, etc.), CLI argument constants, path aliases (ROOT, HOME, CWD), environment variable references, and import-like assignments. ALL_CAPS single-word constants (VERBOSE, CLI, CHECK, PRUNE) now correctly skipped. Python global filtering also improved with builtin/dunder/path skips. State stores dropped from ~1493 false positives to significantly fewer real ones.
-- **Entrypoints markdown fix (v2)**: Angle brackets like `<module_export>` and `<main>` were treated as HTML tags by markdown renderers, silently consumed. Now uses backticks for reliable rendering: `module_export`, `main`.
-- **Performance: --max-files limit**: Scan and handbook commands now accept `--max-files` (default: 5000) to prevent timeout on very large repos. Proportionally truncates file categories with a warning. Use `--max-files 0` to scan all files.
-- **Debug leak output improvement**: Each leak item now includes `pattern` (the detected pattern name), `message` (human-readable description), and `content` (the matched line content). Markdown formatter shows descriptive messages like "Debug console statement: console.log()" instead of raw category names.
-- **Python global state filtering**: Skips ALL_CAPS constants, dunder attributes (__name__, __file__, __all__), and path/env references (os.path, Path, os.getenv). Reduces false positives in Python projects.
+- **C/C++ full support**: New `fallback_cpp.py` parser extracts functions, methods, structs, typedefs, preprocessor macros, and call edges from `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx` files. Outline engine supports C/C++. Complexity engine supports C/C++ including preprocessor conditionals. All 17 analysis engines now scan C/C++ files.
+- **Go full support**: New `fallback_go.py` parser extracts functions, methods, types, and call edges from `.go` files. Outline engine supports Go. Complexity engine supports Go. All analysis engines now scan Go files.
+- **Tauri IPC edge resolver**: `resolve_tauri_ipc_from_apimap()` now implemented — resolves cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers, with snake_case ↔ camelCase matching.
+- **Critical bug fixes**: Fixed 2 ImportError crashes that prevented `scan`, `handbook`, `ask`, `env-check` commands from loading. Fixed C/C++ and Go files being discovered but never parsed.
 
-## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
+## What's New in v6.0
 
-- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find Next.js, React, etc. in workspace packages, not just root. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
-- **Accurate god object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation). Rust impl blocks also properly scoped.
-- **API route false positive elimination**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects: request, headers, cache, store, etc.). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
-- **CSS specificity false positive fix**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba(0, 0, 0, 0.1)`, `var(--x)`, `from -160deg` as selectors. Specificity wars dropped from 31 false positives to 4 real ones.
-- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references. Skips main(), pub functions, and test fixtures. Found 200+ genuine dead items that the text-only scanner missed.
-- **State map constant/component filtering**: Skips ALL_CAPS constants (MAX_FILES, etc.), React components (arrow functions, forwardRef, memo, styled), and immutable values. State stores dropped from 825 false positives to ~150 real ones. Removed module.exports scanning that classified every exported function as a store.
-- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist. No longer defaults to `node-project` for Rust+TS monorepos.
-- **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses backticks instead (v5.8: angle brackets were still broken — `<main>` treated as HTML tag).
+- **NestJS route extraction**: `api-map` now detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller prefixes. Previously, NestJS decorators were misidentified as TypeGraphQL `@Query` decorators, producing incorrect `QUERY.fieldName` routes instead of proper `GET /path` routes.
+- **Tailwind v4 false-positive elimination**: `missing-refs` now recognizes 200+ Tailwind utility class patterns including arbitrary values (`w-[100px]`), data attribute variants (`data-[slot=...]`), group/peer variants, container queries (`@sm:`), arbitrary variants (`[&_...]`), star wildcard (`**:`), and negative values (`-mt-4`). On Cal.com (1145 TSX files with Tailwind), this reduced false positives from 262 to near-zero.
+- **State-map over-matching fix**: `state-map` no longer classifies TypeScript type exports, enums, Zod schemas, and PascalCase constants as "global" state. Added PascalCase filtering (skip unless value is clearly mutable `{}`/`[]`/`new`), enum/type suffix filtering (`Enum`, `Schema`, `Args`, `Input`, etc.), Zod/Yup validation schema filtering, and conservative matching for function-call values (only include if name contains state keywords like "cache", "store", "queue"). Reduced from 1052 false-positive stores to approximately 50 real state items on Cal.com.
+- **Entrypoint config-file filtering**: `entrypoints` now skips 20+ config file patterns (playwright.config.ts, vitest.config.ts, biome.json, turbo.json, etc.) from `module_export` detection. These files contain `export default` but are not application entry points. Reduced false-positive entry points on Cal.com.
+
+## What's New in v5.8
+
+- **Critical bug fixes**: Fixed `should_ignore_dir` missing from utils.py (broke ALL 41 commands), frontend registry deletion cleanup (data never removed from incremental scans), 8 missing `ask` command handlers
+- **Rust parser impl_for fix**: `impl_for` context no longer leaks to sibling functions outside impl blocks
+- **Circular dependency `../` import detection**: Now catches parent-directory imports (`import X from '../utils'`)
+- **SearchConfig & FrontendRegistryInput dataclasses**: Eliminates `many_params` code smell
+- **Package manager detection**: bun, pnpm, yarn, npm from lock files
+- **tRPC / oRPC framework detection**
+- **Convention engine file limits**: `MAX_FILES_PER_CATEGORY = 500` to prevent slow scans on huge codebases
+- **12 engines now use shared logger**: No more silent error swallowing
 
 ## What's New in v5
 

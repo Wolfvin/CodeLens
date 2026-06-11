@@ -44,7 +44,8 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".html", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)

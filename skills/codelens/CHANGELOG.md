@@ -5,55 +5,128 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.7.2] — 2026-06-12
-
-### Fixed
-- **state-map markdown crash**: `_md_state_map()` called `.get('name')` on action/slice entries, but entries are strings in Pinia/Vuex/Redux/Zustand stores. Now handles both dict and string formats gracefully.
-- **binary-scan ImportError**: `scan_binary_artifacts` function was missing from `utils.py`. Now fully implemented with extension-based detection and binary signature scanning (ELF, PE, Mach-O, WASM, etc.).
-- **Pinia/Vuex/Redux false positive actions**: JS/TS keywords (`if`, `for`, `while`, etc.) and built-in methods (`push`, `includes`, `toUpperCase`, etc.) were being extracted as store actions. Added `_is_js_keyword_or_builtin()` filter with 80+ entries. Also improved section extraction using `_extract_section()` with proper brace-matching instead of fragile regex.
+## [6.2.0] — 2026-06-12
 
 ### Added
-- **binary-scan command fully functional**: New `_md_binary_scan` markdown formatter. Scans for compiled binaries, archives, images, and Python bytecode with size reporting and recommendations.
-- **Tauri IPC route mapping in api-map**: Frontend `invoke('command')` calls and backend `#[tauri::command]` Rust handlers are now extracted as IPC routes. Shows full invoke:// endpoint paths.
-- **Unsupported language detection**: Framework detection now identifies Go, Java, Kotlin, C/C++, C#, Swift, and Ruby projects. Scan output shows a `lang_note` warning when unsupported languages are detected.
-- **Go framework signatures**: Added `golang`, `gin`, `echo` to framework detection signatures.
-- **`_extract_section()` helper**: New brace-matching helper for state management extractors that properly handles nested braces and string literals, replacing fragile regex patterns.
+
+- **C/C++ fallback parser** (`scripts/parsers/fallback_cpp.py`): New regex-based parser for C/C++ source files (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`). Extracts free functions, methods (including `ClassName::method()`), struct/class declarations, typedefs, preprocessor function-like macros (`#define MACRO(args)`), and function call edges (including `obj.method()` and `ptr->method()`). On nicbarker/clay (38 C files, 300KB single header), this extracted 1403 backend nodes and 28434 call edges — previously 0/0.
+- **Go fallback parser** (`scripts/parsers/fallback_go.py`): New regex-based parser for Go source files (`.go`). Extracts free functions, methods with receiver types, type declarations (struct/interface), and function/method call edges.
+- **C/C++ and Go outline support** (`scripts/outline_engine.py`): Added `_outline_cpp()` and `_outline_go()` functions with full file structure extraction (functions, classes/structs, imports/includes, types, macros). Updated `_detect_language()` mapping and `source_extensions` set.
+- **C/C++ and Go complexity analysis** (`scripts/complexity_engine.py`): Added `_extract_cpp_functions()`, `_extract_go_functions()`, `_count_cpp_decisions()`, and `_count_go_decisions()`. C/C++ complexity includes preprocessor conditionals (#if, #ifdef, #ifndef, #elif). Cognitive complexity delegates to JS-style brace tracking.
+- **C/C++ and Go scan integration** (`scripts/commands/scan.py`): C/C++ and Go files are now parsed during scan and their data is included in the backend registry (both full and incremental scans). Scan result now includes `cpp_parsed` and `go_parsed` counts.
+- **Tauri IPC edge resolver** (`scripts/edge_resolver.py`): Implemented `resolve_tauri_ipc_from_apimap()` function that resolves cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers. Includes snake_case ↔ camelCase name matching for Tauri's default IPC naming convention, self-edge prevention, and `ipc_exposed` status marking to prevent Rust handlers from being falsely flagged as dead code.
+- **Shared performance utilities** (`scripts/utils.py`): Added `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000 files), and `time_budget_expired()` function. These are now imported by `envcheck_engine.py` and other engines, eliminating the previous `ImportError` crash.
+- **C/C++ and Go source extensions in all engines**: Updated `SOURCE_EXTENSIONS` in 17 engine files to include `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`, `.go`. Affected engines: smell, complexity, dead-code, ownership, secrets, env-check, state-map, perf-hint, api-map, type-infer, config-drift, test-map, dataflow, side-effect, debug-leak, regex-audit, entrypoints.
+
+### Fixed
+
+- **Critical import error**: `scan.py`, `handbook.py`, and `watch.py` crashed on import because `resolve_tauri_ipc_from_apimap` was referenced but not defined in `edge_resolver.py`. Now implemented.
+- **Critical import error**: `ask.py` and `env_check.py` crashed on import because `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, and `time_budget_expired` were referenced from `utils.py` but not defined there. Now added to `utils.py`.
+- **C/C++ files scanned but never parsed**: The scan command discovered `.c`, `.h`, `.cpp` files and counted them in `files_scanned.cpp`, but never parsed them for backend nodes/edges. This meant C/C++ projects returned 0 nodes and 0 edges after scan. Now fixed with the new C/C++ parser.
+- **Go files scanned but never parsed**: Same issue as C/C++ — Go files were discovered but never parsed. Now fixed with the new Go parser.
+
+### Changed
+
+- **Version bump**: Updated from 5.7.1 to 6.2.0 across `utils.py`, `skill.json`, `SKILL-QUICK.md`.
+
+### Test Target Documentation
+
+- **nicbarker/clay** (GitHub): Used as test target for v6.2 improvements — a unique C library that implements declarative UI layout (flexbox-like) entirely in C using preprocessor macros. The main `clay.h` header is 303KB (8000+ lines). 38 C/H files, 3 HTML files, 200 total files. This is a highly unusual codebase (UI layout in C!) that thoroughly tested the new C/C++ parser. Key findings:
+  - Before fix: 0 backend nodes, 0 edges (C files were discovered but never parsed)
+  - After fix: 1403 backend nodes, 28434 call edges
+  - Smell: 222 critical, 478 warning, 953 info — health score 10/100 (clay.h is deeply nested due to macro patterns)
+  - Complexity: 1595 functions detected, top hotspot `Clay__RenderDebugView` at CC=88
+  - Entrypoints: 14 main() functions detected across example programs
+  - Secrets: 0 findings (clean)
 
 ## [6.0.0] — 2026-06-12
 
 ### Added
-- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
-- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
-- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
-- **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
-- **`should_ignore_dir()` utility**: New shared utility in `utils.py` for path-segment-aware directory ignore checking. Replaces inline implementations across multiple engines.
-- **`safe_read_file()` utility**: New shared utility for safe file reading with size limits and encoding handling. Prevents out-of-memory on large files.
-- **`time_budget_expired()` utility**: New shared utility for checking global timeout budgets in engines. Prevents runaway scans on massive codebases.
-- **Performance safeguards in `utils.py`**: `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000), `GLOBAL_TIMEOUT_SEC` (120s) constants for all engines.
-- **`handbook --quick` mode**: New flag to skip expensive engines (secrets, vuln-scan, circular, dead-code) for faster results on large codebases.
-- **Engine status tracking in handbook**: Handbook now reports `engines_ok` and `engines_failed` lists in `meta`. Overall status is `ok`, `degraded`, or `error` based on engine results.
-- **Lazy imports in `ask` command**: All 17 engine imports moved from module-level to inside `_execute_ask_command()`. Reduces CLI startup time significantly.
-- **Thread-safe grammar loader**: `GrammarLoader` singleton now uses `threading.Lock()` for thread safety in watch command.
-- **Modern tree-sitter API support**: `GrammarLoader.get_parser()` now handles both legacy (`Parser(lang)`) and modern (`parser.language = lang`) tree-sitter APIs.
-- **Graceful command import**: `commands/__init__.py` now wraps each command module import in try/except, so one failing module doesn't prevent others from registering.
-- **`truncated` field in env-check output**: Indicates when file count or timeout limits were hit, so users know results are partial.
+
+- **NestJS route extraction** (`scripts/apimap_engine.py`): New `_extract_nestjs_routes()` function detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller-level prefixes. Previously, NestJS route decorators were misidentified as TypeGraphQL `@Query`/`@Mutation` decorators, producing incorrect `QUERY.fieldName` entries instead of proper `GET /path` routes. New NestJS framework detection added to `frameworks_detected` output.
+- **Tailwind v4 false-positive elimination** (`scripts/missing_refs.py`): Expanded `_is_likely_tailwind()` from 35 to 200+ recognized patterns. New detection categories: arbitrary value brackets (`w-[100px]`, `text-[#fff]`), data attribute variants (`data-[slot=...]`, `:data-`), star wildcard variants (`**:`), group/peer/aria/supports/motion variants, container query variants (`@sm:`, `@md:`), arbitrary variants (`[&_...]`), negative value prefix (`-mt-4`, `-translate-x-1`), and 40+ additional utility prefixes (inset-, min-w-, max-h-, col-, row-, aspect-, object-, animate-, backdrop-, blur-, etc.) and 30+ variant prefixes (focus-within:, focus-visible:, group-hover:, disabled:, rtl:, ltr:, etc.). On Cal.com (1145 TSX files with Tailwind v4), this reduced missing-refs false positives from 262 to near-zero.
+- **State-map over-matching fix** (`scripts/statemap_engine.py`): Three new filters in `_extract_js_global_state()`:
+  1. PascalCase filtering: Names starting with uppercase (no underscores) are treated as TypeScript type/enum/class exports and skipped unless the value is clearly mutable (`{}`, `[]`, `new`, `Map`, `Set`).
+  2. Enum/type suffix filtering: Names ending with `Enum`, `Type`, `Interface`, `Schema`, `Args`, `Input`, `Output`, `Result`, `Response`, `Request`, `Payload`, `Event`, `Action`, `Keys`, `Map`, `Record`, `List`, `Set`, `Dict`, `Union` are skipped unless value is mutable.
+  3. Zod/Yup schema filtering: Values starting with `z.`, `t.`, `zod.`, `joi.`, `yup.`, `v.`, `Type(` are skipped.
+  4. Conservative function-call matching: Non-mutable, non-immutable values (function calls, references) are only included if the variable name contains state keywords (`state`, `cache`, `store`, `mutex`, `lock`, `queue`, `pool`, `registry`, `buffer`, `session`). On Cal.com, this reduced state-map stores from 1052 false-positive "global" entries to approximately 50 real state items.
+- **Entrypoint config-file filtering** (`scripts/entrypoints_engine.py`): `module_export` entrypoint type now skips 20+ config file patterns including `.config.ts/js/mjs`, `vitest.`, `playwright.`, `jest.`, `eslint.`, `prettier.`, `tsconfig.`, `turbo.json`, `biome.json`, `lint-staged.`, `postcss.config`, `tailwind.config`, `next.config`, `vite.config`, `webpack.config`, `rollup.config`, `babel.config`, `i18n.config/json`, etc. These files contain `export default` but are build/test tool configuration, not application entry points.
+
+### Changed
+
+- **Version bump**: Updated from 5.7.1 to 6.0.0 across `utils.py`, `skill.json`, `SKILL.md`, `SKILL-QUICK.md`, and `CHANGELOG.md`.
+
+### Test Target Documentation
+
+- **calcom/cal.com** (GitHub): Used as test target for v6.0 improvements — a large scheduling infrastructure monorepo with 3870 TS files, 1145 TSX files, 31 JS files, 20 CSS files, 8 HTML files. Uses Next.js + NestJS + Tailwind CSS + tRPC + Zustand + Turborepo. This is the largest and most complex codebase tested against CodeLens to date. Key findings that drove improvements:
+  - `missing-refs`: 262 Tailwind utility class false positives (e.g., `**:data-[slot=scroll-area-scrollbar]:hidden`, `[&_.current-timezone:before]:hover:opacity-100`)
+  - `state-map`: 1052 false-positive "global" stores (PascalCase type exports like `BookingReferences`, `CustomFieldTypeEnum`)
+  - `api-map`: NestJS `@Get`/`@Query` decorators misidentified as TypeGraphQL, showing `QUERY.timezone` instead of `GET /api/timezone`
+  - `entrypoints`: Config files like `playwright.config.ts`, `vitest.config.ts` incorrectly classified as `module_export` entry points
+  - Other commands worked correctly: smell (14693 issues, health 70), complexity (5364 functions), secrets (64 findings), circular (81 cycles), css-deep (179 issues), perf-hint (2298 hints), side-effect (6026 functions, 89% pure), dataflow (3594 sources, 398 sinks, 1031 violations)
+
+## [5.8.0] — 2026-06-12
+
+### Added
+
+- **New framework signatures** (`scripts/framework_detect.py`): Added detection for **SolidJS** (`solid-js`), **Express**, **Fastify**, **Hono**, **Koa**, **NestJS** (`@nestjs/core`), **Webpack**, **Turborepo** (`turbo.json`). Also added Python library detection for **httpx**, **Starlite/Litestar**.
+- **Go module (go.mod) support** (`scripts/framework_detect.py`): Added `go.mod` parsing for Go dependency detection. Detects `has_go_backend` flag and Go framework dependencies (Gin, Echo). Added `go_packages` field to FRAMEWORK_SIGNATURES for Go crate matching.
+- **Generated file exclusion** (`scripts/utils.py`): Added `GENERATED_FILE_PATTERNS` frozenset containing lock files and generated files (Cargo.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lock, bun.lockb, go.sum, poetry.lock, uv.lock, Gemfile.lock, composer.lock). Added `is_generated_file()` helper function.
+- **refactor-safe excludes generated files** (`scripts/refactor_safe_engine.py`): String references from Cargo.lock, package-lock.json etc. are now excluded from refactoring safety checks, eliminating false positives from generated dependency files.
+- **Python type alias false positive fix** (`scripts/deadcode_engine.py`): Python type aliases (e.g., `URLTypes = Union[...]`, `HeaderTypes: TypeAlias = ...`) are no longer flagged as unused variables. Detection skips names ending in "Types"/"Type" when the RHS contains typing patterns, and skips `TypeAlias` annotations entirely.
+- **module_system now None for non-JS projects** (`scripts/framework_detect.py`): When no package.json is found, `module_system` is `None` instead of incorrectly defaulting to "cjs". This fixes Rust and Python projects showing misleading "cjs" module system.
+
+### Changed
+
+- **Version alignment**: Unified to 5.8.0 across `utils.py`, `skill.json`, and `pyproject.toml`.
+- **`has_go_backend` detection flag** (`scripts/framework_detect.py`): New flag added to `detect_frameworks()` output alongside existing `has_rust_backend`.
+
+### Test Target Documentation
+
+- **encode/httpx** (Python async HTTP client, 60 Python files, 1241 backend nodes, 3347 edges): Tested init, scan, detect, smell, dead-code, complexity, dataflow, env-check, handbook, ask. Found issues: type alias false positives (fixed), module_system incorrectly showing "cjs" (fixed), detect not recognizing httpx library (fixed).
+- **solidjs/solid** (SolidJS reactive framework, TS/JSX monorepo, 336 backend nodes): Tested init, scan, detect, entrypoints. Found issues: SolidJS not detected (fixed), module_system correctly shows "esm".
+- **actix/actix-web** (Rust async web framework, 312 Rust files, 3730 backend nodes, 20139 edges): Tested init, scan, detect, circular, refactor-safe, side-effect. Found issues: Cargo.lock scanned by refactor-safe (fixed), module_system incorrectly showing "cjs" (fixed).
+- **vuejs/pinia** (Vue state management, 36 Vue files, 111 TS files, 175 backend nodes): Tested init, scan, detect, api-map, secrets, css-deep, trace, incremental scan. All working correctly with vue_mode auto-enabled.
+
+### Added (from previous 5.8.0 release)
+
+- **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
+- **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.
+- **Monorepo-aware init config** (`scripts/framework_detect.py`): `get_recommended_config()` now generates correct `frontend_paths` and `backend_paths` for monorepo Tauri projects (e.g., `apps/readest-app/src/` for frontend, `apps/readest-app/src-tauri/src/` for backend).
+- **Lockfile detection** (`scripts/framework_detect.py`): Added automatic detection of package managers from lock files: `bun.lock`/`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. Exposed as `lockfile` in framework detection output.
+- **New framework signatures** (`scripts/framework_detect.py`): Added detection for `trpc`, `orpc`, `zustand`, `redux`, and `vite` frameworks/packages.
+- **SearchConfig dataclass** (`scripts/search_engine.py`): Introduced `SearchConfig` dataclass to replace the 11-parameter `search_workspace()` function. The old function is preserved for backward compatibility and now delegates to `search_with_config(cfg)`. This eliminates the `many_params` code smell (11 → 2 parameters) and makes call sites self-documenting.
+- **FrontendRegistryInput dataclass** (`scripts/registry.py`): Introduced `FrontendRegistryInput` dataclass to replace the 9-parameter `build_frontend_registry()` function. Legacy function preserved for backward compatibility, delegates to `build_frontend_registry_from_input(inp)`. Eliminates the `many_params` code smell (9 → 1 parameter).
+- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
+- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
+- **Missing logger import fix** (`scripts/framework_detect.py`): Added `logger` import from `utils` — the module was referencing `logger.debug()` without importing it, causing `NameError` at runtime when parsing requirements.txt/pyproject.toml failed.
 
 ### Fixed
-- **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
-- **API route false positives**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
-- **CSS specificity false positives**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba()`, `var()`, gradient values as selectors.
-- **State map over-classification**: Skips ALL_CAPS constants, React components (arrow functions, forwardRef, memo, styled), and immutable values. Removed module.exports scanning.
-- **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
-- **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
-- **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
-- **`should_ignore_dir` ImportError in tailwind_detector.py**: Was importing a function that didn't exist in `utils.py`. Now uses shared implementation from `utils.py`.
-- **`safe_read_file` ImportError in a11y_engine.py**: Removed unused import of non-existent function. a11y_engine now uses the shared `safe_read_file` from `utils.py`.
-- **Silent exception swallowing in `context.py`**: `except Exception: pass` replaced with proper `logger.debug()` call.
-- **Silent exception swallowing in `handbook.py`**: `except Exception: pass` for sub-directory package.json replaced with `logger.debug()`.
-- **Handbook always reports `status: ok`**: Now reports `ok`, `degraded`, or `error` based on engine success/failure counts.
-- **env-check returns empty output on large repos**: Added `MAX_FILE_SIZE`, `MAX_FILES` (5000), and `GLOBAL_TIMEOUT_SEC` (90s) limits. Now uses `safe_read_file()` instead of raw `open()`.
-- **Version inconsistency**: SKILL.md said "v6" but code said "5.7.1". All version references now unified to "6.0.0".
-- **CLI version hardcoded**: `codelens.py` description now uses `CODELENS_VERSION` constant instead of hardcoded "v5".
+
+- **CRITICAL: `should_ignore_dir` missing from utils.py** — The function was imported by `framework_detect.py`, `tailwind_detector.py`, and 40 command modules via the import chain, but never defined in `utils.py`. This caused ALL 41 CLI commands to fail with `ImportError` on startup. Added the function with path-segment-aware matching consistent with `should_ignore()` in scan.py.
+- **CRITICAL: Frontend registry deletion cleanup used nonexistent field** — Incremental scan tried to clean deleted-file entries using `c.get("defined_in")`, but frontend classes use `css`/`js` arrays with `path` fields, and IDs use `defined_in_html`. This meant deleted files' frontend data was NEVER removed from the registry. Rewrote cleanup to properly strip refs by path and recalculate ref_count/status.
+- **CRITICAL: `ask` command missing handlers for 8 commands** — Side-effect, dataflow, missing-refs, ownership, config-drift, stack-trace, and type-infer queries all returned "Unknown command" because `_execute_ask_command` had no handler branches. Added all missing handlers.
+- **HIGH: Rust parser `impl_for` context leaked to sibling functions** — When tree-sitter walked past an `impl_item` to a sibling `function_item` outside the impl block, `current_impl_for` still held the previous impl's type name. Fixed by checking parent ancestry before assigning impl context.
+- **HIGH: Circular dependency detection missed `../` imports** — The import regex only matched `./` relative imports, silently ignoring all parent-directory imports (`import X from '../utils'`). Fixed regex to match `\.{1,2}/` for both `./` and `../`.
+- **HIGH: `vulnscan_engine.py` created its own logger** — Bypassed the shared `utils.get_logger()` which configures handlers and log level, causing all vulnscan debug/warning messages to be silently dropped. Changed to import `logger` from utils.
+- **HIGH: Version mismatch** — `utils.py` had version 5.7.0, `skill.json` and `pyproject.toml` had 5.7.1. Unified to 5.8.0 across all three.
+- **MEDIUM: `scan.py` imported unused `compute_frontend_status`** — Removed dead import.
+- **MEDIUM: `context_engine.py` used raw `open()` instead of `safe_read_file()`** — Could crash on minified/large files. Switched to the safe utility.
+- **MEDIUM: `search_engine.py` used simple set membership for directory ignoring** — Didn't benefit from path-segment-aware matching. Added `should_ignore_dir()` call.
+- **MEDIUM: Dead code branch in `incremental.py`** — `if not is_resolved and from_is_changed` was unreachable because `from_is_changed` was already checked earlier. Removed the dead branch.
+- **MEDIUM: `context_engine.py` auto-domain silently dropped backend matches** — When a name matched in both frontend and backend, only the frontend result was returned. Now adds `also_matched_in` note to indicate the overlap.
+- **MEDIUM: `convention_engine.py` had no file count limits** — Could be extremely slow on large codebases (10K+ files). Added `MAX_FILES_PER_CATEGORY = 500` sampling limit.
+- **LOW: 12 engine files imported `DEFAULT_IGNORE_DIRS` but not `logger`** — Added `logger` to imports in: smell_engine, debugleak_engine, apimap_engine, envcheck_engine, dependents_engine, dataflow_engine, regexaudit_engine, statemap_engine, complexity_engine, typeinfer_engine, cssdeep_engine, entrypoints_engine.
+
+### Changed
+
+- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
+- **Version bump**: Updated from 5.7.1 to 5.8.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
+- **Tauri+React monorepo JSX mode** (`scripts/framework_detect.py`): JSX mode is now correctly enabled when both React and Tauri are detected in a monorepo.
+
+### Test Target Documentation
+
+- **readest/readest** (GitHub): Used as a test target for monorepo support — a large Tauri ebook reader app with React frontend and Rust backend. Monorepo structure: 40 Rust files, 1167 TSX files, 1 CSS file. Previously, `detect` returned `has_react: false` because React was only in `apps/readest-app/package.json`. After fix, all 6 frameworks detected: react, next.js, tailwind, zustand, vite, tauri. Also validated: smell (6389 issues, health 75), secrets (72 findings), complexity (3494 functions), circular deps (111 cycles), dead code (450 items), vuln scan (1 CVE), perf hints (952), a11y (584 issues).
 
 ## [5.6.0] — 2026-06-11
 

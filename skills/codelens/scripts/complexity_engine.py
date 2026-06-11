@@ -33,7 +33,8 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs",
+    ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
 }
 
 # Cyclomatic complexity thresholds
@@ -273,6 +274,10 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_py_functions(lines, content)
     elif ext == ".rs":
         functions = _extract_rs_functions(lines, content)
+    elif ext in {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx"}:
+        functions = _extract_cpp_functions(lines, content)
+    elif ext == ".go":
+        functions = _extract_go_functions(lines, content)
 
     return functions
 
@@ -375,7 +380,79 @@ def _extract_rs_functions(lines: List[str], content: str) -> List[Dict]:
     return functions
 
 
-# ─── Function Body Extraction ──────────────────────────────────
+def _extract_cpp_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract C/C++ function definitions."""
+    functions = []
+    skip_names = {
+        'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'return',
+        'struct', 'enum', 'union', 'typedef', 'extern', 'static', 'const',
+        'void', 'int', 'long', 'short', 'char', 'float', 'double', 'bool',
+    }
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # C/C++ function definition pattern
+        m = re.search(
+            r'(?:[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*(?:\s*[*&])?\s+)+'
+            r'([A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)?)\s*\(([^)]*)\)',
+            stripped
+        )
+        if m:
+            name = m.group(1).split('::')[-1]
+            if name not in skip_names and not name.startswith('_'):
+                functions.append({
+                    "name": name,
+                    "line": i + 1,
+                    "type": "function",
+                    "params_str": m.group(2),
+                    "start_col": len(line) - len(line.lstrip()),
+                })
+
+    return functions
+
+
+def _extract_go_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract Go function definitions."""
+    functions = []
+    skip_names = {
+        'if', 'else', 'for', 'range', 'switch', 'case', 'return',
+        'func', 'struct', 'interface', 'type', 'var', 'const',
+        'true', 'false', 'nil',
+    }
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Method: func (receiver) methodName(...)
+        m = re.search(
+            r'\bfunc\s+\([^)]+\)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)',
+            stripped
+        )
+        if m:
+            name = m.group(1)
+            if name not in skip_names:
+                functions.append({
+                    "name": name,
+                    "line": i + 1,
+                    "type": "method",
+                    "params_str": m.group(2),
+                    "start_col": len(line) - len(line.lstrip()),
+                })
+            continue
+
+        # Free function: func name(...)
+        m = re.search(r'\bfunc\s+([A-Za-z_]\w*)\s*\(([^)]*)\)', stripped)
+        if m:
+            name = m.group(1)
+            if name not in skip_names:
+                functions.append({
+                    "name": name,
+                    "line": i + 1,
+                    "type": "function",
+                    "params_str": m.group(2),
+                    "start_col": len(line) - len(line.lstrip()),
+                })
+
+    return functions
 
 def _get_function_body_and_end(
     lines: List[str], fn_info: Dict, ext: str
@@ -481,6 +558,10 @@ def _compute_cyclomatic(fn_body: str, ext: str) -> int:
         decisions += _count_py_decisions(clean)
     elif ext == ".rs":
         decisions += _count_rs_decisions(clean)
+    elif ext in {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx"}:
+        decisions += _count_cpp_decisions(clean)
+    elif ext == ".go":
+        decisions += _count_go_decisions(clean)
 
     return decisions + 1
 
@@ -574,6 +655,63 @@ def _count_rs_decisions(clean: str) -> int:
     return count
 
 
+def _count_cpp_decisions(clean: str) -> int:
+    """Count decision points in C/C++ code."""
+    count = 0
+
+    # if statements
+    count += len(re.findall(r'\bif\s*\(', clean))
+    # else if
+    count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    # else (standalone)
+    count += len(re.findall(r'\belse\s+(?!if\b)', clean))
+    # for loops
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    # while loops
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    # do-while
+    count += len(re.findall(r'\bdo\s*\{', clean))
+    # switch cases
+    count += len(re.findall(r'\bcase\s+', clean))
+    # catch blocks
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    # && and ||
+    count += clean.count('&&')
+    count += clean.count('||')
+    # Ternary operator
+    count += len(re.findall(r'\?\s*[^.?]', clean))
+    # Preprocessor conditionals (#if, #ifdef, #ifndef)
+    count += len(re.findall(r'^\s*#if\b', clean, re.MULTILINE))
+    count += len(re.findall(r'^\s*#elif\b', clean, re.MULTILINE))
+    count += len(re.findall(r'^\s*#ifdef\b', clean, re.MULTILINE))
+    count += len(re.findall(r'^\s*#ifndef\b', clean, re.MULTILINE))
+
+    return count
+
+
+def _count_go_decisions(clean: str) -> int:
+    """Count decision points in Go code."""
+    count = 0
+
+    # if statements
+    count += len(re.findall(r'\bif\s+', clean))
+    # else if
+    count += len(re.findall(r'\belse\s+if\s+', clean))
+    # else
+    count += len(re.findall(r'\belse\s*\{', clean))
+    # for loops (Go only has 'for')
+    count += len(re.findall(r'\bfor\s+', clean))
+    # switch cases
+    count += len(re.findall(r'\bcase\s+', clean))
+    # select cases
+    count += len(re.findall(r'\bcase\s+<-', clean))
+    # && and ||
+    count += clean.count('&&')
+    count += clean.count('||')
+
+    return count
+
+
 # ─── Cognitive Complexity ──────────────────────────────────────
 
 def _compute_cognitive(fn_body: str, ext: str) -> int:
@@ -602,6 +740,10 @@ def _compute_cognitive(fn_body: str, ext: str) -> int:
         total = _cognitive_py(lines)
     elif ext == ".rs":
         total = _cognitive_rs(lines)
+    elif ext in {".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx"}:
+        total = _cognitive_js(lines)  # C/C++ uses same structure as JS (braces)
+    elif ext == ".go":
+        total = _cognitive_js(lines)  # Go uses same brace structure
 
     return total
 
@@ -1089,7 +1231,8 @@ def _remove_comments(code: str, ext: str) -> str:
     result = re.sub(r'/\*[\s\S]{0,50000}?\*/', '', result)
 
     # Line comments
-    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs"}:
+    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs",
+               ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go"}:
         result = re.sub(r'//.*$', '', result, flags=re.MULTILINE)
     elif ext == ".py":
         result = re.sub(r'#.*$', '', result, flags=re.MULTILINE)

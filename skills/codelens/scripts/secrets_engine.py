@@ -47,8 +47,8 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".env", ".yaml", ".yml",
-    ".json", ".toml", ".cfg", ".ini", ".conf",
+    ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
 }
 
 # ── File types to skip entirely (API examples, not real code) ──
