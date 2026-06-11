@@ -11,6 +11,8 @@ Handles:
 - Scoped calls: Module::function() → tracked
 - Macro calls: println!(), vec!() → IGNORED
 - Trait implementations: impl Trait for Type → tracked with impl_for + trait_name
+- Tauri IPC commands: #[tauri::command] → tracked with is_tauri_command + ipc_name
+- Method call context: obj.method() → tracked with call_object for self-edge prevention
 - Comments ignored automatically by tree-sitter
 """
 
@@ -75,6 +77,9 @@ class RustParser(BaseParser):
         current_impl_for = None
         current_trait_name = None
 
+        # Pre-scan for #[tauri::command] attribute lines
+        tauri_command_lines = self._find_tauri_command_lines(source)
+
         # Find all function items and impl items
         fn_declarations = []
 
@@ -105,8 +110,13 @@ class RustParser(BaseParser):
                     impl_for_this_fn = None
                     trait_for_this_fn = None
 
+                # Check if this function is a Tauri command
+                fn_line = self.get_line(node)
+                is_tauri_cmd = fn_line in tauri_command_lines
+
                 decl = self._parse_function_item(node, source, file_path,
-                                                  impl_for_this_fn, trait_for_this_fn)
+                                                  impl_for_this_fn, trait_for_this_fn,
+                                                  is_tauri_cmd=is_tauri_cmd)
                 if decl:
                     fn_declarations.append(decl)
                     nodes.append(decl["node"])
@@ -125,13 +135,40 @@ class RustParser(BaseParser):
             if decl.get("body_node"):
                 fn_calls = self._find_calls_in_body(decl["body_node"], source)
                 for call_info in fn_calls:
-                    edges.append({
+                    edge = {
                         "from": decl["node"]["id"],
                         "to_fn": call_info["fn_name"],
-                        "via_self": call_info.get("via_self", False)
-                    })
+                        "via_self": call_info.get("via_self", False),
+                    }
+                    # Track call object context to prevent false self-edges.
+                    # When a function foo() calls obj.foo(), the edge resolver
+                    # might match it back to itself. Including call_object
+                    # lets the resolver know this is a method call on a different
+                    # object, not a recursive call.
+                    if call_info.get("call_object"):
+                        edge["call_object"] = call_info["call_object"]
+                    edges.append(edge)
 
         return {"nodes": nodes, "edges": edges}
+
+    def _find_tauri_command_lines(self, source: bytes) -> set:
+        """Pre-scan to find line numbers of functions annotated with #[tauri::command].
+
+        Returns a set of 1-indexed line numbers where tauri::command functions start.
+        """
+        lines = source.split(b'\n')
+        tauri_lines = set()
+        for i, line in enumerate(lines):
+            if b'#[tauri::command' in line:
+                # Scan forward to find the fn declaration (within next 5 lines)
+                for offset in range(0, 6):
+                    target = i + offset
+                    if target >= len(lines):
+                        break
+                    if b'fn ' in lines[target]:
+                        tauri_lines.add(target + 1)  # 1-indexed
+                        break
+        return tauri_lines
 
     def _parse_impl(self, node: Node, source: bytes) -> tuple:
         """Parse an impl_item node to extract the type and optional trait."""
@@ -155,7 +192,8 @@ class RustParser(BaseParser):
         return impl_for, trait_name
 
     def _parse_function_item(self, node: Node, source: bytes, file_path: str,
-                              impl_for: Optional[str], trait_name: Optional[str]) -> Optional[Dict]:
+                              impl_for: Optional[str], trait_name: Optional[str],
+                              is_tauri_cmd: bool = False) -> Optional[Dict]:
         """Parse a function_item node."""
         fn_name = None
         is_pub = False
@@ -193,6 +231,13 @@ class RustParser(BaseParser):
         if trait_name:
             node_data["trait_name"] = trait_name
 
+        # Track Tauri IPC commands — these are exposed to the frontend via invoke()
+        if is_tauri_cmd:
+            node_data["is_tauri_command"] = True
+            # Tauri default: snake_case Rust names → camelCase in JS/TS
+            ipc_name = _snake_to_camel(fn_name)
+            node_data["ipc_name"] = ipc_name
+
         return {
             "node": node_data,
             "body_node": body_node,
@@ -214,7 +259,13 @@ class RustParser(BaseParser):
         return calls
 
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:
-        """Parse a call_expression to extract the called function name."""
+        """Parse a call_expression to extract the called function name.
+
+        Also tracks call_object for method calls (e.g., window.open_devtools()
+        records call_object="window") to help the edge resolver prevent
+        false self-edges when a function name matches a method call on a
+        different object.
+        """
         func_node = node.child_by_field_name('function')
         if not func_node:
             return None
@@ -228,7 +279,11 @@ class RustParser(BaseParser):
 
         # Field expression: self.method() or obj.method()
         if func_node.type == 'field_expression':
-            obj_node = func_node.child_by_field_name('object')
+            # Tree-sitter Rust grammar uses 'value' for the object and 'field'
+            # for the method name (NOT 'object' as in other grammars).
+            obj_node = func_node.child_by_field_name('value')
+            if not obj_node:
+                obj_node = func_node.child_by_field_name('object')  # fallback
             field_node = func_node.child_by_field_name('field')
 
             if field_node:
@@ -237,10 +292,23 @@ class RustParser(BaseParser):
                     return None
 
                 via_self = False
-                if obj_node and self.get_text(obj_node, source) == 'self':
-                    via_self = True
+                call_object = None
+                obj_text = ""
+                if obj_node:
+                    obj_text = self.get_text(obj_node, source)
+                    if obj_text == 'self':
+                        via_self = True
+                    else:
+                        # Track the object name for self-edge prevention.
+                        # e.g., window.open_devtools() → call_object="window"
+                        # This helps the resolver know that open_devtools() called
+                        # on "window" is NOT the same as the free fn open_devtools().
+                        call_object = obj_text
 
-                return {"fn_name": method_name, "via_self": via_self}
+                result = {"fn_name": method_name, "via_self": via_self}
+                if call_object:
+                    result["call_object"] = call_object
+                return result
 
         # Scoped identifier: Module::function()
         if func_node.type == 'scoped_identifier':
@@ -251,6 +319,27 @@ class RustParser(BaseParser):
                 name = parts[-1]
                 if name in SKIP_NAMES:
                     return None
-                return {"fn_name": name}
+                # Track the module path for scoped calls
+                result = {"fn_name": name}
+                if len(parts) > 1:
+                    result["call_object"] = '::'.join(parts[:-1])
+                return result
 
         return None
+
+
+# ─── Case Conversion Helper ────────────────────────────────────
+
+def _snake_to_camel(name: str) -> str:
+    """Convert snake_case Rust function name to camelCase for Tauri IPC naming.
+
+    Tauri by default converts Rust snake_case command names to camelCase
+    in the JavaScript/TypeScript frontend. For example:
+    - get_profiles → getProfiles
+    - patch_verge_config → patchVergeConfig
+    - start_core → startCore
+    """
+    if '_' not in name:
+        return name
+    parts = name.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)

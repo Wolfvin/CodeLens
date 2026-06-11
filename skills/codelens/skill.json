@@ -1,7 +1,7 @@
 {
   "name": "codelens",
   "version": "5.7.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo framework detection, SvelteKit route detection, Svelte store detection, framework-adaptive perf-hint, Python CLI tool detection, safe_read_file/should_ignore_dir utils, statemap major upgrade. v6.1: Tauri/Remix/Astro framework detection, smell_engine enhanced, deadcode Tauri support, handbook Tauri identity. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file path lookup. Auto-incremental scan. Shared utils module. Proper logging. Registry freshness check for handbook. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Tauri IPC cross-language edge resolution (invoke()->#[tauri::command]), self-edge prevention, Rust annotation tracking, Tauri-aware dead-code, ipc_exposed status. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo detection, SvelteKit routes, Svelte stores, framework-adaptive perf-hint, Python CLI detection. v6.1: Tauri/Remix/Astro detection, smell_engine enhanced, handbook Tauri. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis",
@@ -73,7 +73,7 @@
     "wcag-compliance",
     "aria-audit",
     "environment-variables",
-    "debug-code-dleanup",
+    "debug-code-cleanup",
     "console-log-detection",
     "vulnerability-scan",
     "cve",
@@ -119,9 +119,18 @@
     "streaming",
     "rest-api",
     "tauri",
+    "tauri-ipc",
+    "invoke",
+    "ipc-bridge",
+    "cross-language",
+    "ipc-exposed",
+    "self-edge-prevention",
     "desktop-app",
     "remix",
     "astro",
-    "monorepo"
+    "monorepo",
+    "django",
+    "secrets-v4",
+    "context-aware-filtering"
   ]
 }

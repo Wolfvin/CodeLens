@@ -505,13 +505,16 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
         # v6: Report functions with ref_count == 0 and status == "dead"
         # But skip: main() functions (entry points), pub functions (public API),
-        # and functions in test files
+        # Tauri IPC commands (exposed to frontend), and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
             if name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
+                continue
+            # Skip Tauri IPC commands — they're called from the frontend via invoke()
+            if node.get("is_tauri_command") or status == "ipc_exposed":
                 continue
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):

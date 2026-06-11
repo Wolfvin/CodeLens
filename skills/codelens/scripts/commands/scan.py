@@ -17,7 +17,7 @@ from incremental import (
     find_changed_files, update_mtimes_cache, remove_from_mtimes_cache,
     merge_frontend_data, merge_backend_data
 )
-from edge_resolver import resolve_edges
+from edge_resolver import resolve_edges, resolve_tauri_ipc_from_apimap
 from parsers.fallback_html import parse_html_fallback
 from parsers.fallback_css import parse_css_fallback
 from parsers.fallback_js_frontend import parse_js_frontend_fallback
@@ -494,6 +494,37 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             all_raw_edges.extend(item.get("edges", []))
 
         resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
+
+        # ─── Tauri IPC cross-language edge resolution ─────────────
+        # After resolving same-language edges, add cross-language edges
+        # for Tauri IPC: TypeScript invoke('commandName') → Rust handler.
+        # This is critical for Tauri apps where frontend calls Rust backend
+        # via the IPC bridge. Without this, Rust #[tauri::command] handlers
+        # appear "dead" because no Rust code calls them directly.
+        if 'tauri' in config.get("frameworks", []):
+            try:
+                from apimap_engine import map_api_routes
+                api_result = map_api_routes(workspace)
+                api_routes = api_result.get("routes", [])
+                resolved_edges = resolve_tauri_ipc_from_apimap(
+                    resolved_nodes, resolved_edges, api_routes
+                )
+                # Recompute ref_counts with the new IPC edges
+                incoming_count = {}
+                for node in resolved_nodes:
+                    incoming_count[node["id"]] = 0
+                for edge in resolved_edges:
+                    to_id = edge.get("to")
+                    if to_id and to_id in incoming_count:
+                        incoming_count[to_id] += 1
+                for node in resolved_nodes:
+                    node["ref_count"] = incoming_count.get(node["id"], 0)
+                    if node.get("is_tauri_command") and node["ref_count"] == 0:
+                        node["status"] = "ipc_exposed"
+                    else:
+                        node["status"] = "dead" if node["ref_count"] == 0 else "active"
+            except Exception:
+                logger.warning("Failed to resolve Tauri IPC edges", exc_info=True)
 
         backend_registry = {
             "last_updated": datetime.now(timezone.utc).isoformat(),

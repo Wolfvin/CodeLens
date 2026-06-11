@@ -16,6 +16,8 @@ def _get_query_action(status: str) -> tuple:
         return ("EXTEND", "Name exists and is active. Do not overwrite — extend or use a different name.")
     elif status == "dead":
         return ("ASK", "Name exists but is dead (unused). Ask user whether to reuse or create new.")
+    elif status == "ipc_exposed":
+        return ("EXTEND", "Name exists as a Tauri IPC command (exposed to frontend via invoke()). Do not overwrite — extend or use a different name.")
     elif status == "duplicate_ref":
         return ("LIST_FIRST", "Name has duplicate references. List all referrers before making changes.")
     elif status == "collision":
