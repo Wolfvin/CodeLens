@@ -31,16 +31,31 @@ def add_args(parser):
     parser.add_argument("--domain", choices=["frontend", "backend"], default=None,
                         help="Domain to search")
     parser.add_argument("--file", default=None, help="Filter by file path")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="Max callers/callees to return (default: 20)")
+    parser.add_argument("--all", action="store_true",
+                        help="Return all callers/callees (no limit)")
 
 
 def execute(args, workspace):
-    return cmd_query(args.name, workspace, args.domain, args.file)
+    limit = None if getattr(args, 'all', False) else getattr(args, 'limit', 20)
+    return cmd_query(args.name, workspace, args.domain, args.file, limit=limit)
 
 
 def cmd_query(query_name: str, workspace: str, domain: str = None,
-               file_filter: str = None) -> Dict[str, Any]:
-    """Query a specific class/id/function from the registry."""
+               file_filter: str = None, limit: int = None) -> Dict[str, Any]:
+    """Query a specific class/id/function from the registry.
+
+    Args:
+        query_name: Name to look up
+        workspace: Workspace root path
+        domain: 'frontend' or 'backend' or None (both)
+        file_filter: Filter by file path substring
+        limit: Max callers/callees to return (None=default=20, 0=no limit)
+    """
     workspace = os.path.abspath(workspace)
+    if limit is None:
+        limit = 20
 
     # ─── File path lookup ─────────────────────────────
     if is_file_path(query_name) and domain in (None, "backend"):
@@ -132,11 +147,17 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 if file_filter and file_filter not in node.get("file", ""):
                     continue
 
-                callers = deduplicate_callers(
+                all_callers = deduplicate_callers(
                     get_callers(node["id"], backend.get("edges", []))
                 )
-                callees = get_callees(node["id"], backend.get("edges", []),
-                                       backend.get("nodes", []))
+                all_callees = get_callees(node["id"], backend.get("edges", []),
+                                           backend.get("nodes", []))
+
+                # Apply limit to callers/callees
+                total_callers = len(all_callers)
+                total_callees = len(all_callees)
+                callers = all_callers[:limit] if limit else all_callers
+                callees = all_callees[:limit] if limit else all_callees
 
                 node_status = node.get("status", "active")
                 action, action_reason = _get_query_action(node_status)
@@ -156,7 +177,15 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                         "async": node.get("async", False)
                     },
                     "callers": callers,
-                    "callees": callees
+                    "callees": callees,
+                    "pagination": {
+                        "callers_total": total_callers,
+                        "callees_total": total_callees,
+                        "callers_shown": len(callers),
+                        "callees_shown": len(callees),
+                        "has_more_callers": total_callers > len(callers),
+                        "has_more_callees": total_callees > len(callees),
+                    }
                 }
 
                 if node.get("impl_for"):

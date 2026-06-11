@@ -92,8 +92,20 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
     for edge in edges:
         from_id = edge.get("from", "")
         to_id = edge.get("to", "")
-        if from_id and to_id and to_id in node_by_id:
+        if from_id and to_id and to_id in node_by_id and edge.get("resolved", True) is not False:
             adj[from_id].append(to_id)
+
+    # Collect self-edges (recursion) before removing them from adjacency list
+    self_edges = []
+    for nid in adj:
+        for neighbor in adj[nid]:
+            if neighbor == nid:
+                node = node_by_id.get(nid, {})
+                self_edges.append((nid, node.get("fn", "unknown")))
+
+    # Remove self-edges (recursion is not a circular dependency)
+    for nid in list(adj.keys()):
+        adj[nid] = [neighbor for neighbor in adj[nid] if neighbor != nid]
 
     # DFS with coloring to find cycles
     WHITE, GRAY, BLACK = 0, 1, 2
@@ -135,6 +147,26 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
             break
         if color[nid] == WHITE:
             dfs_cycle(nid, [])
+
+    # Report self-edges as recursion (info-level, not a circular dependency)
+    seen_self = set()
+    for nid, fn_name in self_edges:
+        if nid not in seen_self:
+            seen_self.add(nid)
+            node = node_by_id.get(nid, {})
+            cycles_found.append({
+                "type": "recursion",
+                "chain": [{
+                    "id": nid,
+                    "fn": fn_name,
+                    "file": node.get("file", ""),
+                    "line": node.get("line", 0)
+                }],
+                "cycle": f"{fn_name} → {fn_name}",
+                "length": 1,
+                "severity": "info",
+                "message": f"Recursive function call: {fn_name}"
+            })
 
     return cycles_found
 

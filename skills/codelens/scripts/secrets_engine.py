@@ -28,7 +28,6 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
-
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -268,17 +267,28 @@ ENV_SECRET_PATTERNS = [
 
 # ─── Entropy thresholds ───────────────────────────────────────
 
-ENTROPY_THRESHOLD = 4.0
+ENTROPY_THRESHOLD = 4.5
 MIN_SECRET_LENGTH = 12
 MAX_SECRET_LENGTH = 256
 
+# Entropy scan exclusions — strings matching these patterns are not secrets
+ENTROPY_EXCLUSION_PATTERNS = [
+    re.compile(r'^data:(?:image|application|audio|video)/'),  # Data URIs
+    re.compile(r'^https?://'),                                # URLs
+    re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+'),       # Email-like
+    re.compile(r'^\d+(\.\d+){1,3}$'),                       # IP-like / version
+    re.compile(r'^[A-Z][a-z]+[A-Z]'),                         # PascalCase (class names)
+    re.compile(r'^(?:const|let|var|import|export|from|require)'), # JS keywords
+    re.compile(r'^\.{0,2}/'),                                 # Relative paths
+    re.compile(r'^[a-f0-9]{7,40}$', re.IGNORECASE),           # Short git hashes
+    re.compile(r'^\$\{'),                                     # Template literals
+    re.compile(r'^[A-Za-z0-9+/]+=*$'),                        # Pure base64 (likely encoded data, not secret)
+]
 
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None,
-    max_results: int = 200,
-    max_files: int = 5000
+    config: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -290,8 +300,6 @@ def detect_secrets(
         workspace: Absolute path to workspace
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
-        max_results: Max findings to return (default 200)
-        max_files: Max files to scan (default 5000)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -302,7 +310,6 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
-    truncated = False
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -315,11 +322,6 @@ def detect_secrets(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
-
-            # File-count limit to prevent timeout on huge repos
-            if files_scanned >= max_files:
-                truncated = True
-                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -336,19 +338,14 @@ def detect_secrets(
             if _is_test_file(rel_path):
                 continue
 
-            # Early exit if we already have enough findings
-            if len(findings) < max_results:
-                # Scan for patterns
-                file_findings = _scan_file_patterns(content, rel_path, ext)
-                findings.extend(file_findings)
+            # Scan for patterns
+            file_findings = _scan_file_patterns(content, rel_path, ext)
+            findings.extend(file_findings)
 
-                # Entropy-based scanning for code files
-                if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                    entropy_findings = _scan_file_entropy(content, rel_path, ext)
-                    findings.extend(entropy_findings)
-
-        if truncated:
-            break
+            # Entropy-based scanning for code files
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+                entropy_findings = _scan_file_entropy(content, rel_path, ext)
+                findings.extend(entropy_findings)
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -380,12 +377,10 @@ def detect_secrets(
         "severity_filter": severity,
         "stats": stats,
         "risk": risk,
-        "findings": findings[:max_results],
+        "findings": findings[:200],  # Cap to avoid explosion
         "env_exposed": env_exposed,
         "recommendations": recommendations,
-        "truncated": truncated or len(findings) > max_results,
     }
-
 
 # ─── Pattern-based Scanner ─────────────────────────────────────
 
@@ -425,7 +420,6 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str,
 
     return findings
 
-
 # ─── Entropy-based Scanner ─────────────────────────────────────
 
 def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, Any]]:
@@ -450,8 +444,23 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, 
 
     all_candidates = set(quoted_strings + assignments)
 
+    # Cap candidates per file to avoid processing thousands from minified files
+    if len(all_candidates) > 200:
+        # Prioritize assignment-style values (more likely to be secrets)
+        priority = set(assignments)
+        remaining = all_candidates - priority
+        all_candidates = priority | set(list(remaining)[:200 - len(priority)])
+
     for candidate in all_candidates:
         if _is_safe_value(candidate):
+            continue
+
+        # Skip candidates matching entropy exclusion patterns
+        if any(pat.match(candidate) for pat in ENTROPY_EXCLUSION_PATTERNS):
+            continue
+
+        # Skip candidates in test/fixture files
+        if _is_test_file(rel_path):
             continue
 
         # Calculate Shannon entropy
@@ -478,7 +487,6 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, 
             })
 
     return findings
-
 
 # ─── .env File Scanner ─────────────────────────────────────────
 
@@ -559,7 +567,6 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
 
     return env_files
 
-
 # ─── .gitignore Check ──────────────────────────────────────────
 
 def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
@@ -607,7 +614,6 @@ def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
 
     return exposed
 
-
 # ─── Entropy Calculation ───────────────────────────────────────
 
 def _shannon_entropy(data: str) -> float:
@@ -640,7 +646,6 @@ def _shannon_entropy(data: str) -> float:
 
     return entropy
 
-
 # ─── Helper Functions ──────────────────────────────────────────
 
 def _mask_value(value: str) -> str:
@@ -651,7 +656,6 @@ def _mask_value(value: str) -> str:
     if len(value) <= 4:
         return value[:2] + "***"
     return value[:4] + "***"
-
 
 def _is_safe_value(value: str) -> bool:
     """Check if a value is a known safe / false-positive pattern."""
@@ -667,7 +671,6 @@ def _is_safe_value(value: str) -> bool:
 
     return False
 
-
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory."""
     test_indicators = [
@@ -677,14 +680,12 @@ def _is_test_file(rel_path: str) -> bool:
     ]
     return any(indicator in rel_path for indicator in test_indicators)
 
-
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""
     idx = content.find(value)
     if idx == -1:
         return 0
     return content[:idx].count('\n') + 1
-
 
 def _infer_category_from_value(value: str) -> str:
     """Infer the likely secret category from the value's format."""
@@ -724,7 +725,6 @@ def _infer_category_from_value(value: str) -> str:
     # Default to token for high-entropy strings
     return "token"
 
-
 def _category_from_env_key(key_name: str) -> str:
     """Determine secret category from an environment variable name."""
     key_upper = key_name.upper()
@@ -748,7 +748,6 @@ def _category_from_env_key(key_name: str) -> str:
 
     return "token"  # Default for unknown high-entropy env vars
 
-
 def _severity_for_category(category: str) -> str:
     """Return the default severity for a secret category."""
     severity_map = {
@@ -763,7 +762,6 @@ def _severity_for_category(category: str) -> str:
     }
     return severity_map.get(category, "high")
 
-
 def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove duplicate findings (same file, line, category)."""
     seen: Set[Tuple[str, int, str]] = set()
@@ -776,7 +774,6 @@ def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]
             unique.append(finding)
 
     return unique
-
 
 # ─── Stats & Risk Computation ──────────────────────────────────
 
@@ -798,7 +795,6 @@ def _compute_stats(
         "by_severity": dict(by_severity),
         "env_files_checked": len(env_files),
     }
-
 
 def _compute_risk(findings: List[Dict[str, Any]], env_exposed: List[str]) -> str:
     """Compute overall risk level based on findings."""
@@ -829,11 +825,9 @@ def _compute_risk(findings: List[Dict[str, Any]], env_exposed: List[str]) -> str
 
     return "low"
 
-
 def _get_env_findings_for_path(findings: List[Dict], path: str) -> List[Dict]:
     """Get findings that belong to a specific .env file path."""
     return [f for f in findings if f.get("file") == path]
-
 
 # ─── Recommendations ───────────────────────────────────────────
 

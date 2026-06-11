@@ -15,14 +15,21 @@ def add_args(parser):
     parser.add_argument("--filter", dest="filter_type",
                         choices=["all", "dead", "duplicate_define", "duplicate_ref", "collision", "active"],
                         default="all", help="Filter by status")
+    parser.add_argument("--limit", type=int, default=200,
+                        help="Max results to return (default: 200)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Offset for pagination (default: 0)")
 
 
 def execute(args, workspace):
-    return cmd_list(workspace, args.domain, args.filter_type)
+    return cmd_list(workspace, args.domain, args.filter_type,
+                    limit=getattr(args, 'limit', 200),
+                    offset=getattr(args, 'offset', 0))
 
 
-def cmd_list(workspace: str, domain: str, filter_type: str = "all") -> Dict[str, Any]:
-    """List all entries with optional filter."""
+def cmd_list(workspace: str, domain: str, filter_type: str = "all",
+             limit: int = 200, offset: int = 0) -> Dict[str, Any]:
+    """List all entries with optional filter and pagination."""
     workspace = os.path.abspath(workspace)
     results = []
 
@@ -82,7 +89,19 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all") -> Dict[str,
             elif filter_type == "duplicate_define" and node.get("duplicate_define"):
                 results.append(entry)
 
-    return {"status": "ok", "domain": domain, "filter": filter_type, "count": len(results), "results": results}
+    total = len(results)
+    paginated = results[offset:offset + limit]
+    return {
+        "status": "ok",
+        "domain": domain,
+        "filter": filter_type,
+        "total": total,
+        "count": len(paginated),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < total,
+        "results": paginated
+    }
 
 
 register_command("list", "List entries with filter", add_args, execute)

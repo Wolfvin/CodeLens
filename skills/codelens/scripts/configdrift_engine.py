@@ -330,8 +330,8 @@ def _compute_drift(
             continue
         normalized = _normalize_pkg_name(pkg, project_type)
         if normalized not in all_declared and pkg not in builtins:
-            # Skip common framework packages that are often transitive
-            transitive = {'prop-types', 'scheduler', 'react', 'react-dom', 'vue', '@vue/runtime-dom'}
+            # Skip common packages that are truly transitive (not direct deps)
+            transitive = {'prop-types', 'scheduler', '@vue/runtime-dom'}
             if pkg not in transitive:
                 drift["missing"].append({
                     "package": pkg,

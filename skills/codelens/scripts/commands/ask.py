@@ -411,7 +411,7 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "smell":
         return detect_smells(workspace)
     elif command == "complexity":
-        return compute_complexity(workspace)
+        return compute_complexity(workspace, sort_by="complexity", limit=30)
     elif command == "impact":
         return analyze_impact(args.get("name", ""), workspace, action=args.get("action", "modify"))
     elif command == "trace":
