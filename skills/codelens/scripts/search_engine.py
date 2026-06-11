@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Set
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir, logger
 
 
 # File type to extension mapping
@@ -166,7 +166,12 @@ def search_with_config(cfg: SearchConfig) -> Dict[str, Any]:
     errors = []
 
     for root, dirs, filenames in os.walk(workspace):
-        # Filter out ignored directories (in-place modification of dirs)
+        # Filter out ignored directories using path-segment-aware matching
+        rel_root = os.path.relpath(root, workspace)
+        if should_ignore_dir(rel_root):
+            dirs.clear()
+            continue
+        # Also filter individual directory names for simple cases
         dirs[:] = [
             d for d in dirs
             if d not in ignore_dirs and not d.startswith('.')

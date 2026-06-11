@@ -1,6 +1,6 @@
 {
   "name": "codelens",
-  "version": "5.7.1",
+  "version": "5.8.0",
   "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.8: SearchConfig/FrontendRegistryInput dataclasses (fixes many_params smell), O(n log n) Gini coefficient, bun.lock detection, trpc/orpc detection, improved normalizer coverage. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8 detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction (6x more nodes). Fuzzy file path lookup. Auto-incremental scan with deleted file handling. Shared utils module. Proper logging (no silent errors). Registry freshness check for handbook. Calibrated health score. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [

@@ -289,15 +289,15 @@ def _parse_js_imports(content: str, file_rel_path: str, workspace: str) -> List[
     imports = []
     file_dir = os.path.dirname(file_rel_path)
 
-    # ES module imports: import X from './path'
-    for m in re.finditer(r'import\s+.*?from\s+["\'](\.\/[^"\']+)["\']', content):
+    # ES module imports: import X from './path' or '../path'
+    for m in re.finditer(r'import\s+.*?from\s+["\'](\.{1,2}/[^"\']+)["\']', content):
         raw = m.group(1)
         resolved = _resolve_import_path(raw, file_dir, workspace)
         if resolved:
             imports.append(resolved)
 
-    # CommonJS: require('./path')
-    for m in re.finditer(r'require\s*\(\s*["\'](\.\/[^"\']+)["\']\s*\)', content):
+    # CommonJS: require('./path') or require('../path')
+    for m in re.finditer(r'require\s*\(\s*["\'](\.{1,2}/[^"\']+)["\']\s*\)', content):
         raw = m.group(1)
         resolved = _resolve_import_path(raw, file_dir, workspace)
         if resolved:

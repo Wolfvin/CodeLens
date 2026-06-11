@@ -22,7 +22,7 @@ import re
 import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 # ─── Configuration ─────────────────────────────────────────────
 

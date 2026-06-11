@@ -7,7 +7,7 @@ Gives AI everything needed to understand a symbol without reading the whole file
 
 import os
 from typing import Dict, List, Any, Optional
-from utils import logger
+from utils import logger, safe_read_file
 
 
 def get_symbol_context(
@@ -158,18 +158,22 @@ def get_symbol_context(
         match_node = exact_node or fuzzy_node
         match_type = "exact" if exact_node else "fuzzy"
 
-        if match_node is not None and context["definition"] is None:
-            node = match_node
-            context["definition"] = {
-                "type": "function",
-                "name": node["fn"],
-                "status": node.get("status", "active"),
-                "ref_count": node.get("ref_count", 0),
-                "file": node.get("file", ""),
-                "line": node.get("line", 0),
-                "async": node.get("async", False),
-                "match_type": match_type
-            }
+        if match_node is not None:
+            # If frontend already found this name (e.g. CSS class), note the overlap
+            if context["definition"] is not None:
+                context["definition"]["also_matched_in"] = "frontend"
+            else:
+                node = match_node
+                context["definition"] = {
+                    "type": "function",
+                    "name": node["fn"],
+                    "status": node.get("status", "active"),
+                    "ref_count": node.get("ref_count", 0),
+                    "file": node.get("file", ""),
+                    "line": node.get("line", 0),
+                    "async": node.get("async", False),
+                    "match_type": match_type
+                }
 
             if match_type == "fuzzy":
                 context["definition"]["query"] = name
@@ -262,9 +266,11 @@ def _read_code_around(
         return None
 
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-    except IOError:
+        content = safe_read_file(file_path)
+        if content is None:
+            return None
+        lines = content.splitlines()
+    except (IOError, OSError):
         return None
 
     start = max(0, center_line - 1 - context_lines)

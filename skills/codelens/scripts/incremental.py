@@ -340,10 +340,6 @@ def merge_backend_data(
             re_resolvable_edges.append(edge)
             continue
 
-        if not is_resolved and from_is_changed:
-            # Unresolved edge from changed file — discard
-            continue
-
         # Edge is between unchanged-file nodes — keep it
         kept_edges.append(edge)
 

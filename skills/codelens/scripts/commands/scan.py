@@ -10,7 +10,7 @@ from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
     load_backend_registry, save_backend_registry,
-    build_frontend_registry, compute_frontend_status
+    build_frontend_registry
 )
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import (
@@ -124,12 +124,40 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                                                   and (e.get("to", "") in remaining_ids or not e.get("to", "")))]
                 save_backend_registry(workspace, existing_backend)
 
-            # Clean frontend data
+            # Clean frontend data — remove entries whose only references are in deleted files.
+            # Class schema: {name, ref_count, status, css: [{path, ...}], js: [{path, ...}]}
+            # ID schema: {name, ref_count, status, defined_in_html: [{path, ...}], css: [{path, ...}], js: [{path, ...}]}
             fe_classes = existing_frontend.get("classes", [])
             if isinstance(fe_classes, list):
-                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
+                cleaned_classes = []
+                for c in fe_classes:
+                    # Strip refs from deleted files, keep refs from surviving files
+                    surviving_css = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
+                    surviving_js = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
+                    if surviving_css or surviving_js:
+                        c["css"] = surviving_css
+                        c["js"] = surviving_js
+                        c["ref_count"] = len(surviving_css) + len(surviving_js)
+                        c["status"] = "active" if c["ref_count"] > 0 else "dead"
+                        cleaned_classes.append(c)
+                    # else: all refs were in deleted files → drop the entry
+                existing_frontend["classes"] = cleaned_classes
+
                 fe_ids = existing_frontend.get("ids", [])
-                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
+                cleaned_ids = []
+                for i in fe_ids:
+                    surviving_html = [r for r in i.get("defined_in_html", []) if r.get("path", "") not in del_set]
+                    surviving_css = [r for r in i.get("css", []) if r.get("path", "") not in del_set]
+                    surviving_js = [r for r in i.get("js", []) if r.get("path", "") not in del_set]
+                    if surviving_html or surviving_css or surviving_js:
+                        i["defined_in_html"] = surviving_html
+                        i["css"] = surviving_css
+                        i["js"] = surviving_js
+                        i["ref_count"] = len(surviving_css) + len(surviving_js)
+                        i["status"] = "active" if i["ref_count"] > 0 else ("dead" if not surviving_html else "active")
+                        cleaned_ids.append(i)
+                    # else: all refs were in deleted files → drop the entry
+                existing_frontend["ids"] = cleaned_ids
                 save_frontend_registry(workspace, existing_frontend)
 
             # Continue with incremental scan for changed/new files

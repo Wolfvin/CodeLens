@@ -31,9 +31,7 @@ import subprocess
 import logging
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
-
-logger = logging.getLogger("codelens.vulnscan")
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 # ─── Configuration ─────────────────────────────────────────────
 

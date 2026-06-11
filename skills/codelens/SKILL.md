@@ -35,9 +35,20 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v5
+# CodeLens v5.8
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v5.8
+
+- **Critical bug fixes**: Fixed `should_ignore_dir` missing from utils.py (broke ALL 41 commands), frontend registry deletion cleanup (data never removed from incremental scans), 8 missing `ask` command handlers
+- **Rust parser impl_for fix**: `impl_for` context no longer leaks to sibling functions outside impl blocks
+- **Circular dependency `../` import detection**: Now catches parent-directory imports (`import X from '../utils'`)
+- **SearchConfig & FrontendRegistryInput dataclasses**: Eliminates `many_params` code smell
+- **Package manager detection**: bun, pnpm, yarn, npm from lock files
+- **tRPC / oRPC framework detection**
+- **Convention engine file limits**: `MAX_FILES_PER_CATEGORY = 500` to prevent slow scans on huge codebases
+- **12 engines now use shared logger**: No more silent error swallowing
 
 ## What's New in v5
 

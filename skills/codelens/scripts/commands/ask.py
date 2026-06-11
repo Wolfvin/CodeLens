@@ -468,6 +468,27 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "refactor-safe":
         from refactor_safe_engine import check_refactor_safety
         return check_refactor_safety(args.get("name", ""), workspace)
+    elif command == "side-effect":
+        from sideeffect_engine import analyze_side_effects
+        return analyze_side_effects(workspace, function_name=args.get("name", ""))
+    elif command == "dataflow":
+        from dataflow_engine import analyze_dataflow
+        return analyze_dataflow(workspace)
+    elif command == "missing-refs":
+        from missing_refs import detect_missing_refs
+        return detect_missing_refs(workspace)
+    elif command == "ownership":
+        from ownership_engine import analyze_ownership
+        return analyze_ownership(workspace)
+    elif command == "config-drift":
+        from configdrift_engine import detect_config_drift
+        return detect_config_drift(workspace)
+    elif command == "stack-trace":
+        from stacktrace_engine import simulate_error_propagation
+        return simulate_error_propagation(args.get("name", ""), workspace)
+    elif command == "type-infer":
+        from typeinfer_engine import infer_types
+        return infer_types(workspace)
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 
