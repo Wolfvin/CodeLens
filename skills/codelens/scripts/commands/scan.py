@@ -12,7 +12,10 @@ from registry import (
     build_frontend_registry, compute_frontend_status
 )
 from framework_detect import detect_frameworks, get_recommended_config
-from incremental import find_changed_files, update_mtimes_cache, remove_from_mtimes_cache
+from incremental import (
+    find_changed_files, update_mtimes_cache, remove_from_mtimes_cache,
+    merge_frontend_data, merge_backend_data
+)
 from edge_resolver import resolve_edges
 from parsers.fallback_html import parse_html_fallback
 from parsers.fallback_css import parse_css_fallback
@@ -249,30 +252,43 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 pass
 
     # Tailwind analysis
+    # In incremental mode, skip tailwind re-analysis since we only have
+    # classes from changed files — the merge will preserve existing tailwind info
     tailwind_info = None
-    if config.get("tailwind_mode") or config.get("has_tailwind"):
-        try:
-            from parsers.tailwind_detector import analyze_tailwind_usage
-            all_classes = []
-            for item in html_data:
-                all_classes.extend(item.get("classes", []))
-            for item in css_data:
-                all_classes.extend(item.get("classes", []))
-            for item in js_frontend_data:
-                all_classes.extend(item.get("classes", []))
-            for item in tsx_data:
-                all_classes.extend(item.get("frontend", {}).get("classes", []))
+    if not (incremental and changed_files):
+        if config.get("tailwind_mode") or config.get("has_tailwind"):
+            try:
+                from parsers.tailwind_detector import analyze_tailwind_usage
+                all_classes = []
+                for item in html_data:
+                    all_classes.extend(item.get("classes", []))
+                for item in css_data:
+                    all_classes.extend(item.get("classes", []))
+                for item in js_frontend_data:
+                    all_classes.extend(item.get("classes", []))
+                for item in tsx_data:
+                    all_classes.extend(item.get("frontend", {}).get("classes", []))
 
-            tailwind_info = analyze_tailwind_usage(workspace, all_classes)
-        except Exception:
-            pass
+                tailwind_info = analyze_tailwind_usage(workspace, all_classes)
+            except Exception:
+                pass
 
     # Build frontend registry
-    frontend_registry = build_frontend_registry(
-        workspace, html_data, css_data, js_frontend_data,
-        tsx_data, vue_data, svelte_data,
-        tailwind_info, config.get("frameworks", [])
-    )
+    if incremental and changed_files:
+        # Incremental: merge new parsed data into existing registry
+        existing_frontend = load_frontend_registry(workspace)
+        frontend_registry = merge_frontend_data(
+            existing_frontend, html_data, css_data, js_frontend_data,
+            tsx_data, vue_data, svelte_data, tailwind_info,
+            changed_files, workspace, config.get("frameworks", [])
+        )
+    else:
+        # Full scan: build from scratch
+        frontend_registry = build_frontend_registry(
+            workspace, html_data, css_data, js_frontend_data,
+            tsx_data, vue_data, svelte_data,
+            tailwind_info, config.get("frameworks", [])
+        )
     save_frontend_registry(workspace, frontend_registry)
 
     # Parse JS Backend files
@@ -360,20 +376,32 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 pass
 
     # Build backend registry with edge resolution
-    all_nodes = []
-    all_raw_edges = []
-    for item in rust_data + js_backend_data + python_data:
-        all_nodes.extend(item.get("nodes", []))
-        all_raw_edges.extend(item.get("edges", []))
+    if incremental and changed_files:
+        # Incremental: merge new parsed data into existing registry
+        existing_backend = load_backend_registry(workspace)
+        new_parsed_data = rust_data + js_backend_data + python_data
+        backend_registry = merge_backend_data(
+            existing_backend, new_parsed_data,
+            changed_files, workspace
+        )
+        resolved_nodes = backend_registry["nodes"]
+        resolved_edges = backend_registry["edges"]
+    else:
+        # Full scan: build from scratch
+        all_nodes = []
+        all_raw_edges = []
+        for item in rust_data + js_backend_data + python_data:
+            all_nodes.extend(item.get("nodes", []))
+            all_raw_edges.extend(item.get("edges", []))
 
-    resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
+        resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
 
-    backend_registry = {
-        "last_updated": datetime.now(timezone.utc).isoformat(),
-        "workspace": workspace,
-        "nodes": resolved_nodes,
-        "edges": resolved_edges
-    }
+        backend_registry = {
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "workspace": workspace,
+            "nodes": resolved_nodes,
+            "edges": resolved_edges
+        }
     save_backend_registry(workspace, backend_registry)
 
     # Update mtimes cache

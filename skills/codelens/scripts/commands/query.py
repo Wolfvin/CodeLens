@@ -126,6 +126,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 return result
 
     return {
+        "status": "ok",
         "found": False,
         "query": query_name,
         "domain": domain or "auto",

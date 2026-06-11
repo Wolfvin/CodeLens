@@ -15,7 +15,7 @@ def add_args(parser):
 def execute(args, workspace):
     if args.list_snapshots:
         snaps = list_snapshots(workspace)
-        return {"snapshots": snaps}
+        return {"status": "ok", "snapshots": snaps}
     elif args.snapshot1 or args.snapshot2:
         return diff_snapshots(workspace, args.snapshot1, args.snapshot2)
     else:

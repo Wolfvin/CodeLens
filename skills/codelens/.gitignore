@@ -39,3 +39,5 @@ tree_sitter/
 
 # Project specific
 *.log
+.codelens/
+agent-ctx/

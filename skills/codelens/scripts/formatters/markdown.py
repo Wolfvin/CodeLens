@@ -21,6 +21,24 @@ def to_markdown(data: Any, command: str = "") -> str:
         lines.append(f"**Type:** {data.get('error_type', '')}")
         return "\n".join(lines)
 
+    # Ask command interpretation header (shown when codelens routes ask to a sub-command)
+    interp = data.get("query_interpretation")
+    if interp:
+        lines.append("## Ask")
+        lines.append("")
+        question = interp.get("question", "")
+        interpreted_as = interp.get("interpreted_as", "")
+        confidence = interp.get("confidence", "")
+        if question:
+            lines.append(f"**Question:** {question}")
+        if interpreted_as:
+            lines.append(f"**Interpreted as:** `{interpreted_as}`")
+        if confidence:
+            lines.append(f"**Confidence:** {confidence}")
+        lines.append("")
+        # Remove query_interpretation from data so sub-formatters don't see it
+        data = {k: v for k, v in data.items() if k != "query_interpretation"}
+
     # Command-specific formatting
     if command == "scan":
         _md_scan(data, lines)
@@ -52,6 +70,58 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_secrets(data, lines)
     elif command == "side-effect":
         _md_side_effect(data, lines)
+    elif command == "list":
+        _md_list(data, lines)
+    elif command == "symbols":
+        _md_symbols(data, lines)
+    elif command == "watch":
+        _md_watch(data, lines)
+    elif command == "init":
+        _md_init(data, lines)
+    elif command == "detect":
+        _md_detect(data, lines)
+    elif command == "search":
+        _md_search(data, lines)
+    elif command == "missing-refs":
+        _md_missing_refs(data, lines)
+    elif command == "diff":
+        _md_diff(data, lines)
+    elif command == "dependents":
+        _md_dependents(data, lines)
+    elif command == "validate":
+        _md_validate(data, lines)
+    elif command == "dataflow":
+        _md_dataflow(data, lines)
+    elif command == "test-map":
+        _md_test_map(data, lines)
+    elif command == "config-drift":
+        _md_config_drift(data, lines)
+    elif command == "type-infer":
+        _md_type_infer(data, lines)
+    elif command == "ownership":
+        _md_ownership(data, lines)
+    elif command == "debug-leak":
+        _md_debug_leak(data, lines)
+    elif command == "stack-trace":
+        _md_stack_trace(data, lines)
+    elif command == "refactor-safe":
+        _md_refactor_safe(data, lines)
+    elif command == "env-check":
+        _md_env_check(data, lines)
+    elif command == "state-map":
+        _md_state_map(data, lines)
+    elif command == "vuln-scan":
+        _md_vuln_scan(data, lines)
+    elif command == "perf-hint":
+        _md_perf_hint(data, lines)
+    elif command == "css-deep":
+        _md_css_deep(data, lines)
+    elif command == "a11y":
+        _md_a11y(data, lines)
+    elif command == "regex-audit":
+        _md_regex_audit(data, lines)
+    elif command == "ask":
+        _md_ask(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
@@ -538,3 +608,1157 @@ def _md_side_effect(data: Dict, lines: list) -> None:
                 effects_list = ", ".join(e.get("type", "") for e in fn.get("side_effects", []))
                 lines.append(f"- `{fn.get('file', '')}:{fn.get('line', '')}` — {fn.get('name', '')} ({effects_list})")
         lines.append("")
+
+
+# ─── 26 New Formatters ──────────────────────────────────────────
+
+
+def _md_list(data: Dict, lines: list) -> None:
+    """Markdown for list command."""
+    domain = data.get("domain", "all")
+    filter_type = data.get("filter", "all")
+    count = data.get("count", 0)
+    lines.append("## Symbol List")
+    lines.append("")
+    lines.append(f"**Domain:** {domain} | **Filter:** {filter_type} | **Total:** {count}")
+    lines.append("")
+    entries = data.get("results", [])
+    if entries:
+        for e in entries[:30]:
+            name = e.get("name", "")
+            etype = e.get("type", "")
+            status = e.get("status", "")
+            defined = e.get("defined_in", "")
+            ref_count = e.get("ref_count", "")
+            loc = f" `{defined}`" if defined else ""
+            refs = f" refs:{ref_count}" if ref_count != "" else ""
+            lines.append(f"- `{name}` ({etype}) [{status}]{loc}{refs}")
+        if len(entries) > 30:
+            lines.append(f"- ... and {len(entries) - 30} more")
+    lines.append("")
+
+
+def _md_symbols(data: Dict, lines: list) -> None:
+    """Markdown for symbols command."""
+    query = data.get("query", "")
+    domain = data.get("domain", "all")
+    count = data.get("count", 0)
+    fuzzy = data.get("fuzzy", False)
+    lines.append(f"## Symbol Search: `{query}`")
+    lines.append("")
+    lines.append(f"**Domain:** {domain} | **Fuzzy:** {fuzzy} | **Results:** {count}")
+    lines.append("")
+    results = data.get("results", [])
+    if results:
+        for r in results[:20]:
+            name = r.get("name", r.get("fn", ""))
+            rtype = r.get("type", "")
+            file = r.get("file", "")
+            line = r.get("line", "")
+            status = r.get("status", "")
+            lines.append(f"- `{name}` ({rtype}) — `{file}:{line}` [{status}]")
+        if len(results) > 20:
+            lines.append(f"- ... and {len(results) - 20} more")
+    lines.append("")
+
+
+def _md_watch(data: Dict, lines: list) -> None:
+    """Markdown for watch command."""
+    status = data.get("status", "stopped")
+    lines.append("## Watch")
+    lines.append("")
+    lines.append(f"**Status:** {status}")
+    lines.append("")
+    lines.append("Watch mode runs interactively. Use the CLI directly for real-time output.")
+    lines.append("")
+
+
+def _md_init(data: Dict, lines: list) -> None:
+    """Markdown for init command."""
+    workspace = data.get("workspace", "")
+    codelens_dir = data.get("codelens_dir", "")
+    config = data.get("config", {})
+    lines.append("## CodeLens Init")
+    lines.append("")
+    lines.append(f"**Workspace:** `{workspace}`")
+    lines.append(f"**Config dir:** `{codelens_dir}`")
+    lines.append("")
+    if config:
+        lines.append("### Auto-detected Config")
+        fws = config.get("frameworks", [])
+        if fws:
+            lines.append(f"- **Frameworks:** {', '.join(fws)}")
+        if config.get("css_preprocessor"):
+            lines.append(f"- **CSS preprocessor:** {config['css_preprocessor']}")
+        if config.get("module_system"):
+            lines.append(f"- **Module system:** {config['module_system']}")
+        modes = []
+        if config.get("jsx_mode"):
+            modes.append("JSX")
+        if config.get("vue_mode"):
+            modes.append("Vue")
+        if config.get("svelte_mode"):
+            modes.append("Svelte")
+        if config.get("tailwind_mode"):
+            modes.append("Tailwind")
+        if modes:
+            lines.append(f"- **Modes:** {', '.join(modes)}")
+        fe_paths = config.get("frontend_paths", [])
+        be_paths = config.get("backend_paths", [])
+        if fe_paths:
+            lines.append(f"- **Frontend paths:** {', '.join(fe_paths[:5])}")
+        if be_paths:
+            lines.append(f"- **Backend paths:** {', '.join(be_paths[:5])}")
+    lines.append("")
+
+
+def _md_detect(data: Dict, lines: list) -> None:
+    """Markdown for detect command."""
+    frameworks = data.get("frameworks", [])
+    lines.append("## Framework Detection")
+    lines.append("")
+    if frameworks:
+        lines.append(f"**Detected:** {', '.join(frameworks)}")
+    else:
+        lines.append("**No frameworks detected**")
+    lines.append("")
+    flags = []
+    if data.get("has_react"):
+        flags.append("React")
+    if data.get("has_nextjs"):
+        flags.append("Next.js")
+    if data.get("has_vue"):
+        flags.append("Vue")
+    if data.get("has_svelte"):
+        flags.append("Svelte")
+    if data.get("has_tailwind"):
+        flags.append("Tailwind")
+    if data.get("has_angular"):
+        flags.append("Angular")
+    if flags:
+        lines.append(f"- **Flags:** {', '.join(flags)}")
+    if data.get("css_preprocessor"):
+        lines.append(f"- **CSS preprocessor:** {data['css_preprocessor']}")
+    if data.get("module_system"):
+        lines.append(f"- **Module system:** {data['module_system']}")
+    lines.append("")
+
+
+def _md_search(data: Dict, lines: list) -> None:
+    """Markdown for search command."""
+    pattern = data.get("pattern", "")
+    stats = data.get("stats", {})
+    lines.append(f"## Search: `{pattern}`")
+    lines.append("")
+    lines.append(f"**Files searched:** {stats.get('files_searched', 0)} | **Matched:** {stats.get('files_matched', 0)} | **Hits:** {stats.get('total_matches', 0)}")
+    if stats.get("truncated"):
+        lines.append(" (truncated)")
+    lines.append("")
+    matches = data.get("matches", [])
+    if matches:
+        for m in matches[:30]:
+            file = m.get("file", "")
+            line = m.get("line", "")
+            text = m.get("text", m.get("match", "")).strip()[:80]
+            lines.append(f"- `{file}:{line}` — {text}")
+        if len(matches) > 30:
+            lines.append(f"- ... and {len(matches) - 30} more")
+    errors = data.get("errors", [])
+    if errors:
+        lines.append(f"**Errors:** {len(errors)} files could not be read")
+    lines.append("")
+
+
+def _md_missing_refs(data: Dict, lines: list) -> None:
+    """Markdown for missing-refs command."""
+    total = data.get("total_issues", 0)
+    summary = data.get("summary", {})
+    lines.append("## Missing References")
+    lines.append("")
+    lines.append(f"**Total issues:** {total}")
+    lines.append(f"- CSS no HTML: {summary.get('css_no_html', 0)} | HTML no CSS: {summary.get('html_no_css', 0)}")
+    lines.append(f"- CSS ID no HTML: {summary.get('css_id_no_html', 0)} | JS ID no HTML: {summary.get('js_id_no_html', 0)}")
+    lines.append(f"- Possible typos: {summary.get('possible_typos', 0)}")
+    lines.append("")
+    issues = data.get("issues", {})
+    # Show each issue category
+    for cat in ["css_no_html", "html_no_css", "css_id_no_html", "js_id_no_html", "possible_typos"]:
+        items = issues.get(cat, [])
+        if items:
+            lines.append(f"### {cat.replace('_', ' ').title()}")
+            for item in items[:10]:
+                name = item.get("name", "")
+                file = item.get("file", item.get("css_file", item.get("html_file", "")))
+                line = item.get("line", "")
+                lines.append(f"- `{name}` in `{file}:{line}`")
+            if len(items) > 10:
+                lines.append(f"- ... and {len(items) - 10} more")
+            lines.append("")
+
+
+def _md_diff(data: Dict, lines: list) -> None:
+    """Markdown for diff command."""
+    # Check if it's a snapshot list
+    snapshots = data.get("snapshots", [])
+    if snapshots:
+        lines.append("## Snapshots")
+        lines.append("")
+        lines.append(f"**Total:** {len(snapshots)}")
+        lines.append("")
+        for s in snapshots[:20]:
+            sid = s.get("id", "")
+            created = s.get("created_at", "")
+            fname = s.get("file", "")
+            lines.append(f"- `{sid}` — {created} ({fname})")
+        lines.append("")
+        return
+
+    # Regular diff
+    summary = data.get("summary", {})
+    workspace = data.get("workspace", "")
+    snap1 = data.get("snapshot_1", data.get("last_snapshot", ""))
+    snap2 = data.get("snapshot_2", "")
+    lines.append("## Registry Diff")
+    lines.append("")
+    if snap1:
+        lines.append(f"**Comparing:** `{snap1}` → `{snap2 or 'current'}`")
+    lines.append("")
+
+    fe = data.get("frontend", {})
+    be = data.get("backend", {})
+
+    if fe:
+        added = fe.get("added_count", 0)
+        removed = fe.get("removed_count", 0)
+        changed = fe.get("changed_count", 0)
+        lines.append(f"### Frontend — +{added} / -{removed} / ~{changed}")
+        for cls in fe.get("added_classes", [])[:5]:
+            lines.append(f"- + `{cls.get('name', '')}` [{cls.get('status', '')}]")
+        for cls in fe.get("removed_classes", [])[:5]:
+            lines.append(f"- - `{cls.get('name', '')}`")
+        for cls in fe.get("changed_classes", [])[:5]:
+            lines.append(f"- ~ `{cls.get('name', '')}`")
+        for id_entry in fe.get("added_ids", [])[:5]:
+            lines.append(f"- + ID `{id_entry.get('name', '')}`")
+        for id_entry in fe.get("removed_ids", [])[:5]:
+            lines.append(f"- - ID `{id_entry.get('name', '')}`")
+        if fe.get("new_collisions"):
+            lines.append(f"- **New collisions:** {len(fe['new_collisions'])}")
+        if fe.get("new_dead"):
+            lines.append(f"- **New dead:** {len(fe['new_dead'])}")
+        lines.append("")
+
+    if be:
+        added = be.get("added_count", 0)
+        removed = be.get("removed_count", 0)
+        changed = be.get("changed_count", 0)
+        lines.append(f"### Backend — +{added} / -{removed} / ~{changed}")
+        for node in be.get("added_nodes", [])[:5]:
+            lines.append(f"- + `{node.get('fn', '')}` ({node.get('file', '')})")
+        for node in be.get("removed_nodes", [])[:5]:
+            lines.append(f"- - `{node.get('fn', '')}`")
+        for node in be.get("changed_nodes", [])[:5]:
+            lines.append(f"- ~ `{node.get('fn', '')}`")
+        if be.get("new_dead"):
+            lines.append(f"- **New dead:** {len(be['new_dead'])}")
+        lines.append("")
+
+
+def _md_dependents(data: Dict, lines: list) -> None:
+    """Markdown for dependents command."""
+    # Check if it's a dependency graph
+    graph = data.get("graph", {})
+    if graph:
+        stats = data.get("stats", {})
+        lines.append("## Dependency Graph")
+        lines.append("")
+        lines.append(f"**Files:** {stats.get('total_files', 0)} | **Edges:** {stats.get('total_import_edges', 0)} | **Leaves:** {stats.get('leaf_files', 0)} | **Roots:** {stats.get('root_files', 0)}")
+        lines.append("")
+        most_depended = data.get("most_depended_on", [])
+        if most_depended:
+            lines.append("### Most Depended On")
+            for item in most_depended[:10]:
+                lines.append(f"- `{item.get('file', '')}` — {item.get('dependents', item.get('count', 0))} dependents")
+            lines.append("")
+        leaves = data.get("leaf_files", [])
+        if leaves:
+            lines.append("### Leaf Files")
+            for lf in leaves[:10]:
+                lines.append(f"- `{lf}`")
+            lines.append("")
+        return
+
+    # Single file dependents or dependencies
+    file = data.get("file", "")
+    stats = data.get("stats", {})
+    direct = data.get("direct_dependents", data.get("direct_dependencies", []))
+    transitive = data.get("transitive_dependents", data.get("transitive_dependencies", []))
+
+    direction = "Dependents" if "direct_dependents" in data else "Dependencies"
+    lines.append(f"## {direction}: `{file}`")
+    lines.append("")
+    lines.append(f"**Direct:** {stats.get('direct_count', 0)} | **Transitive:** {stats.get('transitive_count', 0)} | **Total impact:** {stats.get('total_impact', stats.get('total', 0))}")
+    lines.append("")
+    if direct:
+        lines.append("### Direct")
+        for d in direct[:20]:
+            lines.append(f"- `{d}`")
+        lines.append("")
+    if transitive:
+        lines.append("### Transitive")
+        for t in transitive[:20]:
+            lines.append(f"- `{t}`")
+        if len(transitive) > 20:
+            lines.append(f"- ... and {len(transitive) - 20} more")
+        lines.append("")
+
+
+def _md_validate(data: Dict, lines: list) -> None:
+    """Markdown for validate command."""
+    total = data.get("total_issues", 0)
+    summary = data.get("summary", {})
+    rec = data.get("recommendation", "")
+    lines.append("## Registry Validation")
+    lines.append("")
+    icon = "PASS" if total == 0 else "FAIL"
+    lines.append(f"**Status:** {icon} ({total} issues)")
+    lines.append("")
+    lines.append(f"- Missing files: {summary.get('missing_files', 0)}")
+    lines.append(f"- Unregistered files: {summary.get('unregistered_files', 0)}")
+    lines.append(f"- Stale references: {summary.get('stale_references', 0)}")
+    lines.append(f"- Orphan entries: {summary.get('orphan_entries', 0)}")
+    lines.append("")
+    issues = data.get("issues", {})
+    if issues:
+        for cat in ["missing_files", "unregistered_files", "stale_references", "orphan_entries"]:
+            items = issues.get(cat, [])
+            if items:
+                lines.append(f"### {cat.replace('_', ' ').title()}")
+                for item in items[:10]:
+                    if isinstance(item, dict):
+                        lines.append(f"- `{item.get('file', item.get('path', ''))}` — {item.get('reason', '')}")
+                    else:
+                        lines.append(f"- `{item}`")
+                if len(items) > 10:
+                    lines.append(f"- ... and {len(items) - 10} more")
+                lines.append("")
+    if rec:
+        lines.append(f"**Recommendation:** {rec}")
+        lines.append("")
+
+
+def _md_dataflow(data: Dict, lines: list) -> None:
+    """Markdown for dataflow command."""
+    stats = data.get("stats", {})
+    risk = data.get("risk", "")
+    source_filter = data.get("source_filter", "")
+    sink_filter = data.get("sink_filter", "")
+    lines.append("## Data Flow Analysis")
+    lines.append("")
+    lines.append(f"**Risk:** {risk}")
+    if source_filter:
+        lines.append(f"**Source filter:** {source_filter}")
+    if sink_filter:
+        lines.append(f"**Sink filter:** {sink_filter}")
+    lines.append(f"- Sources: {stats.get('sources_found', 0)} | Sinks: {stats.get('sinks_found', 0)} | Sanitizers: {stats.get('sanitizers_found', 0)}")
+    lines.append(f"- Violations: {stats.get('violations', 0)} | Safe paths: {stats.get('safe_paths', 0)} | Untraced: {stats.get('untraced_sources', 0)}")
+    lines.append("")
+    violations = data.get("violations", [])
+    if violations:
+        lines.append("### Violations")
+        for v in violations[:10]:
+            source = v.get("source", {})
+            sink = v.get("sink", {})
+            sev = source.get("severity", v.get("severity", ""))
+            src_label = source.get("label", source.get("name", source.get("fn", "")))
+            src_file = source.get("file", "")
+            src_line = source.get("line", "")
+            snk_label = sink.get("label", sink.get("name", sink.get("fn", "")))
+            snk_file = sink.get("file", "")
+            snk_line = sink.get("line", "")
+            sev_str = f"[{sev.upper()}] " if sev else ""
+            lines.append(f"- {sev_str}`{src_label}` (`{src_file}:{src_line}`) → `{snk_label}` (`{snk_file}:{snk_line}`)")
+        if len(violations) > 10:
+            lines.append(f"- ... and {len(violations) - 10} more")
+        lines.append("")
+    safe_paths = data.get("safe_paths", [])
+    if safe_paths:
+        lines.append("### Safe Paths")
+        for sp in safe_paths[:5]:
+            src = sp.get("source", {})
+            snk = sp.get("sink", {})
+            src_label = src.get("label", src.get("name", ""))
+            snk_label = snk.get("label", snk.get("name", ""))
+            san = sp.get("sanitizer", {})
+            san_label = san.get("label", san.get("name", "unknown")) if isinstance(san, dict) else "unknown"
+            lines.append(f"- `{src_label}` → `{snk_label}` (sanitized by `{san_label}`)")
+        if len(safe_paths) > 5:
+            lines.append(f"- ... and {len(safe_paths) - 5} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_test_map(data: Dict, lines: list) -> None:
+    """Markdown for test-map command."""
+    # Check if it's a single-function result
+    fn_name = data.get("function", "")
+    if fn_name:
+        tested = data.get("tested", False)
+        icon = "COVERED" if tested else "UNTESTED"
+        lines.append(f"## Test Coverage: `{fn_name}`")
+        lines.append("")
+        lines.append(f"**Status:** {icon}")
+        coverage = data.get("coverage", [])
+        if coverage:
+            for c in coverage[:10]:
+                file = c.get("file", "")
+                c_tested = c.get("tested", False)
+                lines.append(f"- `{file}` — {'tested' if c_tested else 'untested'}")
+        recs = data.get("recommendations", [])
+        if recs:
+            lines.append("")
+            lines.append("### Recommendations")
+            for r in recs[:5]:
+                lines.append(f"- {r}")
+        lines.append("")
+        return
+
+    # Full workspace coverage
+    stats = data.get("stats", {})
+    lines.append("## Test Coverage Map")
+    lines.append("")
+    lines.append(f"**Source files:** {stats.get('total_source_files', 0)} | **Test files:** {stats.get('total_test_files', 0)}")
+    lines.append(f"**Functions:** {stats.get('total_functions', 0)} | **Tested:** {stats.get('tested_functions', 0)} | **Untested:** {stats.get('untested_functions', 0)}")
+    lines.append(f"**Coverage:** {stats.get('coverage_percent', 0)}% | **Files without tests:** {stats.get('files_without_tests', 0)}")
+    lines.append("")
+    untested = data.get("untested_list", [])
+    if untested:
+        lines.append("### Untested Functions")
+        for u in untested[:15]:
+            if isinstance(u, dict):
+                fname = u.get("name", u.get("function", ""))
+                lines.append(f"- `{fname}` in `{u.get('file', '')}`")
+            else:
+                lines.append(f"- `{u}`")
+        if len(untested) > 15:
+            lines.append(f"- ... and {len(untested) - 15} more")
+        lines.append("")
+    files_without = data.get("files_without_tests", [])
+    if files_without:
+        lines.append("### Files Without Tests")
+        for f in files_without[:10]:
+            if isinstance(f, dict):
+                lines.append(f"- `{f.get('file', f.get('path', ''))}`")
+            else:
+                lines.append(f"- `{f}`")
+        lines.append("")
+    orphan_tests = data.get("orphan_tests", [])
+    if orphan_tests:
+        lines.append("### Orphan Tests")
+        for t in orphan_tests[:5]:
+            lines.append(f"- `{t}`")
+        lines.append("")
+
+
+def _md_config_drift(data: Dict, lines: list) -> None:
+    """Markdown for config-drift command."""
+    stats = data.get("stats", {})
+    drift = data.get("drift", {})
+    project_type = data.get("project_type", "")
+    lines.append("## Config Drift Analysis")
+    lines.append("")
+    if project_type:
+        lines.append(f"**Project type:** {project_type}")
+    lines.append(f"**Declared:** {stats.get('declared_count', 0)} | Missing: {stats.get('missing_deps', 0)} | Unused: {stats.get('unused_deps', 0)} | Dev/prod mismatch: {stats.get('dev_prod_mismatch', 0)} | Phantom: {stats.get('phantom_imports', 0)}")
+    lines.append("")
+    missing = drift.get("missing", [])
+    if missing:
+        lines.append("### Missing Dependencies")
+        for m in missing[:10]:
+            if isinstance(m, dict):
+                name = m.get("name", m.get("package", ""))
+                sev = m.get("severity", "")
+                msg = m.get("message", "")[:60]
+                sev_str = f"[{sev.upper()}] " if sev else ""
+                lines.append(f"- {sev_str}`{name}` — {msg}")
+            else:
+                lines.append(f"- `{m}` — used in code but not declared")
+        lines.append("")
+    unused = drift.get("unused", [])
+    if unused:
+        lines.append("### Unused Dependencies")
+        for u in unused[:10]:
+            if isinstance(u, dict):
+                name = u.get("name", u.get("package", ""))
+                lines.append(f"- `{name}` — declared but not imported")
+            else:
+                lines.append(f"- `{u}` — declared but not imported")
+        lines.append("")
+    dev_prod = drift.get("dev_prod_mismatch", [])
+    if dev_prod:
+        lines.append("### Dev/Prod Mismatches")
+        for d in dev_prod[:5]:
+            if isinstance(d, dict):
+                lines.append(f"- `{d.get('name', '')}` — {d.get('reason', '')}")
+            else:
+                lines.append(f"- `{d}`")
+        lines.append("")
+    phantom = drift.get("phantom_imports", [])
+    if phantom:
+        lines.append("### Phantom Imports")
+        for p in phantom[:5]:
+            lines.append(f"- `{p}`")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_type_infer(data: Dict, lines: list) -> None:
+    """Markdown for type-infer command."""
+    fn_name = data.get("function", "")
+    if fn_name:
+        # Single function result
+        inferred = data.get("inferred_types", [])
+        lines.append(f"## Type Inference: `{fn_name}`")
+        lines.append("")
+        lines.append(f"**Inferred types:** {data.get('count', 0)}")
+        lines.append("")
+        if inferred:
+            for t in inferred[:15]:
+                name = t.get("name", "")
+                inferred_type = t.get("inferred_type", t.get("type", ""))
+                confidence = t.get("confidence", "")
+                lines.append(f"- `{name}`: {inferred_type} ({confidence})")
+        lines.append("")
+        return
+
+    # Full workspace result
+    stats = data.get("stats", {})
+    lines.append("## Type Inference")
+    lines.append("")
+    lines.append(f"**Files analyzed:** {stats.get('files_analyzed', 0)} | **Variables typed:** {stats.get('variables_typed', 0)} | **Functions typed:** {stats.get('functions_typed', 0)} | **High confidence:** {stats.get('high_confidence', 0)}")
+    lines.append("")
+    type_map = data.get("type_map", {})
+    if type_map:
+        count = 0
+        for file_path, types in type_map.items():
+            if count >= 10:
+                break
+            if isinstance(types, dict) and types:
+                lines.append(f"### `{file_path}`")
+                for name, info in list(types.items())[:8]:
+                    if isinstance(info, dict):
+                        kind = info.get("kind", "")
+                        inferred_type = info.get("inferred_type", info.get("type", ""))
+                        confidence = info.get("confidence", "")
+                        lines.append(f"- `{name}` ({kind}): {inferred_type} [{confidence}]")
+                lines.append("")
+                count += 1
+    lines.append("")
+
+
+def _md_ownership(data: Dict, lines: list) -> None:
+    """Markdown for ownership command."""
+    status = data.get("status", "")
+
+    # No git repo
+    if status == "no_git":
+        lines.append("## Code Ownership")
+        lines.append("")
+        lines.append("**Git not available** — using file modification times as proxy")
+        lines.append("")
+        fallback = data.get("fallback", {})
+        if fallback:
+            files = fallback.get("files", [])
+            stale = fallback.get("stale_count", 0)
+            lines.append(f"**Stale files:** {stale}")
+            for f in files[:10]:
+                lines.append(f"- `{f.get('path', '')}` — last modified {f.get('last_modified_days_ago', '?')} days ago ({f.get('freshness', '')})")
+            lines.append("")
+        return
+
+    # Single function
+    fn_name = data.get("function", "")
+    if fn_name:
+        lines.append(f"## Ownership: `{fn_name}`")
+        lines.append("")
+        lines.append(f"**File:** `{data.get('file', '')}:{data.get('line', '')}`")
+        owner = data.get("primary_owner", "")
+        if owner:
+            lines.append(f"**Primary owner:** {owner}")
+        lines.append("")
+        ownership = data.get("ownership", [])
+        if ownership:
+            lines.append("### Ownership Breakdown")
+            for o in ownership[:5]:
+                lines.append(f"- {o.get('author', '')}: {o.get('percentage', 0):.0f}% ({o.get('lines', 0)} lines)")
+            lines.append("")
+        age = data.get("age", {})
+        if age:
+            lines.append(f"**Age:** avg {age.get('average_age_days', 0)}d | median {age.get('median_age_days', 0)}d | freshness: {age.get('freshness', '')}")
+            lines.append("")
+        recs = data.get("recommendations", [])
+        if recs:
+            for r in recs[:3]:
+                lines.append(f"- {r}")
+            lines.append("")
+        return
+
+    # Single file
+    file = data.get("file", "")
+    if file and not data.get("ownership_summary"):
+        lines.append(f"## Ownership: `{file}`")
+        lines.append("")
+        lines.append(f"**Total lines:** {data.get('total_lines', 0)} | **Stale:** {data.get('stale_percentage', 0)}%")
+        lines.append("")
+        ownership = data.get("ownership", [])
+        if ownership:
+            for o in ownership[:5]:
+                lines.append(f"- {o.get('author', '')}: {o.get('percentage', 0):.0f}% ({o.get('lines', 0)} lines)")
+            lines.append("")
+        return
+
+    # Full workspace
+    stats = data.get("stats", {})
+    ownership_summary = data.get("ownership_summary", [])
+    lines.append("## Code Ownership")
+    lines.append("")
+    lines.append(f"**Contributors:** {stats.get('contributors', 0)} | **Files analyzed:** {stats.get('files_analyzed', 0)} | **Stale files:** {stats.get('stale_files', 0)}")
+    lines.append("")
+    if ownership_summary:
+        lines.append("### Top Contributors")
+        for o in ownership_summary[:10]:
+            author = o.get("author", o.get("name", ""))
+            files = o.get("files", 0)
+            pct = o.get("percentage", 0)
+            lines.append(f"- {author}: {pct:.0f}% ({files} files)")
+        lines.append("")
+    orphan_files = data.get("orphan_files", [])
+    if orphan_files:
+        lines.append("### Orphan Files (no recent owner)")
+        for f in orphan_files[:10]:
+            if isinstance(f, dict):
+                lines.append(f"- `{f.get('path', f.get('file', ''))}`")
+            else:
+                lines.append(f"- `{f}`")
+        lines.append("")
+
+
+def _md_debug_leak(data: Dict, lines: list) -> None:
+    """Markdown for debug-leak command."""
+    stats = data.get("stats", {})
+    lines.append("## Debug Leak Detection")
+    lines.append("")
+    lines.append(f"**Total leaks:** {stats.get('total_leaks', 0)} | **Files scanned:** {stats.get('files_scanned', 0)}")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    lines.append("")
+    leaks = data.get("leaks", [])
+    if leaks:
+        lines.append("### Leaks")
+        for leak in leaks[:20]:
+            file = leak.get("file", "")
+            line = leak.get("line", "")
+            cat = leak.get("category", "")
+            sev = leak.get("severity", "")
+            content = leak.get("content", leak.get("match", ""))[:60]
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: `{content}`")
+        if len(leaks) > 20:
+            lines.append(f"- ... and {len(leaks) - 20} more")
+        lines.append("")
+    cleanup = data.get("cleanup_priority", [])
+    if cleanup:
+        lines.append("### Cleanup Priority")
+        for item in cleanup[:5]:
+            lines.append(f"- `{item.get('file', '')}:{item.get('line', '')}` — {item.get('category', '')}")
+        lines.append("")
+
+
+def _md_stack_trace(data: Dict, lines: list) -> None:
+    """Markdown for stack-trace command."""
+    fn_name = data.get("function", "")
+    stats = data.get("stats", {})
+    crash_risk = data.get("crash_risk", "")
+    lines.append(f"## Stack Trace: `{fn_name}`")
+    lines.append("")
+    lines.append(f"**Crash risk:** {crash_risk}")
+    lines.append(f"- Paths: {stats.get('total_paths', 0)} | Handled: {stats.get('handled', 0)} | Unhandled: {stats.get('unhandled', 0)} | Partial: {stats.get('partially_handled', 0)}")
+    lines.append(f"- Max depth: {stats.get('max_depth_reached', 0)}")
+    lines.append("")
+    chains = data.get("chains", [])
+    if chains:
+        lines.append("### Error Chains")
+        for chain in chains[:5]:
+            origin = chain.get("origin", {})
+            origin_fn = origin.get("fn", "")
+            origin_file = origin.get("file", "")
+            chain_len = chain.get("chain_length", 0)
+            lines.append(f"- `{origin_fn}` (`{origin_file}`) — chain length: {chain_len}")
+        lines.append("")
+    propagation = data.get("propagation", [])
+    if propagation:
+        lines.append("### Propagation")
+        for p in propagation[:10]:
+            fn = p.get("fn", p.get("function", ""))
+            file = p.get("file", "")
+            handling = p.get("error_handling", {})
+            has_handling = handling.get("has_handling", False) if isinstance(handling, dict) else handling
+            status_str = "handled" if has_handling else "UNHANDLED"
+            lines.append(f"- `{fn}` (`{file}`) [{status_str}]")
+        if len(propagation) > 10:
+            lines.append(f"- ... and {len(propagation) - 10} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_refactor_safe(data: Dict, lines: list) -> None:
+    """Markdown for refactor-safe command."""
+    name = data.get("symbol", "")
+    action = data.get("action", "")
+    safety = data.get("safety", "")
+    stats = data.get("stats", {})
+    lines.append(f"## Refactor Safety: `{name}`")
+    lines.append("")
+    lines.append(f"**Action:** {action} | **Safety:** {safety}")
+    lines.append(f"- Total risks: {stats.get('total_risks', 0)} | Files affected: {stats.get('files_affected', 0)}")
+    lines.append(f"- String refs: {stats.get('string_refs', 0)} | Dynamic access: {stats.get('dynamic_access', 0)} | Eval refs: {stats.get('eval_refs', 0)}")
+    lines.append(f"- Test refs: {stats.get('test_refs', 0)} | Config refs: {stats.get('config_refs', 0)} | Doc refs: {stats.get('doc_refs', 0)}")
+    lines.append("")
+    risks = data.get("risks", {})
+    if risks:
+        for risk_type, risk_items in risks.items():
+            if risk_items:
+                lines.append(f"### {risk_type.replace('_', ' ').title()}")
+                for item in risk_items[:10]:
+                    if isinstance(item, dict):
+                        lines.append(f"- `{item.get('file', '')}:{item.get('line', '')}` — {item.get('match', item.get('content', ''))[:60]}")
+                    else:
+                        lines.append(f"- `{item}`")
+                if len(risk_items) > 10:
+                    lines.append(f"- ... and {len(risk_items) - 10} more")
+                lines.append("")
+    files_to_update = data.get("files_to_update", [])
+    if files_to_update:
+        lines.append("### Files to Update")
+        for f in files_to_update[:15]:
+            lines.append(f"- `{f}`")
+        if len(files_to_update) > 15:
+            lines.append(f"- ... and {len(files_to_update) - 15} more")
+        lines.append("")
+
+
+def _md_env_check(data: Dict, lines: list) -> None:
+    """Markdown for env-check command."""
+    stats = data.get("stats", {})
+    lines.append("## Environment Variable Audit")
+    lines.append("")
+    lines.append(f"**Total vars:** {stats.get('total_vars', 0)} | Required: {stats.get('required', 0)} | Optional: {stats.get('optional', 0)} | Undocumented: {stats.get('undocumented', 0)}")
+    lines.append(f"**In .env file:** {stats.get('in_env_file', 0)} | **Files scanned:** {stats.get('files_scanned', 0)}")
+    lines.append("")
+    variables = data.get("variables", [])
+    if variables:
+        lines.append("### Variables")
+        for v in variables[:20]:
+            name = v.get("name", "")
+            required = v.get("required", False)
+            vtype = v.get("type", "")
+            has_default = v.get("has_default", False)
+            req_str = "REQUIRED" if required else "optional"
+            default_str = " (has default)" if has_default else ""
+            lines.append(f"- `{name}` [{req_str}] {vtype}{default_str}")
+        if len(variables) > 20:
+            lines.append(f"- ... and {len(variables) - 20} more")
+        lines.append("")
+    missing = data.get("missing_from_example", [])
+    if missing:
+        lines.append("### Missing from .env.example")
+        for m in missing[:10]:
+            if isinstance(m, dict):
+                name = m.get("name", "")
+                req = " (required)" if m.get("is_required") else ""
+                lines.append(f"- `{name}`{req}")
+            else:
+                lines.append(f"- `{m}`")
+        lines.append("")
+    required_no_fb = data.get("required_without_fallback", [])
+    if required_no_fb:
+        lines.append("### Required Without Fallback")
+        for r in required_no_fb[:10]:
+            if isinstance(r, dict):
+                name = r.get("name", "")
+                lines.append(f"- `{name}`")
+            else:
+                lines.append(f"- `{r}`")
+        lines.append("")
+    naming = data.get("naming_inconsistencies", [])
+    if naming:
+        lines.append("### Naming Inconsistencies")
+        for n in naming[:5]:
+            lines.append(f"- {n}")
+        lines.append("")
+    env_files = data.get("env_files", [])
+    if env_files:
+        lines.append("### Env Files")
+        for ef in env_files[:5]:
+            if isinstance(ef, dict):
+                lines.append(f"- `{ef.get('path', '')}` ({ef.get('type', '')})")
+            else:
+                lines.append(f"- `{ef}`")
+        lines.append("")
+
+
+def _md_state_map(data: Dict, lines: list) -> None:
+    """Markdown for state-map command."""
+    stats = data.get("stats", {})
+    lines.append("## State Map")
+    lines.append("")
+    lines.append(f"**Stores:** {stats.get('total_stores', 0)} | **Slices:** {stats.get('total_slices', 0)} | **Files scanned:** {stats.get('files_scanned', 0)}")
+    fws = stats.get("frameworks_detected", [])
+    if fws:
+        lines.append(f"**Frameworks:** {', '.join(fws)}")
+    by_type = stats.get("by_type", {})
+    if by_type:
+        parts = [f"{k}: {v}" for k, v in by_type.items() if v > 0]
+        lines.append(f"- By type: {', '.join(parts)}")
+    lines.append("")
+    stores = data.get("stores", [])
+    if stores:
+        lines.append("### Stores")
+        for store in stores[:15]:
+            name = store.get("name", "")
+            stype = store.get("type", "")
+            framework = store.get("framework", "")
+            defined = store.get("defined_in", "")
+            line = store.get("line", "")
+            fw_str = f" ({framework})" if framework else ""
+            lines.append(f"- `{name}` [{stype}]{fw_str} — `{defined}:{line}`")
+            slices = store.get("slices", [])
+            if slices:
+                for s in slices[:3]:
+                    lines.append(f"  - slice: `{s.get('name', '')}`")
+            actions = store.get("actions", [])
+            if actions:
+                for a in actions[:3]:
+                    lines.append(f"  - action: `{a.get('name', '')}`")
+        if len(stores) > 15:
+            lines.append(f"- ... and {len(stores) - 15} more")
+        lines.append("")
+    flow = data.get("state_flow", [])
+    if flow:
+        lines.append("### State Flow")
+        for f in flow[:10]:
+            from_file = f.get("from", "")
+            to_file = f.get("to", "")
+            via = f.get("via", "")
+            lines.append(f"- `{from_file}` → `{to_file}" + (f"` via `{via}" if via else "`"))
+        if len(flow) > 10:
+            lines.append(f"- ... and {len(flow) - 10} more")
+        lines.append("")
+
+
+def _md_vuln_scan(data: Dict, lines: list) -> None:
+    """Markdown for vuln-scan command."""
+    stats = data.get("stats", {})
+    risk = data.get("risk", "")
+    severity_filter = data.get("severity_filter", "")
+    lines.append("## Vulnerability Scan")
+    lines.append("")
+    lines.append(f"**Risk:** {risk}")
+    if severity_filter:
+        lines.append(f"**Severity filter:** {severity_filter}")
+    lines.append(f"- Total vulnerabilities: {stats.get('total_vulnerabilities', 0)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    by_eco = stats.get("by_ecosystem", {})
+    if by_eco:
+        parts = [f"{k}: {v}" for k, v in by_eco.items() if v > 0]
+        lines.append(f"- By ecosystem: {', '.join(parts)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Findings")
+        for f in findings[:15]:
+            sev = f.get("severity", "")
+            package = f.get("package", f.get("dependency", ""))
+            cve = f.get("cve", f.get("vulnerability_id", ""))
+            title = f.get("title", f.get("description", ""))[:60]
+            lines.append(f"- [{sev.upper()}] `{package}` — {cve}: {title}")
+        if len(findings) > 15:
+            lines.append(f"- ... and {len(findings) - 15} more")
+        lines.append("")
+    audit = data.get("audit_available", False)
+    if not audit:
+        lines.append("**Note:** No lockfile found — results are based on manifest analysis only.")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_perf_hint(data: Dict, lines: list) -> None:
+    """Markdown for perf-hint command."""
+    stats = data.get("stats", {})
+    risk = data.get("risk", "")
+    sev_filter = data.get("severity_filter", "")
+    cat_filter = data.get("category_filter", "")
+    lines.append("## Performance Hints")
+    lines.append("")
+    lines.append(f"**Risk:** {risk}")
+    if sev_filter:
+        lines.append(f"**Severity filter:** {sev_filter}")
+    if cat_filter:
+        lines.append(f"**Category filter:** {cat_filter}")
+    lines.append(f"- Total hints: {stats.get('total_hints', 0)}")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Findings")
+        for f in findings[:15]:
+            sev = f.get("severity", "")
+            cat = f.get("category", "")
+            file = f.get("file", "")
+            line = f.get("line", "")
+            msg = f.get("message", f.get("description", ""))[:60]
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: {msg}")
+        if len(findings) > 15:
+            lines.append(f"- ... and {len(findings) - 15} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_css_deep(data: Dict, lines: list) -> None:
+    """Markdown for css-deep command."""
+    stats = data.get("stats", {})
+    sev_filter = data.get("severity_filter", "")
+    lines.append("## Deep CSS Analysis")
+    lines.append("")
+    if sev_filter:
+        lines.append(f"**Severity filter:** {sev_filter}")
+    lines.append(f"- Total issues: {stats.get('total_issues', 0)}")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    lines.append(f"- CSS files: {stats.get('css_files_scanned', 0)} | HTML/JS files: {stats.get('html_js_files_scanned', 0)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Findings")
+        for f in findings[:15]:
+            sev = f.get("severity", "")
+            cat = f.get("category", "")
+            file = f.get("file", "")
+            line = f.get("line", "")
+            name = f.get("name", "")
+            msg = f.get("message", "")[:60]
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: {name} {msg}")
+        if len(findings) > 15:
+            lines.append(f"- ... and {len(findings) - 15} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_a11y(data: Dict, lines: list) -> None:
+    """Markdown for a11y command."""
+    stats = data.get("stats", {})
+    lines.append("## Accessibility Audit")
+    lines.append("")
+    lines.append(f"- Total issues: {stats.get('total_issues', 0)} | Files scanned: {stats.get('files_scanned', 0)}")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    lines.append("")
+    issues = data.get("issues", [])
+    if issues:
+        lines.append("### Issues")
+        for issue in issues[:20]:
+            sev = issue.get("severity", "")
+            cat = issue.get("category", "")
+            file = issue.get("file", "")
+            line = issue.get("line", "")
+            msg = issue.get("message", "")[:80]
+            wcag = issue.get("wcag", "")
+            wcag_str = f" (WCAG {wcag})" if wcag else ""
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: {msg}{wcag_str}")
+        if len(issues) > 20:
+            lines.append(f"- ... and {len(issues) - 20} more")
+        lines.append("")
+    wcag_map = data.get("wcag_mapping", {})
+    if wcag_map:
+        lines.append("### WCAG Mapping")
+        for criterion, count in wcag_map.items():
+            lines.append(f"- {criterion}: {count} issue(s)")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_regex_audit(data: Dict, lines: list) -> None:
+    """Markdown for regex-audit command."""
+    stats = data.get("stats", {})
+    lines.append("## Regex Audit")
+    lines.append("")
+    lines.append(f"- Total patterns: {stats.get('total_patterns', 0)} | Vulnerable: {stats.get('vulnerable', 0)} | Files scanned: {stats.get('files_scanned', 0)}")
+    by_cat = stats.get("by_category", {})
+    if by_cat:
+        parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+        lines.append(f"- By category: {', '.join(parts)}")
+    by_sev = stats.get("by_severity", {})
+    if by_sev:
+        parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+        lines.append(f"- By severity: {', '.join(parts)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Vulnerable Patterns")
+        for f in findings[:15]:
+            sev = f.get("severity", "")
+            cat = f.get("category", "")
+            file = f.get("file", "")
+            line = f.get("line", "")
+            pattern = f.get("pattern", "")[:40]
+            msg = f.get("message", "")[:60]
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: `/{pattern}/` {msg}")
+        if len(findings) > 15:
+            lines.append(f"- ... and {len(findings) - 15} more")
+        lines.append("")
+    recommendations = data.get("recommendations", [])
+    if recommendations:
+        lines.append("### Recommendations")
+        for r in recommendations[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+
+def _md_ask(data: Dict, lines: list) -> None:
+    """Markdown for ask command — shows interpretation then delegates to sub-formatter."""
+    interp = data.get("query_interpretation", {})
+
+    # Handle unknown_query or error status
+    if data.get("status") == "unknown_query":
+        lines.append("## Ask")
+        lines.append("")
+        lines.append(f"**Question:** {data.get('question', '')}")
+        lines.append(f"**Status:** Could not interpret query")
+        suggestion = data.get("suggestion", "")
+        if suggestion:
+            lines.append(f"**Suggestion:** {suggestion}")
+        lines.append("")
+        return
+
+    if data.get("status") == "error" and "error" in data and "interpreted_as" in data:
+        lines.append("## Ask")
+        lines.append("")
+        lines.append(f"**Question:** {data.get('question', interp.get('question', ''))}")
+        lines.append(f"**Interpreted as:** {data.get('interpreted_as', '')}")
+        lines.append(f"**Error:** {data.get('error', '')}")
+        lines.append("")
+        return
+
+    # Show interpretation header
+    lines.append("## Ask")
+    lines.append("")
+    question = interp.get("question", "")
+    interpreted_as = interp.get("interpreted_as", "")
+    confidence = interp.get("confidence", "")
+    if question:
+        lines.append(f"**Question:** {question}")
+    if interpreted_as:
+        lines.append(f"**Interpreted as:** `{interpreted_as}`")
+    if confidence:
+        lines.append(f"**Confidence:** {confidence}")
+    lines.append("")
+
+    # Delegate to the appropriate sub-formatter by stripping query_interpretation
+    # and routing to the correct formatter
+    sub_data = {k: v for k, v in data.items() if k != "query_interpretation"}
+    sub_command = interpreted_as
+
+    # Map the interpreted command to the right formatter
+    formatter_map = {
+        "scan": _md_scan,
+        "query": _md_query,
+        "context": _md_context,
+        "outline": _md_outline,
+        "impact": _md_impact,
+        "trace": _md_trace,
+        "smell": _md_smell,
+        "dead-code": _md_dead_code,
+        "circular": _md_circular,
+        "handbook": _md_handbook,
+        "entrypoints": _md_entrypoints,
+        "api-map": _md_api_map,
+        "complexity": _md_complexity,
+        "secrets": _md_secrets,
+        "side-effect": _md_side_effect,
+        "symbols": _md_symbols,
+        "test-map": _md_test_map,
+        "perf-hint": _md_perf_hint,
+        "vuln-scan": _md_vuln_scan,
+        "env-check": _md_env_check,
+        "debug-leak": _md_debug_leak,
+        "state-map": _md_state_map,
+        "dependents": _md_dependents,
+    }
+
+    formatter = formatter_map.get(sub_command)
+    if formatter:
+        formatter(sub_data, lines)
+    else:
+        _md_generic(sub_data, lines)

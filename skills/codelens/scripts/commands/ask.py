@@ -1,8 +1,8 @@
-"""Ask command — Natural language query router."""
+"""Ask command — Natural language query router with score-based matching."""
 
 import os
 import re
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
 
 from context_engine import get_symbol_context
 from search_engine import search_symbols
@@ -27,6 +27,61 @@ from commands import register_command
 from commands.scan import cmd_scan
 from commands.handbook import cmd_handbook
 
+# ─── Keyword Weight Definitions ──────────────────────────────────
+# Technical/specific terms get weight 3, action words get weight 1,
+# generic filler words get weight 0.
+
+_KEYWORD_WEIGHTS: Dict[str, int] = {
+    # Technical terms (weight 3) — high specificity
+    "api route": 3, "api routes": 3, "endpoint": 3, "endpoints": 3,
+    "api map": 3, "rest route": 3, "http route": 3, "graphql": 3,
+    "circular": 3, "circular dependency": 3, "circular dep": 3, "dependency cycle": 3,
+    "dead code": 3, "unused code": 3, "unreachable": 3, "zombie": 3,
+    "orphan": 3, "never called": 3,
+    "secret": 3, "api key": 3, "password": 3, "token leak": 3,
+    "cve": 3, "vuln": 3, "vulnerability": 3, "vulnerable": 3,
+    "security hole": 3,
+    "code smell": 3, "technical debt": 3,
+    "complexity": 3, "cyclomatic": 3, "cognitive complexity": 3,
+    "test coverage": 3, "untested": 3, "missing test": 3, "test map": 3,
+    "performance": 3, "n+1": 3, "memory leak": 3, "bottleneck": 3,
+    "entry point": 3, "entrypoint": 3,
+    "env var": 3, "environment variable": 3, ".env": 3, "missing env": 3,
+    "console.log": 3, "debugger": 3, "debug code": 3,
+    "zustand": 3, "redux": 3, "pinia": 3, "global state": 3,
+    "side effect": 3, "pure function": 3, "impure": 3, "side-effect": 3,
+    "refactor": 3, "safe to rename": 3, "safe to move": 3,
+    "dependents": 3, "import graph": 3, "dependency graph": 3,
+    "css issue": 3, "css problem": 3, "css audit": 3,
+    "accessibility": 3, "a11y": 3, "aria": 3,
+    "regex": 3, "redo": 3, "redos": 3,
+    "what changed": 3, "diff": 3, "changes": 3,
+    "tech stack": 3, "frameworks": 3, "detect framework": 3,
+    "how to configure": 3, "configuration": 3,
+    "not used": 3,
+
+    # Action words (weight 1) — lower specificity
+    "show me": 1, "find": 1, "search for": 1, "look for": 1,
+    "trace": 1, "scan": 1, "analyze": 1, "index": 1,
+    "where is": 1, "where's": 1, "where does": 1,
+    "what is": 1, "what's": 1, "how does": 1, "how is": 1,
+    "who imports": 1, "who uses": 1, "who depends": 1,
+    "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
+
+    # Generic words (weight 0) — ignored for scoring
+    "the": 0, "a": 0, "an": 0, "me": 0, "my": 0,
+    "this": 0, "that": 0, "it": 0, "is": 0, "are": 0,
+    "of": 0, "for": 0, "in": 0, "on": 0, "to": 0,
+}
+
+# Default weight for keywords not in the table
+_DEFAULT_KEYWORD_WEIGHT = 2
+
+
+def _get_keyword_weight(kw: str) -> int:
+    """Get the weight for a keyword based on specificity."""
+    return _KEYWORD_WEIGHTS.get(kw, _DEFAULT_KEYWORD_WEIGHT)
+
 
 def add_args(parser):
     parser.add_argument("question", help="Natural language question about the codebase")
@@ -42,11 +97,12 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
     """
     Natural language query router.
     Maps a question to the appropriate CodeLens command and returns its result.
+    Uses score-based matching to find the best command.
     """
     workspace = os.path.abspath(workspace)
     q = question.lower().strip()
 
-    # Determine which command to run based on keyword patterns
+    # Determine which command to run based on score-based matching
     command, args = _parse_ask_question(q, workspace)
 
     if command is None:
@@ -54,7 +110,7 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
             "status": "unknown_query",
             "question": question,
             "workspace": workspace,
-            "suggestion": "Could not determine the appropriate command. Try: scan, context, trace, impact, smell, dead-code, secrets, circular, api-map, entrypoints, outline, query, complexity, test-map, perf-hint, vuln-scan"
+            "suggestion": "Could not determine the appropriate command. Try: scan, context, trace, impact, smell, dead-code, secrets, circular, api-map, entrypoints, outline, query, complexity, test-map, perf-hint, vuln-scan, dependents, refactor-safe, css-deep, a11y, regex-audit, diff, detect, env-check"
         }
 
     # Execute the determined command
@@ -80,12 +136,23 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
 
 
 def _parse_ask_question(q: str, workspace: str) -> tuple:
-    """Parse a natural language question and determine which command to run."""
+    """
+    Parse a natural language question using score-based matching.
+
+    Instead of first-match, each pattern is scored based on:
+    1. Keyword weight (specific technical terms = 3, action words = 1, generic = 0)
+    2. Number of keywords matched from the pattern
+    3. Coverage bonus for matching multiple keywords from same pattern
+
+    The highest-scoring pattern wins, which correctly routes queries like
+    "show me the API routes" to api-map (score from "api route" = 3*2*1.5 = 9)
+    instead of context (score from "show me" = 1*1*1.0 = 1).
+    """
 
     patterns = [
-        # ─── Specific topic patterns (checked first) ───────────
+        # ─── Specific topic patterns ───────────
 
-        # Dead code (very specific — must come before "show me")
+        # Dead code
         (["dead code", "unused code", "unreachable", "zombie", "not used", "never called", "orphan"],
          "dead-code", {}, "high"),
 
@@ -153,7 +220,47 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["refactor", "rename", "move", "safe to rename", "safe to move"],
          "refactor-safe", {"name": _extract_symbol_name}, "medium"),
 
-        # ─── Generic patterns (checked last) ────────────────────
+        # ─── Newly added patterns ───────────
+
+        # Dependents / import tracking
+        (["dependents", "who imports", "who uses", "who depends", "import graph", "dependency graph",
+          "which files import"],
+         "dependents", {}, "medium"),
+
+        # Refactor safety (broader)
+        (["is this code safe", "safe to change", "safe to remove", "is it safe"],
+         "refactor-safe", {"name": _extract_symbol_name}, "medium"),
+
+        # CSS deep analysis
+        (["css issue", "css problem", "css audit", "css analysis", "css deep",
+          "css variable", "keyframe", "specificity", "z-index"],
+         "css-deep", {}, "high"),
+
+        # Accessibility
+        (["accessibility", "a11y", "aria", "wcag", "screen reader", "alt text",
+          "keyboard nav", "focus", "accessible"],
+         "a11y", {}, "high"),
+
+        # Regex audit
+        (["regex", "regexp", "regular expression", "redo", "redos", "regex audit",
+          "catastrophic backtracking", "regex vulnerabilities", "regex vulnerability",
+          "regex issue", "regex problem"],
+         "regex-audit", {}, "high"),
+
+        # Diff / changes
+        (["what changed", "diff", "changes since", "what's different", "compare"],
+         "diff", {}, "high"),
+
+        # Detect / tech stack
+        (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
+          "what technologies", "stack"],
+         "detect", {}, "high"),
+
+        # Env configuration
+        (["how to configure", "configuration", "config check", "env setup"],
+         "env-check", {}, "high"),
+
+        # ─── Generic patterns (scored lower by keyword weight) ────
 
         # Context / definition queries
         (["where is", "where's", "where does", "find definition", "find def", "what is", "what's"],
@@ -167,7 +274,7 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
          "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
 
-        # Show me
+        # Show me (generic — low weight keywords)
         (["show me"],
          "context", {"name": _extract_symbol_name}, "low"),
 
@@ -178,30 +285,55 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         # Handbook
         (["overview", "handbook", "project brief", "tell me about", "summarize", "summary of"],
          "handbook", {}, "high"),
-
-        # Dependencies
-        (["dependents", "who imports", "who uses", "who depends", "import graph", "dependency graph"],
-         "dependents", {}, "medium"),
     ]
 
+    # ─── Score each pattern ────────────────────────────────
+    candidates: List[Tuple[float, str, dict, str]] = []
+
     for keywords, command, extra_args, confidence in patterns:
+        score = 0.0
+        matched_keywords = 0
+
         for kw in keywords:
             if kw in q:
-                # Build args dict
-                resolved_args = {"_confidence": confidence}
-                for key, val in extra_args.items():
-                    if callable(val):
-                        resolved_args[key] = val(q, kw)
-                    else:
-                        resolved_args[key] = val
-                return command, resolved_args
+                weight = _get_keyword_weight(kw)
+                # Multi-word keywords are more specific: "api route" > "api"
+                word_bonus = len(kw.split())
+                score += weight * word_bonus
+                matched_keywords += 1
 
-    # Fallback: try to find a symbol name and use context
-    symbol = _extract_symbol_name(q, "")
-    if symbol:
-        return "context", {"name": symbol, "_confidence": "low"}
+        if matched_keywords > 0:
+            # Coverage bonus: matching more keywords from same pattern is better
+            coverage = matched_keywords / len(keywords)
+            score *= (1 + coverage)
+            candidates.append((score, command, extra_args, confidence))
 
-    return None, {}
+    if not candidates:
+        # Fallback: try to find a symbol name and use context
+        symbol = _extract_symbol_name(q, "")
+        if symbol:
+            return "context", {"name": symbol, "_confidence": "low"}
+        return None, {}
+
+    # Sort by score descending, return best match
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best_score, command, extra_args, confidence = candidates[0]
+
+    # Adjust confidence based on score margin
+    if len(candidates) > 1 and candidates[0][0] <= candidates[1][0] * 1.2:
+        # Close match — lower confidence
+        if confidence == "high":
+            confidence = "medium"
+
+    # Build args dict
+    resolved_args = {"_confidence": confidence, "_score": best_score}
+    for key, val in extra_args.items():
+        if callable(val):
+            resolved_args[key] = val(q, "")
+        else:
+            resolved_args[key] = val
+
+    return command, resolved_args
 
 
 def _extract_symbol_name(q: str, keyword: str) -> str:
@@ -212,7 +344,9 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
                     "show me ", "find definition of ", "find def ", "find ",
                     "search for ", "how does ", "how is ", "trace ", "impact of ",
                     "what happens if i change ", "what happens if i delete ",
-                    "can i change ", "can i delete "]:
+                    "can i change ", "can i delete ", "is this code safe ",
+                    "is it safe ", "safe to change ", "safe to remove ",
+                    "which files import "]:
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix):]
             break
@@ -302,6 +436,24 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
         return cmd_handbook(workspace)
     elif command == "dependents":
         return get_dependency_graph(workspace)
+    elif command == "css-deep":
+        from cssdeep_engine import analyze_css_deep
+        return analyze_css_deep(workspace)
+    elif command == "a11y":
+        from a11y_engine import audit_accessibility
+        return audit_accessibility(workspace)
+    elif command == "regex-audit":
+        from regexaudit_engine import audit_regex_patterns
+        return audit_regex_patterns(workspace)
+    elif command == "diff":
+        from diff_engine import diff_current_vs_last
+        return diff_current_vs_last(workspace)
+    elif command == "detect":
+        from framework_detect import detect_frameworks
+        return detect_frameworks(workspace)
+    elif command == "refactor-safe":
+        from refactor_safe_engine import check_refactor_safety
+        return check_refactor_safety(args.get("name", ""), workspace)
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 

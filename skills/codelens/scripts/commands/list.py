@@ -82,7 +82,7 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all") -> Dict[str,
             elif filter_type == "duplicate_define" and node.get("duplicate_define"):
                 results.append(entry)
 
-    return {"domain": domain, "filter": filter_type, "count": len(results), "results": results}
+    return {"status": "ok", "domain": domain, "filter": filter_type, "count": len(results), "results": results}
 
 
 register_command("list", "List entries with filter", add_args, execute)

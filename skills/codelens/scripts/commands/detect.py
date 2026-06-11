@@ -19,7 +19,11 @@ def execute(args, workspace):
 def cmd_detect(workspace: str) -> Dict[str, Any]:
     """Detect frameworks and show recommended config."""
     workspace = os.path.abspath(workspace)
-    return detect_frameworks(workspace)
+    result = detect_frameworks(workspace)
+    # Ensure status field is present
+    if isinstance(result, dict) and "status" not in result:
+        result["status"] = "ok"
+    return result
 
 
 register_command("detect", "Detect frameworks in workspace", add_args, execute)

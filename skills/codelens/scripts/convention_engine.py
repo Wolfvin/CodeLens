@@ -136,6 +136,18 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     if sem_test.get("framework"):
         conventions["semantic"]["testing"] = sem_test
     
+    sem_css = _detect_css_framework(all_source_files, workspace)
+    if sem_css.get("framework"):
+        conventions["semantic"]["css_framework"] = sem_css
+    
+    sem_auth = _detect_auth_pattern(all_source_files, workspace)
+    if sem_auth.get("provider"):
+        conventions["semantic"]["authentication"] = sem_auth
+    
+    sem_deploy = _detect_deployment_pattern(workspace)
+    if sem_deploy.get("platform"):
+        conventions["semantic"]["deployment"] = sem_deploy
+    
     return {
         "status": "ok",
         "workspace": workspace,
@@ -1031,4 +1043,457 @@ def _detect_testing_framework(all_source_files: List[str], workspace: str) -> Di
         "style": style_map.get(best),
         "confidence": confidence,
         "hint": hints.get(best, f"Use {best} testing patterns"),
+    }
+
+
+def _detect_css_framework(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect CSS framework in the codebase."""
+    scores = {
+        "tailwind": 0,
+        "bootstrap": 0,
+        "material_ui": 0,
+        "chakra_ui": 0,
+        "ant_design": 0,
+        "bulma": 0,
+    }
+
+    # Check for config files
+    config_files = {
+        "tailwind.config.js": ("tailwind", 5),
+        "tailwind.config.ts": ("tailwind", 5),
+        "tailwind.config.mjs": ("tailwind", 5),
+        "tailwind.config.cjs": ("tailwind", 5),
+    }
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build', '__pycache__', '.codelens', '.next', '.cache', 'venv', '.venv'} and not d.startswith('.')]
+        for fn in filenames:
+            if fn in config_files:
+                framework, points = config_files[fn]
+                scores[framework] += points
+
+    # Check package.json for dependencies
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            import json
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+            # Tailwind CSS
+            if "tailwindcss" in deps:
+                scores["tailwind"] += 5
+            if "@tailwindcss" in str(deps.keys()):
+                scores["tailwind"] += 3
+
+            # Bootstrap
+            if "bootstrap" in deps:
+                scores["bootstrap"] += 5
+            if "react-bootstrap" in deps:
+                scores["bootstrap"] += 3
+
+            # Material UI
+            if "@mui/material" in deps:
+                scores["material_ui"] += 5
+            if "@mui" in str(deps.keys()):
+                scores["material_ui"] += 3
+
+            # Chakra UI
+            if "@chakra-ui/react" in deps or "@chakra-ui/core" in deps:
+                scores["chakra_ui"] += 5
+
+            # Ant Design
+            if "antd" in deps:
+                scores["ant_design"] += 5
+
+            # Bulma
+            if "bulma" in deps:
+                scores["bulma"] += 5
+        except Exception:
+            pass
+
+    # Check source files for class name patterns and imports
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Tailwind CSS — utility class patterns
+        if re.search(r'className=["\'][^"\']*(?:flex|grid|bg-|text-|p-\d|m-\d|w-|h-|rounded|shadow)', content):
+            scores["tailwind"] += 2
+        if re.search(r"from\s+['\"]tailwindcss['\"]", content):
+            scores["tailwind"] += 3
+        if re.search(r'@tailwind\s+', content):
+            scores["tailwind"] += 3
+        if re.search(r'@apply\s+', content):
+            scores["tailwind"] += 2
+
+        # Bootstrap — container, row, col, btn, etc.
+        if re.search(r'className=["\'][^"\']*(?:container|row|col-(?:sm|md|lg|xl)|btn(?:-primary|-secondary|-danger))', content):
+            scores["bootstrap"] += 2
+        if re.search(r"from\s+['\"]bootstrap['\"]", content):
+            scores["bootstrap"] += 3
+
+        # Material UI — MUI imports
+        if re.search(r"from\s+['\"]@mui", content):
+            scores["material_ui"] += 3
+        if re.search(r'<(?:TextField|Button|Box|Stack|Grid|Paper|AppBar)', content):
+            scores["material_ui"] += 2
+
+        # Chakra UI
+        if re.search(r"from\s+['\"]@chakra-ui", content):
+            scores["chakra_ui"] += 3
+        if re.search(r'<(?:Box|Flex|Stack|VStack|HStack|Button|Input|Text)\s', content) and re.search(r'chakra', content, re.IGNORECASE):
+            scores["chakra_ui"] += 2
+
+        # Ant Design
+        if re.search(r"from\s+['\"]antd['\"]", content):
+            scores["ant_design"] += 3
+        if re.search(r'<(?:Table|Form|Input|Button|Modal|Select)\s', content) and re.search(r'antd', content, re.IGNORECASE):
+            scores["ant_design"] += 2
+
+        # Bulma
+        if re.search(r'className=["\'][^"\']*(?:is-(?:primary|danger|warning|info|success)|has-text|column|section|hero)', content):
+            scores["bulma"] += 2
+        if re.search(r"from\s+['\"]bulma['\"]", content):
+            scores["bulma"] += 3
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"framework": None, "confidence": "low", "hint": "No CSS framework patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    hints = {
+        "tailwind": "Use Tailwind utility classes",
+        "bootstrap": "Use Bootstrap grid and component classes",
+        "material_ui": "Use MUI components with sx prop or styled API",
+        "chakra_ui": "Use Chakra UI components with style props",
+        "ant_design": "Use Ant Design components with Form.Item pattern",
+        "bulma": "Use Bulma modifier and helper classes",
+    }
+
+    return {
+        "framework": best,
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} for styling"),
+    }
+
+
+def _detect_auth_pattern(all_source_files: List[str], workspace: str) -> Dict[str, Any]:
+    """Detect authentication pattern in the codebase."""
+    scores = {
+        "nextauth": 0,
+        "passport": 0,
+        "jwt": 0,
+        "oauth": 0,
+        "firebase_auth": 0,
+        "supabase_auth": 0,
+        "clerk": 0,
+    }
+
+    # Check package.json for auth dependencies
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            import json
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+            if "next-auth" in deps:
+                scores["nextauth"] += 5
+            if "passport" in deps:
+                scores["passport"] += 5
+            if "jsonwebtoken" in deps or "jose" in deps:
+                scores["jwt"] += 4
+            if "firebase" in deps:
+                scores["firebase_auth"] += 5
+            if "@supabase/supabase-js" in deps or "@supabase/auth" in deps:
+                scores["supabase_auth"] += 5
+            if "@clerk/nextjs" in deps or "@clerk/clerk-js" in deps:
+                scores["clerk"] += 5
+        except Exception:
+            pass
+
+    # Check Python dependencies
+    req_path = os.path.join(workspace, 'requirements.txt')
+    if os.path.isfile(req_path):
+        try:
+            with open(req_path, 'r', encoding='utf-8') as f:
+                req_content = f.read().lower()
+            if 'pyjwt' in req_content or 'python-jose' in req_content:
+                scores["jwt"] += 4
+            if 'authlib' in req_content or 'python-social-auth' in req_content:
+                scores["oauth"] += 4
+            if 'firebase-admin' in req_content:
+                scores["firebase_auth"] += 4
+            if 'supabase' in req_content:
+                scores["supabase_auth"] += 4
+            if 'flask-login' in req_content or 'django' in req_content:
+                scores["jwt"] += 1  # Generic session-based auth
+        except Exception:
+            pass
+
+    # Check source files for import patterns and middleware
+    sample = all_source_files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # NextAuth
+        if re.search(r"from\s+['\"]next-auth['\"]", content):
+            scores["nextauth"] += 3
+        if re.search(r'NextAuth\s*\(', content):
+            scores["nextauth"] += 3
+        if re.search(r'useSession\s*\(', content):
+            scores["nextauth"] += 2
+        if re.search(r'getServerSession\s*\(', content):
+            scores["nextauth"] += 2
+        if re.search(r'SessionProvider', content):
+            scores["nextauth"] += 2
+        if re.search(r'\[...nextauth\]', content):
+            scores["nextauth"] += 3
+
+        # Passport.js
+        if re.search(r"from\s+['\"]passport['\"]", content):
+            scores["passport"] += 3
+        if re.search(r'passport\.use\s*\(', content):
+            scores["passport"] += 3
+        if re.search(r'passport\.authenticate\s*\(', content):
+            scores["passport"] += 2
+        if re.search(r'passport-strategy', content):
+            scores["passport"] += 2
+
+        # JWT
+        if re.search(r"from\s+['\"]jsonwebtoken['\"]", content):
+            scores["jwt"] += 3
+        if re.search(r'jwt\.sign\s*\(', content):
+            scores["jwt"] += 3
+        if re.search(r'jwt\.verify\s*\(', content):
+            scores["jwt"] += 3
+        if re.search(r'Bearer\s+[\w-]+\.[\w-]+', content):
+            scores["jwt"] += 2
+        if re.search(r'Authorization.*Bearer', content):
+            scores["jwt"] += 2
+
+        # OAuth
+        if re.search(r'oauth', content, re.IGNORECASE):
+            scores["oauth"] += 1
+        if re.search(r'client_id|client_secret|redirect_uri|authorization_code', content):
+            scores["oauth"] += 2
+        if re.search(r'/auth/(?:google|github|twitter|facebook|apple)', content):
+            scores["oauth"] += 3
+
+        # Firebase Auth
+        if re.search(r"from\s+['\"]firebase/auth['\"]", content):
+            scores["firebase_auth"] += 3
+        if re.search(r'createUserWithEmailAndPassword|signInWithEmailAndPassword', content):
+            scores["firebase_auth"] += 3
+        if re.search(r'auth\.currentUser', content):
+            scores["firebase_auth"] += 2
+
+        # Supabase Auth
+        if re.search(r"from\s+['\"]@supabase", content) and re.search(r'auth', content):
+            scores["supabase_auth"] += 3
+        if re.search(r'supabase\.auth\.', content):
+            scores["supabase_auth"] += 3
+        if re.search(r'signUp|signInWithPassword', content) and re.search(r'supabase', content, re.IGNORECASE):
+            scores["supabase_auth"] += 2
+
+        # Clerk
+        if re.search(r"from\s+['\"]@clerk", content):
+            scores["clerk"] += 3
+        if re.search(r'useUser\s*\(\s*\)|useAuth\s*\(\s*\)', content):
+            scores["clerk"] += 2
+        if re.search(r'SignedIn|SignedOut|SignInButton|UserButton', content):
+            scores["clerk"] += 3
+
+        # Session handling patterns (generic)
+        if re.search(r'getSession|session\.user|req\.session', content):
+            scores["nextauth"] += 1
+
+        # Middleware auth pattern
+        if re.search(r'middleware.*auth|withAuth|requireAuth|authenticate\s*\(', content):
+            scores["jwt"] += 1
+
+    best = max(scores, key=scores.get)
+    best_score = scores[best]
+
+    if best_score == 0:
+        return {"provider": None, "confidence": "low", "hint": "No authentication patterns detected"}
+
+    if best_score >= 5:
+        confidence = "high"
+    elif best_score >= 3:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    # Determine auth style
+    style_map = {
+        "nextauth": "session_based",
+        "passport": "session_based",
+        "jwt": "token_based",
+        "oauth": "delegated",
+        "firebase_auth": "token_based",
+        "supabase_auth": "token_based",
+        "clerk": "session_based",
+    }
+
+    hints = {
+        "nextauth": "Use NextAuth session providers and useSession hook",
+        "passport": "Use Passport.js strategies for authentication",
+        "jwt": "Use JWT tokens with Bearer authorization header",
+        "oauth": "Use OAuth2 authorization code flow with PKCE",
+        "firebase_auth": "Use Firebase Auth with onAuthStateChanged listener",
+        "supabase_auth": "Use Supabase Auth with signIn/signUp methods",
+        "clerk": "Use Clerk components and hooks (useUser, useAuth)",
+    }
+
+    return {
+        "provider": best,
+        "style": style_map.get(best, "unknown"),
+        "confidence": confidence,
+        "hint": hints.get(best, f"Use {best} for authentication"),
+    }
+
+
+def _detect_deployment_pattern(workspace: str) -> Dict[str, Any]:
+    """Detect deployment platform from config files in the workspace."""
+    deployment_files = {
+        "vercel.json": "vercel",
+        ".vercel/project.json": "vercel",
+        "netlify.toml": "netlify",
+        ".netlify/state.json": "netlify",
+        "Dockerfile": "docker",
+        "docker-compose.yml": "docker",
+        "docker-compose.yaml": "docker",
+        "fly.toml": "fly_io",
+        "railway.json": "railway",
+        "railway.toml": "railway",
+        "render.yaml": "render",
+        "heroku.yml": "heroku",
+        "Procfile": "heroku",
+        "app.yaml": "gcp",
+        ".cloudrun.yaml": "gcp",
+        "serverless.yml": "aws_lambda",
+        "serverless.yaml": "aws_lambda",
+        "template.yaml": "aws_sam",
+        "terraform": "terraform",
+        "main.tf": "terraform",
+        "cdk.json": "aws_cdk",
+    }
+
+    found_platforms: Dict[str, List[str]] = {}
+    config_files_found = []
+
+    for rel_path, platform in deployment_files.items():
+        full_path = os.path.join(workspace, rel_path)
+        if os.path.isfile(full_path):
+            config_files_found.append(rel_path)
+            if platform not in found_platforms:
+                found_platforms[platform] = []
+            found_platforms[platform].append(rel_path)
+
+    # Check package.json for deployment hints
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            import json
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+            if "vercel" in deps or "@vercel" in str(deps.keys()):
+                if "vercel" not in found_platforms:
+                    found_platforms["vercel"] = []
+                found_platforms["vercel"].append("package.json (vercel dependency)")
+            if "@netlify" in str(deps.keys()):
+                if "netlify" not in found_platforms:
+                    found_platforms["netlify"] = []
+                found_platforms["netlify"].append("package.json (netlify dependency)")
+        except Exception:
+            pass
+
+    # Check for .github/workflows (CI/CD but hints at deployment)
+    github_workflows = os.path.join(workspace, '.github', 'workflows')
+    if os.path.isdir(github_workflows):
+        try:
+            for wf_file in os.listdir(github_workflows):
+                wf_path = os.path.join(github_workflows, wf_file)
+                if os.path.isfile(wf_path):
+                    try:
+                        with open(wf_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            content = f.read().lower()
+                        if 'vercel' in content:
+                            if "vercel" not in found_platforms:
+                                found_platforms["vercel"] = []
+                            found_platforms["vercel"].append(f".github/workflows/{wf_file}")
+                        if 'netlify' in content:
+                            if "netlify" not in found_platforms:
+                                found_platforms["netlify"] = []
+                            found_platforms["netlify"].append(f".github/workflows/{wf_file}")
+                        if 'docker' in content:
+                            if "docker" not in found_platforms:
+                                found_platforms["docker"] = []
+                            found_platforms["docker"].append(f".github/workflows/{wf_file}")
+                        if 'aws' in content or 'amazonaws' in content:
+                            if "aws_lambda" not in found_platforms:
+                                found_platforms["aws_lambda"] = []
+                            found_platforms["aws_lambda"].append(f".github/workflows/{wf_file}")
+                    except IOError:
+                        pass
+        except OSError:
+            pass
+
+    if not found_platforms:
+        return {"platform": None, "confidence": "low", "hint": "No deployment platform detected"}
+
+    # Find the best platform (most evidence)
+    best_platform = max(found_platforms, key=lambda p: len(found_platforms[p]))
+    platform_files = found_platforms[best_platform]
+
+    # Determine confidence
+    if len(platform_files) >= 2:
+        confidence = "high"
+    elif len(platform_files) == 1:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    hints = {
+        "vercel": "Use Vercel deployment patterns (serverless functions, edge middleware)",
+        "netlify": "Use Netlify deployment patterns (Netlify Functions, redirects)",
+        "docker": "Use Docker deployment patterns (multi-stage builds, health checks)",
+        "fly_io": "Use Fly.io deployment patterns (fly.toml config, regions)",
+        "railway": "Use Railway deployment patterns (railway.json config)",
+        "render": "Use Render deployment patterns (render.yaml Blueprint)",
+        "heroku": "Use Heroku deployment patterns (Procfile, buildpacks)",
+        "gcp": "Use Google Cloud deployment patterns (Cloud Run, App Engine)",
+        "aws_lambda": "Use AWS Lambda deployment patterns (serverless framework)",
+        "aws_sam": "Use AWS SAM deployment patterns (template.yaml)",
+        "aws_cdk": "Use AWS CDK deployment patterns (constructs, stacks)",
+        "terraform": "Use Terraform deployment patterns (IaC, state management)",
+    }
+
+    return {
+        "platform": best_platform,
+        "config_files": platform_files,
+        "confidence": confidence,
+        "hint": hints.get(best_platform, f"Use {best_platform} deployment patterns"),
     }

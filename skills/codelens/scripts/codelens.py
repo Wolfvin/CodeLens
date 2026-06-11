@@ -61,6 +61,55 @@ from diff_engine import save_snapshot
 from outline_engine import get_workspace_outline
 
 
+# ─── Error Suggestion Helper ──────────────────────────────────
+
+def _suggest_fix(command: str, error: Exception) -> str:
+    """Return a helpful suggestion based on the command and error type."""
+    error_type = type(error).__name__ if isinstance(error, Exception) else str(type(error))
+    error_msg = str(error).lower()
+
+    # Import errors
+    if isinstance(error, ImportError) or 'import' in error_msg or 'module' in error_msg:
+        return "A required module is missing. Check that all dependencies are installed (e.g., tree-sitter for your language)."
+
+    # File not found errors
+    if isinstance(error, FileNotFoundError) or 'no such file' in error_msg or 'not found' in error_msg:
+        return "Check that the workspace path is correct and the directory exists."
+
+    # Command-specific suggestions
+    if command == "scan":
+        if 'incremental' in error_msg:
+            return "Try running without --incremental first, or delete .codelens/ and re-scan."
+        return "Try running without --incremental, or check that the workspace contains source files."
+
+    if command in ("query", "trace", "impact", "context", "dependents"):
+        return "Make sure you've run 'scan' first to build the registry."
+
+    if command in ("circular", "dead-code", "smell", "complexity", "api-map", "entrypoints"):
+        return "Make sure you've run 'scan' first to build the registry, or check the workspace path."
+
+    if command in ("secrets", "vuln-scan"):
+        return "Check that the workspace path is correct and contains source files to scan."
+
+    if command == "diff":
+        return "Make sure you've run 'scan' at least twice to create snapshots for comparison."
+
+    if command == "watch":
+        return "Check that the workspace path is correct and watchdog is installed (pip install watchdog)."
+
+    if command in ("test-map", "perf-hint"):
+        return "Make sure you've run 'scan' first, or check that source files are present."
+
+    if command == "ask":
+        return "Try rephrasing your question, or run 'scan' first to build the codebase registry."
+
+    if command == "handbook":
+        return "Run 'scan' first, or check that the workspace contains a valid project."
+
+    # Default suggestion
+    return "Run with a different workspace path or check the command syntax with --help."
+
+
 # ─── Workspace Auto-Detect ─────────────────────────────────────
 
 LAST_WORKSPACE_FILE = ".codelens_last_workspace"
@@ -292,12 +341,33 @@ def main():
         # ─── Format and print output ──
         print(format_output(result, args.format, format_command))
 
+    except FileNotFoundError as e:
+        error_result = {
+            "status": "error",
+            "command": args.command,
+            "error": str(e),
+            "error_type": "file_not_found",
+            "suggestion": "Check that the workspace path is correct and the directory exists."
+        }
+        print(format_output(error_result, args.format, args.command), file=sys.stderr)
+        sys.exit(1)
+    except ImportError as e:
+        error_result = {
+            "status": "error",
+            "command": args.command,
+            "error": str(e),
+            "error_type": "import_error",
+            "suggestion": "A required module is missing. Check that all dependencies are installed."
+        }
+        print(format_output(error_result, args.format, args.command), file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         error_result = {
             "status": "error",
             "command": args.command,
             "error": str(e),
-            "error_type": type(e).__name__
+            "error_type": type(e).__name__,
+            "suggestion": _suggest_fix(args.command, e)
         }
         print(format_output(error_result, args.format, args.command), file=sys.stderr)
         sys.exit(1)
