@@ -22,28 +22,27 @@ def execute(args, workspace):
         domain=args.domain,
         depth=args.depth
     )
-    # Add decision tree fields
+    # Add decision tree fields — derive risk_level from the engine's risk assessment
+    # to avoid contradictory "risk" vs "risk_level" values
     if result.get("status") == "ok":
-        affected = result.get("affected", {})
-        # Count actual items: direct + indirect dependents, not dict keys
-        if isinstance(affected, dict):
-            affected_count = len(affected.get("direct", [])) + len(affected.get("indirect", []))
-        elif isinstance(affected, list):
-            affected_count = len(affected)
-        else:
-            affected_count = 0
-        if affected_count == 0:
-            result["risk_level"] = "low"
-            result["recommended_action"] = "Safe to proceed. No dependent code found."
-        elif affected_count <= 3:
-            result["risk_level"] = "medium"
-            result["recommended_action"] = "Proceed with caution. Review affected code before changing."
-        elif affected_count <= 10:
-            result["risk_level"] = "high"
-            result["recommended_action"] = "High risk. Thoroughly test all affected code after changes."
-        else:
-            result["risk_level"] = "critical"
+        engine_risk = result.get("risk", "low")
+        stats = result.get("stats", {})
+        direct_dependents = stats.get("direct_dependents", 0)
+        indirect_dependents = stats.get("indirect_dependents", 0)
+        affected_files = stats.get("affected_files", 0)
+
+        # Use the engine's risk as the authoritative risk_level
+        result["risk_level"] = engine_risk
+
+        # Set recommended_action consistent with risk_level
+        if engine_risk == "critical":
             result["recommended_action"] = "Critical risk. Consider refactoring to reduce dependencies first."
+        elif engine_risk == "high":
+            result["recommended_action"] = "High risk. Thoroughly test all affected code after changes."
+        elif engine_risk == "medium":
+            result["recommended_action"] = "Proceed with caution. Review affected code before changing."
+        else:
+            result["recommended_action"] = "Safe to proceed. No dependent code found."
     return result
 
 

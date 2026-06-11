@@ -230,10 +230,18 @@ class TSXParser(BaseParser):
             elif node.type == 'class_declaration':
                 decl = self._parse_class_decl(node, source, file_path)
             elif node.type == 'export_statement':
-                # Check children for function/variable declarations
                 for child in node.children:
-                    if child.type in ('function_declaration', 'lexical_declaration'):
-                        pass  # Will be caught by walk
+                    if child.type in ('function_declaration', 'generator_function_declaration'):
+                        decl = self._parse_fn_decl(child, source, file_path)
+                        if decl:
+                            declarations.append(decl)
+                    elif child.type == 'lexical_declaration':
+                        for subchild in child.children:
+                            if subchild.type == 'variable_declarator':
+                                decl = self._parse_var_declarator(subchild, source, file_path)
+                                if decl:
+                                    declarations.append(decl)
+                return False  # Already processed, don't let walk double-count
 
             if decl:
                 declarations.append(decl)
