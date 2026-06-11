@@ -2,29 +2,34 @@
 
 All notable changes to CodeLens are documented here.
 
-## [5.7.1] — 2026-06-11
-
-### Fixed
-- **CRITICAL: `package.json` version mismatch**: Version was 5.1.0 while `pyproject.toml` and `skill.json` were at 5.7.0. Now aligned to 5.7.0.
-- **CRITICAL: `ask` and `handbook` commands blocked by API**: The REST API whitelist (`ALLOWED_COMMANDS`) in `commandRunner.ts` was missing `ask` and `handbook`, making the natural language query router and project handbook inaccessible via the REST API. Both commands are now whitelisted.
-- **CRITICAL: `ask` command missing from UI**: The `CODELENS_COMMANDS` array in `neural.ts` was missing `ask` and `handbook`, making them invisible in the command palette. Both are now listed under the new "Agent" category.
-- **HIGH: `side-effect` command argument mismatch**: `commandRunner.sideEffect(name, workspace)` passed `[name, workspace]` as positional args, but the Python CLI expects `workspace` as the first positional arg with `--name` as an optional flag. Fixed to pass `[workspace, '--name', name]`.
-- **HIGH: WebSocket CORS wildcard**: The WebSocket server used `cors: { origin: "*" }`, allowing any origin. Now defaults to `['http://localhost:3000', 'http://localhost:81']` and reads comma-separated origins from `CORS_ORIGIN` env var.
-- **HIGH: `.env` file committed with real paths**: The `.env` file containing hardcoded paths was committed to the repository. Removed from git tracking (already listed in `.gitignore`).
-- **MEDIUM: Hardcoded workspace path**: `analysisStore.ts` had `workspace: '/home/z/my-project'` as default. Changed to empty string — the workspace must be explicitly set.
-- **MEDIUM: `circular_engine.py` not using shared ignore dirs**: Local `ignore_dirs` sets in import cycle and CSS cycle detection didn't match `DEFAULT_IGNORE_DIRS` from `utils.py` (missing `_archive`, `coverage`, `.pytest_cache`, etc.). Now imports and uses the shared constant.
-- **MEDIUM: `impact_engine.py` risk field name inconsistency**: The engine returned `"risk"` while integration tests checked for `"risk_level"`. Added `"risk_level"` as an alias alongside the existing `"risk"` field for backward compatibility.
-- **MEDIUM: Workspace path traversal vulnerability**: The `commandRunner.execute()` method passed workspace arguments directly to the CLI without validation. Added basic path traversal check rejecting `..`, `/etc/`, and `/proc/` paths.
-- **MEDIUM: API root route placeholder**: `src/app/api/route.ts` returned `"Hello, world!"`. Replaced with a proper API info endpoint listing available routes.
-- **LOW: O(n²) Gini coefficient**: `computeGini` in `healthScore.ts` used nested loops (O(n²)). Rewritten using the sorted-array O(n) formula.
-- **LOW: Silent error swallowing in `graphStore.loadFromJSON`**: Errors during JSON parsing were silently caught without logging. Now logs the error to `console.error`.
-- **LOW: No database connection error handling**: `db.ts` instantiated `PrismaClient` without any error handling. Added `$connect()` with `.catch()` for graceful failure and a try/catch around initialization.
-- **LOW: `status-codes.md` in Indonesian**: The reference document was written in Indonesian. Translated to English for consistency with all other documentation.
+## [5.8.0] — 2026-06-11
 
 ### Added
-- `ask` and `handbook` normalizers in `normalizer.ts`: The `ask` normalizer delegates to the matched sub-command's normalizer with interpretation metadata. The `handbook` normalizer extracts frameworks and entrypoints as graph nodes.
-- `ask` and `handbook` wrapper methods in `commandRunner.ts`: `ask(question, workspace)` and `handbook(workspace)`.
-- Workspace path validation in `commandRunner.execute()`.
+- **Frontend dashboard** (`src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`):
+  - Overview tab with quick start guide and API status
+  - Graph tab with node type breakdown, cluster view, and node table
+  - Commands tab with interactive command runner and quick command buttons
+  - Health tab with score visualization and recommendations
+  - Dark theme matching the Neural Workspace design system
+- **`handbook` and `ask` command support** in the REST API and WebSocket:
+  - Added to `ALLOWED_COMMANDS` whitelist in `commandRunner.ts`
+  - Added `handbook()` and `ask()` method wrappers to `CommandRunner` class
+  - Added to `CODELENS_COMMANDS` type definitions in `neural.ts`
+- **Normalizer handlers** for `handbook` and `ask` commands:
+  - `normalizeHandbook`: Creates project node + risk nodes from handbook output
+  - `normalizeAsk`: Delegates to scan normalizer for structured results, falls back to info node
+- **Informative API root** (`GET /api`): Returns name, version, status, endpoints, and command count
+
+### Changed
+- **analysisStore**: Removed hardcoded `/home/z/my-project` workspace default — now defaults to empty string
+- **tsconfig.json**: Added `_archive` to `exclude` list to prevent TypeScript from checking archived code
+- **commandRunner.ts**: Fixed `CODELENS_SCRIPT` type from `string | undefined` to `string` with empty-string fallback for type safety
+- **Security**: Removed `.env` from git tracking (was accidentally committed with credentials)
+
+### Fixed
+- `commandRunner.ts`: `CODELENS_SCRIPT` was `undefined` type, causing TypeScript overload resolution failure in `execFileAsync`
+- `page.tsx`: `unknown` type in JSX expression caused `TS2322` — fixed with explicit null check and `String()` wrapper
+- Root API route returned `{ message: "Hello, world!" }` instead of useful server information
 
 ## [5.3.0] — 2026-06-11
 

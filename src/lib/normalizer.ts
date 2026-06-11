@@ -72,8 +72,8 @@ class Normalizer {
       init: this.normalizeInit,
       detect: this.normalizeDetect,
       watch: this.normalizeWatch,
-      ask: this.normalizeAsk,
       handbook: this.normalizeHandbook,
+      ask: this.normalizeAsk,
     }
     return map[name] ?? null
   }
@@ -2069,153 +2069,113 @@ class Normalizer {
     )
   }
 
-  /** handbook: Project orientation for AI agents — aggregates data from multiple engines */
+  /** handbook: Project orientation for AI agents */
   private normalizeHandbook(output: any): GraphEvent {
     const nodes: GraphNode[] = []
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
 
-    // Identity node
-    const identity = output?.identity
-    if (identity) {
-      const id = this.makeNodeId('file', 'project-identity')
-      nodes.push({
-        id, label: identity.name ?? 'Project', type: 'file', domain: 'backend',
-        status: 'active', radius: 14, color: NEURAL_COLORS.file,
-        data: { category: 'identity', ...identity },
-      })
-      targetIds.push(id)
-    }
+    // Handbook returns structured project orientation data
+    const identity = output?.identity ?? output?.project ?? {}
+    const structure = output?.structure ?? {}
+    const health = output?.health ?? {}
+    const conventions = output?.conventions ?? {}
+    const risks = output?.risks ?? []
 
-    // Structure: entrypoints as route nodes
-    const structure = output?.structure
-    if (structure?.entrypoints) {
-      for (const ep of structure.entrypoints.slice(0, 30)) {
-        const id = this.makeNodeId('route', ep.name ?? ep.type ?? 'entrypoint', ep.file)
-        nodes.push({
-          id, label: ep.name ?? ep.type ?? 'entrypoint', type: 'route', domain: 'backend',
-          status: 'active', file: ep.file, line: ep.line, radius: 6, color: NEURAL_COLORS.route,
-          data: { category: 'entrypoint', type: ep.type },
+    // Create a node for the project itself
+    const projectNodeId = this.makeNodeId('file', identity.name ?? 'project')
+    const projectNode: GraphNode = {
+      id: projectNodeId,
+      label: identity.name ?? 'project',
+      type: 'file',
+      domain: 'backend',
+      status: 'active',
+      file: identity.root ?? '',
+      radius: 12,
+      color: NEURAL_COLORS.file,
+      data: { type: 'project', ...identity, structure, health, conventions },
+    }
+    nodes.push(projectNode)
+    targetIds.push(projectNodeId)
+
+    // Create risk nodes if present
+    if (Array.isArray(risks)) {
+      for (const risk of risks.slice(0, 10)) {
+        const riskLabel = typeof risk === 'string' ? risk : risk.message ?? risk.category ?? 'risk'
+        const riskNodeId = this.makeNodeId('vulnerability', riskLabel)
+        const riskNode: GraphNode = {
+          id: riskNodeId,
+          label: riskLabel,
+          type: 'vulnerability',
+          domain: 'backend',
+          status: 'warning',
+          radius: 6,
+          color: NEURAL_COLORS.vulnerability,
+          data: { severity: risk.severity ?? 'medium', category: risk.category ?? '' },
+        }
+        nodes.push(riskNode)
+        targetIds.push(riskNodeId)
+        edges.push({
+          id: this.makeEdgeId(projectNodeId, riskNodeId, 'contains'),
+          source: projectNodeId,
+          target: riskNodeId,
+          type: 'contains',
+          weight: 1,
+          status: 'warning',
         })
-        targetIds.push(id)
       }
     }
 
-    // Structure: API routes
-    if (structure?.api_routes) {
-      for (const route of structure.api_routes.slice(0, 30)) {
-        const id = this.makeNodeId('route', `${route.method ?? 'GET'} ${route.path ?? '/'}`)
-        nodes.push({
-          id, label: `${route.method ?? 'GET'} ${route.path ?? '/'}`, type: 'route', domain: 'backend',
-          status: route.auth_protected ? 'warning' : 'active', radius: 6, color: NEURAL_COLORS.route,
-          data: { category: 'api_route', handler: route.handler, auth_protected: route.auth_protected },
-        })
-        targetIds.push(id)
-      }
-    }
-
-    // Risks: circular deps, secrets, vulnerabilities
-    const risks = output?.risks
-    let riskLevel: RiskLevel = 'low'
-    if (risks) {
-      const criticalRisks = (risks.secrets_count ?? 0) + (risks.vulnerabilities_count ?? 0)
-      if (criticalRisks > 3) riskLevel = 'critical'
-      else if (criticalRisks > 0) riskLevel = 'high'
-
-      if (risks.circular_deps_count > 0) {
-        const id = this.makeNodeId('function', `circular-deps`)
-        nodes.push({
-          id, label: `${risks.circular_deps_count} circular deps`, type: 'function', domain: 'backend',
-          status: 'warning', radius: 8, color: NEURAL_COLORS.warning,
-          data: { category: 'risk', risk_type: 'circular_dependency' },
-        })
-        targetIds.push(id)
-      }
-
-      if (risks.secrets_count > 0) {
-        const id = this.makeNodeId('secret', `hardcoded-secrets`)
-        nodes.push({
-          id, label: `${risks.secrets_count} hardcoded secrets`, type: 'secret', domain: 'backend',
-          status: 'critical', radius: 10, color: NEURAL_COLORS.secret,
-          data: { category: 'risk', risk_type: 'hardcoded_secrets' },
-        })
-        targetIds.push(id)
-      }
-    }
-
-    // Health score
-    const health = output?.health
-    if (health) {
-      riskLevel = health.overall < 50 ? 'critical' : health.overall < 70 ? 'high' : health.overall < 85 ? 'medium' : riskLevel
-    }
-
-    const summary = health
-      ? `Project handbook: health=${health.overall ?? 'N/A'}/100, ${nodes.length} key items`
-      : `Project handbook: ${nodes.length} key items`
-
+    const riskLevel = risks.length > 3 ? 'high' : risks.length > 0 ? 'medium' : 'safe'
     return this.makeEvent(
       'handbook', nodes, edges, 'pulse', targetIds, riskLevel,
-      'handbook', summary,
+      'orientation', `Project handbook: ${identity.name ?? 'unknown'} — ${risks.length} risks identified`
     )
   }
 
-  /** ask: Natural language query router — routes to the interpreted command */
+  /** ask: Natural language query router */
   private normalizeAsk(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const edges: GraphEdge[] = []
     const targetIds: string[] = []
 
-    const interpretation = output?.query_interpretation
-    const interpretedAs = interpretation?.interpreted_as ?? 'unknown'
-    const confidence = interpretation?.confidence ?? 0
+    // Ask returns a routed command result with the original query
+    const routedCommand = output?.command ?? output?.routed_command ?? 'unknown'
+    const query = output?.query ?? output?.question ?? ''
+    const result = output?.result ?? output
 
-    // Create a node for the question interpretation
-    const questionId = this.makeNodeId('file', `ask-${interpretedAs}`)
-    nodes.push({
-      id: questionId, label: `ask → ${interpretedAs}`, type: 'file', domain: 'backend',
-      status: confidence > 0.7 ? 'active' : 'warning', radius: 10,
-      color: confidence > 0.7 ? NEURAL_COLORS.active : NEURAL_COLORS.warning,
-      data: {
-        category: 'ask',
-        interpreted_as: interpretedAs,
-        confidence,
-        original_query: interpretation?.original_query ?? '',
-        reasoning: interpretation?.reasoning ?? '',
-      },
-    })
-    targetIds.push(questionId)
-
-    // If the answer contains results, add them as nodes
-    const results = output?.results
-    if (Array.isArray(results)) {
-      for (const item of results.slice(0, 50)) {
-        const name = item.name ?? item.label ?? item.fn ?? 'result'
-        const file = item.file ?? item.path
-        const line = item.line
-        const id = this.makeNodeId('function', name, file, line)
-        const nodeType: NodeType = item.type === 'class' ? 'class' : item.type === 'id' ? 'id' : 'function'
-        nodes.push({
-          id, label: name, type: nodeType, domain: 'backend',
-          status: item.status ?? 'active', file, line, radius: 6,
-          color: NEURAL_COLORS[nodeType] ?? NEURAL_COLORS.function,
-          data: { category: 'ask_result', ...item },
-        })
-        targetIds.push(id)
-        edges.push({
-          id: `e_ask_${id}`,
-          source: questionId, target: id,
-          type: 'contains', weight: 1, status: 'active',
-        })
+    // If the result contains nodes/edges from the routed command, normalize them
+    if (result?.frontend || result?.backend) {
+      // Delegate to scan normalizer for structured results
+      const scanEvent = this.normalizeScan(result)
+      return {
+        ...scanEvent,
+        sourceCommand: 'ask',
+        metadata: {
+          ...scanEvent.metadata,
+          category: 'ask',
+          summary: `Ask "${query}" → routed to ${routedCommand}: ${scanEvent.metadata.summary ?? ''}`,
+        },
       }
     }
 
-    const summary = output?.summary
-      ?? `Asked: "${interpretation?.original_query ?? ''}" → routed to ${interpretedAs} (confidence: ${(confidence * 100).toFixed(0)}%)`
+    // Fallback: create a single info node
+    const askNodeId = this.makeNodeId('function', `ask:${query.substring(0, 40)}`)
+    const askNode: GraphNode = {
+      id: askNodeId,
+      label: `ask: ${query.substring(0, 50)}`,
+      type: 'function',
+      domain: 'backend',
+      status: 'active',
+      radius: 8,
+      color: NEURAL_COLORS.function,
+      data: { routedCommand, query, result },
+    }
+    nodes.push(askNode)
+    targetIds.push(askNodeId)
 
     return this.makeEvent(
-      'ask', nodes, edges, 'flow', targetIds,
-      confidence > 0.7 ? 'low' : 'medium',
-      'ask', summary,
+      'ask', nodes, [], 'pulse', targetIds, 'low',
+      'ask', `Ask routed to: ${routedCommand}`
     )
   }
 

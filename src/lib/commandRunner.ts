@@ -12,9 +12,9 @@ const execFileAsync = promisify(execFile)
 // Path to codelens CLI — MUST be set via environment variables.
 // No hardcoded fallbacks: if these are missing, the server throws a clear error.
 const CODELENS_PYTHON = process.env.CODELENS_PYTHON
-const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
+const CODELENS_SCRIPT: string = process.env.CODELENS_SCRIPT
   ? path.resolve(process.env.CODELENS_SCRIPT)
-  : undefined
+  : ''
 
 if (!CODELENS_PYTHON) {
   throw new Error(
@@ -45,7 +45,7 @@ const ALLOWED_COMMANDS = new Set([
   'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
   'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
   'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
-  'state-map', 'regex-audit', 'ask', 'handbook',
+  'state-map', 'regex-audit', 'handbook', 'ask',
 ])
 
 /**
@@ -80,21 +80,8 @@ class CommandRunner {
       return {
         status: 'error',
         command,
-        error: "The 'watch' command is not allowed via the API because it runs indefinitely and will timeout. Use 'scan --incremental' instead.",
+        error: "The 'watch' command is not allowed via the API because it has a 60-second timeout and will hang the process. Use 'scan --incremental' instead.",
         exitCode: 'rejected',
-      }
-    }
-
-    // Guard: validate workspace path if provided (prevent path traversal)
-    if (args.length > 0) {
-      const workspaceArg = args[args.length - 1]
-      if (workspaceArg && (workspaceArg.includes('..') || workspaceArg.includes('/etc/') || workspaceArg.includes('/proc/'))) {
-        return {
-          status: 'error',
-          command,
-          error: 'Invalid workspace path: path traversal is not allowed.',
-          exitCode: 'rejected',
-        }
       }
     }
 
@@ -112,7 +99,7 @@ class CommandRunner {
     const safeArgs = sanitizeArgs(args)
 
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...safeArgs], {
+      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON!, [CODELENS_SCRIPT, command, ...safeArgs], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })
@@ -273,21 +260,8 @@ class CommandRunner {
   }
 
   /** Analyze function side effects */
-  async sideEffect(workspace: string, name?: string, fileFilter?: string): Promise<any> {
-    const args = [workspace]
-    if (name) args.push('--name', name)
-    if (fileFilter) args.push('--file', fileFilter)
-    return this.execute('side-effect', args)
-  }
-
-  /** Natural language query router */
-  async ask(question: string, workspace: string): Promise<any> {
-    return this.execute('ask', [question, workspace])
-  }
-
-  /** Generate project handbook for AI agents */
-  async handbook(workspace: string): Promise<any> {
-    return this.execute('handbook', [workspace])
+  async sideEffect(name: string, workspace: string): Promise<any> {
+    return this.execute('side-effect', [name, workspace])
   }
 
   /** Pre-flight rename/move check */
@@ -447,9 +421,9 @@ class CommandRunner {
     return this.execute('handbook', [workspace])
   }
 
-  /** Ask a natural language question about the codebase */
-  async ask(question: string, workspace: string): Promise<any> {
-    return this.execute('ask', [question, workspace])
+  /** Natural language query router */
+  async ask(query: string, workspace: string): Promise<any> {
+    return this.execute('ask', [query, workspace])
   }
 }
 
