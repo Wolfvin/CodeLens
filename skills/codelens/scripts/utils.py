@@ -158,7 +158,7 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.8.0"
+CODELENS_VERSION = "5.7.1"
 
 
 # ─── Safe File I/O ──────────────────────────────────────────
