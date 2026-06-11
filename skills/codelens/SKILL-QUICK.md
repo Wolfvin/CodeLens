@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v5.8 — Quick Reference
+# CodeLens v5.7 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -185,9 +185,6 @@ $CLI scan /workspace
 
 # Post-write update
 $CLI scan --incremental
-
-# Force full rescan (ignore existing registry)
-$CLI scan --full
 
 # Analysis
 $CLI smell

@@ -83,7 +83,7 @@ const ALLOWED_COMMANDS = new Set([
   'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
   'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
   'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
-  'state-map', 'regex-audit',
+  'state-map', 'regex-audit', 'handbook', 'ask',
 ])
 
 /**

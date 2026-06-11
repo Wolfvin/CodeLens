@@ -1,10 +1,18 @@
-import { NextResponse } from 'next/server';
+// ============================================================
+// GET /api — Server health check
+// ============================================================
+
+import { NextResponse } from 'next/server'
 
 export async function GET() {
   return NextResponse.json({
-    name: 'CodeLens API',
-    version: '5.1.0',
     status: 'ok',
-    endpoints: ['/api/graph', '/api/command', '/api/health']
-  });
+    version: '5.7.0',
+    timestamp: Date.now(),
+    services: {
+      api: 'running',
+      python: process.env.CODELENS_PYTHON ? 'configured' : 'missing',
+      script: process.env.CODELENS_SCRIPT ? 'configured' : 'missing',
+    },
+  })
 }
