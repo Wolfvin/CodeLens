@@ -26,6 +26,21 @@ All notable changes to CodeLens are documented here.
 
 ## [5.8.0] — 2026-06-11
 
+### Added
+
+- **SearchConfig dataclass**: Replaced 11-parameter `search_workspace()` with `SearchConfig` dataclass + `search_with_config()` for better maintainability. Legacy function preserved for backward compatibility.
+- **FrontendRegistryInput dataclass**: Replaced 9-parameter `build_frontend_registry()` with `FrontendRegistryInput` dataclass. Eliminates `many_params` code smell.
+- **Package manager detection**: Framework detect now identifies bun/pnpm/yarn/npm from lock files (`bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`).
+- **tRPC / oRPC framework detection**: Added `has_trpc` and `has_orpc` flags from package dependency analysis.
+- **normalizeGeneric normalizer**: Added generic normalizer for `handbook` and `ask` commands in the main normalizer (src/lib/normalizer.ts).
+- **Expanded WebSocket normalizer**: Added explicit animation routing for 17 previously-unhandled commands in the WebSocket server.
+- **Missing logger import fix**: `framework_detect.py` now imports `logger` from `utils`, fixing `NameError` on parse failures.
+
+### Changed
+
+- **Gini coefficient O(n²) → O(n log n)**: Replaced double-nested-loop with sorted-sum method in `healthScore.ts`. Dramatically faster for large codebases.
+- **Version bump**: 5.7.1 → 5.8.0 across `utils.py`, `skill.json`, `pyproject.toml`, `CHANGELOG.md`.
+
 ### Security
 
 - **Workspace path validation**: REST API and WebSocket now validate workspace paths — reject `..` traversal, optional `CODELENS_WORKSPACE_ROOT` allowlist, symlink resolution.

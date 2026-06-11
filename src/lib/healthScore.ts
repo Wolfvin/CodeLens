@@ -520,10 +520,7 @@ export function computeHealthScore(
   }
 }
 
-// ---- Circular dependency detection (DFS cycle detection with deduplication) ----
-// Uses Tarjan-style approach: collect all back-edges (GRAY → GRAY hits) and
-// then deduplicate by normalizing cycle signatures. This avoids counting
-// the same cycle multiple times from different starting nodes.
+// ---- Circular dependency detection (simple DFS cycle detection) ----
 
 function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
   const adjList = new Map<string, string[]>()
@@ -543,31 +540,23 @@ function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
   const color = new Map<string, number>()
   for (const node of nodes) color.set(node.id, WHITE)
 
-  // Track all back-edges (source → target where target is GRAY)
-  const backEdges: Array<{ from: string; to: string }> = []
-  // Track current DFS path for cycle reconstruction
-  const path: string[] = []
-  const pathIndex = new Map<string, number>()
+  let cycleCount = 0
 
-  function dfs(nodeId: string): void {
+  function dfs(nodeId: string): boolean {
     color.set(nodeId, GRAY)
-    path.push(nodeId)
-    pathIndex.set(nodeId, path.length - 1)
-
     const neighbors = adjList.get(nodeId) ?? []
     for (const neighbor of neighbors) {
       const c = color.get(neighbor)
       if (c === GRAY) {
-        // Found a back-edge → record it for cycle identification
-        backEdges.push({ from: nodeId, to: neighbor })
-      } else if (c === WHITE) {
-        dfs(neighbor)
+        cycleCount++
+        return true
+      }
+      if (c === WHITE && dfs(neighbor)) {
+        // Continue to find more cycles
       }
     }
-
     color.set(nodeId, BLACK)
-    path.pop()
-    pathIndex.delete(nodeId)
+    return false
   }
 
   for (const node of nodes) {
@@ -576,41 +565,24 @@ function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
     }
   }
 
-  // Deduplicate cycles: each back-edge identifies a unique cycle.
-  // We normalize by sorting the node IDs in the cycle and using that as a key.
-  // This avoids counting the same cycle discovered from different starting points.
-  const seenCycles = new Set<string>()
-  let uniqueCycleCount = 0
-
-  for (const { from, to } of backEdges) {
-    // Build the cycle path from 'to' back to 'from' via the DFS path
-    // For deduplication, we just use the sorted set of nodes in the cycle
-    // Since we may not have the exact path, use the edge pair as a proxy
-    // and sort to normalize direction
-    const key = [from, to].sort().join('→')
-    if (!seenCycles.has(key)) {
-      seenCycles.add(key)
-      uniqueCycleCount++
-    }
-  }
-
-  return uniqueCycleCount
+  return cycleCount
 }
 
 // ---- Gini coefficient (measures inequality) ----
-// Optimized O(n log n) sort-based algorithm instead of O(n²) double loop.
-// Formula: G = (2 * Σ(i * x_i)) / (n * Σ(x_i)) - (n + 1) / n
-// where x_i is sorted in ascending order and i is 1-indexed.
+// Optimized from O(n²) to O(n log n) using the sorted-sum method.
+// The Gini coefficient can be computed as:
+//   G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n
+// where x_i are sorted in ascending order and i is 1-indexed.
+// This avoids the double-nested loop of the naive implementation.
 
 function computeGini(values: number[]): number {
   if (values.length === 0) return 0
   const n = values.length
-  if (n === 1) return 0  // No inequality with a single value
-
   const sorted = [...values].sort((a, b) => a - b)
   const sum = sorted.reduce((s, v) => s + v, 0)
   if (sum === 0) return 0
 
+  // Compute weighted sum: Σ(i * x_i) where i is 1-indexed
   let weightedSum = 0
   for (let i = 0; i < n; i++) {
     weightedSum += (i + 1) * sorted[i]

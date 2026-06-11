@@ -8,7 +8,7 @@ import json
 import os
 import re
 from typing import Dict, List, Any, Optional
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # Known framework signatures
@@ -334,6 +334,41 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         pass
             if detected["has_tailwind"]:
                 break
+
+    # 6. Detect package manager from lock files
+    lock_file = os.path.join(workspace, "bun.lock")
+    if os.path.exists(lock_file):
+        detected["package_manager"] = "bun"
+    else:
+        lock_file = os.path.join(workspace, "pnpm-lock.yaml")
+        if os.path.exists(lock_file):
+            detected["package_manager"] = "pnpm"
+        else:
+            lock_file = os.path.join(workspace, "yarn.lock")
+            if os.path.exists(lock_file):
+                detected["package_manager"] = "yarn"
+            elif os.path.exists(os.path.join(workspace, "package-lock.json")):
+                detected["package_manager"] = "npm"
+            else:
+                detected["package_manager"] = None
+
+    # 7. Detect tRPC / oRPC from package dependencies
+    pkg_path = os.path.join(workspace, "package.json")
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            all_deps = {}
+            all_deps.update(pkg.get("dependencies", {}))
+            all_deps.update(pkg.get("devDependencies", {}))
+            if "@trpc/server" in all_deps or "@trpc/client" in all_deps or "@trpc/react-query" in all_deps:
+                detected["frameworks"].append("trpc")
+                detected["has_trpc"] = True
+            if "@orpc/server" in all_deps or "@orpc/client" in all_deps:
+                detected["frameworks"].append("orpc")
+                detected["has_orpc"] = True
+        except (json.JSONDecodeError, IOError):
+            pass
 
     return detected
 
