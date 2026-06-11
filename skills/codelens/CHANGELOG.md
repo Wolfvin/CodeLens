@@ -8,36 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [5.8.0] — 2026-06-12
 
 ### Added
-- **Java parser** (`fallback_java.py`): Regex-based Java parser extracting classes, methods, imports, and annotations. Detects Android, Spring, and plain Java projects.
-- **C/C++ parser** (`fallback_c.py`): Regex-based C/C++ parser extracting functions, structs, enums, includes, macros, and typedefs.
-- **Go parser** (`fallback_go.py`): Regex-based Go parser extracting functions, methods (with receivers), types (struct, interface), imports, and package declarations.
-- **Binary file detection**: Scan now discovers and reports binary files (`.so`, `.a`, `.dll`, `.exe`, `.wasm`, `.apk`, `.jar`, `.class`, `.dex`, etc.) with a dedicated `binaries` category and `binary_warning` in scan output.
-- **Android/Gradle framework detection**: Detects Android projects via `AndroidManifest.xml`, `build.gradle`, and Gradle build system.
-- **Emscripten/WASM framework detection**: Detects Emscripten via Makefile `emcc` references and `.wasm` file presence.
-- **CMake framework detection**: Detects CMake via `CMakeLists.txt`.
-- **Go modules framework detection**: Detects Go via `go.mod`.
-- **Maven framework detection**: Detects Maven via `pom.xml`.
-- **Handbook identity for Android/Gradle/Emscripten/Go/Maven**: Project type no longer shows "unknown" for these project types. Detects `android-app`, `jvm-project`, `wasm-project`, `go-project`, `java-project`.
-- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore check added to `utils.py`.
-- **`should_ignore_file()` utility**: File extension-based ignore check for minified files, source maps, and type declarations.
+- **Tauri framework detection**: Auto-detects Tauri apps via `src-tauri/tauri.conf.json`, `@tauri-apps/api` in package.json, and `tauri` crate in Cargo.toml. Sets `has_tauri` and `has_rust_backend` flags in framework detection output.
+- **Tauri command mapping (api-map)**: Extracts `#[tauri::command]` annotated Rust functions as IPC routes with method `INVOKE`, path `tauri://<fn_name>`. Detects async commands, State<T> parameters, auth-gated commands, macro-generated commands (channel_commands!), and `tauri::generate_handler![]` registration blocks. Tested with 320+ Tauri commands on OpenPawz.
+- **Rust framework signatures**: Added detection for axum, actix-web, rocket, warp, poem, salvo via Cargo.toml dependency scanning.
+- **Cargo.toml dependency scanning**: New `_find_cargo_tomls()` and `_parse_cargo_dependencies()` functions in `framework_detect.py` that scan root, `src-tauri/`, and `crates/*` Cargo.toml files for framework crate dependencies.
+- **Rust memory_leak patterns**: Added 4 Rust-specific performance hints — `Box::leak()`, nested `Rc/Arc` cycles, `mem::forget()`, and unbounded channels (`mpsc::channel` without `sync_channel`/`bounded`).
+- **Per-pattern extension gating**: Memory leak patterns now have `applies_to_ext` field to prevent JS-only patterns (addEventListener, setInterval, etc.) from false-positiving on Rust files. Pattern-level gating runs before regex matching.
+- **`safe_read_file()` utility**: Safe file reading with size limit and error handling (max 200KB default). Added to `utils.py` for use by a11y_engine and other modules.
+- **`should_ignore_dir()` utility**: Path-segment-aware directory ignore check that prevents false matches (e.g., workspace named "test-dist" doesn't match "dist"). Added to `utils.py`.
+- **Tauri-aware recommended config**: When Tauri is detected, `get_recommended_config()` adds `src/` to frontend_paths, `src-tauri/src/` to backend_paths, removes `src/` from backend_paths, and adds `src-tauri/target/` and `src-tauri/gen/` to ignore list.
 
 ### Fixed
-- **Secrets engine false positives from lock files**: `package-lock.json` npm registry URLs (e.g., `//registry.npmjs.org/@scope/`) were being matched as embedded credentials. Added `LOCK_FILES_TO_SKIP` set to skip all known lock file formats. Reduced 21 false positives to 0 on sqlite-wasm.
-- **Secrets engine `.d.ts` false positives**: TypeScript declaration files no longer scanned for secrets.
-- **`.d.ts` files in smell analysis**: Auto-generated TypeScript declaration files now excluded from code smell detection. Health score improved from 45 → 85 on sqlite-wasm (8454-line `.d.ts` file was inflating all smell categories).
-- **`.d.ts` files in scan discovery**: Declaration files no longer parsed as regular TypeScript backend source.
-- **`.d.ts` files in outline engine**: Declaration files excluded from workspace outline generation.
-- **Import error on `safe_read_file`**: `a11y_engine.py` imported `safe_read_file` from utils which didn't exist. Removed unused import.
-- **Import error on `should_ignore_dir`**: `tailwind_detector.py` imported `should_ignore_dir` from utils which didn't exist. Added the function to `utils.py`.
-- **`framework_detect.py` logger NameError**: Code referenced `logger` but module defined `_logger`. Fixed reference.
-- **Framework detection substring matching**: `if ignore in root` checks in framework_detect.py caused false-positive directory skipping (e.g., `src/bin/` matched by `bin`). Replaced with path-segment-aware matching.
-- **Edge resolver `KeyError: 'fn'`**: Java/C/Go parsers used `name` field while edge_resolver expected `fn`. Added node normalization in scan.py.
-- **Binary file deduplication**: Two-pass file discovery could produce duplicate entries. Added `_deduplicate_files()` utility.
+- **ImportError on startup**: `safe_read_file` and `should_ignore_dir` were imported by a11y_engine and tailwind_detector but not defined in `utils.py`. Both functions are now implemented.
+- **Framework detection crash**: `FRAMEWORK_SIGNATURES` entries without `packages` key (Rust-only frameworks) caused KeyError. Fixed with `.get("packages", [])`.
+- **dead-code recommended_action missing**: The `recommended_action` field was only added when `total_dead > 0`, missing the zero-dead-code case. Now always present.
+- **dead-code total_dead field mismatch**: Command used `stats.total_dead` but engine returns `stats.total_dead_code`. Fixed with fallback lookup.
 
-### Changed
-- **Smell engine SOURCE_EXTENSIONS**: Added `.java`, `.c`, `.cpp`, `.go` for multi-language smell detection.
-- **Scan output format**: `files_scanned` now includes `java`, `c_cpp`, `go`, `binaries` categories. Added `java_parsed`, `c_cpp_parsed`, `go_parsed` counts.
-- **Binary file discovery**: Uses lighter ignore rules than source file discovery — `bin` directories may contain `.wasm`/`.so` artifacts.
+### Test Target
+- **OpenPawz** (https://github.com/OpenPawz/openpawz): Large Tauri v2 app with vanilla TypeScript frontend, 1088 files, 870+ source files, 320+ Tauri commands, 343 Rust files. Used to validate all Tauri-related improvements.
 
 ## [6.0.0] — 2026-06-12
 

@@ -242,41 +242,75 @@ PERF_HINT_CATEGORIES = {
     "memory_leak": {
         "severity": "high",
         "category": "memory_leak",
-        "description": "Event listeners or intervals that are never cleaned up",
+        "description": "Event listeners, intervals, or resources that are never cleaned up",
         "patterns": [
-            # addEventListener without matching removeEventListener
+            # addEventListener without matching removeEventListener (JS/TS only)
             {
                 "regex": r'\.addEventListener\s*\(\s*["\'](\w+)["\']',
                 "negative_regex": r'\.removeEventListener\s*\(\s*["\']\1["\']',
                 "hint": "addEventListener without corresponding removeEventListener — potential memory leak",
                 "fix_suggestion": "Store the handler reference and call removeEventListener in the cleanup phase (useEffect return / componentWillUnmount).",
+                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # setInterval without clearInterval
+            # setInterval without clearInterval (JS/TS only)
             {
                 "regex": r'(?:const|let|var)?\s*\w*\s*=\s*setInterval\s*\(',
                 "negative_regex": r'clearInterval\s*\(',
                 "hint": "setInterval without clearInterval — interval runs forever, causing memory/CPU leak",
                 "fix_suggestion": "Store the interval ID and call clearInterval() in the cleanup phase (useEffect return / componentWillUnmount).",
+                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # setTimeout without clearTimeout (less severe but still a leak source)
+            # setTimeout without clearTimeout (JS/TS only)
             {
                 "regex": r'(?:const|let|var)?\s*\w*\s*=\s*setTimeout\s*\(',
                 "negative_regex": r'clearTimeout\s*\(',
                 "hint": "setTimeout assigned but no clearTimeout seen — timeout may fire after component unmounts",
                 "fix_suggestion": "Store the timeout ID and call clearTimeout() in the cleanup phase to prevent stale updates.",
+                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # Closures retaining large objects (heuristic: large buffer assigned then used in closure)
+            # Closures retaining large objects (JS/TS/Python)
             {
                 "regex": r'(?:const|let|var)\s+\w+\s*=\s*(?:new\s+(?:Array|Buffer|Uint8Array)|Array\s*\(\s*\d{4,}\s*\)|Buffer\.alloc\s*\(\s*\d{5,})',
                 "hint": "Large buffer/array allocation — ensure it is not captured by a long-lived closure",
                 "fix_suggestion": "Null out the reference after use, or use a WeakRef / scoped allocator to allow GC.",
+                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py"},
             },
-            # EventEmitter .on() without .off() or .removeListener()
+            # EventEmitter .on() without .off() or .removeListener() (JS/TS only)
             {
                 "regex": r'\.(?:on|addListener)\s*\(\s*["\'](\w+)["\']',
                 "negative_regex": r'\.(?:off|removeListener|removeAllListeners)\s*\(\s*["\']\1["\']',
                 "hint": "EventEmitter .on() without matching .off() — listener accumulates over time",
                 "fix_suggestion": "Call .off() or .removeListener() when the subscriber is done (e.g., in cleanup / destructor).",
+                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
+            },
+            # Rust: Box::leak() — intentionally or accidentally leaks memory
+            {
+                "regex": r'Box::leak\s*\(',
+                "hint": "Box::leak() — memory is intentionally leaked and will never be reclaimed",
+                "fix_suggestion": "If intentional, consider using Box::into_raw/Box::from_raw for explicit lifecycle management. If not, use Box without leak.",
+                "applies_to_ext": {".rs"},
+            },
+            # Rust: Rc/Arc cycle — potential reference cycle leak
+            {
+                "regex": r'(?:Rc|Arc)::new\s*\((?:Rc|Arc)::new',
+                "hint": "Nested Rc/Arc — potential reference cycle that prevents deallocation",
+                "fix_suggestion": "Use Weak<T> for back-references to break reference cycles, or restructure with owned data.",
+                "applies_to_ext": {".rs"},
+            },
+            # Rust: mem::forget — prevents Drop from running
+            {
+                "regex": r'mem::forget\s*\(',
+                "hint": "mem::forget() — prevents Drop from running, potentially leaking resources",
+                "fix_suggestion": "Only use mem::forget when intentionally transferring ownership to FFI. Otherwise, let Drop handle cleanup.",
+                "applies_to_ext": {".rs"},
+            },
+            # Rust: Unbounded channel — can grow without limit
+            {
+                "regex": r'(?:mpsc|broadcast)::channel\s*\(\s*\)',
+                "negative_regex": r'(?:bounded|sync_channel)',
+                "hint": "Unbounded channel — can grow without limit under high load, causing memory pressure",
+                "fix_suggestion": "Use bounded channels (mpsc::sync_channel or tokio::sync::mpsc::channel with capacity) for backpressure.",
+                "applies_to_ext": {".rs"},
             },
         ],
     },
@@ -539,6 +573,12 @@ def _scan_file_hints(
                 if elapsed > PER_FILE_TIMEOUT_SEC:
                     logger.debug(f"Per-file timeout ({PER_FILE_TIMEOUT_SEC}s) reached for {rel_path}, skipping remaining patterns")
                     return findings
+
+            # Per-pattern extension gating (e.g., JS-only patterns should not run on .rs files)
+            applies_to = pattern_def.get("applies_to_ext")
+            if applies_to and ext not in applies_to:
+                continue
+
             # Handle special pattern types
             if pattern_def.get("self_call_regex"):
                 # Recursive function detection: find function defs that call themselves
@@ -754,9 +794,9 @@ def _category_applies_to_file(category: str, ext: str) -> bool:
     if category == "large_bundle":
         return ext in JS_TS_EXTENSIONS
 
-    # Memory leak: JS/TS + Python
+    # Memory leak: JS/TS + Python + Rust (with per-pattern extension gating)
     if category == "memory_leak":
-        return ext in JS_TS_EXTENSIONS or ext == ".py"
+        return ext in JS_TS_EXTENSIONS or ext == ".py" or ext == ".rs"
 
     # Default: allow for known source extensions
     return ext in SOURCE_EXTENSIONS

@@ -18,10 +18,12 @@ def execute(args, workspace):
     )
     # Add removal safety assessment
     if result.get("status") == "ok":
-        total_dead = result.get("stats", {}).get("total_dead", 0)
+        stats = result.get("stats", {})
+        total_dead = stats.get("total_dead", stats.get("total_dead_code", 0))
         if total_dead == 0:
             result["removal_safety"] = "n/a"
             result["dependency_count"] = 0
+            result["recommended_action"] = "No dead code detected."
         else:
             # Count items with references (riskier to remove)
             items = result.get("dead_items", result.get("items", []))
