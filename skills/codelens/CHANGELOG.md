@@ -7,20 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.0] — 2026-06-12
 
+### Added
+
+- **Tauri reverse engineering analysis** (`scripts/utils.py` → `scan_tauri_artifacts()`): Deep analysis of Tauri applications for security auditing and reverse engineering. New capabilities:
+  - IPC command/handler mapping: Scans Rust source for `#[tauri::command]` functions, `generate_handler!` macro registrations, and `invoke()` calls from TypeScript frontend. Maps which commands exist, which are registered, and which are called from the UI.
+  - Capabilities/permissions security audit: Parses all `capabilities/*.json` files and flags dangerous permissions (`shell:allow-execute`, `shell:allow-spawn`, `fs:allow-write-file`, etc.) with severity ratings. Detects permissive filesystem scopes (`**` wildcards).
+  - Sidecar binary analysis: Detects `externalBin` entries in tauri.conf.json, checks for source availability, and flags closed-source/proprietary sidecar risks.
+  - Updater security audit: Analyzes updater configuration for insecure HTTP endpoints, missing signing keys, and install mode settings.
+  - WebView security audit: Flags missing CSP (Content Security Policy), permissive asset protocol scope (`**` wildcards), and other webview misconfigurations.
+  - Deep-link scheme analysis: Detects registered URL schemes and warns about potential URL-scheme injection vulnerabilities.
+  - Build script analysis: Scans `build.rs` for filesystem and process operations.
+  - URI scheme protocol detection: Finds `register_uri_scheme_protocol` calls in Rust source.
+  - Security summary with risk level classification (critical/high/moderate).
+- **Enhanced `binary-scan` command** (`scripts/commands/binary_scan.py`): Now automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full RE findings.
+- **Rust monorepo detection** (`scripts/framework_detect.py`): `_discover_workspace_package_jsons()` now also detects:
+  - `Cargo.toml` with `[workspace]` section → `cargo-workspace` indicator
+  - `crates/` directory with 2+ `Cargo.toml` files → `cargo-crates` indicator
+  - `pnpm-workspace.yaml` presence → `pnpm-workspace` indicator (even without `packages:` list)
+  - `package.json` workspaces field → `npm-workspaces` indicator
+- **Monorepo tools field** (`scripts/framework_detect.py`): `detect_frameworks()` now returns `monorepo_tools` list (e.g., `["pnpm-workspace", "cargo-crates"]`) to identify which monorepo mechanisms were detected.
+- **Ask command Tauri routing** (`scripts/commands/ask.py`): Added 17 new keyword patterns for binary/RE queries (binary, exe, sidecar, tauri command, ipc command, capabilities, webview security, csp, etc.). Queries like "what Tauri commands are available" now correctly route to `binary-scan` instead of `context`.
+
 ### Fixed
 
-- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
-- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
-- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
-- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
-- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
-- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
-- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
-- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
+- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (like clash-verge-rev which has `allowBuilds` instead) were incorrectly classified as non-monorepo. Now uses structural indicators (pnpm-workspace.yaml presence, Cargo workspace, crates/ directory) in addition to multiple package.json count.
+- **HIGH: Version mismatch** — `utils.py` had version 5.7.1 while CHANGELOG documented 5.8.0. Unified to 5.9.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
+
+### Changed
+
+- **`_discover_workspace_package_jsons()` return type**: Now returns `tuple[list[str], list[str]]` — (package_json_paths, monorepo_indicators) instead of just `list[str]`. All callers updated.
+- **`_collect_deps_from_package_jsons()` signature**: Now accepts optional `monorepo_indicators` parameter to augment monorepo detection beyond just multiple package.json files.
+- **`detect_frameworks()` output**: Now includes `monorepo_tools` field with list of detected monorepo mechanisms.
 
 ### Test Target Documentation
 
-- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
+- **clash-verge-rev/clash-verge-rev** (GitHub): Used as test target for v5.9.0 — the most popular Tauri app on GitHub (~125k stars). Complex VPN/proxy management app with Rust backend + React frontend. Monorepo with pnpm workspace + 6 Rust crates. Testing revealed: 2 sidecar binaries (verge-mihomo, verge-mihomo-alpha), missing CSP (null), wildcard asset protocol scope (**), shell:allow-execute + shell:allow-spawn permissions, 2 deep-link schemes, signed updater with 3 endpoints. Security findings: 1 high (missing CSP), 1 high (permissive asset protocol), 2 critical (shell permissions), 1 info (signed updates).
 
 ## [5.8.0] — 2026-06-12
 

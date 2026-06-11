@@ -1,16 +1,22 @@
 # CodeLens Changelog
 
-## v5.7.2 — 2026-06-12
+## v5.9.0 — 2026-06-12
 
-### Bug Fixes (7)
+### New Features (4)
 
-- **CRITICAL: Trace markdown formatter displayed paths character-by-character** — `_md_trace()` treated the `path` string field as an iterable list, producing output like `p → a → c → k → a → g → e → s`. Introduced `_format_trace_chain()` helper with proper string/list handling, depth indentation, and cyclic/unresolved markers.
-- **CRITICAL: TS/JS backend parser missed arrow functions in parentheses or `as` expressions** — `const name = ((...args) => {})` and `const name = (() => {}) as Type` were not captured. Added `_unwrap_fn_from_parens()` and `as_expression` handling to both parsers.
-- **HIGH: Framework detection missed Rust/Python polyglot projects** — Ruff showed "No frameworks" and "cjs". Added `module_system` for Cargo/Python/polyglot, `languages` field, and `has_rust_backend` from `Cargo.toml` presence.
-- **HIGH: Zombie CSS false positives with invalid class names** — Class names like `.(version`, `.===`, `.\`@${...}\`` were reported. Added CSS class name regex validation and character blacklist.
-- **HIGH: God object detection massive false positives in JS/TS** — Regex matched `if(`, `for(`, etc. Rewrote to extract class bodies first via brace-depth matching, then count methods. Also scoped Rust `fn` counting to each `impl` block.
-- **MEDIUM: API map included test fixture routes** — Added filtering for `/test/`, `/fixtures/`, `*.test.*`, `*.spec.*` paths.
-- **MEDIUM: Framework detect markdown missing flags** — Added display for FastAPI, Flask, Django, Tauri, Rust, monorepo, and lockfile fields.
+- **Tauri reverse engineering analysis** (`scan_tauri_artifacts()`): Deep security auditing of Tauri desktop applications. Detects IPC commands/handlers, capabilities/permissions, sidecar binaries, updater configuration, webview security (CSP, asset protocol), deep-link schemes, and build scripts. Produces a comprehensive security audit with severity ratings (critical/high/medium/info) and risk level classification.
+- **Enhanced `binary-scan` command**: Automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full findings including security audit, IPC command map, capabilities breakdown, and risk summary.
+- **Rust monorepo detection**: Detects Cargo workspace (`[workspace]` in Cargo.toml), `crates/` directory with multiple crates, `pnpm-workspace.yaml` presence (even without `packages:` list), and npm/yarn workspaces. Returns `monorepo_tools` list identifying which mechanisms were detected.
+- **Ask command Tauri/binary routing**: 17 new keyword patterns for binary/RE queries. "what Tauri commands are available" now correctly routes to `binary-scan`.
+
+### Bug Fixes (2)
+
+- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (e.g., clash-verge-rev with `allowBuilds`) were incorrectly classified as non-monorepo. Now uses structural indicators in addition to package.json count.
+- **HIGH: Version mismatch** — `utils.py` had 5.7.1 while CHANGELOG said 5.8.0. Unified to 5.9.0.
+
+### Test Target
+
+- **clash-verge-rev/clash-verge-rev** (~125k stars): Most popular Tauri app on GitHub. VPN/proxy management with Rust+React. Found: 2 sidecars, missing CSP, wildcard asset protocol, shell:allow-execute/spawn, 2 deep-links, signed updater.
 
 ## v5.8.1 — 2026-06-12
 

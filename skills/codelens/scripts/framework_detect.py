@@ -231,9 +231,13 @@ def _discover_workspace_package_jsons(workspace: str) -> List[str]:
     if os.path.exists(root_pkg):
         pkg_jsons.append(root_pkg)
 
+    # Track monorepo indicators for detection beyond just multiple package.jsons
+    _monorepo_indicators = []
+
     # 1. pnpm-workspace.yaml
     pnpm_ws = os.path.join(workspace, "pnpm-workspace.yaml")
     if os.path.exists(pnpm_ws):
+        _monorepo_indicators.append("pnpm-workspace")
         try:
             with open(pnpm_ws, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -252,6 +256,8 @@ def _discover_workspace_package_jsons(workspace: str) -> List[str]:
             workspaces = root_data.get("workspaces", [])
             if isinstance(workspaces, dict):
                 workspaces = workspaces.get("packages", [])
+            if workspaces:
+                _monorepo_indicators.append("npm-workspaces")
             for glob_pattern in workspaces:
                 pkg_jsons.extend(_glob_package_jsons(workspace, glob_pattern))
         except (json.JSONDecodeError, IOError):
@@ -268,6 +274,30 @@ def _discover_workspace_package_jsons(workspace: str) -> List[str]:
                     if os.path.isfile(pkg_path) and pkg_path not in pkg_jsons:
                         pkg_jsons.append(pkg_path)
 
+    # 4. Rust workspace detection — Cargo.toml with [workspace] or crates/ directory
+    root_cargo = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(root_cargo):
+        try:
+            with open(root_cargo, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if '[workspace]' in cargo_content or 'workspace.members' in cargo_content:
+                _monorepo_indicators.append("cargo-workspace")
+        except IOError:
+            pass
+    # Also check for crates/ directory with multiple Cargo.toml files
+    crates_dir = os.path.join(workspace, "crates")
+    if os.path.isdir(crates_dir):
+        crate_cargos = [
+            os.path.join(crates_dir, d, "Cargo.toml")
+            for d in os.listdir(crates_dir)
+            if os.path.isfile(os.path.join(crates_dir, d, "Cargo.toml"))
+        ]
+        if len(crate_cargos) >= 2 and "cargo-workspace" not in _monorepo_indicators:
+            _monorepo_indicators.append("cargo-crates")
+
+    # Store monorepo indicators for later use
+    _pkg_json_monorepo_indicators = _monorepo_indicators
+
     # Deduplicate while preserving order
     seen = set()
     unique = []
@@ -275,7 +305,7 @@ def _discover_workspace_package_jsons(workspace: str) -> List[str]:
         if p not in seen:
             seen.add(p)
             unique.append(p)
-    return unique
+    return unique, _pkg_json_monorepo_indicators
 
 
 def _glob_package_jsons(workspace: str, glob_pattern: str) -> List[str]:
@@ -310,7 +340,10 @@ def _glob_package_jsons(workspace: str, glob_pattern: str) -> List[str]:
     return results
 
 
-def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any]:
+def _collect_deps_from_package_jsons(
+    pkg_json_paths: List[str],
+    monorepo_indicators: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Collect all dependencies from multiple package.json files.
 
@@ -318,11 +351,13 @@ def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any
     - all_deps: merged dependency dict
     - module_system: 'esm' if any package has type:module
     - css_preprocessor: detected from any package
-    - is_monorepo: True if multiple package.json files found
+    - is_monorepo: True if multiple package.json files found OR monorepo indicators present
+    - monorepo_tools: list of detected monorepo tooling (e.g. pnpm-workspace, cargo-workspace)
     """
     all_deps = {}
     module_system = "cjs"
     css_preprocessor = None
+    _indicators = monorepo_indicators or []
 
     for pkg_path in pkg_json_paths:
         try:
@@ -350,11 +385,15 @@ def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any
         except (json.JSONDecodeError, IOError):
             pass
 
+    # Monorepo if multiple package.jsons OR structural indicators present
+    is_monorepo = len(pkg_json_paths) > 1 or len(_indicators) > 0
+
     return {
         "all_deps": all_deps,
         "module_system": module_system,
         "css_preprocessor": css_preprocessor,
-        "is_monorepo": len(pkg_json_paths) > 1,
+        "is_monorepo": is_monorepo,
+        "monorepo_tools": _indicators,
     }
 
 
@@ -386,6 +425,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
+        "monorepo_tools": [],
         "lockfile": None,
     }
 
@@ -402,12 +442,13 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             break
 
     # 1. Discover all package.json files (monorepo-aware)
-    pkg_json_paths = _discover_workspace_package_jsons(workspace)
-    pkg_info = _collect_deps_from_package_jsons(pkg_json_paths)
+    pkg_json_paths, monorepo_indicators = _discover_workspace_package_jsons(workspace)
+    pkg_info = _collect_deps_from_package_jsons(pkg_json_paths, monorepo_indicators)
     all_deps = pkg_info["all_deps"]
     detected["module_system"] = pkg_info["module_system"]
     detected["css_preprocessor"] = pkg_info["css_preprocessor"]
     detected["is_monorepo"] = pkg_info["is_monorepo"]
+    detected["monorepo_tools"] = pkg_info.get("monorepo_tools", [])
 
     # Check all collected deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
