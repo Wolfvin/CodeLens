@@ -45,6 +45,15 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Performance Anti-Pattern Detection**: 8 categories — N+1 queries, sync blocking, memory leaks, expensive re-renders, large bundles, inefficient iterations, unoptimized images, cache misses
 - **Deep CSS Analysis**: Unused custom properties (--var), orphan @keyframes, specificity wars (!important overuse), duplicate property declarations, z-index abuse, non-standard @media breakpoints
 
+## What's New in v5.7 — Bug Fixes & Safety
+
+- **Circular engine phantom edge fix**: `_resolve_import_path` now returns `None` for unresolved imports instead of returning the unresolved path, preventing phantom edges in import cycle detection.
+- **Refactor-safe string matching fix**: `_find_string_refs` regex now uses word boundaries (`\b`) so symbol names are matched as standalone words within strings, eliminating overly broad false positives.
+- **Dead-code export detection fix**: Removed `handler` and `router` from the entry-point skip list (which caused false negatives for Next.js API routes) and added HTTP method names (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`) as recognized Next.js API route handlers.
+- **Incremental scan mutation safety**: `_recompute_duplicate_define` now creates copies of CSS ref dicts before mutating, preventing in-place corruption of shared data structures.
+- **Side-effect argparse**: Verified `workspace` positional argument uses `nargs='?'` and `--name` is properly optional, eliminating argument confusion.
+- **Removed duplicate `missing_refs.py`**: Deleted leftover `scripts/missing_refs.py` from monolith refactor (the registered version is `scripts/commands/missing_refs.py`).
+
 ## What's New in v5.6 — Real-World Tested
 
 - **TSX backend extraction**: 6.2x more backend nodes from TSX files when tree-sitter-typescript is unavailable. Uses `parse_js_backend_fallback` on TSX to extract functions and imports.

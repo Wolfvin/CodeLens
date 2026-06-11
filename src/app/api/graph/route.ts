@@ -5,17 +5,19 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server'
-import { commandRunner, sanitizeWorkspace } from '@/lib/commandRunner'
+import { commandRunner } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
 
-// ─── Scan Result Cache ──────────────────────────────────────
-// Prevents redundant re-scans on every GET request.
-// Cache entries expire after CACHE_TTL_MS milliseconds.
+// ─── In-memory cache with 5-minute TTL ──────────────────────
+interface CacheEntry {
+  result: Record<string, unknown>
+  timestamp: number
+}
 
-const scanCache = new Map<string, { data: any; timestamp: number }>()
-const CACHE_TTL_MS = 30_000 // 30 seconds — balances freshness vs. performance
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const graphCache = new Map<string, CacheEntry>()
 
 export async function GET(request: NextRequest) {
   try {
@@ -29,18 +31,14 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Validate workspace path to prevent path traversal
-    const safeWorkspace = sanitizeWorkspace(workspace)
-
-    // Check cache first — avoids expensive re-scan on repeated requests
-    const cacheKey = safeWorkspace
-    const cached = scanCache.get(cacheKey)
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-      return NextResponse.json(cached.data)
+    // Check cache
+    const cached = graphCache.get(workspace)
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return NextResponse.json(cached.result)
     }
 
     // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(safeWorkspace)
+    const scanOutput = await commandRunner.scan(workspace)
 
     // Check for CLI errors
     if (scanOutput.status === 'error') {
@@ -79,7 +77,8 @@ export async function GET(request: NextRequest) {
     // Compute clusters
     const clusters = clusterEngine.computeClusters(selectedNodes, selectedEdges)
 
-    // Assign clusterId to each node (using cloned nodes to avoid mutation, Map for O(n) lookup)
+    // Assign clusterId to each node (using cloned nodes to avoid mutation)
+    // O(1) Map lookup instead of O(n) find per cluster node
     const finalNodes = selectedNodes.map(n => ({ ...n }))
     const nodeMap = new Map(finalNodes.map(n => [n.id, n]))
     for (const cluster of clusters) {
@@ -100,19 +99,19 @@ export async function GET(request: NextRequest) {
     // Compute heatmap (inspired by Emerge)
     const heatmap = computeHeatmap(finalNodes, selectedEdges, coupling)
 
-    const responseData = {
+    const result = {
       nodes: finalNodes,
       edges: selectedEdges,
       clusters,
       healthScore,
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
-    })
+    }
 
-    // Cache the result for subsequent requests
-    scanCache.set(cacheKey, { data: responseData, timestamp: Date.now() })
+    // Store in cache
+    graphCache.set(workspace, { result, timestamp: Date.now() })
 
-    return NextResponse.json(responseData)
+    return NextResponse.json(result)
   } catch (err: any) {
     console.error('[/api/graph] Error:', err)
     return NextResponse.json(

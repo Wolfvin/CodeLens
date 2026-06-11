@@ -426,12 +426,13 @@ def _infer_literal_type_py(value: str) -> Optional[str]:
         return "float"
     if value.startswith('['):
         return "list"
-    if value.startswith('{'):
-        return "dict"
     if value.startswith('('):
         return "tuple"
+    # Check for set before dict: sets use {} without colons, dicts have colons
     if value.startswith('{') and ':' not in value:
         return "set"
+    if value.startswith('{'):
+        return "dict"
     if value.startswith('b"') or value.startswith("b'"):
         return "bytes"
     if value.startswith('f"') or value.startswith("f'"):

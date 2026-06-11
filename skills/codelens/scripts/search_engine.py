@@ -9,6 +9,13 @@ import re
 from typing import Dict, List, Any, Optional, Set
 from utils import DEFAULT_IGNORE_DIRS
 
+
+def _is_redos_risky(pattern: str) -> bool:
+    """Heuristic check for potentially catastrophic backtracking patterns."""
+    # Nested quantifiers like (a+)+ or (a*)* are classic ReDoS patterns
+    nested_quantifier = re.search(r'(\([^)]*[+*][^)]*\))[+*{]', pattern)
+    return nested_quantifier is not None
+
 # File type to extension mapping
 TYPE_EXTENSIONS = {
     "html": {".html", ".htm"},
@@ -67,6 +74,15 @@ def search_workspace(
         Dict with matches, stats, and any errors
     """
     workspace = os.path.abspath(workspace)
+
+    # Guard against ReDoS - reject patterns with nested quantifiers
+    if _is_redos_risky(pattern):
+        return {
+            "status": "error",
+            "message": "Pattern appears to contain nested quantifiers that could cause catastrophic backtracking (ReDoS). Please simplify the pattern.",
+            "matches": [],
+            "stats": {"files_searched": 0, "files_matched": 0, "total_matches": 0}
+        }
 
     # Compile the regex
     try:

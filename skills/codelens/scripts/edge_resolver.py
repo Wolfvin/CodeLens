@@ -26,7 +26,7 @@ def resolve_edges(
     # Build lookup: fn_name → list of nodes
     fn_name_to_nodes: Dict[str, List[Dict]] = {}
     for node in all_nodes:
-        fn_name = node["fn"]
+        fn_name = node.get("fn", "unknown")
         if fn_name not in fn_name_to_nodes:
             fn_name_to_nodes[fn_name] = []
         fn_name_to_nodes[fn_name].append(node)
@@ -34,7 +34,9 @@ def resolve_edges(
     # Also index by file:line for exact matching
     id_to_node: Dict[str, Dict] = {}
     for node in all_nodes:
-        id_to_node[node["id"]] = node
+        node_id = node.get("id", "")
+        if node_id:
+            id_to_node[node_id] = node
 
     # Resolve edges
     resolved_edges = []
@@ -91,7 +93,9 @@ def resolve_edges(
     # Compute ref_count from incoming edges
     incoming_count: Dict[str, int] = {}
     for node in all_nodes:
-        incoming_count[node["id"]] = 0
+        node_id = node.get("id", "")
+        if node_id:
+            incoming_count[node_id] = 0
 
     for edge in resolved_edges:
         to_id = edge.get("to")
@@ -100,8 +104,10 @@ def resolve_edges(
 
     # Update nodes with ref_count and status
     for node in all_nodes:
-        node["ref_count"] = incoming_count.get(node["id"], 0)
-        node["status"] = "dead" if node["ref_count"] == 0 else "active"
+        node_id = node.get("id", "")
+        if node_id:
+            node["ref_count"] = incoming_count.get(node_id, 0)
+            node["status"] = "dead" if node["ref_count"] == 0 else "active"
 
     # Check duplicate_define: same fn name in multiple files
     # Clear any pre-existing duplicate_define flags first (for re-resolution correctness)

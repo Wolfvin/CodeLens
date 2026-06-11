@@ -145,22 +145,29 @@ def _recompute_id_status(entry: Dict) -> None:
 
 def _recompute_duplicate_define(entry: Dict) -> None:
     """Recompute duplicate_define flags on css refs for a class entry."""
-    # Clear existing flags first
+    # Clear existing flags first - work on copies to avoid mutation
+    new_css = []
     for ref in entry.get("css", []):
-        ref.pop("flag", None)
+        ref_copy = dict(ref)
+        ref_copy.pop("flag", None)
+        new_css.append(ref_copy)
+    
     # Group by path
     css_paths: Dict[str, List[Dict]] = {}
-    for ref in entry.get("css", []):
+    for ref in new_css:
         p = ref.get("path", "")
         if p not in css_paths:
             css_paths[p] = []
         css_paths[p].append(ref)
+    
     # Mark duplicates
     for path, path_refs in css_paths.items():
         if len(path_refs) > 1:
             for i, ref in enumerate(path_refs):
                 if i > 0:
                     ref["flag"] = "duplicate_define"
+    
+    entry["css"] = new_css
 
 
 def merge_frontend_data(

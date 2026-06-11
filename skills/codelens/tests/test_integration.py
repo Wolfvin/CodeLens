@@ -21,6 +21,23 @@ SCRIPT_DIR = os.path.join(os.path.dirname(__file__), '..', 'scripts')
 CODELENS = sys.executable + ' ' + os.path.join(SCRIPT_DIR, 'codelens.py')
 WORKSPACE = os.path.abspath(os.path.join(SCRIPT_DIR, '..', '..', '..'))
 
+# Files that tests may create inside WORKSPACE/.codelens/
+_CODELENS_ARTIFACTS = ['handbook.json', 'AGENT.md']
+
+
+@pytest.fixture(autouse=True)
+def cleanup_codelens_artifacts():
+    """Remove any .codelens artifacts created by tests to avoid workspace pollution."""
+    yield
+    codelens_dir = os.path.join(WORKSPACE, '.codelens')
+    for f in _CODELENS_ARTIFACTS:
+        path = os.path.join(codelens_dir, f)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
 
 def run_command(cmd_str, timeout=120):
     """Run a codelens command and return (returncode, stdout, stderr)."""
@@ -229,6 +246,15 @@ class TestHandbook:
         run_command('handbook .')
         assert os.path.exists(os.path.join(WORKSPACE, '.codelens', 'handbook.json'))
         assert os.path.exists(os.path.join(WORKSPACE, '.codelens', 'AGENT.md'))
+        # Cleanup is handled by autouse fixture; explicit cleanup here as well
+        # for clarity since this test is the primary polluter.
+        for f in _CODELENS_ARTIFACTS:
+            path = os.path.join(WORKSPACE, '.codelens', f)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     def test_handbook_conventions_has_naming(self):
         rc, stdout, _ = run_command('handbook .')

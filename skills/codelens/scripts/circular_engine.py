@@ -281,7 +281,7 @@ def _resolve_import_path(raw_import: str, from_dir: str, workspace: str) -> Opti
         if os.path.isfile(full_path):
             return os.path.relpath(full_path, workspace)
 
-    return rel_path  # Return unresolved path
+    return None
 
 
 # ─── CSS @import Cycle Detection ────────────────────────

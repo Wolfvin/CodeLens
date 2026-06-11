@@ -161,12 +161,19 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                 in_deps = False
                 for line in content.split('\n'):
                     stripped = line.strip()
-                    if 'dependencies' in stripped.lower() and '=' in stripped:
-                        in_deps = True
-                        continue
-                    elif stripped.startswith('['):
+                    if stripped.startswith('['):
                         in_deps = False
                         continue
+                    # Match [project.dependencies] or [tool.poetry.dependencies]
+                    if 'dependencies' in stripped.lower() and stripped.startswith('['):
+                        in_deps = True
+                        continue
+                    if in_deps and stripped and not stripped.startswith('#'):
+                        # Handle both TOML array format and inline table format
+                        # e.g., "requests = "^2.28"" or "requests"
+                        name = re.split(r'[\s=><[~]', stripped)[0].strip()
+                        if name and not name.startswith('#') and not name.startswith('['):
+                            declared["dependencies"][name] = stripped
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
 

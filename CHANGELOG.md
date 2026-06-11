@@ -5,25 +5,38 @@ All notable changes to CodeLens are documented here.
 ## [5.8.0] — 2026-06-11
 
 ### Fixed — Critical
-- **API whitelist missing `handbook` and `ask` commands** — these key AI-facing commands were rejected by the REST API (`commandRunner.ts`)
-- **Path traversal vulnerability** — API routes accepted arbitrary workspace paths without validation, allowing access to system directories (`/etc`, `/root`, etc.)
-- **No scan result caching** — `/api/graph` and `/api/health` re-scanned the entire workspace on every GET request (10+ seconds); added 30-second TTL cache
-- **Auto-incremental scan couldn't be disabled** — added `--full` flag to force clean re-scan when registry data is stale
-- **`fn_map` overwrite bug** — `fallback_python.py` silently overwrote function entries with the same name (e.g., methods in different classes), causing misattributed call edges
+- **`--format` flag unreachable in CLI** (codelens.py): Added `--format` to parent parser so it works on all subcommands (e.g., `codelens scan . --format markdown` now works correctly)
+- **`handbook` and `ask` commands blocked by API whitelist** (commandRunner.ts): Added both commands to `ALLOWED_COMMANDS` so they work via REST API and WebSocket
+- **KeyError crashes on malformed backend nodes** (edge_resolver.py): Changed `node["fn"]`/`node["id"]` to `.get()` with safe defaults — prevents crashes on malformed parser output
+- **Version mismatch**: Aligned `package.json` (was 5.1.0) to 5.7.0 matching `utils.py` CODELENS_VERSION
 
 ### Fixed — High
-- **Inconsistent ignore directories** — `framework_detect.py`, `circular_engine.py`, and `validate_engine.py` used hardcoded ignore lists instead of centralized `DEFAULT_IGNORE_DIRS` from `utils.py`
-- **`--format json` not explicitly passed** — API calls could receive non-JSON output if user config changed default format; now always passes `--format json`
+- **`/api/graph` and `/api/health` re-scan on every GET**: Added in-memory cache with 5-minute TTL — prevents O(workspace_size) DOS per request
+- **`_infer_literal_type_py` set detection unreachable** (typeinfer_engine.py): Reordered set/dict checks so `{1, 2, 3}` correctly infers as `set` instead of always `dict`
+- **`configdrift_engine.py` pyproject.toml parsing non-functional**: Empty loop body meant zero dependencies were ever extracted from pyproject.toml — now correctly parses `[project.dependencies]` sections
+- **In-place mutation of shared ref dicts** (registry.py, incremental.py): `_build_class_entries` and `_recompute_duplicate_define` now create copies before mutating flags — prevents cross-entry data corruption
+- **`compute_summary` inconsistent dict access** (utils.py): Handles `nodes`/`edges`/`classes`/`ids` being either lists or integers — uses `len()` for lists with int fallback
 
 ### Fixed — Medium
-- **Secrets engine insufficient masking** — short secrets (< 8 chars) revealed the entire value with "first 4 + ***" strategy; now uses "first 2 + ***" for values under 8 chars
-- **`graphStore.loadFromJSON` silently swallows errors** — added logging for malformed JSON attempts
-- **EventLog truncation gap** — changed from 1000→500 (50% gap) to 1000→800 (20% gap) for less event history loss
+- **`circular_engine.py` phantom import edges**: `_resolve_import_path` now returns `None` instead of unresolved path when no file matches
+- **`refactor_safe_engine.py` overly broad string ref matching**: Added `\b` word boundaries to regex — eliminates false positives like `"OrderProcessor"` matching symbol `"Order"`
+- **`deadcode_engine.py` unused export skip list too aggressive**: Removed `handler` and `router` from entry_points skip set (common Next.js API exports), added HTTP method names (`GET`, `POST`, etc.)
+- **`search_engine.py` ReDoS protection**: Added `_is_redos_risky()` heuristic to reject nested quantifier patterns before compilation
+- **Hardcoded workspace path** (analysisStore.ts): Changed `workspace: '/home/z/my-project'` to `workspace: ''`
+- **Duplicate `missing_refs.py`**: Removed leftover `scripts/missing_refs.py` (canonical version is `scripts/commands/missing_refs.py`)
+- **O(n) cluster assignment** (graph route.ts): Replaced `Array.find()` with `Map.get()` for O(1) lookups
 
-### Added
-- `sanitizeWorkspace()` function in `commandRunner.ts` for workspace path validation
-- 30-second TTL scan result cache in `/api/graph` and `/api/health` routes
-- `--full` flag on `scan` command to force full re-scan
+### Fixed — Test Suite
+- **Integration test workspace pollution**: Added autouse cleanup fixture that removes test-generated files after each test
+- **Weak assertion `test_no_secrets_in_clean_code`**: Now asserts `total_secrets == 0` instead of just checking type
+- **Weak async detection assertions** (test_js_backend_parser, test_rust_parser): Explicitly checks `node.get("async") is True or == "async"`
+- **Weak scan assertions** (test_cli.py): Strengthened from `> 0` to specific minimum counts with structure validation
+- **Hardcoded `/home/z/my-project` in analysisStore.test.ts**: Replaced with empty string
+- **Missing `jest` devDependency**: Added `jest@^29.7.0` to package.json
+- **Missing `test` script**: Added `"test": "jest"` and `"test:py"` to package.json
+
+### Changed
+- SKILL.md: Added "What's New in v5.7" section documenting safety and bugfix improvements
 
 ## [5.3.0] — 2026-06-11
 
