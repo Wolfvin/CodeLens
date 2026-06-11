@@ -5,6 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] — 2026-06-12
+
+### Added
+
+- **`artifact-scan` command (P0)**: Dedicated reverse engineering command that discovers compiled/built artifacts — WASM binaries, shared libraries, minified JS/CSS, source maps, and built output directories. Reports file sizes, types, WASM header metadata (version, sections), source-to-artifact mapping, and actionable recommendations.
+- **`--reverse-engineering` / `--re` flag on `scan`**: When enabled, temporarily removes `dist/`, `build/`, `.next/`, `.nuxt/` from the ignore list, allowing CodeLens to scan and analyze built output alongside source code. Artifact metadata is saved to `.codelens/artifacts.json`.
+- **Binary artifact detection in `scan`**: `.wasm`, `.so`, `.dll`, `.dylib`, `.exe`, `.pyc`, `.o`, `.a` files are now categorized into an `artifacts` file category during discovery, with metadata extraction (type classification, WASM header parsing, size reporting).
+- **`safe_read_file()` utility**: Reads files with null-byte binary detection, size limiting, and graceful error handling. Returns `None` for binary/oversized/unreadable files instead of silently reading garbage.
+- **`is_binary_file()` utility**: Checks first 8KB of a file for null bytes to detect binary content.
+- **`BINARY_EXTENSIONS` / `ARTIFACT_EXTENSIONS` constants**: Centralized sets of binary and minified file extensions for consistent reference across all engines.
+- **`.mjs` / `.cjs` support in `discover_files`**: ES module and CommonJS module extensions are now properly discovered and parsed as JavaScript files.
+- **Vue/Svelte fallback parsers**: When the dedicated Vue or Svelte parser is unavailable, CodeLens now falls back to HTML fallback parsing instead of silently skipping those files.
+- **WASM framework detection**: `framework_detect` now detects `wasm-bindgen`, `wasm-pack`, and `emscripten` from both package.json dependencies and Cargo.toml references. Also detects `.wasm` binary files in the workspace.
+- **Reverse engineering ask patterns**: `ask` command now routes queries about "compiled", "binary", "artifact", "minified", "wasm", "reverse engineer" to the `artifact-scan` command with high confidence.
+
+### Fixed
+
+- **`safe_read_file` missing import**: `a11y_engine.py` imported `safe_read_file` from `utils` but the function did not exist. Removed the dead import (the function was never called in the engine body).
+- **CSS `duplicate_props` same-line false positive**: Properties reported as duplicate on the same line (e.g., "lines 99 and 99") are now correctly skipped — same-line "duplicates" are a double-counting artifact from the regex engine.
+- **Binary file corruption in `smell_engine`**: Smell engine previously opened all files with `encoding='utf-8', errors='ignore'`, silently reading binary files as garbage text and producing nonsensical smell reports. Now uses `safe_read_file()` which detects and skips binary files.
+- **Minified file pollution in `smell_engine`**: `.min.js` and `.min.css` files are now skipped by the smell engine to avoid enormous line-count false positives and ReDoS-level regex performance on single-line files.
+- **File size cap in `smell_engine`**: Added 500KB limit to prevent reading extremely large generated files into memory.
+- **Version inconsistency**: Aligned `skill.json` (was 5.7.1), `pyproject.toml` (was 5.7.1), and `CODELENS_VERSION` constant (was 5.7.1) to 6.1.0. CHANGELOG 6.0.0 was already released.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

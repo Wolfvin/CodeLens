@@ -59,6 +59,8 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "tech stack": 3, "frameworks": 3, "detect framework": 3,
     "how to configure": 3, "configuration": 3,
     "not used": 3,
+    "compiled": 3, "binary": 3, "artifact": 3, "built": 3, "minified": 3,
+    "wasm": 3, "reverse engineer": 3, "reverse engineering": 3,
 
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
@@ -260,6 +262,12 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
           "catastrophic backtracking", "regex vulnerabilities", "regex vulnerability",
           "regex issue", "regex problem"],
          "regex-audit", {}, "high"),
+
+        # Reverse engineering / artifact detection
+        (["compiled", "binary", "artifact", "built", "minified", "wasm",
+          "reverse engineer", "reverse engineering", "dist folder", "build output",
+          "compiled artifacts", "built files", "minified files"],
+         "artifact-scan", {}, "high"),
 
         # Diff / changes
         (["what changed", "diff", "changes since", "what's different", "compare"],
@@ -468,6 +476,9 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "refactor-safe":
         from refactor_safe_engine import check_refactor_safety
         return check_refactor_safety(args.get("name", ""), workspace)
+    elif command == "artifact-scan":
+        from commands.artifact_scan import cmd_artifact_scan
+        return cmd_artifact_scan(workspace, deep=False)
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 

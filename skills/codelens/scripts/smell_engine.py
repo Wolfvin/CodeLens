@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -42,6 +42,7 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
+MAX_FILE_SIZE = 500 * 1024  # 500KB
 
 
 def detect_smells(
@@ -96,10 +97,19 @@ def detect_smells(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip minified files
+            if '.min.' in filename:
+                continue
+
+            # Skip files exceeding size cap
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             files_scanned += 1
@@ -860,10 +870,19 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip minified files
+            if '.min.' in filename:
+                continue
+
+            # Skip files exceeding size cap
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             # Extract function bodies (first line only as signature)
@@ -936,10 +955,19 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
 
             file_path = os.path.join(root, filename)
 
+            # Skip minified files
+            if '.min.' in filename:
+                continue
+
+            # Skip files exceeding size cap
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             file_count += 1

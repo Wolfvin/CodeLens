@@ -7,7 +7,7 @@ from typing import Dict, List, Any
 
 from utils import logger
 from registry import (
-    load_config, save_config, ensure_codelens_dir,
+    load_config, save_config, ensure_codelens_dir, get_codelens_dir,
     load_frontend_registry, save_frontend_registry,
     load_backend_registry, save_backend_registry,
     build_frontend_registry, compute_frontend_status
@@ -34,20 +34,23 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--reverse-engineering", "--re", action="store_true",
+                        help="Reverse engineering mode: scan built/compiled artifacts (dist/, .min.js, .wasm metadata)")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    reverse_engineering = getattr(args, 'reverse_engineering', False)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, reverse_engineering=reverse_engineering)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, reverse_engineering: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
@@ -55,6 +58,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
+
+    # In reverse engineering mode, remove dist/build from ignore list to scan built artifacts
+    if reverse_engineering:
+        original_ignore = config.get("ignore", []).copy()
+        config["ignore"] = [p for p in config.get("ignore", []) 
+                        if p.rstrip('/') not in ('dist', 'build', '.next', '.nuxt')]
 
     # Auto-detect frameworks if not configured
     if not config.get("frameworks"):
@@ -288,6 +297,10 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 if parse_vue_sfc:
                     refs = parse_vue_sfc(content, os.path.relpath(path, workspace))
                     vue_data.append(refs)
+                else:
+                    # Fallback: extract template classes/ids using HTML fallback
+                    fb_refs = parse_html_fallback(content, os.path.relpath(path, workspace))
+                    vue_data.append({"path": os.path.relpath(path, workspace), "frontend": fb_refs})
             except IOError:
                 logger.debug(f"Failed to read Vue file: {path}")
 
@@ -308,6 +321,10 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 if parse_svelte_component:
                     refs = parse_svelte_component(content, os.path.relpath(path, workspace))
                     svelte_data.append(refs)
+                else:
+                    # Fallback: extract template classes/ids using HTML fallback
+                    fb_refs = parse_html_fallback(content, os.path.relpath(path, workspace))
+                    svelte_data.append({"path": os.path.relpath(path, workspace), "frontend": fb_refs})
             except IOError:
                 logger.debug(f"Failed to read Svelte file: {path}")
 
@@ -446,6 +463,43 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
+    # ─── Binary Artifact Detection ─────────────────────────────
+    artifact_data = []
+    if files.get("artifacts") or reverse_engineering:
+        # In RE mode, also scan for minified files that were previously skipped
+        artifact_dirs_to_scan = set()
+        for af in files.get("artifacts", []):
+            artifact_dirs_to_scan.add(os.path.dirname(af))
+        
+        # Scan artifacts for metadata
+        for af in files.get("artifacts", []):
+            try:
+                rel_path = os.path.relpath(af, workspace)
+                file_size = os.path.getsize(af)
+                ext = os.path.splitext(af)[1].lower()
+                
+                artifact_entry = {
+                    "path": rel_path,
+                    "size_bytes": file_size,
+                    "type": _classify_binary(ext),
+                    "extension": ext,
+                }
+                
+                # For .wasm files, try to read the header
+                if ext == '.wasm' and file_size > 8:
+                    try:
+                        with open(af, 'rb') as f:
+                            header = f.read(8)
+                            if header[:4] == b'\x00asm':
+                                artifact_entry["wasm_version"] = int.from_bytes(header[4:8], 'little')
+                                artifact_entry["type"] = "wasm_binary"
+                    except (IOError, OSError):
+                        pass
+                
+                artifact_data.append(artifact_entry)
+            except (IOError, OSError):
+                logger.debug(f"Failed to read artifact: {af}")
+
     # Build backend registry with edge resolution
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
@@ -475,6 +529,16 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         }
     save_backend_registry(workspace, backend_registry)
 
+    # Save artifact data if any found
+    if artifact_data:
+        artifact_path = os.path.join(get_codelens_dir(workspace), 'artifacts.json')
+        with open(artifact_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "workspace": workspace,
+                "artifacts": artifact_data
+            }, f, indent=2, ensure_ascii=False)
+
     # Update mtimes cache
     all_files = []
     for file_list in files.values():
@@ -493,7 +557,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "rust": len(files["rust"]),
             "python": len(files["python"]),
             "vue": len(files["vue"]),
-            "svelte": len(files["svelte"])
+            "svelte": len(files["svelte"]),
+            "artifacts": len(files.get("artifacts", []))
         },
         "python_parsed": len(python_data),
         "frontend": {
@@ -506,8 +571,28 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "artifacts": {
+            "count": len(artifact_data),
+            "items": artifact_data[:50]  # Cap at 50
+        },
+        "reverse_engineering": reverse_engineering
     }
+
+
+def _classify_binary(ext: str) -> str:
+    """Classify a binary file extension."""
+    BINARY_TYPES = {
+        '.wasm': 'wasm_binary',
+        '.so': 'shared_library',
+        '.dll': 'windows_dll',
+        '.dylib': 'macos_dylib',
+        '.exe': 'windows_executable',
+        '.pyc': 'python_bytecode',
+        '.o': 'object_file',
+        '.a': 'static_library',
+    }
+    return BINARY_TYPES.get(ext, 'unknown_binary')
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -524,7 +609,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "rust": [],
         "python": [],
         "vue": [],
-        "svelte": []
+        "svelte": [],
+        "artifacts": []
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -559,7 +645,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["tsx"].append(file_path)
             elif ext == '.tsx':
                 files["tsx"].append(file_path)
-            elif ext in ('.js', '.ts'):
+            elif ext in ('.js', '.ts', '.mjs', '.cjs'):
                 if ext == '.ts' and is_frontend_file(rel_path, config):
                     files["tsx"].append(file_path)
                 elif is_frontend_file(rel_path, config):
@@ -576,6 +662,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["vue"].append(file_path)
             elif ext == '.svelte':
                 files["svelte"].append(file_path)
+            elif ext in ('.wasm', '.so', '.dll', '.dylib', '.exe', '.pyc', '.o', '.a'):
+                files["artifacts"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
 

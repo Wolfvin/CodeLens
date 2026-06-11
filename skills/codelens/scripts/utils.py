@@ -156,6 +156,52 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── File Reading Utilities ───────────────────────────────────
+
+def safe_read_file(path: str, max_size: int = 1024 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file with size limit and encoding handling.
+    
+    Returns None if the file is binary, too large, or unreadable.
+    """
+    try:
+        file_size = os.path.getsize(path)
+        if file_size > max_size:
+            return None
+        
+        with open(path, 'rb') as f:
+            raw = f.read(min(file_size, 8192))
+            # Binary file detection: check for null bytes in the first 8KB
+            if b'\x00' in raw:
+                return None
+        
+        with open(path, 'r', encoding=encoding, errors='replace') as f:
+            return f.read()
+    except (IOError, OSError, UnicodeDecodeError):
+        return None
+
+
+def is_binary_file(path: str) -> bool:
+    """Check if a file appears to be binary by examining its first 8KB."""
+    try:
+        with open(path, 'rb') as f:
+            chunk = f.read(8192)
+            return b'\x00' in chunk
+    except (IOError, OSError):
+        return True
+
+
+BINARY_EXTENSIONS = frozenset({
+    '.wasm', '.so', '.dll', '.dylib', '.exe', '.pyc', '.pyd',
+    '.o', '.a', '.lib', '.gch', '.pch', '.class', '.jar',
+    '.nexe', '.obj', '.pdb', '.dSYM', '.ko',
+})
+
+ARTIFACT_EXTENSIONS = frozenset({
+    '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+    '.map', '.js.map', '.css.map',
+})
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.1.0"

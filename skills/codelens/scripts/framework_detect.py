@@ -107,6 +107,21 @@ FRAMEWORK_SIGNATURES = {
         "pip_packages": ["pydantic"],
         "config_files": [],
         "indicators": []
+    },
+    "wasm-bindgen": {
+        "packages": ["wasm-bindgen"],
+        "config_files": [],
+        "indicators": ["wasm-bindgen", "wasm_bindgen"]
+    },
+    "wasm-pack": {
+        "packages": ["wasm-pack"],
+        "config_files": [],
+        "indicators": []
+    },
+    "emscripten": {
+        "packages": [],
+        "config_files": ["CMakeLists.txt"],
+        "indicators": ["emscripten", "EMSCRIPTEN"]
     }
 }
 
@@ -300,6 +315,31 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 elif fw_name == "django":
                     detected["has_django"] = True
                 break
+
+    # Check for wasm-bindgen in Cargo.toml
+    cargo_toml = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(cargo_toml):
+        try:
+            with open(cargo_toml, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if 'wasm-bindgen' in cargo_content or 'wasm_bindgen' in cargo_content:
+                if "wasm-bindgen" not in detected["frameworks"]:
+                    detected["frameworks"].append("wasm-bindgen")
+        except (IOError, UnicodeDecodeError):
+            pass
+
+    # Check for .wasm files
+    for root, dirs, fnames in os.walk(workspace):
+        # Skip hidden and common ignore dirs
+        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.codelens', 'target', '__pycache__'}]
+        for fn in fnames:
+            if fn.endswith('.wasm'):
+                if "wasm-bindgen" not in detected["frameworks"]:
+                    detected["frameworks"].append("wasm-binary")
+                break
+        else:
+            continue
+        break
 
     # 4. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
