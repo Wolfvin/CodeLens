@@ -1,5 +1,25 @@
 # CodeLens Changelog
 
+## v6.2.0 — 2026-06-12
+
+### Added (8)
+
+- **C/C++ fallback parser** — `parsers/fallback_cpp.py`: Regex-based parser for `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`. Extracts functions, methods, structs, typedefs, preprocessor macros, and call edges.
+- **Go fallback parser** — `parsers/fallback_go.py`: Regex-based parser for `.go`. Extracts functions, methods, types, and call edges.
+- **C/C++ and Go outline support** — `outline_engine.py`: Added `_outline_cpp()` and `_outline_go()`.
+- **C/C++ and Go complexity analysis** — `complexity_engine.py`: Added `_extract_cpp_functions()`, `_extract_go_functions()`, `_count_cpp_decisions()`, `_count_go_decisions()`.
+- **C/C++ and Go scan integration** — `commands/scan.py`: C/C++ and Go data now included in backend registry.
+- **Tauri IPC edge resolver** — `edge_resolver.py`: Implemented `resolve_tauri_ipc_from_apimap()` with snake_case ↔ camelCase matching.
+- **Shared performance utilities** — `utils.py`: Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired()`.
+- **C/C++ and Go extensions in all engines** — Updated SOURCE_EXTENSIONS in 17 engine files.
+
+### Bug Fixes (4)
+
+- **CRITICAL: Import error crash** — `scan.py`, `handbook.py`, `watch.py` crashed because `resolve_tauri_ipc_from_apimap` was not defined. Now implemented.
+- **CRITICAL: Import error crash** — `ask.py`, `env_check.py` crashed because `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` were not in `utils.py`. Now added.
+- **CRITICAL: C/C++ files scanned but never parsed** — Scan discovered C/C++ files but returned 0 nodes/edges. Now parsed with `fallback_cpp.py`.
+- **CRITICAL: Go files scanned but never parsed** — Same as C/C++. Now parsed with `fallback_go.py`.
+
 ## v5.7.2 — 2026-06-12
 
 ### Bug Fixes (7)

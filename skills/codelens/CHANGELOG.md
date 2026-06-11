@@ -5,6 +5,40 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.0] — 2026-06-12
+
+### Added
+
+- **C/C++ fallback parser** (`scripts/parsers/fallback_cpp.py`): New regex-based parser for C/C++ source files (`.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`). Extracts free functions, methods (including `ClassName::method()`), struct/class declarations, typedefs, preprocessor function-like macros (`#define MACRO(args)`), and function call edges (including `obj.method()` and `ptr->method()`). On nicbarker/clay (38 C files, 300KB single header), this extracted 1403 backend nodes and 28434 call edges — previously 0/0.
+- **Go fallback parser** (`scripts/parsers/fallback_go.py`): New regex-based parser for Go source files (`.go`). Extracts free functions, methods with receiver types, type declarations (struct/interface), and function/method call edges.
+- **C/C++ and Go outline support** (`scripts/outline_engine.py`): Added `_outline_cpp()` and `_outline_go()` functions with full file structure extraction (functions, classes/structs, imports/includes, types, macros). Updated `_detect_language()` mapping and `source_extensions` set.
+- **C/C++ and Go complexity analysis** (`scripts/complexity_engine.py`): Added `_extract_cpp_functions()`, `_extract_go_functions()`, `_count_cpp_decisions()`, and `_count_go_decisions()`. C/C++ complexity includes preprocessor conditionals (#if, #ifdef, #ifndef, #elif). Cognitive complexity delegates to JS-style brace tracking.
+- **C/C++ and Go scan integration** (`scripts/commands/scan.py`): C/C++ and Go files are now parsed during scan and their data is included in the backend registry (both full and incremental scans). Scan result now includes `cpp_parsed` and `go_parsed` counts.
+- **Tauri IPC edge resolver** (`scripts/edge_resolver.py`): Implemented `resolve_tauri_ipc_from_apimap()` function that resolves cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers. Includes snake_case ↔ camelCase name matching for Tauri's default IPC naming convention, self-edge prevention, and `ipc_exposed` status marking to prevent Rust handlers from being falsely flagged as dead code.
+- **Shared performance utilities** (`scripts/utils.py`): Added `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000 files), and `time_budget_expired()` function. These are now imported by `envcheck_engine.py` and other engines, eliminating the previous `ImportError` crash.
+- **C/C++ and Go source extensions in all engines**: Updated `SOURCE_EXTENSIONS` in 17 engine files to include `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx`, `.go`. Affected engines: smell, complexity, dead-code, ownership, secrets, env-check, state-map, perf-hint, api-map, type-infer, config-drift, test-map, dataflow, side-effect, debug-leak, regex-audit, entrypoints.
+
+### Fixed
+
+- **Critical import error**: `scan.py`, `handbook.py`, and `watch.py` crashed on import because `resolve_tauri_ipc_from_apimap` was referenced but not defined in `edge_resolver.py`. Now implemented.
+- **Critical import error**: `ask.py` and `env_check.py` crashed on import because `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, and `time_budget_expired` were referenced from `utils.py` but not defined there. Now added to `utils.py`.
+- **C/C++ files scanned but never parsed**: The scan command discovered `.c`, `.h`, `.cpp` files and counted them in `files_scanned.cpp`, but never parsed them for backend nodes/edges. This meant C/C++ projects returned 0 nodes and 0 edges after scan. Now fixed with the new C/C++ parser.
+- **Go files scanned but never parsed**: Same issue as C/C++ — Go files were discovered but never parsed. Now fixed with the new Go parser.
+
+### Changed
+
+- **Version bump**: Updated from 5.7.1 to 6.2.0 across `utils.py`, `skill.json`, `SKILL-QUICK.md`.
+
+### Test Target Documentation
+
+- **nicbarker/clay** (GitHub): Used as test target for v6.2 improvements — a unique C library that implements declarative UI layout (flexbox-like) entirely in C using preprocessor macros. The main `clay.h` header is 303KB (8000+ lines). 38 C/H files, 3 HTML files, 200 total files. This is a highly unusual codebase (UI layout in C!) that thoroughly tested the new C/C++ parser. Key findings:
+  - Before fix: 0 backend nodes, 0 edges (C files were discovered but never parsed)
+  - After fix: 1403 backend nodes, 28434 call edges
+  - Smell: 222 critical, 478 warning, 953 info — health score 10/100 (clay.h is deeply nested due to macro patterns)
+  - Complexity: 1595 functions detected, top hotspot `Clay__RenderDebugView` at CC=88
+  - Entrypoints: 14 main() functions detected across example programs
+  - Secrets: 0 findings (clean)
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

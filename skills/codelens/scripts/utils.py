@@ -246,9 +246,33 @@ def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = '
         return None
 
 
+# ─── Shared Performance Limits ───────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000    # Max files to scan in a single run
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
+
+    Used by engines (env-check, secrets, etc.) to avoid scanning
+    enormous repos for too long. Returns True when the elapsed
+    time since *start_time* exceeds *budget_sec* seconds.
+
+    Args:
+        start_time: Unix timestamp from time.time() when the scan started.
+        budget_sec: Maximum allowed duration in seconds.
+
+    Returns:
+        True if the budget has been exceeded, False otherwise.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.2.0"
 
 
 # ─── Binary Artifact Scanning ──────────────────────────────────

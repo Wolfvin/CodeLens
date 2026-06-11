@@ -39,6 +39,7 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, MAX_FILES_
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx", ".go",
 }
 
 ENV_FILE_PATTERNS = {

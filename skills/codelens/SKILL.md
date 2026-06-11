@@ -31,13 +31,21 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  v6.2 adds: Full C/C++ and Go language support — fallback parsers, outline extraction, complexity analysis, all engines now scan C/C++ and Go files. Tauri IPC edge resolver implemented. Critical import errors fixed.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, C/C++, Go, PHP, Blade.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.0
+# CodeLens v6.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.2
+
+- **C/C++ full support**: New `fallback_cpp.py` parser extracts functions, methods, structs, typedefs, preprocessor macros, and call edges from `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx` files. Outline engine supports C/C++. Complexity engine supports C/C++ including preprocessor conditionals. All 17 analysis engines now scan C/C++ files.
+- **Go full support**: New `fallback_go.py` parser extracts functions, methods, types, and call edges from `.go` files. Outline engine supports Go. Complexity engine supports Go. All analysis engines now scan Go files.
+- **Tauri IPC edge resolver**: `resolve_tauri_ipc_from_apimap()` now implemented — resolves cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers, with snake_case ↔ camelCase matching.
+- **Critical bug fixes**: Fixed 2 ImportError crashes that prevented `scan`, `handbook`, `ask`, `env-check` commands from loading. Fixed C/C++ and Go files being discovered but never parsed.
 
 ## What's New in v6.0
 
