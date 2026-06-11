@@ -8,6 +8,10 @@ Uses DFS with coloring (white/gray/black) for efficient cycle detection.
 
 Performance: Includes max_cycles limit to prevent timeout on very large
 codebases with many cycles (e.g., 65K+ nodes, 320K+ edges).
+
+v5.9 fix: Early return from DFS due to max_cycles limit no longer corrupts
+path/color state. Uses a `stopped` flag to propagate early exit and ensure
+proper unwinding of the DFS stack.
 """
 
 import os
@@ -113,18 +117,24 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
     parent = {nid: None for nid in node_by_id}
     cycles_found = []
     seen_cycles = set()
+    stopped = [False]  # Mutable flag for early exit propagation
 
-    def dfs_cycle(node_id: str, path: List[str]) -> bool:
+    def dfs_cycle(node_id: str, path: List[str]):
         color[node_id] = GRAY
         path.append(node_id)
 
         for neighbor in adj[node_id]:
-            if len(cycles_found) >= max_cycles:
-                return True  # Early exit
+            if stopped[0]:
+                break
 
             if color[neighbor] == GRAY:
                 # Found a cycle — extract it
-                cycle_start = path.index(neighbor)
+                try:
+                    cycle_start = path.index(neighbor)
+                except ValueError:
+                    # Safety: neighbor is GRAY but not in current path
+                    # (shouldn't happen with proper unwinding, but handle gracefully)
+                    continue
                 cycle_path = path[cycle_start:] + [neighbor]
 
                 # Skip self-loops (recursive calls) — these are not circular dependencies
@@ -137,17 +147,20 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
                     seen_cycles.add(cycle_key)
                     cycle_detail = _format_function_cycle(cycle_path, node_by_id)
                     cycles_found.append(cycle_detail)
+                    if len(cycles_found) >= max_cycles:
+                        stopped[0] = True
 
             elif color[neighbor] == WHITE:
                 parent[neighbor] = node_id
                 dfs_cycle(neighbor, path)
+                if stopped[0]:
+                    break
 
         path.pop()
         color[node_id] = BLACK
-        return False
 
     for nid in node_by_id:
-        if len(cycles_found) >= max_cycles:
+        if stopped[0]:
             break
         if color[nid] == WHITE:
             dfs_cycle(nid, [])
@@ -243,6 +256,7 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
     # DFS cycle detection on import graph
     cycles_found = []
     seen_cycles = set()
+    stopped = [False]  # Mutable flag for early exit propagation
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
@@ -252,11 +266,21 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
+            if stopped[0]:
+                break
+
             if neighbor not in color:
                 continue  # External module
 
             if color[neighbor] == GRAY:
-                cycle_start = path.index(neighbor)
+                try:
+                    cycle_start = path.index(neighbor)
+                except ValueError:
+                    # Safety: neighbor is GRAY but not in current path
+                    # This can happen due to state corruption from a previous
+                    # early return. Skip this edge gracefully.
+                    logger.debug(f"Circular engine: skipping GRAY node not in path: {neighbor}")
+                    continue
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -270,14 +294,18 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
                         "message": f"Circular import: {' → '.join(cycle_path)}"
                     })
                     if len(cycles_found) >= max_cycles:
-                        return
+                        stopped[0] = True
             elif color[neighbor] == WHITE:
                 dfs_import(neighbor, path)
+                if stopped[0]:
+                    break
 
         path.pop()
         color[node] = BLACK
 
     for f in import_graph:
+        if stopped[0]:
+            break
         if color.get(f, WHITE) == WHITE:
             dfs_import(f, [])
 
@@ -317,7 +345,7 @@ def _resolve_import_path(raw_import: str, from_dir: str, workspace: str) -> Opti
         return None  # Skip non-relative imports
 
     # Try with extensions
-    extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '/index.js', '/index.ts']
+    extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '/index.js', '/index.ts', '/index.tsx']
     for ext in extensions:
         full_path = os.path.join(workspace, rel_path + ext)
         if os.path.isfile(full_path):
@@ -367,6 +395,7 @@ def _detect_css_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dic
     # DFS cycle detection
     cycles_found = []
     seen_cycles = set()
+    stopped = [False]  # Mutable flag for early exit propagation
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
@@ -376,11 +405,19 @@ def _detect_css_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dic
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
+            if stopped[0]:
+                break
+
             if neighbor not in color:
                 continue
 
             if color[neighbor] == GRAY:
-                cycle_start = path.index(neighbor)
+                try:
+                    cycle_start = path.index(neighbor)
+                except ValueError:
+                    # Safety: neighbor is GRAY but not in current path
+                    logger.debug(f"Circular engine: skipping GRAY node not in path: {neighbor}")
+                    continue
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -394,14 +431,18 @@ def _detect_css_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dic
                         "message": f"Circular CSS @import: {' → '.join(cycle_path)}"
                     })
                     if len(cycles_found) >= max_cycles:
-                        return
+                        stopped[0] = True
             elif color[neighbor] == WHITE:
                 dfs_css(neighbor, path)
+                if stopped[0]:
+                    break
 
         path.pop()
         color[node] = BLACK
 
     for f in import_graph:
+        if stopped[0]:
+            break
         if color.get(f, WHITE) == WHITE:
             dfs_css(f, [])
 

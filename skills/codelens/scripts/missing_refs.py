@@ -168,28 +168,103 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
 
 
 def _is_likely_tailwind(class_name: str) -> bool:
-    """Heuristic to detect Tailwind utility classes."""
+    """Heuristic to detect Tailwind utility classes.
+
+    Covers:
+    - Standard utility prefixes (w-, h-, p-, m-, text-, bg-, etc.)
+    - Important modifier prefix (!)
+    - Negative value prefix (-)
+    - Responsive prefixes (sm:, md:, lg:, xl:, 2xl:)
+    - State variants (hover:, focus:, active:, dark:, etc.)
+    - Arbitrary value syntax ([...])
+    - Fractional values (w-1/2, w-1/3)
+    """
+    # Strip leading ! (important modifier) and - (negative value)
+    stripped = class_name.lstrip('!')
+
     tailwind_prefixes = [
+        # Layout
         'flex', 'grid', 'block', 'inline', 'hidden', 'visible',
-        'w-', 'h-', 'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
+        'table', 'flow-root', 'contents', 'list-',
+        # Spacing
+        'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
+        'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
         'pt-', 'pb-', 'pl-', 'pr-', 'px-', 'py-',
-        'text-', 'bg-', 'border-', 'rounded-', 'shadow-',
-        'gap-', 'space-', 'justify-', 'items-',
-        'font-', 'tracking-', 'leading-',
-        'opacity-', 'z-', 'overflow-',
-        'hover:', 'focus:', 'active:', 'dark:', 'sm:', 'md:', 'lg:', 'xl:', '2xl:',
-        'transition-', 'duration-', 'ease-',
-        'scale-', 'rotate-', 'translate-',
-        'ring-', 'outline-',
-        'cursor-', 'select-', 'pointer-',
+        # Typography
+        'text-', 'font-', 'tracking-', 'leading-', 'whitespace-',
+        'break-', 'truncate', 'overflow-ellipsis', 'overflow-clip',
+        'underline', 'overline', 'line-through', 'no-underline',
+        'uppercase', 'lowercase', 'capitalize', 'normal-case',
+        # Colors & backgrounds
+        'bg-', 'from-', 'via-', 'to-', 'bg-gradient-',
+        # Border
+        'border-', 'rounded-', 'ring-', 'outline-', 'divide-',
+        # Effects
+        'shadow-', 'opacity-', 'blur-', 'brightness-', 'contrast-',
+        'drop-shadow-', 'grayscale-', 'hue-rotate-', 'invert-', 'saturate-', 'sepia-',
+        # Flexbox & Grid
+        'gap-', 'space-', 'justify-', 'items-', 'self-', 'place-',
+        'flex-', 'grid-', 'order-', 'col-', 'row-',
+        # Positioning
+        'absolute', 'relative', 'fixed', 'sticky',
+        'top-', 'bottom-', 'left-', 'right-', 'inset-',
+        'z-',
+        # Overflow
+        'overflow-', 'overscroll-',
+        # Transitions & Animation
+        'transition-', 'duration-', 'ease-', 'animate-',
+        'delay-',
+        # Transform
+        'scale-', 'rotate-', 'translate-', 'skew-', 'origin-',
+        # Interactivity
+        'cursor-', 'select-', 'pointer-', 'resize-', 'appearance-',
+        'accent-',
+        # SVG
+        'fill-', 'stroke-',
+        # Accessibility
+        'sr-only', 'not-sr-only',
+        # Typography plugin (@tailwindcss/typography)
+        'prose', 'prose-',
     ]
 
     for prefix in tailwind_prefixes:
-        if class_name.startswith(prefix) or class_name == prefix.rstrip('-'):
+        if stripped.startswith(prefix) or stripped == prefix.rstrip('-'):
             return True
 
+    # Responsive/state variants: sm:, md:, lg:, xl:, 2xl:, hover:, focus:, etc.
+    variant_pattern = re.compile(
+        r'^(?:!)?'  # optional important modifier
+        r'(?:'
+        r'sm:|md:|lg:|xl:|2xl:|3xl:|4xl:'  # responsive
+        r'|hover:|focus:|active:|visited:|focus-within:|focus-visible:'
+        r'|disabled:|checked:|selected:|default:|optional:|required:'
+        r'|invalid:|valid:|in-range:|out-of-range:'
+        r'|dark:|light:|motion-safe:|motion-reduce:'
+        r'|first:|last:|odd:|even:|only:'
+        r'|group-hover:|group-focus:|group-active:|group-dark:'
+        r'|peer-hover:|peer-focus:|peer-active:|peer-dark:'
+        r')'
+    )
+    if variant_pattern.match(class_name):
+        # After stripping the variant, check if remaining is a utility
+        remaining = variant_pattern.sub('', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining)
+
+    # Arbitrary value syntax: w-[100px], bg-[#fff], etc.
+    if re.search(r'\[.+\]', stripped):
+        return True
+
+    # Negative values: -mb-4, -mt-8, etc.
+    if stripped.startswith('-') and any(stripped[1:].startswith(p) for p in ['m', 'p', 'w', 'h', 'inset', 'top', 'bottom', 'left', 'right', 'z', 'space', 'gap', 'rotate', 'translate', 'skew']):
+        return True
+
     # Pure number patterns like "w4", "h8"
-    if re.match(r'^[whmp][\d]+$', class_name):
+    if re.match(r'^[whmp][\d]+$', stripped):
+        return True
+
+    # Fractional values: w-1/2, w-1/3, h-2/3
+    if re.match(r'^[wh]\d+/\d+$', stripped):
         return True
 
     return False

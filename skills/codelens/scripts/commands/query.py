@@ -224,6 +224,22 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 })
 
         if fuzzy_matches:
+            # Sort fuzzy matches: prioritize by relevance
+            # 1. Exact case-insensitive match first
+            # 2. Then by ref_count (most referenced = most important)
+            # 3. Then alphabetically by function name
+            def fuzzy_sort_key(match):
+                fn = match.get("fn", "")
+                # Exact case-insensitive match gets highest priority
+                is_exact_ci = 0 if fn.lower() == query_lower else 1
+                # Higher ref_count = more important (sort ascending, negate for descending)
+                ref_count = match.get("ref_count", 0)
+                # Active status before dead
+                is_dead = 0 if match.get("status") != "dead" else 1
+                return (is_exact_ci, is_dead, -ref_count, fn.lower())
+
+            fuzzy_matches.sort(key=fuzzy_sort_key)
+
             # Return fuzzy matches as a list (not a single result)
             return {
                 "found": True,

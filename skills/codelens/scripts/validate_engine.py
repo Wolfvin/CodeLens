@@ -71,11 +71,13 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     # ─── Check 2: Unregistered files ───────────────────
+    # Only check source code files (not config/data files like .json, .toml, .yaml)
+    # Config files typically have no symbols to register, so reporting them as
+    # "unregistered" creates noise without value.
     source_extensions = {
         '.html', '.htm', '.css', '.scss', '.less', '.sass',
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.vue', '.svelte',
-        '.json', '.toml', '.yaml', '.yml',
     }
     ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
                    "__pycache__", ".codelens", ".next", ".cache", "vendor"}

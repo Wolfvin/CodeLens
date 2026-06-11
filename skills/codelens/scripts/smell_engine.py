@@ -749,33 +749,147 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
     return smells
 
 
+def _count_js_class_methods(lines: List[str], class_start_line: int) -> int:
+    """Count method definitions inside a JS/TS class body.
+
+    Uses brace-depth tracking to find the class body boundary and
+    only counts method definitions (not calls) within it.
+
+    Method definition patterns:
+      - foo() {           (regular method)
+      - async foo() {     (async method)
+      - get foo() {       (getter)
+      - set foo() {       (setter)
+      - static foo() {    (static method)
+      - private foo() {   (TS access modifier)
+      - foo = () => {     (arrow class field method)
+      - foo = async () => { (async arrow class field)
+    """
+    # Find the opening brace of the class
+    brace_depth = 0
+    in_class = False
+    method_count = 0
+
+    # Method definition pattern: matches method declarations at class body level
+    # This must be at the start of a line (with optional whitespace) and NOT inside
+    # a nested function/object. We track brace depth to ensure we're at class level.
+    method_def_pattern = re.compile(
+        r'^\s*'                           # start of line + whitespace
+        r'(?:'
+        r'(?:private|public|protected|static|abstract|override|readonly)\s+'  # modifiers
+        r')*'
+        r'(?:async\s+)?'                  # optional async
+        r'(?:get|set)?\s*'                # optional getter/setter
+        r'#?'                             # optional private field marker
+        r'(\w+)\s*'                       # method name
+        r'(?:<[^>]*>)?\s*'               # optional generic type params
+        r'\('                             # opening paren = method signature
+    )
+
+    # Arrow class field method pattern: foo = () => {, foo = async () => {
+    arrow_method_pattern = re.compile(
+        r'^\s*'
+        r'(?:private|public|protected|static|abstract|override|readonly)\s*'
+        r'(?:async\s+)?'
+        r'#?(\w+)\s*=\s*(?:async\s+)?\(?[^)]*\)?\s*=>'
+    )
+
+    class_depth = 0  # brace depth when we first enter the class
+
+    for i in range(class_start_line, len(lines)):
+        line = lines[i]
+
+        for ch in line:
+            if ch == '{':
+                brace_depth += 1
+                if not in_class:
+                    in_class = True
+                    class_depth = brace_depth
+            elif ch == '}':
+                if in_class and brace_depth == class_depth:
+                    # We've closed the class body
+                    return method_count
+                brace_depth -= 1
+
+        if not in_class:
+            continue
+
+        # We're inside the class body at the right depth (class_depth + 0 means class-level)
+        # Only count methods when we're at class body level (brace_depth == class_depth)
+        if brace_depth == class_depth:
+            if method_def_pattern.match(line):
+                method_name = method_def_pattern.match(line).group(1)
+                # Filter out constructor (it's not a regular method)
+                if method_name != 'constructor':
+                    method_count += 1
+            elif arrow_method_pattern.match(line):
+                method_name = arrow_method_pattern.match(line).group(1)
+                if method_name != 'constructor':
+                    method_count += 1
+
+    return method_count
+
+
 def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect god objects (classes/modules with too many methods)."""
     smells = []
 
-    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
-        class_match = re.search(r'class\s+(\w+)', content)
+    # Keywords that should NOT be treated as class names
+    JS_KEYWORDS = {"extends", "implements", "contains", "constructor", "static",
+                   "get", "set", "new", "return", "typeof", "instanceof"}
 
-        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-            })
-        elif class_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                "suggestion": "Consider extracting some methods into a separate class."
-            })
+    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+        # Find all classes in the file with their names
+        # Handle: class Foo { ... }, class Foo extends Bar { ... },
+        #         const X = class { ... }, export default class { ... }
+        class_blocks = []  # (class_name, start_line_idx)
+
+        lines = content.split('\n')
+        for i, line in enumerate(lines):
+            # Named class declaration: class Foo, class Foo extends Bar
+            m = re.match(r'^\s*(?:export\s+)?(?:default\s+)?class\s+(\w+)', line)
+            if m:
+                name = m.group(1)
+                if name not in JS_KEYWORDS:
+                    class_blocks.append((name, i))
+                continue
+
+            # Anonymous class expression: const X = class extends ... {, const X = class {
+            # Try to extract the variable name as the class name
+            m_anon = re.match(r'^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*class(?:\s+extends\s+\w+)?\s*\{', line)
+            if m_anon:
+                class_blocks.append((m_anon.group(1), i))
+                continue
+
+            # Also catch: const X = class extends ... { on same line
+            m_anon2 = re.match(r'^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*class\s+extends', line)
+            if m_anon2:
+                class_blocks.append((m_anon2.group(1), i))
+                continue
+
+        for class_name, class_start_line in class_blocks:
+            # Count method definitions INSIDE the class body only
+            # We need to find the matching closing brace
+            method_count = _count_js_class_methods(lines, class_start_line)
+
+            if method_count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "critical",
+                    "message": f"Class '{class_name}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+                })
+            elif method_count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": class_name,
+                    "method_count": method_count,
+                    "severity": "warning",
+                    "message": f"Class '{class_name}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class."
+                })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping

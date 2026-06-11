@@ -138,7 +138,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         for chain in circ_result.get("chains", [])[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
-        logger.warning("Circular dependency detection failed", exc_info=True)
+        logger.warning("Circular dependency detection failed")
     try:
         dead_result = detect_dead_code(workspace)
         dead_count = dead_result.get("stats", {}).get("total_dead", 0)

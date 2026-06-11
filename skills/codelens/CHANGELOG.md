@@ -5,6 +5,23 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
+- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
+- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
+- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
+- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
+- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
+- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
+- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
+
+### Test Target Documentation
+
+- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
+
 ## [5.8.0] — 2026-06-12
 
 ### Added
