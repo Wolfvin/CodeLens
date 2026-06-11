@@ -5,6 +5,39 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-12
+
+### Added
+
+- **`safe_read_file` utility**: Centralized file reading with size limits, encoding handling, and error recovery. Prevents crashes from missing/unreadable files. Available in `utils.py` for all engines.
+- **Multi-match query results**: `query` command now returns ALL matching definitions instead of just the first one. When multiple matches exist, returns a structured summary with `match_count` and per-match details. Single matches still return full detail with callers/callees.
+- **Per-category cap for perf-hint**: Categories exceeding 100 findings are truncated with overflow count reported in `stats.truncated_categories`. Prevents overwhelming output on large repos.
+- **File-wide negative regex scope**: `negative_scope: "file"` in perf-hint patterns checks the entire file for negative patterns (not just a 4000-char window). Used for React.memo detection to correctly identify files that wrap ANY component in memo.
+- **Config suffix filtering for state-map**: Skips variables ending with common config/constant suffixes (Config, Options, Props, Variants, Theme, Colors, Schema, Tokens, etc.) to reduce false positives.
+- **Technical term guard in ask symbol extraction**: Prevents routing keywords like "complex", "complexity", "circular" from being extracted as symbol names when ask falls through to context.
+
+### Changed
+
+- **Ask scoring formula**: Coverage bonus now only applies when 2+ keywords match from a pattern. Previously, patterns with many keywords (like the complexity pattern with 5 keywords) were penalized when only one matched, causing "show me" (weight 1) to outrank "complexity" (weight 3).
+- **Default keyword weight**: Reduced from 2 to 1 for unknown words. Technical terms should always score higher via explicit weights.
+- **Word-boundary matching for ask**: Single-word keywords now use `\b` boundary matching to prevent false positives like "established" matching "state".
+- **React.memo detection scope**: Only flags EXPORTED components (regex requires `export` prefix). Internal helper functions and non-exported components are no longer flagged.
+- **perf-hint fix suggestion**: React.memo suggestion now includes caveat that memo is not always beneficial.
+- **SOURCE_EXTENSIONS for perf-hint**: Removed `.json`, `.yaml`, `.yml` — config files should not be performance-scanned.
+- **ALL_CAPS constant skip in state-map**: Now matches single-word ALL_CAPS (e.g., `COLORS`, `THEME`, `VARIANTS`), not just underscore-separated names.
+- **Dead code status for exported/components**: Functions marked as `exported` or `component` are no longer classified as "dead" even with zero ref_count. These are consumed externally (e.g., JSX `<Component/>`).
+- **Limit parameter semantics**: `limit=0` now correctly returns all results (was inconsistent).
+
+### Fixed
+
+- **CRITICAL: `safe_read_file` ImportError crash**: `a11y_engine.py` imported `safe_read_file` from `utils.py` which didn't exist. Added the missing function to `utils.py`.
+- **Ask routing for "show me the most complex functions"**: Now correctly routes to `complexity` command instead of falling through to `context` with symbol name "most".
+- **Query returns only first match**: Querying "Button" on a large codebase with dozens of Button components now returns all matches instead of just the first one.
+- **7086 expensive_renders false positives**: Reduced by requiring `export` prefix and file-wide memo check. Typical reduction: 7086 → ~200 on shadcn/ui.
+- **408 false "global" stores in state-map**: Reduced by skipping ALL_CAPS single-word constants, React HOC wrappers (React.memo, React.forwardRef), factory functions, and config suffix patterns.
+- **Dataflow only finds first sink**: Source→sink analysis now collects ALL reachable sinks per source, not just the first one. Catches taint violations where the same user input reaches multiple sinks.
+- **Dataflow `.value` pattern too broad**: Replaced overly broad `\.value\s*` regex with DOM-specific patterns (target.value, input.value, etc.) to prevent massive false positives on any codebase using `.value` properties.
+
 ## [6.0.0] — 2026-06-12
 
 ### Added

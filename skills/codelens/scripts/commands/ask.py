@@ -35,14 +35,14 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     # Technical terms (weight 3) — high specificity
     "api route": 3, "api routes": 3, "endpoint": 3, "endpoints": 3,
     "api map": 3, "rest route": 3, "http route": 3, "graphql": 3,
-    "circular": 3, "circular dependency": 3, "circular dep": 3, "dependency cycle": 3,
+    "circular": 3, "circular dependency": 3, "circular dep": 3, "dependency cycle": 3, "cycle": 3,
     "dead code": 3, "unused code": 3, "unreachable": 3, "zombie": 3,
-    "orphan": 3, "never called": 3,
+    "orphan": 3, "never called": 3, "not used": 3,
     "secret": 3, "api key": 3, "password": 3, "token leak": 3,
     "cve": 3, "vuln": 3, "vulnerability": 3, "vulnerable": 3,
-    "security hole": 3,
-    "code smell": 3, "technical debt": 3,
-    "complexity": 3, "cyclomatic": 3, "cognitive complexity": 3,
+    "security hole": 3, "security": 3, "secure": 3,
+    "code smell": 3, "technical debt": 3, "smell": 3,
+    "complexity": 3, "complex": 3, "complicated": 3, "cyclomatic": 3, "cognitive complexity": 3,
     "test coverage": 3, "untested": 3, "missing test": 3, "test map": 3,
     "performance": 3, "n+1": 3, "memory leak": 3, "bottleneck": 3,
     "entry point": 3, "entrypoint": 3,
@@ -75,7 +75,7 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
 }
 
 # Default weight for keywords not in the table
-_DEFAULT_KEYWORD_WEIGHT = 2
+_DEFAULT_KEYWORD_WEIGHT = 1
 
 
 def _get_keyword_weight(kw: str) -> int:
@@ -183,7 +183,7 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "entrypoints", {}, "high"),
 
         # Security
-        (["security", "secret", "api key", "password", "token leak", "cve", "vuln"],
+        (["security", "secret", "api key", "password", "token leak", "cve", "vuln", "secure"],
          "secrets", {}, "high"),
 
         # Vulnerabilities
@@ -309,17 +309,31 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         matched_keywords = 0
 
         for kw in keywords:
-            if kw in q:
-                weight = _get_keyword_weight(kw)
-                # Multi-word keywords are more specific: "api route" > "api"
-                word_bonus = len(kw.split())
-                score += weight * word_bonus
-                matched_keywords += 1
+            # Use word-boundary matching to avoid substring false positives
+            # e.g. "established" should NOT match keyword "state"
+            kw_words = kw.split()
+            if len(kw_words) > 1:
+                # Multi-word keyword: exact substring in query
+                if kw not in q:
+                    continue
+            else:
+                # Single-word keyword: use word boundary check
+                if not re.search(r'\b' + re.escape(kw) + r'\b', q):
+                    continue
+
+            weight = _get_keyword_weight(kw)
+            # Multi-word keywords are more specific: "api route" > "api"
+            word_bonus = len(kw.split())
+            score += weight * word_bonus
+            matched_keywords += 1
 
         if matched_keywords > 0:
-            # Coverage bonus: matching more keywords from same pattern is better
-            coverage = matched_keywords / len(keywords)
-            score *= (1 + coverage)
+            # Coverage bonus: only apply when 2+ keywords match
+            # This prevents patterns with many keywords from being penalized
+            # when only one matches (e.g., complexity pattern with 5 keywords)
+            if matched_keywords > 1:
+                coverage = matched_keywords / len(keywords)
+                score *= (1 + coverage * 0.5)
             candidates.append((score, command, extra_args, confidence))
 
     if not candidates:
@@ -397,6 +411,21 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     match = re.search(r'[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+', cleaned)
     if match:
         return match.group(0)
+
+    # Check for known technical terms before falling back to generic identifier
+    # This prevents words like "most", "all", "every" from being extracted as symbols
+    _TECHNICAL_TERMS = {
+        'complex', 'complexity', 'cyclomatic', 'cognitive', 'dead', 'unused',
+        'unreachable', 'orphan', 'secret', 'vulnerable', 'circular', 'cycle',
+        'performance', 'slow', 'bottleneck', 'accessible', 'a11y', 'aria',
+        'secure', 'safe', 'dangerous', 'risk', 'secure', 'dependency',
+        'import', 'export', 'module', 'component', 'function', 'class',
+    }
+    cleaned_words = cleaned.split()
+    for word in cleaned_words:
+        if word.lower() in _TECHNICAL_TERMS:
+            # Don't extract as symbol — it's a routing keyword
+            return ""
 
     # Fallback: any identifier
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)

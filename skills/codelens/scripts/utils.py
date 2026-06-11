@@ -156,6 +156,37 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── File Reading Utility ──────────────────────────────────
+
+def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file's contents with error handling and size limit.
+
+    Args:
+        file_path: Absolute or relative path to the file.
+        max_size: Maximum file size in bytes to read (default 200KB).
+                  Files larger than this are skipped to avoid memory issues.
+        encoding: File encoding (default utf-8).
+
+    Returns:
+        File contents as string, or None if the file cannot be read,
+        doesn't exist, is too large, or is a binary file.
+    """
+    try:
+        if not os.path.isfile(file_path):
+            return None
+
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            logger.debug(f"Skipping large file ({file_size} bytes): {file_path}")
+            return None
+
+        with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+            return f.read()
+    except (IOError, OSError, UnicodeDecodeError):
+        logger.debug(f"Failed to read file: {file_path}", exc_info=True)
+        return None
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.8.0"

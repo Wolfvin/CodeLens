@@ -151,7 +151,12 @@ def resolve_edges(
     # Update nodes with ref_count and status
     for node in all_nodes:
         node["ref_count"] = incoming_count.get(node["id"], 0)
-        node["status"] = "dead" if node["ref_count"] == 0 else "active"
+        # v6: Exported functions and React components are NOT dead even with 0 ref_count.
+        # Entry points, exports, and components are consumed externally (e.g., JSX <Component/>).
+        if node["ref_count"] == 0 and not node.get("exported", False) and not node.get("component", False):
+            node["status"] = "dead"
+        else:
+            node["status"] = "active"
 
     # Check duplicate_define: same fn name in multiple files
     # Sort nodes within each group by (file, line) for deterministic flagging

@@ -1044,8 +1044,8 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             value_part = m.group(2).strip() if m.group(2) else ""
 
             # v6: Skip ALL_CAPS constants — they are immutable, not state.
-            # A name like MAX_FILES, FETCH_TIMEOUT_MS is a constant.
-            if var_name == var_name.upper() and '_' in var_name:
+            # A name like MAX_FILES, FETCH_TIMEOUT_MS, COLORS, THEME, VARIANTS is a constant.
+            if var_name == var_name.upper() and len(var_name) > 2:
                 continue
 
             # Skip common non-state constants
@@ -1064,8 +1064,25 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             # Skip forwardRef, memo, styled, createStyled, etc.
             if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
                 continue
+            # Skip React.memo and React.forwardRef
+            if re.match(r'^React\.(forwardRef|memo)\s*\(', value_part):
+                continue
             # Skip JSX components: "const X = <SomeComponent"
             if value_part.startswith('<'):
+                continue
+            # Skip factory functions that return components: "const X = createX(...)"
+            if re.match(r'^[A-Z]\w+\s*\(', value_part) and '=>' not in value_part:
+                continue
+
+            # v7: Skip known config/constant suffixes — these are immutable design tokens,
+            # not mutable state. Examples: ThemeConfig, ButtonVariants, ColorMapping, etc.
+            _CONFIG_SUFFIXES = (
+                'Config', 'Options', 'Props', 'Defaults', 'Mapping', 'Registry',
+                'Theme', 'Colors', 'Variants', 'Schema', 'Meta', 'Presets',
+                'Constants', 'Definitions', 'Mappings', 'Settings', 'Params',
+                'Tokens', 'Breakpoints', 'Spacings', 'Typography', 'Palette',
+            )
+            if any(var_name.endswith(s) for s in _CONFIG_SUFFIXES):
                 continue
 
             # v6: Skip class instantiations of known non-state patterns

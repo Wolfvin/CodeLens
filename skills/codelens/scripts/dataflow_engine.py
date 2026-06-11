@@ -48,7 +48,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"\.value\s*",
+            r"(?:target|currentTarget|element|input|select|textarea|e\.target)\.value",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -467,7 +467,9 @@ def _build_flows(
         for src in file_sources:
             reached_sink = None
 
-            # Find the nearest sink after this source in the same file
+            # Find sinks after this source in the same file
+            # v6: Collect ALL sinks, not just the first one.
+            # A source can flow to multiple sinks (e.g., user input → DB query AND → HTML output)
             for snk in file_sinks:
                 if snk["line"] > src["line"]:
                     # Check if there's a data flow path
@@ -484,7 +486,6 @@ def _build_flows(
                             "reaches_sink": True,
                             "flow_type": "intra_file"
                         })
-                        break
 
             if not reached_sink:
                 # Check cross-file flows
