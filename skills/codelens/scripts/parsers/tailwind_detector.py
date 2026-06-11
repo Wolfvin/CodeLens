@@ -204,12 +204,12 @@ def _find_custom_utilities(workspace: str) -> List[Dict]:
     utilities = []
 
     for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+        # Use path-segment-aware check to avoid false positives
+        # (e.g., workspace named "test-dist" shouldn't match "dist")
+        rel_root = os.path.relpath(root, workspace)
+        from utils import should_ignore_dir
+        if should_ignore_dir(rel_root):
+            dirs.clear()
             continue
 
         for f in files:

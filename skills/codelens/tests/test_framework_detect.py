@@ -193,3 +193,65 @@ class TestFrameworkDetect:
             assert result["module_system"] == "cjs"
         finally:
             shutil.rmtree(ws, ignore_errors=True)
+
+    def test_detect_tauri_by_config_file(self):
+        """Tauri can be detected by src-tauri/tauri.conf.json."""
+        ws = tempfile.mkdtemp()
+        src_tauri = os.path.join(ws, "src-tauri")
+        os.makedirs(src_tauri)
+        with open(os.path.join(src_tauri, "tauri.conf.json"), 'w') as f:
+            json.dump({"build": {"devPath": "http://localhost:1420"}}, f)
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0"}}, f)
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_tauri"] is True
+            assert any("tauri" in fw.lower() for fw in result["frameworks"])
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_detect_tauri_by_cargo_dependency(self):
+        """Tauri can be detected by tauri crate in Cargo.toml."""
+        ws = tempfile.mkdtemp()
+        src_tauri = os.path.join(ws, "src-tauri")
+        os.makedirs(src_tauri)
+        with open(os.path.join(src_tauri, "Cargo.toml"), 'w') as f:
+            f.write('[package]\nname = "my-tauri-app"\nversion = "0.1.0"\n\n[dependencies]\ntauri = "2.0"\n')
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_tauri"] is True
+            assert result["has_rust_backend"] is True
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_tauri_recommended_config_paths(self):
+        """Tauri projects should have src/ as frontend and src-tauri/src/ as backend."""
+        ws = tempfile.mkdtemp()
+        src_tauri = os.path.join(ws, "src-tauri")
+        os.makedirs(src_tauri)
+        with open(os.path.join(src_tauri, "tauri.conf.json"), 'w') as f:
+            json.dump({"build": {}}, f)
+        with open(os.path.join(ws, "package.json"), 'w') as f:
+            json.dump({"dependencies": {"react": "^18.0.0"}}, f)
+        try:
+            config = get_recommended_config(ws)
+            # src/ should be in frontend_paths for Tauri
+            assert any("src/" in p for p in config["frontend_paths"])
+            # src-tauri/src/ should be in backend_paths
+            assert any("src-tauri/src/" in p for p in config["backend_paths"])
+            # src/ should NOT be in backend_paths for Tauri
+            assert "src/" not in config["backend_paths"]
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_cargo_dependency_scanning(self):
+        """Cargo.toml dependencies should be scanned for framework detection."""
+        ws = tempfile.mkdtemp()
+        with open(os.path.join(ws, "Cargo.toml"), 'w') as f:
+            f.write('[package]\nname = "my-app"\nversion = "0.1.0"\n\n[dependencies]\naxum = "0.7"\ntokio = "1"\n')
+        try:
+            result = detect_frameworks(ws)
+            assert result["has_rust_backend"] is True
+            assert any("axum" in fw.lower() for fw in result["frameworks"])
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)

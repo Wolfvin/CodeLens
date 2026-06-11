@@ -518,28 +518,18 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
-        # Always use relative paths for should_ignore to avoid false
-        # positives from workspace directory names containing ignore
-        # keywords (e.g., 'my-target' matching the 'target' rule)
+        
+        # Use only relative path for ignore checking to avoid false positives
+        # when the workspace directory name contains an ignore pattern substring
+        # (e.g., workspace named "test-target" would falsely match "target/")
         if should_ignore(rel_root, config):
             dirs.clear()
             continue
 
-        # Don't descend into .codelens or other hidden/system dirs
-        skip_dirs = []
-        for d in dirs:
-            d_rel = os.path.join(rel_root, d) if rel_root != '.' else d
-            if should_ignore(d_rel, config):
-                skip_dirs.append(d)
-        for d in skip_dirs:
-            dirs.remove(d)
-        
-        if '.codelens' in root or '.codelens' in dirs:
-            if '.codelens' in dirs:
-                dirs.remove('.codelens')
-            if '.codelens' in root:
-                dirs.clear()
-                continue
+        # Don't descend into .codelens
+        if '.codelens' in root:
+            dirs.clear()
+            continue
 
         for filename in filenames:
             file_path = os.path.join(root, filename)
@@ -606,31 +596,45 @@ def is_backend_file(file_path: str, config: Dict) -> bool:
 
 
 def should_ignore(file_path: str, config: Dict) -> bool:
-    """Check if a file or directory should be ignored.
+    """Check if a file should be ignored.
     
-    Uses path-segment matching instead of naive substring matching.
-    This prevents false positives like 'target/' matching
-    '/home/user/my-target/project/src/' (the word 'target' in the
-    parent directory name should NOT trigger the ignore rule).
+    Uses path-segment-aware matching to avoid false positives.
+    For example, pattern "target/" matches "project/target/" but NOT
+    "project/test-target/" because "target" must be a complete path segment.
     
-    A pattern like 'node_modules/' matches if any path segment
-    starts with 'node_modules'. This works for both relative and
-    absolute paths.
+    The pattern is expected to have a trailing slash (e.g., "node_modules/").
+    Matching checks if any path segment starts with the pattern prefix.
     """
     # Normalize to forward slashes for consistent matching
     normalized = file_path.replace('\\', '/')
     
     for pattern in config.get("ignore", []):
-        # Strip trailing slash from pattern for segment matching
-        clean_pattern = pattern.rstrip('/')
-        if not clean_pattern:
-            continue
-            
-        # Split the path into segments and check each one
-        segments = normalized.split('/')
-        for segment in segments:
-            if segment == clean_pattern:
-                return True
+        # Normalize pattern too
+        pat = pattern.replace('\\', '/')
+        
+        # Strip trailing slash for segment matching
+        pat_prefix = pat.rstrip('/')
+        
+        # Check if the pattern appears as a path segment
+        # A segment is preceded by '/' or is at the start of the path
+        # Pattern "target" should match "/target/" or start with "target/"
+        # but NOT "/test-target/" or "/my_target/"
+        
+        # Check 1: pattern is at the start of the path (e.g., "node_modules/pkg/")
+        if normalized.startswith(pat_prefix + '/'):
+            return True
+        
+        # Check 2: pattern appears as a full segment (preceded by '/')
+        if '/' + pat_prefix + '/' in normalized:
+            return True
+        
+        # Check 3: pattern matches the entire last segment (e.g., path ends with "/.git")
+        if normalized.endswith('/' + pat_prefix):
+            return True
+        
+        # Check 4: exact match
+        if normalized == pat_prefix:
+            return True
     
     return False
 
