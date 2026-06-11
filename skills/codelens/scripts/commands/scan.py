@@ -37,6 +37,8 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--full", action="store_true",
+                        help="Force full rescan (ignore incremental state)")
 
 
 def execute(args, workspace):
@@ -92,6 +94,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 "message": "No changes detected. Registry is up to date.",
                 "files_scanned": {k: 0 for k in files},
                 "incremental": True,
+                "changed_files_count": 0,
                 "backend": {
                     "nodes": len(be_nodes) if isinstance(be_nodes, list) else be_nodes,
                     "edges": len(be_edges) if isinstance(be_edges, list) else be_edges

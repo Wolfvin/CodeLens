@@ -200,7 +200,7 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     # JS/TS imports
-    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue'}
+    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte'}
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         if '.codelens' in root:
@@ -242,7 +242,7 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
 # ─── Import Parsers ──────────────────────────────────────
 
 def _parse_js_imports(file_path: str, rel_path: str, workspace: str) -> List[str]:
-    """Parse JS/TS import statements. Also handles Vue SFC <script> sections."""
+    """Parse JS/TS import statements. Also handles Vue SFC and Svelte <script> sections."""
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
@@ -257,6 +257,13 @@ def _parse_js_imports(file_path: str, rel_path: str, workspace: str) -> List[str
             content = script_match.group(1)
         else:
             return []  # No script section in Vue SFC
+    elif ext == '.svelte':
+        # Svelte: extract <script> section
+        script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+        if script_match:
+            content = script_match.group(1)
+        else:
+            return []  # No script section in Svelte component
 
     imports = []
     file_dir = os.path.dirname(rel_path)
@@ -283,7 +290,13 @@ def _parse_js_imports(file_path: str, rel_path: str, workspace: str) -> List[str
 
 
 def _parse_rust_imports(file_path: str, rel_path: str, workspace: str) -> List[str]:
-    """Parse Rust use/mod declarations."""
+    """Parse Rust use/mod declarations.
+
+    Handles:
+    - mod declarations (reference other Rust files/modules)
+    - use declarations with crate:: prefix (resolve to local files when possible)
+    - use declarations with super:: prefix (resolve to parent module)
+    """
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
@@ -302,6 +315,27 @@ def _parse_rust_imports(file_path: str, rel_path: str, workspace: str) -> List[s
             if os.path.exists(mod_path):
                 imports.append(os.path.relpath(mod_path, workspace))
                 break
+
+    # use declarations with super:: (resolve to parent module)
+    for m in re.finditer(r'use\s+super::(\w+)', content):
+        mod_name = m.group(1)
+        parent_dir = os.path.dirname(file_dir)
+        for ext in ['.rs', '/mod.rs']:
+            mod_path = os.path.join(workspace, parent_dir, mod_name + ext)
+            if os.path.exists(mod_path):
+                imports.append(os.path.relpath(mod_path, workspace))
+                break
+
+    # use declarations with crate:: prefix (resolve relative to crate root)
+    for m in re.finditer(r'use\s+crate::([\w:]+)', content):
+        crate_path = m.group(1).replace('::', '/')
+        # Try resolving from src/ root (most common Rust layout)
+        for src_dir in ['src/', '']:
+            for ext in ['.rs', '/mod.rs']:
+                mod_path = os.path.join(workspace, src_dir, crate_path + ext)
+                if os.path.exists(mod_path):
+                    imports.append(os.path.relpath(mod_path, workspace))
+                    break
 
     return imports
 
@@ -380,7 +414,8 @@ def _resolve_relative_import(
 
     if extensions is None:
         extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
-                      '/index.js', '/index.ts', '/index.tsx', '/index.vue']
+                      '.svelte', '/index.js', '/index.ts', '/index.tsx', '/index.vue',
+                      '/index.svelte']
 
     rel_path = os.path.normpath(os.path.join(from_dir, raw_import))
 
@@ -412,7 +447,8 @@ def _resolve_path_alias(raw_import: str, workspace: str) -> Optional[str]:
         alias_bases.append(('app/src/', raw_import[2:]))
 
     extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
-                  '/index.js', '/index.ts', '/index.tsx', '/index.vue']
+                  '.svelte', '/index.js', '/index.ts', '/index.tsx', '/index.vue',
+                  '/index.svelte']
 
     for base_dir, rel_path in alias_bases:
         for ext in extensions:

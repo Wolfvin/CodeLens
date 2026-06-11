@@ -213,7 +213,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
         "workspace": workspace,
         "total_issues": total_issues,
         "issues": issues,
-        "summary": {
+        "stats": {
             "missing_files": len(issues["missing_files"]),
             "unregistered_files": len(issues["unregistered_files"]),
             "stale_references": len(issues["stale_references"]),
