@@ -159,34 +159,3 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.7.1"
-
-
-# ─── Safe File I/O ──────────────────────────────────────────
-
-def safe_read_file(path: str, encoding: str = 'utf-8') -> str:
-    """Read a file safely, returning content or empty string on error.
-
-    Used by a11y_engine and other modules to read template / source files
-    without crashing on encoding issues or missing files.
-    """
-    try:
-        with open(path, 'r', encoding=encoding, errors='replace') as f:
-            return f.read()
-    except (IOError, OSError, UnicodeDecodeError):
-        return ""
-
-
-# ─── Directory Ignore Helper ───────────────────────────────
-
-def should_ignore_dir(rel_path: str) -> bool:
-    """Check if a directory path should be ignored based on DEFAULT_IGNORE_DIRS.
-
-    Performs a path-segment-aware check so that e.g. "test-dist" does NOT
-    match "dist".  Each segment of the relative path is compared against
-    the set of ignored directory names.
-    """
-    if not rel_path or rel_path == '.':
-        return False
-    # Split on OS separator AND forward-slash (for cross-platform safety)
-    segments = rel_path.replace('\\', '/').split('/')
-    return any(seg in DEFAULT_IGNORE_DIRS for seg in segments)

@@ -267,7 +267,8 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
 
         # Detect / tech stack
         (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
-          "what technologies", "stack"],
+          "what technologies", "stack", "tauri", "electron", "what kind of app",
+          "what type of project", "is this a", "is this an"],
          "detect", {}, "high"),
 
         # Env configuration
@@ -388,19 +389,40 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
         return match.group(1).strip()
 
     # Look for identifier-like patterns
+    # Stop words that should NOT be treated as symbol names
+    _stop_words = {
+        'is', 'are', 'was', 'were', 'am', 'be', 'been', 'being',
+        'this', 'that', 'these', 'those', 'it', 'its',
+        'a', 'an', 'the', 'my', 'your', 'our', 'their',
+        'do', 'does', 'did', 'done', 'have', 'has', 'had',
+        'will', 'would', 'could', 'should', 'can', 'may', 'might',
+        'if', 'or', 'and', 'but', 'not', 'no', 'yes',
+        'how', 'what', 'when', 'where', 'who', 'why', 'which',
+        'about', 'with', 'from', 'into', 'for', 'to', 'of', 'in', 'on', 'at',
+        'app', 'project', 'code', 'file', 'codebase', 'program',
+        'good', 'bad', 'clean', 'dirty', 'safe', 'ready',
+    }
+    if cleaned.lower() in _stop_words:
+        return ""
+
     match = re.search(r'[a-z][a-zA-Z0-9]*_[a-zA-Z0-9_]+', cleaned)
     if match:
         return match.group(0)
     match = re.search(r'[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*', cleaned)
     if match:
-        return match.group(0)
+        result = match.group(0)
+        if result.lower() not in _stop_words:
+            return result
     match = re.search(r'[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+', cleaned)
     if match:
         return match.group(0)
 
-    # Fallback: any identifier
+    # Fallback: any identifier — but skip stop words
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
     if match:
+        result = match.group(0)
+        if result.lower() not in _stop_words:
+            return result
         return match.group(0)
 
     return cleaned if cleaned else ""

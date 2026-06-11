@@ -439,11 +439,24 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
+        # Skip config files consumed by tools at runtime (not imported by app code)
+        # e.g., postcss.config.mjs, tailwind.config.ts, next.config.mjs, vite.config.ts
+        if any(x in file_path for x in ['.config.mjs', '.config.js', '.config.ts', '.config.cjs',
+                                          'jest.config', 'wdio.conf', 'playwright.config',
+                                          'vitest.config', 'webpack.config', 'rollup.config',
+                                          'tsconfig.json', 'biome.json']):
+            continue
+
+        # Skip middleware files — they're consumed by the framework, not imported
+        if 'middleware' in file_path.lower():
+            continue
+
         for export in exports:
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
+            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup',
+                        'config', 'middleware', 'withPWA', 'defineConfig', 'defineCloudflareConfig'}:
                 continue
 
             if name not in all_imported_names:

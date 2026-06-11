@@ -1047,7 +1047,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         stripped = line.strip()
 
         # Module-level const/let/var with initial values (potential globals)
-        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
+        # Only match if the line is NOT indented (module-level, not inside a function/class)
+        if not line[0].isspace() if line else True:
+            m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
+        else:
+            m = None
         if m:
             var_name = m.group(1)
             value_part = m.group(2).strip() if m.group(2) else ""
@@ -1067,14 +1071,30 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             # "const X = memo(...)", "const X = styled.div(...)", etc.
             if value_part.startswith('((') or value_part.startswith('()') or value_part.startswith('function'):
                 continue
+            # Arrow functions with destructured props: "const X = ({ prop1, prop2 })" or
+            # "const X = ({ prop1 }: Props)" — React component pattern.
+            # Even without '=>' on the same line, ({...}) is destructured props.
+            if value_part.startswith('({'):
+                continue
             # Arrow functions with optional type annotation: "value =>", "() =>", "<T>(...) =>"
             if '=>' in value_part and not value_part.startswith('{'):
                 continue
             # Skip forwardRef, memo, styled, createStyled, etc.
-            if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
+            # Handle generic type params: forwardRef<T>(...), memo<T>(...)
+            if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\b', value_part):
                 continue
             # Skip JSX components: "const X = <SomeComponent"
             if value_part.startswith('<'):
+                continue
+            # Skip known UI component library patterns (Radix, Headless UI, etc.)
+            # e.g., "const DropdownMenu = Root" or "const X = SomeLibrary.X"
+            if re.match(r'^[A-Z]\w*\.\w+', value_part):
+                continue
+            # Skip re-exports from UI libraries: "const X = Primitive"
+            # where Primitive is a PascalCase import (likely a component)
+            if re.match(r'^[A-Z]\w*$', value_part) and var_name[0].isupper() and '_' not in var_name:
+                # Heuristic: if both the variable name and value are PascalCase single words,
+                # this is likely a component alias, not state.
                 continue
 
             # Skip Svelte store creators — they are detected by _detect_svelte_stores()

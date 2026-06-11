@@ -365,6 +365,21 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     # v6: Combined type detection — handle polyglot projects
     active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
 
+    # Check for Tauri desktop app pattern
+    has_tauri = False
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        if 'src-tauri' in dirs or any(f in files for f in ('tauri.conf.json', 'Tauri.toml')):
+            has_tauri = True
+            break
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
@@ -374,12 +389,17 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        if has_tauri:
+            type_parts.append("tauri")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
         # v6: If monorepo indicators found, append -monorepo suffix
         if identity["is_monorepo"]:
             identity["type"] = active_types[0] + "-monorepo"
+        # Tauri app: even single-type projects get tauri label
+        if has_tauri:
+            identity["type"] = "tauri-" + identity["type"]
     # If no type detected, remains "unknown"
 
     # v6: When frameworks are found in subdirectory package.json files,

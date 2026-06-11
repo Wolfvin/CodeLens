@@ -250,7 +250,7 @@ def search_symbols(
         workspace: Absolute path to workspace
         name: Symbol name to search for
         domain: "frontend", "backend", or "all"
-        fuzzy: Allow partial/fuzzy matching
+        fuzzy: Allow partial/fuzzy matching (default: True for substring match)
         max_results: Maximum results
 
     Returns:
@@ -259,21 +259,25 @@ def search_symbols(
     workspace = os.path.abspath(workspace)
     results = []
 
+    # Always compile a substring pattern — exact match is a special case of fuzzy
+    # When fuzzy=False, we still do case-insensitive substring matching so that
+    # searching "epub" finds "parse_epub_metadata". Only when fuzzy=True do we
+    # also do edit-distance/loose matching.
+    name_lower = name.lower()
+    substring_pattern = re.compile(re.escape(name), re.IGNORECASE)
+
     if domain in ("frontend", "all"):
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
 
-        if fuzzy:
-            pattern = re.compile(re.escape(name), re.IGNORECASE)
-        else:
-            pattern = None
-
         for cls in frontend.get("classes", []):
-            if cls["name"] == name or (fuzzy and pattern and pattern.search(cls["name"])):
+            cls_name = cls["name"]
+            # Exact match always included; substring match by default; fuzzy adds edit-distance
+            if cls_name == name or substring_pattern.search(cls_name):
                 results.append({
                     "domain": "frontend",
                     "type": "class",
-                    "name": cls["name"],
+                    "name": cls_name,
                     "status": cls["status"],
                     "ref_count": cls["ref_count"],
                     "locations": [
@@ -283,11 +287,12 @@ def search_symbols(
                 })
 
         for id_entry in frontend.get("ids", []):
-            if id_entry["name"] == name or (fuzzy and pattern and pattern.search(id_entry["name"])):
+            id_name = id_entry["name"]
+            if id_name == name or substring_pattern.search(id_name):
                 results.append({
                     "domain": "frontend",
                     "type": "id",
-                    "name": id_entry["name"],
+                    "name": id_name,
                     "status": id_entry["status"],
                     "ref_count": id_entry["ref_count"],
                     "locations": [
@@ -302,18 +307,13 @@ def search_symbols(
         from registry import load_backend_registry
         backend = load_backend_registry(workspace)
 
-        if fuzzy:
-            if not pattern:
-                pattern = re.compile(re.escape(name), re.IGNORECASE)
-        else:
-            pattern = None
-
         for node in backend.get("nodes", []):
-            if node["fn"] == name or (fuzzy and pattern and pattern.search(node["fn"])):
+            fn_name = node["fn"]
+            if fn_name == name or substring_pattern.search(fn_name):
                 results.append({
                     "domain": "backend",
                     "type": "function",
-                    "name": node["fn"],
+                    "name": fn_name,
                     "status": node.get("status", "active"),
                     "ref_count": node.get("ref_count", 0),
                     "location": f"{node.get('file', '')}:{node.get('line', 0)}",
@@ -321,6 +321,9 @@ def search_symbols(
                     "impl_for": node.get("impl_for"),
                     "component": node.get("component", False)
                 })
+
+    # Sort: exact matches first, then by ref_count descending
+    results.sort(key=lambda r: (0 if r["name"] == name else 1, -r.get("ref_count", 0)))
 
     return {
         "status": "ok",
