@@ -31,6 +31,11 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
+    # Monorepo / CI / docs directories that rarely contain source code
+    '.changeset', '.github', '.circleci', '.gitlab',
+    'docs', 'doc', 'scratchpad', 'patches',
+    'out', '.output', '.serverless', '.terraform',
+    '.turbo', '.vercel', '.netlify',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({

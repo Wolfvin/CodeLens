@@ -518,14 +518,28 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
-        if should_ignore(rel_root + "/", config) or should_ignore(root, config):
+        # Always use relative paths for should_ignore to avoid false
+        # positives from workspace directory names containing ignore
+        # keywords (e.g., 'my-target' matching the 'target' rule)
+        if should_ignore(rel_root, config):
             dirs.clear()
             continue
 
-        # Don't descend into .codelens
-        if '.codelens' in root:
-            dirs.clear()
-            continue
+        # Don't descend into .codelens or other hidden/system dirs
+        skip_dirs = []
+        for d in dirs:
+            d_rel = os.path.join(rel_root, d) if rel_root != '.' else d
+            if should_ignore(d_rel, config):
+                skip_dirs.append(d)
+        for d in skip_dirs:
+            dirs.remove(d)
+        
+        if '.codelens' in root or '.codelens' in dirs:
+            if '.codelens' in dirs:
+                dirs.remove('.codelens')
+            if '.codelens' in root:
+                dirs.clear()
+                continue
 
         for filename in filenames:
             file_path = os.path.join(root, filename)
@@ -592,10 +606,32 @@ def is_backend_file(file_path: str, config: Dict) -> bool:
 
 
 def should_ignore(file_path: str, config: Dict) -> bool:
-    """Check if a file should be ignored."""
+    """Check if a file or directory should be ignored.
+    
+    Uses path-segment matching instead of naive substring matching.
+    This prevents false positives like 'target/' matching
+    '/home/user/my-target/project/src/' (the word 'target' in the
+    parent directory name should NOT trigger the ignore rule).
+    
+    A pattern like 'node_modules/' matches if any path segment
+    starts with 'node_modules'. This works for both relative and
+    absolute paths.
+    """
+    # Normalize to forward slashes for consistent matching
+    normalized = file_path.replace('\\', '/')
+    
     for pattern in config.get("ignore", []):
-        if pattern in file_path:
-            return True
+        # Strip trailing slash from pattern for segment matching
+        clean_pattern = pattern.rstrip('/')
+        if not clean_pattern:
+            continue
+            
+        # Split the path into segments and check each one
+        segments = normalized.split('/')
+        for segment in segments:
+            if segment == clean_pattern:
+                return True
+    
     return False
 
 
