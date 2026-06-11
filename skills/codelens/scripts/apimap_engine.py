@@ -203,6 +203,13 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── NestJS ───────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                nestjs_routes = _extract_nestjs_routes(content, rel_path)
+                if nestjs_routes:
+                    frameworks_detected.add("nestjs")
+                    routes.extend(nestjs_routes)
+
             # ─── Tauri IPC Commands ────────────────────────────
             elif ext == ".rs":
                 tauri_routes = _extract_tauri_commands(content, rel_path)
@@ -2025,3 +2032,103 @@ def _snake_to_camel(name: str) -> str:
     """
     parts = name.split('_')
     return parts[0] + ''.join(word.capitalize() for word in parts[1:])
+
+
+# ─── NestJS Route Extraction ──────────────────────────────────
+
+def _extract_nestjs_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract routes from NestJS controller files.
+
+    NestJS uses decorators to define routes:
+    - @Controller('path') — class-level route prefix
+    - @Get('path'), @Post('path'), @Put('path'), @Delete('path'), @Patch('path')
+    - @Query('param'), @Param('param'), @Body() — parameter decorators
+
+    This extractor properly distinguishes NestJS route decorators from
+    TypeGraphQL @Query/@Mutation decorators by checking for @Controller.
+    """
+    routes = []
+
+    # Quick check: only process files that have NestJS indicators
+    if not re.search(r'@Controller\b', content) and not re.search(r'@Get\b|@Post\b|@Put\b|@Delete\b|@Patch\b', content):
+        return routes
+
+    # Must have NestJS imports to be a real controller
+    has_nestjs = bool(re.search(
+        r"import\s+.*from\s+['\"]@nestjs/(common|core|platform)['\"]", content
+    ))
+    # Also accept files that use @Controller decorator (strong signal)
+    has_controller = bool(re.search(r'@Controller\s*[\(]', content))
+
+    if not has_nestjs and not has_controller:
+        return routes
+
+    # Step 1: Find the class-level @Controller prefix
+    controller_prefix = ""
+    for m in re.finditer(r'@Controller\s*\(\s*[\'"`]([^\'"`]*)[\'"`]\s*\)', content):
+        controller_prefix = "/" + m.group(1).strip("/") if m.group(1) else ""
+        break  # Use first @Controller found
+
+    # Also try: @Controller({ path: 'prefix' })
+    if not controller_prefix:
+        for m in re.finditer(r'@Controller\s*\(\s*\{\s*path\s*:\s*[\'"`]([^\'"`]*)[\'"`]', content):
+            controller_prefix = "/" + m.group(1).strip("/") if m.group(1) else ""
+            break
+
+    # Step 2: Find method-level decorators
+    # Pattern: @Get('path'), @Post('path'), etc.
+    http_method_decorators = {
+        'Get': 'GET',
+        'Post': 'POST',
+        'Put': 'PUT',
+        'Delete': 'DELETE',
+        'Patch': 'PATCH',
+        'Options': 'OPTIONS',
+        'Head': 'HEAD',
+        'All': 'ALL',
+    }
+
+    for decorator_name, http_method in http_method_decorators.items():
+        # Match @Get('path') or @Get('path/:id') or @Get() (empty = root)
+        for m in re.finditer(
+            rf'@{decorator_name}\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
+            content
+        ):
+            method_path = m.group(1) or ""
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Find the handler method name (next function after decorator)
+            handler_name = _find_nestjs_handler(content, m.end())
+
+            # Build full path
+            full_path = _normalize_path(controller_prefix + "/" + method_path) if method_path else _normalize_path(controller_prefix or "/")
+
+            routes.append({
+                "method": http_method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nestjs",
+            })
+
+    return routes
+
+
+def _find_nestjs_handler(content: str, pos: int) -> str:
+    """Find the method handler name after a NestJS route decorator.
+
+    Looks for: async methodName(...) or methodName(...)
+    """
+    # Search in the next 200 chars for the method definition
+    window = content[pos:pos + 200]
+
+    # async handler(params) or handler(params)
+    m = re.search(r'(?:async\s+)?(\w+)\s*\(', window)
+    if m and m.group(1) not in ('constructor', 'ngOnInit', 'ngOnDestroy'):
+        return m.group(1)
+
+    return "anonymous"
