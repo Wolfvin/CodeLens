@@ -5,6 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.0] — 2026-06-11
+
+### Fixed
+
+- **CRITICAL: Version mismatch in pyproject.toml**: Version was 5.1.0 while utils.py and skill.json said 5.7.0. Now aligned to 5.7.0.
+- **CRITICAL: Broken test imports**: 5 test files (`test_css_parser`, `test_html_parser`, `test_js_backend_parser`, `test_js_frontend_parser`, `test_rust_parser`) imported fallback parsers from the old monolithic `codelens.py` which no longer exports them. Updated to import from `parsers.fallback_*` modules.
+- **CRITICAL: Broken pip entry point**: Removed `codelens = "codelens:main"` from `pyproject.toml` — the scripts/ directory uses `sys.path`-based imports, not a proper Python package. Added a comment explaining what's needed to make it installable.
+- **CRITICAL: Non-standard build backend**: Changed `setuptools.backends._legacy:_Backend` to the standard `setuptools.build_meta`.
+- **HIGH: Frontend deletion cleanup was a no-op**: When files were deleted during incremental scan, frontend class/ID entries were never cleaned because they don't have a `"defined_in"` key. Now properly filters by `"path"` in the `css`/`js`/`defined_in_html` ref lists and recomputes status.
+- **HIGH: CSS parser `::` triggered SCSS fallback on standard CSS**: The `::` pattern in the SCSS/Less detection heuristic matched standard CSS3 pseudo-elements (`::before`, `::after`, `::placeholder`), causing duplicate class/id references. Removed `::` from the detection list.
+- **HIGH: Class collision detection was broken**: HTML class definitions were mapped to the `"css"` category instead of `"html"`, so classes lost their HTML definition info. Now classes get a `"defined_in_html"` field (like IDs), enabling proper collision detection when the same class appears in multiple HTML elements.
+- **HIGH: GrammarLoader was not thread-safe**: The singleton `__new__` method and dict mutations lacked locks, risking double-instantiation and data races in the watch command's threads. Added `threading.Lock` to `__new__` and a `dict_lock` for `get_language`/`get_parser`.
+- **HIGH: Watch command race condition lost file changes**: Changes arriving during a rescan were lost because the debounce timer wasn't running. After scan completes, the code now checks `_changed_files` under lock and schedules another rescan if non-empty.
+- **HIGH: Dead code in incremental edge processing**: `if not is_resolved and from_is_changed` in `incremental.py` was unreachable because `from_is_changed` was always False at that point (the True branch already `continue`s). Removed the dead code block.
+- **MEDIUM: O(n²) BFS in impact_engine**: `queue.pop(0)` on a list is O(n), making BFS O(n²) for large call graphs. Replaced with `collections.deque` and `popleft()` for O(1).
+- **MEDIUM: O(n) path.index() per back-edge in circular_engine**: Called on every cycle detection across 3 DFS functions. Added `path_index` dict for O(1) lookup.
+- **MEDIUM: Search engine recompiled regex per file**: `include_pattern` and `exclude_pattern` were compiled inside the per-file loop. Now compiled once before `os.walk`.
+- **MEDIUM: Dead-code command used wrong field name**: `result.get("dead_items", result.get("items", []))` didn't match the actual output key `"results"` from `deadcode_engine`. Now correctly iterates over all category lists in `results`.
+- **MEDIUM: state-map markdown formatter crashed on string actions**: The `actions` list in statemap results could contain strings, but the formatter called `.get()` on them. Now handles both dicts and strings.
+- **Command count updated**: pyproject.toml description now says "41 commands" (was "39").
+
 ## [5.7.0] — 2026-06-11
 
 ### Added

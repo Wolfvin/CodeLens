@@ -18,14 +18,18 @@ def execute(args, workspace):
     )
     # Add removal safety assessment
     if result.get("status") == "ok":
-        total_dead = result.get("stats", {}).get("total_dead", 0)
+        total_dead = result.get("stats", {}).get("total_dead_code", 0)
         if total_dead == 0:
             result["removal_safety"] = "n/a"
             result["dependency_count"] = 0
         else:
             # Count items with references (riskier to remove)
-            items = result.get("dead_items", result.get("items", []))
-            with_refs = sum(1 for item in items if item.get("ref_count", 0) > 0)
+            # deadcode_engine returns results under the "results" key, categorized by type
+            all_items = []
+            for category_items in result.get("results", {}).values():
+                if isinstance(category_items, list):
+                    all_items.extend(category_items)
+            with_refs = sum(1 for item in all_items if item.get("ref_count", 0) > 0)
             if with_refs == 0:
                 result["removal_safety"] = "safe"
             elif with_refs < total_dead * 0.3:

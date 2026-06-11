@@ -19,8 +19,8 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser from codelens.py
-from codelens import _fallback_js_frontend_parse
+# Import fallback regex parser
+from parsers.fallback_js_frontend import parse_js_frontend_fallback as _fallback_js_frontend_parse
 
 
 def _parse(content, path="app.js"):

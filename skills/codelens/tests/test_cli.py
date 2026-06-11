@@ -11,7 +11,10 @@ import pytest
 SCRIPT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
 sys.path.insert(0, SCRIPT_DIR)
 
-from codelens import cmd_scan, cmd_query, cmd_list, cmd_init
+from commands.scan import cmd_scan
+from commands.query import cmd_query
+from commands.list import cmd_list
+from commands.init import cmd_init
 
 
 def _create_sample_workspace():

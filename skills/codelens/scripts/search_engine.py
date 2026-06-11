@@ -103,6 +103,10 @@ def search_workspace(
             ignore_dirs.add(clean)
             ignore_files.add(clean)
 
+    # Compile include/exclude regexes once before the walk loop
+    inc_regex = re.compile(include_pattern) if include_pattern else None
+    exc_regex = re.compile(exclude_pattern) if exclude_pattern else None
+
     # Search
     matches = []
     files_searched = 0
@@ -144,15 +148,11 @@ def search_workspace(
             if file_filter and file_filter not in rel_path:
                 continue
 
-            # Include/exclude patterns
-            if include_pattern:
-                inc_regex = re.compile(include_pattern)
-                if not inc_regex.search(rel_path):
-                    continue
-            if exclude_pattern:
-                exc_regex = re.compile(exclude_pattern)
-                if exc_regex.search(rel_path):
-                    continue
+            # Include/exclude patterns (pre-compiled)
+            if inc_regex and not inc_regex.search(rel_path):
+                continue
+            if exc_regex and exc_regex.search(rel_path):
+                continue
 
             # Read and search file
             files_searched += 1

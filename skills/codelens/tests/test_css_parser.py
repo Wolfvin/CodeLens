@@ -19,8 +19,8 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser from codelens.py
-from codelens import _fallback_css_parse
+# Import fallback regex parser
+from parsers.fallback_css import parse_css_fallback as _fallback_css_parse
 
 
 def _parse(content, path="test.css"):

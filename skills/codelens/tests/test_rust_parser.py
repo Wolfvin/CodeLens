@@ -19,8 +19,8 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser from codelens.py
-from codelens import _fallback_rust_parse
+# Import fallback regex parser
+from parsers.fallback_rust import parse_rust_fallback as _fallback_rust_parse
 
 
 def _parse(content, path="main.rs"):

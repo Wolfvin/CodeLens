@@ -95,14 +95,18 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
     cycles_found = []
     seen_cycles = set()
 
+    # Track path index for O(1) cycle extraction (instead of path.index())
+    path_index: Dict[str, int] = {}
+
     def dfs_cycle(node_id: str, path: List[str]) -> bool:
         color[node_id] = GRAY
+        path_index[node_id] = len(path)
         path.append(node_id)
 
         for neighbor in adj[node_id]:
             if color[neighbor] == GRAY:
-                # Found a cycle — extract it
-                cycle_start = path.index(neighbor)
+                # Found a cycle — extract it using pre-computed index
+                cycle_start = path_index[neighbor]
                 cycle_path = path[cycle_start:] + [neighbor]
 
                 # Normalize cycle (start from smallest ID to deduplicate)
@@ -117,6 +121,7 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
                 dfs_cycle(neighbor, path)
 
         path.pop()
+        path_index.pop(node_id, None)
         color[node_id] = BLACK
         return False
 
@@ -199,9 +204,11 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
+    path_index: Dict[str, int] = {}
 
     def dfs_import(node: str, path: List[str]):
         color[node] = GRAY
+        path_index[node] = len(path)
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
@@ -209,7 +216,7 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
                 continue  # External module
 
             if color[neighbor] == GRAY:
-                cycle_start = path.index(neighbor)
+                cycle_start = path_index[neighbor]
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -226,6 +233,7 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
                 dfs_import(neighbor, path)
 
         path.pop()
+        path_index.pop(node, None)
         color[node] = BLACK
 
     for f in import_graph:
@@ -322,9 +330,11 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
+    path_index: Dict[str, int] = {}
 
     def dfs_css(node: str, path: List[str]):
         color[node] = GRAY
+        path_index[node] = len(path)
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
@@ -332,7 +342,7 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
                 continue
 
             if color[neighbor] == GRAY:
-                cycle_start = path.index(neighbor)
+                cycle_start = path_index[neighbor]
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -349,6 +359,7 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
                 dfs_css(neighbor, path)
 
         path.pop()
+        path_index.pop(node, None)
         color[node] = BLACK
 
     for f in import_graph:

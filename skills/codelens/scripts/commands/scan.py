@@ -124,12 +124,36 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                                               or e.get("from_fn", "") or e.get("to_fn", "")]
                 save_backend_registry(workspace, existing_backend)
 
-            # Clean frontend data
+            # Clean frontend data — remove entries whose only refs are from deleted files
             fe_classes = existing_frontend.get("classes", [])
             if isinstance(fe_classes, list):
-                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
+                cleaned_classes = []
+                for c in fe_classes:
+                    # Filter out CSS/JS refs that originated from deleted files
+                    c["css"] = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
+                    c["js"] = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
+                    # Recompute ref_count and status
+                    from registry import compute_frontend_status
+                    ref_count = len(c["css"]) + len(c["js"])
+                    c["ref_count"] = ref_count
+                    c["status"] = compute_frontend_status(c["name"], "class", [], c["css"], c["js"])
+                    if ref_count > 0:
+                        cleaned_classes.append(c)
+                existing_frontend["classes"] = cleaned_classes
+
                 fe_ids = existing_frontend.get("ids", [])
-                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
+                cleaned_ids = []
+                for i in fe_ids:
+                    # Filter out refs from deleted files
+                    i["defined_in_html"] = [r for r in i.get("defined_in_html", []) if r.get("path", "") not in del_set]
+                    i["css"] = [r for r in i.get("css", []) if r.get("path", "") not in del_set]
+                    i["js"] = [r for r in i.get("js", []) if r.get("path", "") not in del_set]
+                    ref_count = len(i["css"]) + len(i["js"])
+                    i["ref_count"] = ref_count
+                    i["status"] = compute_frontend_status(i["name"], "id", i["defined_in_html"], i["css"], i["js"])
+                    if ref_count > 0 or len(i.get("defined_in_html", [])) > 0:
+                        cleaned_ids.append(i)
+                existing_frontend["ids"] = cleaned_ids
                 save_frontend_registry(workspace, existing_frontend)
 
             # Continue with incremental scan for changed/new files

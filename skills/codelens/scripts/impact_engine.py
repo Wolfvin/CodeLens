@@ -6,7 +6,7 @@ Combines frontend + backend tracing with risk assessment.
 
 import os
 from typing import Dict, List, Any, Optional, Set
-from collections import defaultdict
+from collections import defaultdict, deque
 
 
 def analyze_impact(
@@ -113,10 +113,10 @@ def analyze_impact(
 
             # Indirect callers (2+ hops) via BFS
             visited = {target_id}
-            queue = [(target_id, 1)]
+            queue = deque([(target_id, 1)])
 
             while queue:
-                current_id, current_depth = queue.pop(0)
+                current_id, current_depth = queue.popleft()
                 if current_depth >= depth:
                     continue
 

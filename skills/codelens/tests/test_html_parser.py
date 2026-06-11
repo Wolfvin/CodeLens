@@ -20,8 +20,8 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser from codelens.py
-from codelens import _fallback_html_parse
+# Import fallback regex parser
+from parsers.fallback_html import parse_html_fallback as _fallback_html_parse
 
 
 def _parse(content, path="test.html"):

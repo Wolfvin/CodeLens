@@ -129,18 +129,18 @@ def compute_frontend_status(
     Compute status for a frontend entry.
 
     Priority:
-    1. collision (IDs only, same id in >1 HTML element)
-    2. dead (ref_count == 0 in CSS and JS)
+    1. collision (IDs: same id in >1 HTML element; classes: same class in >1 HTML element)
+    2. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
     3. duplicate_ref (referenced from 2+ different files)
-    4. active (default, ref_count > 0)
+    4. active (default, has CSS or JS references)
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Collision: ID appears in >1 HTML element
-    if entry_type == "id" and len(html_refs) > 1:
+    # Collision: ID/class appears in >1 HTML element
+    if len(html_refs) > 1:
         return "collision"
 
-    # Dead: no CSS or JS references
+    # Dead: no CSS or JS references (defined in HTML but not styled or used)
     if ref_count == 0:
         return "dead"
 
@@ -195,7 +195,7 @@ def build_frontend_registry(
 
     # Process HTML data
     for item in html_data:
-        add_refs(item.get("classes", []), "class", "css")   # HTML class= is definition, map to css category
+        add_refs(item.get("classes", []), "class", "html")   # HTML class= is definition, map to html category
         add_refs(item.get("ids", []), "id", "html")
 
     # Process CSS data
@@ -299,6 +299,7 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             "name": name,
             "ref_count": ref_count,
             "status": status,
+            "defined_in_html": refs["html"],
             "css": refs["css"],
             "js": refs["js"]
         }

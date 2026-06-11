@@ -122,11 +122,12 @@ def _strip_refs_from_changed(refs: List[Dict], changed_rel_paths: Set[str]) -> L
 def _recompute_class_status(entry: Dict) -> None:
     """Recompute ref_count and status for a class entry in-place."""
     from registry import compute_frontend_status
+    html_refs = entry.get("defined_in_html", [])
     css_refs = entry.get("css", [])
     js_refs = entry.get("js", [])
     entry["ref_count"] = len(css_refs) + len(js_refs)
     entry["status"] = compute_frontend_status(
-        entry["name"], "class", [], css_refs, js_refs
+        entry["name"], "class", html_refs, css_refs, js_refs
     )
 
 
@@ -196,11 +197,12 @@ def merge_frontend_data(
 
     stripped_classes: List[Dict] = []
     for entry in existing_registry.get("classes", []):
+        entry["defined_in_html"] = _strip_refs_from_changed(entry.get("defined_in_html", []), changed_rel_paths)
         entry["css"] = _strip_refs_from_changed(entry.get("css", []), changed_rel_paths)
         entry["js"] = _strip_refs_from_changed(entry.get("js", []), changed_rel_paths)
         _recompute_class_status(entry)
         # Keep entry if it still has any refs (including from HTML side)
-        if entry["ref_count"] > 0:
+        if entry["ref_count"] > 0 or len(entry.get("defined_in_html", [])) > 0:
             stripped_classes.append(entry)
 
     stripped_ids: List[Dict] = []
@@ -232,6 +234,7 @@ def merge_frontend_data(
         name = new_entry["name"]
         if name in existing_class_map:
             existing = existing_class_map[name]
+            existing["defined_in_html"].extend(new_entry.get("defined_in_html", []))
             existing["css"].extend(new_entry.get("css", []))
             existing["js"].extend(new_entry.get("js", []))
             _recompute_class_status(existing)
@@ -338,10 +341,6 @@ def merge_backend_data(
         if to_id in removed_node_ids:
             # Edge points to a removed node — try to re-resolve later
             re_resolvable_edges.append(edge)
-            continue
-
-        if not is_resolved and from_is_changed:
-            # Unresolved edge from changed file — discard
             continue
 
         # Edge is between unchanged-file nodes — keep it

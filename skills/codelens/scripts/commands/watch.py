@@ -84,6 +84,14 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
         # Run incremental scan
         scan_result = cmd_scan(workspace, incremental=True)
 
+        # Check for file changes that arrived during the scan
+        # If any did, schedule another rescan to avoid losing them
+        with _lock:
+            if _changed_files:
+                new_timer = _threading.Timer(debounce, _do_rescan)
+                new_timer.daemon = True
+                new_timer.start()
+
         # Auto-save snapshot
         try:
             frontend = load_frontend_registry(workspace)
