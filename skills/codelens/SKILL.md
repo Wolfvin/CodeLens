@@ -35,9 +35,18 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.0
+# CodeLens v6.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.1
+
+- **JSX component usage tracking** (CRITICAL): `tsx_parser` now extracts component references from JSX syntax (`<Button>`, `<Card />`). Previously, React components appeared "dead" because their only references were through JSX syntax, not function calls. On shadcn/ui (3248 TSX files), this increased resolved edges from 8,469 to 46,176 (5.5x improvement) and reduced dead nodes from ~8,000+ to 270.
+- **Query command fuzzy-overwrite bug fix** (CRITICAL): `query` command now correctly returns exact multi-match results instead of having fuzzy matches overwrite them. Querying "Button" in a codebase with 22 exact Button definitions now returns all 22 matches, not 381 fuzzy matches.
+- **Missing import recovery**: Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` to `utils.py` — fixed 5 broken commands (`ask`, `env-check`, `handbook`, `scan`, `watch`) that crashed on import.
+- **Missing `resolve_tauri_ipc_from_apimap`**: Implemented the function in `edge_resolver.py` — fixed `scan`, `handbook`, and `watch` commands that imported it. Resolves cross-language Tauri IPC edges (TypeScript `invoke('cmd')` → Rust `#[tauri::command]`).
+- **Tailwind v4 expanded false-positive elimination**: `missing-refs` now recognizes container query `@container/name`, star wildcard `*:`, double-star `**:`, arbitrary variants `[&_...]`, data attribute variants `data-[slot=]:`, and negative transform prefixes `-scale-`, `-rotate-`, `-translate-`. Reduced `html_no_css` false positives on shadcn/ui from 372 to near-zero.
+- **Auto-fuzzy query**: When `query` finds no exact matches, it now automatically tries fuzzy substring matching before returning "not found". Previously, fuzzy matching only ran with `--fuzzy` flag.
 
 ## What's New in v6.0
 

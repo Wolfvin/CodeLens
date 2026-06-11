@@ -48,6 +48,27 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+# ─── Performance Limits ──────────────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000    # Max files to scan per engine run
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
+
+    Used by engines to bail out early on large codebases.
+
+    Args:
+        start_time: time.time() when the operation started.
+        budget_sec: Maximum seconds allowed.
+
+    Returns:
+        True if the budget has been exceeded, False otherwise.
+    """
+    import time as _time
+    return (_time.time() - start_time) > budget_sec
+
 
 def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
     """Check if a relative directory path should be ignored.
@@ -248,7 +269,7 @@ def safe_read_file(file_path: str, max_size: int = 200 * 1024, encoding: str = '
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.1.0"
 
 
 # ─── Binary Artifact Scanning ──────────────────────────────────

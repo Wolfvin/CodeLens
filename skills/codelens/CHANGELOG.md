@@ -5,6 +5,23 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: JSX component usage not tracked (`tsx_parser.py`)** — React components used via JSX syntax (`<Button>`, `<Card />`) were invisible to the call graph because the TSX parser only tracked `call_expression` nodes. Added `_process_jsx_component()` that extracts component names from `jsx_opening_element` and `jsx_self_closing_element` nodes, creates edges with `via_jsx: True`, and correctly skips lowercase HTML elements. On shadcn/ui (3248 TSX files), resolved edges increased from 8,469 to 46,176 (5.5x), and dead nodes dropped from ~8,000+ to 270.
+- **CRITICAL: Query command fuzzy overwrite bug (`commands/query.py`)** — When multiple exact matches existed (e.g., 22 "Button" components), the fuzzy matching code at the bottom of `cmd_query()` would overwrite the multi_match result with fuzzy matches (e.g., 381 matches for "*button*"). Moved fuzzy matching into the `total_matches == 0` branch so it only runs when no exact matches exist. Also added auto-fuzzy: when `query` finds no exact matches, it automatically tries fuzzy substring matching before returning "not found".
+- **CRITICAL: 5 commands broken on import (`utils.py`, `edge_resolver.py`)** — `ask.py` and `env_check.py` imported `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` from `utils.py` but these symbols didn't exist. `handbook.py`, `scan.py`, `watch.py` imported `resolve_tauri_ipc_from_apimap` from `edge_resolver.py` but the function didn't exist. Added all missing symbols: `MAX_FILE_SIZE = 200 * 1024`, `MAX_FILES_DEFAULT = 5000`, `time_budget_expired()` function, and `resolve_tauri_ipc_from_apimap()` function.
+
+### Added
+
+- **Tailwind v4 expanded pattern detection (`missing_refs.py`)** — Added recognition for: container query prefix with names (`@container/name`, `@2xl/field-group:`), star wildcard (`*:`, `**:`), arbitrary variants with nested brackets (`[&_[data-slot=x]:nth-child(even)]:hidden`), data attribute variants (`data-[slot=icon]:flex`), negative transform prefixes (`-scale-`, `-rotate-`, `-translate-`). Added `_is_utility_base()` helper for validating stripped utility names after variant removal.
+- **Tauri IPC edge resolution (`edge_resolver.py`)** — Implemented `resolve_tauri_ipc_from_apimap()` that creates cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers, with snake_case ↔ camelCase matching for cross-language name resolution.
+
+### Tested
+
+- **shadcn/ui** (122MB, 3248 TSX files, 410 TS files, 68 CSS files): Full test suite run including `init`, `scan`, `detect`, `smell`, `circular`, `complexity`, `secrets`, `query`, `missing-refs`, `css-deep`, `perf-hint`, `entrypoints`, `state-map`, `dead-code`, `ask`, `handbook`, `symbols`. Detected: React/Next.js/Tailwind/Vite frameworks, 10358 backend nodes, health score 60/100, 28 circular deps, 3 secrets, 213 CSS issues, 439 perf hints.
+
 ## [5.9.0] — 2026-06-12
 
 ### Fixed

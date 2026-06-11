@@ -311,3 +311,80 @@ def _to_alternate_case(name: str) -> str:
 
     # No conversion needed
     return leading + name
+
+
+# ─── Tauri IPC Cross-Language Edge Resolution ────────────────
+
+def resolve_tauri_ipc_from_apimap(
+    nodes: List[Dict],
+    edges: List[Dict],
+    api_routes: List[Dict]
+) -> List[Dict]:
+    """Resolve Tauri IPC edges from API map data.
+
+    In Tauri apps, the TypeScript frontend calls Rust backend functions
+    via the invoke() IPC bridge:
+      TypeScript: await invoke('command_name', { args })
+      Rust:       #[tauri::command] fn command_name(args) -> Result
+
+    This function creates cross-language edges between:
+    - Frontend invoke('xxx') calls → Rust #[tauri::command] handlers
+
+    Args:
+        nodes: Current resolved nodes list.
+        edges: Current resolved edges list.
+        api_routes: API route data from apimap_engine (may contain
+                    tauri_ipc entries with 'tauri_command' field).
+
+    Returns:
+        Updated edges list with new IPC edges appended.
+    """
+    if not api_routes:
+        return edges
+
+    # Build lookup: Rust tauri_command nodes by command name
+    rust_tauri_nodes: Dict[str, Dict] = {}
+    for node in nodes:
+        if node.get("is_tauri_command"):
+            # tauri_command is stored in the node's fn or metadata
+            cmd_name = node.get("fn", "")
+            if cmd_name:
+                rust_tauri_nodes[cmd_name] = node
+
+    # Build lookup: Frontend invoke('xxx') calls
+    # These appear as backend nodes with type "tauri_invoke" or
+    # as edges with to_fn matching a tauri command name.
+    new_edges = list(edges)
+
+    for route in api_routes:
+        tauri_cmd = route.get("tauri_command", "")
+        if not tauri_cmd:
+            continue
+
+        # Find the Rust handler node
+        rust_node = rust_tauri_nodes.get(tauri_cmd)
+        if not rust_node:
+            # Also try snake_case ↔ camelCase matching
+            alt_key = _to_alternate_case(tauri_cmd)
+            rust_node = rust_tauri_nodes.get(alt_key)
+        if not rust_node:
+            continue
+
+        # Find frontend invoke() calls that reference this command
+        # These are nodes with type "tauri_invoke" matching this command
+        for node in nodes:
+            if node.get("type") == "tauri_invoke" and node.get("fn", "").endswith(tauri_cmd):
+                new_edge = {
+                    "from": node["id"],
+                    "to": rust_node["id"],
+                    "type": "tauri_ipc",
+                }
+                # Avoid duplicate edges
+                already_exists = any(
+                    e.get("from") == new_edge["from"] and e.get("to") == new_edge["to"]
+                    for e in new_edges
+                )
+                if not already_exists:
+                    new_edges.append(new_edge)
+
+    return new_edges

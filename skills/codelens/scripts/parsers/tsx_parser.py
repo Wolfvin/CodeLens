@@ -69,10 +69,12 @@ class TSXParser(BaseParser):
         for decl in fn_declarations:
             nodes.append(decl["node"])
 
-        # Second pass: walk entire tree for JSX attrs and calls
+        # Second pass: walk entire tree for JSX attrs, component usage, and calls
         def visit(node: Node, _, depth):
             if node.type == 'jsx_attribute':
                 self._process_jsx_attribute(node, source, file_path, classes, ids)
+            elif node.type in ('jsx_opening_element', 'jsx_self_closing_element'):
+                self._process_jsx_component(node, source, file_path, fn_declarations, edges)
             elif node.type == 'call_expression':
                 call_info = self._parse_call(node, source, fn_declarations)
                 if call_info:
@@ -367,6 +369,83 @@ class TSXParser(BaseParser):
             result["node"]["heritage"] = heritage
 
         return result
+
+    def _process_jsx_component(self, node: Node, source: bytes,
+                                file_path: str, fn_declarations: List[Dict],
+                                edges: List):
+        """Process a JSX opening/closing element to track component usage.
+
+        In React, <Button variant="default"> is equivalent to calling Button().
+        Without tracking this, all React components appear "dead" because their
+        only references are through JSX syntax, not function calls.
+
+        Handles:
+        - <Button> → edge to "Button"
+        - <Button /> → edge to "Button"
+        - <ui.Button> → edge to "Button" (member expression)
+        - <div>, <span>, <h1> → SKIP (HTML elements are lowercase)
+        """
+        # Get the element name node
+        name_node = node.child_by_field_name('name')
+        if not name_node:
+            # Try first child that is an identifier or member_expression
+            for child in node.children:
+                if child.type in ('identifier', 'member_expression', 'nested_identifier'):
+                    name_node = child
+                    break
+
+        if not name_node:
+            return
+
+        # Extract component name
+        component_name = None
+        if name_node.type == 'identifier':
+            component_name = self.get_text(name_node, source)
+        elif name_node.type == 'member_expression':
+            # e.g., <ui.Button> → extract "Button"
+            prop_node = name_node.child_by_field_name('property')
+            if prop_node:
+                component_name = self.get_text(prop_node, source)
+        elif name_node.type == 'nested_identifier':
+            # e.g., <Motion.Button> → extract last part
+            for child in name_node.children:
+                if child.type == 'identifier':
+                    component_name = self.get_text(child, source)
+
+        if not component_name:
+            return
+
+        # Skip HTML elements (lowercase) and built-in SVG elements
+        if component_name[0].islower():
+            return
+
+        # Skip common non-component uppercase identifiers
+        NON_COMPONENTS = {
+            'Fragment', 'Suspense', 'StrictMode', 'Provider', 'Consumer',
+        }
+        if component_name in NON_COMPONENTS:
+            return
+
+        # Find which function this JSX is inside (the caller)
+        jsx_line = self.get_line(node)
+        caller_id = None
+        best_scope_size = float('inf')
+        for decl in fn_declarations:
+            if decl["scope_start"] <= jsx_line - 1 <= decl["scope_end"]:
+                scope_size = decl["scope_end"] - decl["scope_start"]
+                if scope_size < best_scope_size:
+                    best_scope_size = scope_size
+                    caller_id = decl["node"]["id"]
+
+        if not caller_id:
+            return
+
+        # Create edge: caller → component
+        edges.append({
+            "from": caller_id,
+            "to_fn": component_name,
+            "via_jsx": True
+        })
 
     def _parse_call(self, node: Node, source: bytes,
                      fn_declarations: List[Dict]) -> Optional[Dict]:

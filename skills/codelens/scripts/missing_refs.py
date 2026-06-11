@@ -178,9 +178,61 @@ def _is_likely_tailwind(class_name: str) -> bool:
     - State variants (hover:, focus:, active:, dark:, etc.)
     - Arbitrary value syntax ([...])
     - Fractional values (w-1/2, w-1/3)
+    - Tailwind v4: container queries (@sm:, @md:, @2xl/name:)
+    - Tailwind v4: star wildcard (*:, **:)
+    - Tailwind v4: arbitrary variants ([&_:])
+    - Tailwind v4: data attribute variants (data-[slot=]:)
+    - Tailwind v4: group/peer named variants (group-hover/name:)
     """
     # Strip leading ! (important modifier) and - (negative value)
     stripped = class_name.lstrip('!')
+
+    # ─── Tailwind v4: Container query prefix (@) ───────────
+    # Matches: @sm:, @md:, @lg:, @xl:, @2xl:, @3xl:, @4xl:
+    # Also: @2xl/name: (named container queries)
+    # Also: @container, @container/name (standalone container utility)
+    if re.match(r'^(?:!)?@[a-z0-9]+(?:/[a-zA-Z0-9_-]+)?:', class_name):
+        remaining = re.sub(r'^(?:!)?@[a-z0-9]+(?:/[a-zA-Z0-9_-]+)?:', '', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining) or _is_utility_base(remaining)
+        return True
+
+    # Standalone @container utility: @container, @container/name
+    if re.match(r'^(?:!)?@container(?:/[a-zA-Z0-9_-]+)?$', stripped):
+        return True
+
+    # ─── Tailwind v4: Arbitrary variants with nested brackets ─
+    # Matches: [&_[data-slot=x]:nth-child(even)]:hidden
+    # More permissive pattern allowing : inside brackets
+    if re.match(r'^(?:!)?\[&[^]]+\]:', class_name):
+        remaining = re.sub(r'^(?:!)?\[&[^]]+\]:', '', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining) or _is_utility_base(remaining)
+        return True
+
+    # ─── Tailwind v4: Star wildcard (*:, **:) ──────────────
+    # Matches: *:basis-1/4, **:hover:flex, *:first:mt-0
+    if re.match(r'^(?:!)?\*{1,2}:', class_name):
+        remaining = re.sub(r'^(?:!)?\*{1,2}:', '', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining) or _is_utility_base(remaining)
+        return True
+
+    # ─── Tailwind v4: Arbitrary variants ([&...]) ──────────
+    # Matches: [&_li]:flex, [&>*]:block, [@media(...)]:hidden
+    if re.match(r'^(?:!)?\[&[^]]*\]:', class_name):
+        remaining = re.sub(r'^(?:!)?\[&[^]]*\]:', '', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining) or _is_utility_base(remaining)
+        return True
+
+    # ─── Tailwind v4: Data attribute variants ─────────────
+    # Matches: data-[slot=icon]:flex, data-[state=open]:block
+    if re.match(r'^(?:!)?data-\[[^]]+\]:', class_name):
+        remaining = re.sub(r'^(?:!)?data-\[[^]]+\]:', '', class_name)
+        if remaining:
+            return _is_likely_tailwind(remaining) or _is_utility_base(remaining)
+        return True
 
     tailwind_prefixes = [
         # Layout
@@ -216,6 +268,7 @@ def _is_likely_tailwind(class_name: str) -> bool:
         'delay-',
         # Transform
         'scale-', 'rotate-', 'translate-', 'skew-', 'origin-',
+        '-scale-', '-rotate-', '-translate-', '-skew-',
         # Interactivity
         'cursor-', 'select-', 'pointer-', 'resize-', 'appearance-',
         'accent-',
@@ -265,6 +318,86 @@ def _is_likely_tailwind(class_name: str) -> bool:
 
     # Fractional values: w-1/2, w-1/3, h-2/3
     if re.match(r'^[wh]\d+/\d+$', stripped):
+        return True
+
+    return False
+
+
+def _is_utility_base(name: str) -> bool:
+    """Quick check if a stripped class name matches a common Tailwind utility base.
+
+    Used after stripping Tailwind v4 variant prefixes (container queries, star
+    wildcards, arbitrary variants, data attributes) to verify the remaining
+    part is a real utility class like 'flex', 'basis-1/4', 'mt-0', etc.
+    """
+    if not name:
+        return True  # Empty remaining = just a variant with no base = still Tailwind
+
+    # Common standalone utilities
+    STANDALONE = {
+        'flex', 'grid', 'block', 'inline', 'inline-block', 'inline-flex',
+        'hidden', 'visible', 'invisible', 'contents', 'flow-root',
+        'static', 'fixed', 'absolute', 'relative', 'sticky',
+        'truncate', 'sr-only', 'not-sr-only', 'isolate', 'isolation-auto',
+        'container', 'aspect-auto', 'aspect-square', 'aspect-video',
+        'inset-auto', 'inset-full',
+        'underline', 'overline', 'line-through', 'no-underline',
+        'uppercase', 'lowercase', 'capitalize', 'normal-case',
+        'antialiased', 'subpixel-antialiased',
+        'list-none', 'list-disc', 'list-decimal', 'list-inside', 'list-outside',
+        'text-left', 'text-center', 'text-right', 'text-justify', 'text-start', 'text-end',
+        'border', 'border-0', 'border-2', 'border-4', 'border-8',
+        'rounded', 'rounded-none', 'rounded-sm', 'rounded-md', 'rounded-lg', 'rounded-xl',
+        'rounded-2xl', 'rounded-3xl', 'rounded-full',
+        'shadow', 'shadow-none', 'shadow-sm', 'shadow-md', 'shadow-lg', 'shadow-xl',
+        'shadow-2xl', 'shadow-inner',
+        'ring', 'ring-0', 'ring-1', 'ring-2', 'ring-offset',
+        'animate-none', 'animate-spin', 'animate-ping', 'animate-pulse', 'animate-bounce',
+        'transition', 'transition-none', 'transition-all', 'transition-colors',
+        'transition-opacity', 'transition-shadow', 'transition-transform',
+        'ease-linear', 'ease-in', 'ease-out', 'ease-in-out',
+        'cursor-auto', 'cursor-default', 'cursor-pointer', 'cursor-wait', 'cursor-text',
+        'cursor-move', 'cursor-not-allowed', 'cursor-grab', 'cursor-grabbing',
+        'select-none', 'select-text', 'select-all', 'select-auto',
+        'resize', 'resize-none', 'resize-y', 'resize-x',
+        'appearance-none',
+    }
+    if name in STANDALONE:
+        return True
+
+    # Prefix-based utilities
+    PREFIXES = [
+        'w-', 'h-', 'min-w-', 'min-h-', 'max-w-', 'max-h-',
+        'p-', 'm-', 'mt-', 'mb-', 'ml-', 'mr-', 'mx-', 'my-',
+        'pt-', 'pb-', 'pl-', 'pr-', 'px-', 'py-',
+        'text-', 'font-', 'tracking-', 'leading-', 'whitespace-',
+        'bg-', 'from-', 'via-', 'to-',
+        'border-', 'rounded-', 'ring-', 'outline-', 'divide-',
+        'shadow-', 'opacity-', 'blur-', 'brightness-', 'contrast-',
+        'gap-', 'space-', 'justify-', 'items-', 'self-', 'place-',
+        'flex-', 'grid-', 'order-', 'col-', 'row-',
+        'top-', 'bottom-', 'left-', 'right-', 'inset-',
+        'z-', 'overflow-', 'overscroll-',
+        'scale-', 'rotate-', 'translate-', 'skew-', 'origin-',
+        'duration-', 'delay-', 'ease-',
+        'fill-', 'stroke-', 'accent-',
+        'basis-', 'grow', 'shrink',
+        'prose',
+    ]
+    for prefix in PREFIXES:
+        if name.startswith(prefix) or name == prefix.rstrip('-'):
+            return True
+
+    # Arbitrary value syntax: [100px], [#fff], [var(--x)]
+    if re.search(r'\[.+\]', name):
+        return True
+
+    # Fractional values: 1/2, 1/3, 2/3, 1/4, 3/4
+    if re.match(r'^\d+/\d+$', name):
+        return True
+
+    # Numeric suffixes: basis-1/4, mt-0, p-4, etc.
+    if re.match(r'^[a-z]+-\d+', name):
         return True
 
     return False
