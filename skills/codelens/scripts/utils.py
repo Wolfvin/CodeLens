@@ -39,41 +39,32 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
 })
 
 
-def should_ignore_dir(rel_path: str) -> bool:
-    """Check if a relative path should be ignored during directory traversal.
+def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
+    """Check if a relative directory path should be ignored.
 
-    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS to avoid
-    false positives from substring matches. For example, "target" matches
-    "src/target/debug" but NOT "test-target/src" because "target" must
-    appear as a complete path segment.
+    Uses path-segment-aware matching against DEFAULT_IGNORE_DIRS (plus any
+    caller-supplied extra set) to avoid false positives from substring matches.
+    For example, 'target' matches 'src/target/debug' but NOT 'test-target/src'.
 
-    This is the shared utility version used by framework_detect and other
-    modules that walk the filesystem without a config-based ignore list.
-    For config-based ignore matching, use should_ignore() in commands/scan.py.
+    Args:
+        rel_path: Relative path from workspace root (e.g. 'src/node_modules/pkg').
+        extra_ignore: Optional additional directory names to ignore.
+
+    Returns:
+        True if the path contains an ignored directory segment, False otherwise.
     """
     # Normalize to forward slashes for consistent matching
     normalized = rel_path.replace('\\', '/')
 
-    for ignore_dir in DEFAULT_IGNORE_DIRS:
-        # Check if the ignore_dir appears as a complete path segment
-        # Segment is preceded by '/' or is at the start of the path
-        # "target" should match "/target/" or start with "target/"
-        # but NOT "/test-target/" or "/my_target/"
+    # Merge default + extra ignore sets
+    ignore_dirs = DEFAULT_IGNORE_DIRS
+    if extra_ignore:
+        ignore_dirs = ignore_dirs | extra_ignore
 
-        # Check 1: at the start of the path (e.g., "node_modules/pkg")
-        if normalized.startswith(ignore_dir + '/'):
-            return True
-
-        # Check 2: as a full segment (preceded by '/')
-        if '/' + ignore_dir + '/' in normalized:
-            return True
-
-        # Check 3: matches the entire last segment (e.g., path ends with "/.git")
-        if normalized.endswith('/' + ignore_dir):
-            return True
-
-        # Check 4: exact match (path IS the ignore dir)
-        if normalized == ignore_dir:
+    # Split the path into segments and check each against the ignore set
+    segments = normalized.split('/')
+    for segment in segments:
+        if segment in ignore_dirs:
             return True
 
     return False
