@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.1.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. Auto-triggers: check exists, who calls, find secrets, security audit, API routes, endpoints, global state, env vars, debug code, complexity, regex audit, a11y, production ready, refactor, deploy check, performance, dead code, CVE scan. 39 commands, tree-sitter, 10 langs, workspace auto-detect.",
+  "version": "5.2.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. Auto-triggers: check exists, who calls, find secrets, security audit, API routes, endpoints, global state, env vars, debug code, complexity, regex audit, a11y, production ready, refactor, deploy check, performance, dead code, CVE scan. 41 commands including handbook, ask (NL router), --format markdown. Agent-optimized: one-shot orientation, decision trees in output, quality metrics in context, convention detection, AGENT.md generation. Tree-sitter, 10 langs, workspace auto-detect.",
   "author": "codelens",
   "tags": [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
@@ -26,6 +26,9 @@
     "performance-hints", "n-plus-one", "memory-leak", "bundle-size", "sync-blocking",
     "css-variables", "css-keyframes", "specificity", "z-index", "duplicate-props",
     "auto-trigger", "pre-write", "post-write", "code-review", "onboarding", "pre-deploy",
+    "handbook", "agent-orientation", "ask-command", "nl-query", "natural-language",
+    "markdown-output", "format-markdown", "convention-detection", "agent-md",
+    "decision-tree", "actionable-output", "quality-metrics", "project-brief",
     "colloquial-trigger", "negative-trigger", "fallback-chain", "error-recovery",
     "parallel-execution", "edge-case", "streaming", "rest-api"
   ]

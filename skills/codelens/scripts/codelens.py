@@ -41,6 +41,8 @@ Usage:
     python3 codelens.py vuln-scan <workspace>          # Scan dependencies for known CVEs
     python3 codelens.py perf-hint <workspace>          # Detect performance anti-patterns
     python3 codelens.py css-deep <workspace>           # Deep CSS analysis (vars, keyframes, specificity)
+    python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
+    python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
 """
 
 import sys
@@ -49,6 +51,7 @@ import json
 import argparse
 import time
 import threading
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
@@ -916,6 +919,22 @@ def _fallback_python_parse(content, file_path):
     return {"nodes": nodes, "edges": edges}
 
 
+# ─── Query Decision Tree ────────────────────────────────────────
+
+def _get_query_action(status: str) -> tuple:
+    """Return (action, action_reason) based on query result status."""
+    if status == "active":
+        return ("EXTEND", "Name exists and is active. Do not overwrite — extend or use a different name.")
+    elif status == "dead":
+        return ("ASK", "Name exists but is dead (unused). Ask user whether to reuse or create new.")
+    elif status == "duplicate_ref":
+        return ("LIST_FIRST", "Name has duplicate references. List all referrers before making changes.")
+    elif status == "collision":
+        return ("STOP", "Name collision detected. Fix collision before proceeding.")
+    else:
+        return ("EXTEND", "Name exists. Proceed with caution.")
+
+
 # ─── Query Command ────────────────────────────────────────────
 
 def cmd_query(query_name: str, workspace: str, domain: str = None,
@@ -930,6 +949,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             if cls["name"] == query_name:
                 if file_filter and file_filter not in json.dumps(cls):
                     continue
+                action, action_reason = _get_query_action(cls["status"])
                 return {
                     "found": True,
                     "type": "class",
@@ -937,6 +957,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     "name": cls["name"],
                     "ref_count": cls["ref_count"],
                     "status": cls["status"],
+                    "action": action,
+                    "action_reason": action_reason,
                     "css": cls.get("css", []),
                     "js": cls.get("js", [])
                 }
@@ -945,6 +967,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             if id_entry["name"] == query_name:
                 if file_filter and file_filter not in json.dumps(id_entry):
                     continue
+                action, action_reason = _get_query_action(id_entry["status"])
                 return {
                     "found": True,
                     "type": "id",
@@ -952,6 +975,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     "name": id_entry["name"],
                     "ref_count": id_entry["ref_count"],
                     "status": id_entry["status"],
+                    "action": action,
+                    "action_reason": action_reason,
                     "defined_in_html": id_entry.get("defined_in_html", []),
                     "css": id_entry.get("css", []),
                     "js": id_entry.get("js", [])
@@ -969,15 +994,19 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 callees = get_callees(node["id"], backend.get("edges", []),
                                        backend.get("nodes", []))
 
+                node_status = node.get("status", "active")
+                action, action_reason = _get_query_action(node_status)
                 result = {
                     "found": True,
                     "type": "function",
                     "domain": "backend",
+                    "action": action,
+                    "action_reason": action_reason,
                     "node": {
                         "id": node["id"],
                         "fn": node["fn"],
                         "ref_count": node.get("ref_count", 0),
-                        "status": node.get("status", "active"),
+                        "status": node_status,
                         "file": node.get("file", ""),
                         "line": node.get("line", 0),
                         "async": node.get("async", False)
@@ -997,7 +1026,13 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
                 return result
 
-    return {"found": False, "query": query_name, "domain": domain or "auto"}
+    return {
+        "found": False,
+        "query": query_name,
+        "domain": domain or "auto",
+        "action": "CREATE",
+        "action_reason": "Name does not exist. Safe to create."
+    }
 
 
 # ─── List Command ─────────────────────────────────────────────
@@ -1093,13 +1128,1174 @@ def cmd_detect(workspace: str) -> Dict[str, Any]:
     return detect_frameworks(workspace)
 
 
+# ─── Ask Command (Natural Language Router) ──────────────────────
+
+def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
+    """
+    Natural language query router.
+    Maps a question to the appropriate CodeLens command and returns its result.
+    """
+    workspace = os.path.abspath(workspace)
+    q = question.lower().strip()
+
+    # Determine which command to run based on keyword patterns
+    command, args = _parse_ask_question(q, workspace)
+
+    if command is None:
+        return {
+            "status": "unknown_query",
+            "question": question,
+            "workspace": workspace,
+            "suggestion": "Could not determine the appropriate command. Try: scan, context, trace, impact, smell, dead-code, secrets, circular, api-map, entrypoints, outline, query, complexity, test-map, perf-hint, vuln-scan"
+        }
+
+    # Execute the determined command
+    try:
+        result = _execute_ask_command(command, args, workspace)
+    except Exception as e:
+        return {
+            "status": "error",
+            "question": question,
+            "interpreted_as": command,
+            "error": str(e)
+        }
+
+    # Add interpretation metadata
+    if isinstance(result, dict):
+        result["query_interpretation"] = {
+            "question": question,
+            "interpreted_as": command,
+            "confidence": args.pop("_confidence", "medium")
+        }
+
+    return result
+
+
+def _parse_ask_question(q: str, workspace: str) -> tuple:
+    """Parse a natural language question and determine which command to run."""
+
+    # Patterns: (keyword_patterns, command, extra_args, confidence)
+    patterns = [
+        # Context / definition queries
+        (["where is", "where's", "where does", "find definition", "find def", "show me", "what is", "what's"],
+         "context", {"name": _extract_symbol_name}, "high"),
+
+        # Symbol search
+        (["search for", "find symbol", "find all", "look for"],
+         "symbols", {"name": _extract_symbol_name}, "high"),
+
+        # Dead code
+        (["dead code", "unused code", "unreachable", "zombie", "not used", "never called", "orphan"],
+         "dead-code", {}, "high"),
+
+        # Security
+        (["security", "secret", "api key", "password", "token leak", "vulnerability", "cve", "vuln"],
+         "secrets", {}, "high"),
+
+        # Circular dependencies
+        (["circular", "cycle", "circular dependency", "circular dep", "dependency cycle"],
+         "circular", {}, "high"),
+
+        # API routes
+        (["api route", "endpoint", "api map", "rest route", "http route", "graphql"],
+         "api-map", {}, "high"),
+
+        # Entrypoints
+        (["entry point", "entrypoint", "main function", "where does it start", "how does it start", "boot"],
+         "entrypoints", {}, "high"),
+
+        # Smells / health
+        (["code smell", "smell", "health", "code quality", "code health", "technical debt"],
+         "smell", {}, "high"),
+
+        # Complexity
+        (["complexity", "complex", "complicated", "cyclomatic", "cognitive complexity"],
+         "complexity", {}, "high"),
+
+        # Impact analysis
+        (["what happens if", "impact of", "what if i change", "what if i delete", "can i change", "can i delete", "safe to"],
+         "impact", {"name": _extract_symbol_name, "action": "modify"}, "medium"),
+
+        # Trace
+        (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
+         "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
+
+        # Test coverage
+        (["test coverage", "tested", "untested", "missing test", "test map"],
+         "test-map", {}, "high"),
+
+        # Performance
+        (["performance", "slow", "perf", "n+1", "memory leak", "bottleneck"],
+         "perf-hint", {}, "high"),
+
+        # Vulnerabilities
+        (["vulnerability", "vulnerable", "cve", "security hole"],
+         "vuln-scan", {}, "high"),
+
+        # Outline
+        (["outline", "structure", "file structure", "what's in", "contents of"],
+         "outline", {}, "medium"),
+
+        # Environment check
+        (["env var", "environment variable", ".env", "missing env", "env check"],
+         "env-check", {}, "high"),
+
+        # Debug leak
+        (["debug code", "console.log", "debugger", "todo", "fixme", "leftover"],
+         "debug-leak", {}, "high"),
+
+        # State
+        (["state management", "store", "redux", "zustand", "pinia", "global state"],
+         "state-map", {}, "high"),
+
+        # Scan
+        (["scan", "analyze", "index", "build registry", "full analysis"],
+         "scan", {}, "high"),
+
+        # Handbook
+        (["overview", "handbook", "project brief", "tell me about", "summarize", "summary of"],
+         "handbook", {}, "high"),
+
+        # Dependencies
+        (["dependents", "who imports", "who uses", "who depends", "import graph", "dependency graph"],
+         "dependents", {}, "medium"),
+    ]
+
+    for keywords, command, extra_args, confidence in patterns:
+        for kw in keywords:
+            if kw in q:
+                # Build args dict
+                resolved_args = {"_confidence": confidence}
+                for key, val in extra_args.items():
+                    if callable(val):
+                        resolved_args[key] = val(q, kw)
+                    else:
+                        resolved_args[key] = val
+                return command, resolved_args
+
+    # Fallback: try to find a symbol name and use context
+    symbol = _extract_symbol_name(q, "")
+    if symbol:
+        return "context", {"name": symbol, "_confidence": "low"}
+
+    return None, {}
+
+
+def _extract_symbol_name(q: str, keyword: str) -> str:
+    """Try to extract a symbol name from the question."""
+    # Remove common question words
+    cleaned = q
+    for prefix in ["where is ", "where's ", "where does ", "what is ", "what's ",
+                    "show me ", "find definition of ", "find def ", "find ",
+                    "search for ", "how does ", "how is ", "trace ", "impact of ",
+                    "what happens if i change ", "what happens if i delete ",
+                    "can i change ", "can i delete "]:
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):]
+            break
+
+    # Remove trailing question marks and whitespace
+    cleaned = cleaned.rstrip("?!. ").strip()
+
+    # Try to extract code-like identifiers (camelCase, snake_case, PascalCase)
+    # Look for backticked names first
+    match = re.search(r'`([^`]+)`', q)
+    if match:
+        return match.group(1).strip()
+
+    # Look for quoted names
+    match = re.search(r'["\']([^"\']+)["\']', q)
+    if match:
+        return match.group(1).strip()
+
+    # Look for identifier-like patterns
+    match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
+    if match:
+        return match.group(0)
+
+    return cleaned if cleaned else ""
+
+
+def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
+    """Execute the determined command with the given args."""
+    if command == "context":
+        return get_symbol_context(args.get("name", ""), workspace)
+    elif command == "symbols":
+        return search_symbols(workspace, args.get("name", ""), domain="all", fuzzy=True)
+    elif command == "dead-code":
+        return detect_dead_code(workspace)
+    elif command == "secrets":
+        return detect_secrets(workspace)
+    elif command == "circular":
+        return detect_circular(workspace)
+    elif command == "api-map":
+        return map_api_routes(workspace)
+    elif command == "entrypoints":
+        return map_entrypoints(workspace)
+    elif command == "smell":
+        return detect_smells(workspace)
+    elif command == "complexity":
+        return compute_complexity(workspace)
+    elif command == "impact":
+        return analyze_impact(args.get("name", ""), workspace, action=args.get("action", "modify"))
+    elif command == "trace":
+        return trace_symbol(args.get("name", ""), workspace, direction=args.get("direction", "both"))
+    elif command == "test-map":
+        return map_test_coverage(workspace)
+    elif command == "perf-hint":
+        return detect_perf_hints(workspace)
+    elif command == "vuln-scan":
+        return scan_vulnerabilities(workspace)
+    elif command == "outline":
+        return get_workspace_outline(workspace)
+    elif command == "env-check":
+        return check_env_vars(workspace)
+    elif command == "debug-leak":
+        return detect_debug_leaks(workspace)
+    elif command == "state-map":
+        return map_state(workspace)
+    elif command == "scan":
+        return cmd_scan(workspace)
+    elif command == "handbook":
+        return cmd_handbook(workspace)
+    elif command == "dependents":
+        return get_dependency_graph(workspace)
+    else:
+        return {"status": "error", "message": f"Unknown command: {command}"}
+
+
 # ─── Symbols Command ────────────────────────────────────────────
 
 def cmd_symbols(args):
     """Search registry symbols by name."""
     workspace = resolve_workspace(args.workspace)
     result = search_symbols(workspace, args.name, domain=args.domain, fuzzy=args.fuzzy)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(_format_output(result, getattr(args, 'format', 'json'), getattr(args, 'command', 'symbols')))
+
+
+# ─── Output Formatting ──────────────────────────────────────────
+
+def _format_output(data: Any, format_type: str = "json", command: str = "") -> str:
+    """Format output data as JSON or Markdown."""
+    if format_type == "markdown":
+        return _to_markdown(data, command)
+    # Default: JSON
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def _to_markdown(data: Any, command: str = "") -> str:
+    """Convert command output dict to markdown format."""
+    if not isinstance(data, dict):
+        return str(data)
+
+    lines = []
+    status = data.get("status", "")
+
+    # Error output
+    if status == "error":
+        lines.append(f"## Error")
+        lines.append("")
+        lines.append(f"**Command:** `{command}`")
+        lines.append(f"**Error:** {data.get('error', 'Unknown error')}")
+        lines.append(f"**Type:** {data.get('error_type', '')}")
+        return "\n".join(lines)
+
+    # Command-specific formatting
+    if command == "scan":
+        _md_scan(data, lines)
+    elif command == "query":
+        _md_query(data, lines)
+    elif command == "context":
+        _md_context(data, lines)
+    elif command == "outline":
+        _md_outline(data, lines)
+    elif command == "impact":
+        _md_impact(data, lines)
+    elif command == "trace":
+        _md_trace(data, lines)
+    elif command == "smell":
+        _md_smell(data, lines)
+    elif command == "dead-code":
+        _md_dead_code(data, lines)
+    elif command == "circular":
+        _md_circular(data, lines)
+    elif command == "handbook":
+        _md_handbook(data, lines)
+    elif command == "entrypoints":
+        _md_entrypoints(data, lines)
+    elif command == "api-map":
+        _md_api_map(data, lines)
+    elif command == "complexity":
+        _md_complexity(data, lines)
+    elif command == "secrets":
+        _md_secrets(data, lines)
+    elif command == "side-effect":
+        _md_side_effect(data, lines)
+    else:
+        # Generic markdown for any command
+        _md_generic(data, lines)
+
+    return "\n".join(lines)
+
+
+def _md_generic(data: Dict, lines: list) -> None:
+    """Generic markdown output for any command."""
+    lines.append(f"## Result")
+    lines.append("")
+    for key, value in data.items():
+        if isinstance(value, (str, int, float, bool)):
+            lines.append(f"- **{key}:** {value}")
+        elif isinstance(value, list) and len(value) < 20:
+            lines.append(f"- **{key}:** {len(value)} items")
+            for item in value[:10]:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("file") or item.get("path") or str(item)[:50]
+                    lines.append(f"  - {name}")
+                else:
+                    lines.append(f"  - {item}")
+        elif isinstance(value, dict):
+            lines.append(f"- **{key}:** {len(value)} entries")
+        elif isinstance(value, list):
+            lines.append(f"- **{key}:** {len(value)} items")
+    lines.append("")
+
+
+def _md_scan(data: Dict, lines: list) -> None:
+    """Markdown for scan command."""
+    lines.append("## Scan Result")
+    lines.append("")
+    fs = data.get("files_scanned", {})
+    lines.append(f"- **Workspace:** `{data.get('workspace', '')}`")
+    for ftype, count in fs.items():
+        if count > 0:
+            lines.append(f"- **{ftype}:** {count} files")
+    fe = data.get("frontend", {})
+    be = data.get("backend", {})
+    lines.append(f"- **Frontend:** {fe.get('classes', 0)} classes, {fe.get('ids', 0)} IDs")
+    lines.append(f"- **Backend:** {be.get('nodes', 0)} nodes, {be.get('edges', 0)} edges")
+    fws = data.get("frameworks", [])
+    if fws:
+        lines.append(f"- **Frameworks:** {', '.join(fws)}")
+    outline_gen = data.get("outline_generated")
+    if outline_gen is not None:
+        lines.append(f"- **Outline generated:** {'Yes' if outline_gen else 'No'}")
+    lines.append("")
+
+
+def _md_query(data: Dict, lines: list) -> None:
+    """Markdown for query command."""
+    name = data.get("name", "")
+    found = data.get("found", False)
+    status = data.get("status", "")
+    action = data.get("action", "")
+    action_reason = data.get("action_reason", "")
+
+    icon = "Found" if found else "Not found"
+    lines.append(f"## Query: `{name}`")
+    lines.append("")
+    lines.append(f"**Status:** {icon}" + (f" ({status})" if status and found else ""))
+    if action:
+        lines.append(f"**Action:** {action}")
+    if action_reason:
+        lines.append(f"**Reason:** {action_reason}")
+    lines.append("")
+
+    refs = data.get("references", [])
+    if refs:
+        lines.append("### References")
+        for ref in refs[:20]:
+            rtype = ref.get("type", "")
+            rname = ref.get("name", name)
+            file_path = ref.get("file", "")
+            line = ref.get("line", "")
+            status_str = ref.get("status", "")
+            lines.append(f"- `{rname}` ({rtype}) — `{file_path}:{line}` [{status_str}]")
+        lines.append("")
+
+
+def _md_context(data: Dict, lines: list) -> None:
+    """Markdown for context command."""
+    symbol = data.get("symbol", "")
+    found = data.get("found", False)
+    ctx = data.get("context", {})
+
+    lines.append(f"## Context: `{symbol}`")
+    lines.append("")
+
+    if not found or not ctx:
+        lines.append("Symbol not found.")
+        lines.append("")
+        return
+
+    defn = ctx.get("definition") or {}
+    lines.append(f"**Type:** {defn.get('type', 'unknown')} | **Status:** {defn.get('status', '')} | **Refs:** {defn.get('ref_count', 0)}")
+    lines.append("")
+
+    # Code snippet
+    snippet = ctx.get("code_snippet")
+    if snippet:
+        lines.append("### Definition")
+        ext = os.path.splitext(snippet.get("file", ""))[1].lstrip(".")
+        lang_map = {"py": "python", "js": "javascript", "ts": "typescript", "tsx": "tsx", "rs": "rust"}
+        lang = lang_map.get(ext, ext)
+        lines.append(f"```{lang}")
+        for line_info in snippet.get("lines", []):
+            prefix = ">>>" if line_info.get("is_target") else "   "
+            lines.append(f"{prefix} {line_info.get('line', ''):4d} | {line_info.get('content', '')}")
+        lines.append("```")
+        lines.append("")
+
+    # Callers
+    callers = ctx.get("callers", [])
+    if callers:
+        lines.append("### Callers")
+        for c in callers[:10]:
+            lines.append(f"- `{c.get('file', '')}:{c.get('line', '')}` — {c.get('source', c.get('fn', ''))}")
+        lines.append("")
+
+    # Callees
+    callees = ctx.get("callees", [])
+    if callees:
+        lines.append("### Callees")
+        for c in callees[:10]:
+            resolved = "resolved" if c.get("resolved") else "unresolved"
+            lines.append(f"- {c.get('fn', '')} → `{c.get('file', '')}:{c.get('line', '')}` [{resolved}]")
+        lines.append("")
+
+    # Quality (if enriched)
+    quality = ctx.get("quality")
+    if quality:
+        lines.append("### Quality")
+        lines.append(f"- **Complexity:** {quality.get('complexity', 'N/A')}")
+        lines.append(f"- **Side effects:** {quality.get('side_effects', 'N/A')}")
+        lines.append(f"- **Safety:** {quality.get('safety', 'N/A')}")
+        smells = quality.get("smells", [])
+        if smells:
+            lines.append(f"- **Smells:** {', '.join(smells)}")
+        lines.append("")
+
+
+def _md_outline(data: Dict, lines: list) -> None:
+    """Markdown for outline command."""
+    if "outlines" in data:
+        # Workspace outline
+        lines.append(f"## Workspace Outline ({data.get('files_outlined', 0)} files)")
+        lines.append("")
+        for outline in data.get("outlines", []):
+            file = outline.get("file", "")
+            lang = outline.get("language", "")
+            lines.append(f"### `{file}` ({lang})")
+            ol = outline.get("outline", {})
+            for key, items in ol.items():
+                if isinstance(items, list) and items:
+                    lines.append(f"- **{key}:** {len(items)}")
+            lines.append("")
+    else:
+        # Single file outline
+        file = data.get("file", "")
+        lines.append(f"## Outline: `{file}`")
+        lines.append("")
+        ol = data.get("outline", {})
+        for key, items in ol.items():
+            if isinstance(items, list) and items:
+                lines.append(f"- **{key}:** {len(items)}")
+
+
+def _md_impact(data: Dict, lines: list) -> None:
+    """Markdown for impact command."""
+    lines.append(f"## Impact Analysis: `{data.get('symbol', '')}`")
+    lines.append("")
+    risk = data.get("risk_level", data.get("risk", ""))
+    action_plan = data.get("recommended_action", data.get("action", ""))
+    if risk:
+        lines.append(f"**Risk Level:** {risk}")
+    if action_plan:
+        lines.append(f"**Recommended Action:** {action_plan}")
+    lines.append("")
+    affected = data.get("affected", data.get("affected_files", []))
+    if affected:
+        lines.append("### Affected")
+        for a in affected[:20]:
+            if isinstance(a, dict):
+                lines.append(f"- `{a.get('file', '')}:{a.get('line', '')}` — {a.get('type', a.get('fn', ''))}")
+            else:
+                lines.append(f"- {a}")
+        lines.append("")
+
+
+def _md_trace(data: Dict, lines: list) -> None:
+    """Markdown for trace command."""
+    lines.append(f"## Trace: `{data.get('symbol', data.get('name', ''))}`")
+    lines.append("")
+    direction = data.get("direction", "")
+    if direction:
+        lines.append(f"**Direction:** {direction}")
+    lines.append("")
+    chains = data.get("chains", data.get("trace", []))
+    if chains:
+        for chain in chains[:10]:
+            if isinstance(chain, dict):
+                path = chain.get("path", [])
+                lines.append(f"- {' → '.join(str(p) for p in path)}")
+            elif isinstance(chain, list):
+                lines.append(f"- {' → '.join(str(p) for p in chain)}")
+            else:
+                lines.append(f"- {chain}")
+        lines.append("")
+
+
+def _md_smell(data: Dict, lines: list) -> None:
+    """Markdown for smell command."""
+    stats = data.get("stats", {})
+    lines.append("## Code Smells")
+    lines.append("")
+    lines.append(f"**Health Score:** {stats.get('health_score', 0)}/100")
+    lines.append(f"- Critical: {stats.get('critical', 0)} | Warning: {stats.get('warning', 0)} | Info: {stats.get('info', 0)}")
+    lines.append("")
+    top = data.get("top_priority", [])
+    if top:
+        lines.append("### Top Priority")
+        for smell in top[:10]:
+            cat = smell.get("category", "")
+            file = smell.get("file", "")
+            line = smell.get("line", "")
+            msg = smell.get("message", "")
+            sev = smell.get("severity", "")
+            lines.append(f"- [{sev.upper()}] `{file}:{line}` — {cat}: {msg}")
+        lines.append("")
+
+
+def _md_dead_code(data: Dict, lines: list) -> None:
+    """Markdown for dead-code command."""
+    stats = data.get("stats", {})
+    lines.append("## Dead Code Analysis")
+    lines.append("")
+    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
+    lines.append(f"- Unreachable: {stats.get('unreachable', 0)} | Unused exports: {stats.get('unused_exports', 0)} | Zombie CSS: {stats.get('zombie_css', 0)}")
+    removal_safety = data.get("removal_safety", "")
+    if removal_safety:
+        lines.append(f"- **Removal safety:** {removal_safety}")
+    lines.append("")
+    items = data.get("dead_items", data.get("items", []))
+    if items:
+        lines.append("### Items")
+        for item in items[:15]:
+            file = item.get("file", "")
+            line = item.get("line", "")
+            dtype = item.get("type", item.get("category", ""))
+            name = item.get("name", item.get("fn", ""))
+            lines.append(f"- `{file}:{line}` — {dtype}: {name}")
+        lines.append("")
+
+
+def _md_circular(data: Dict, lines: list) -> None:
+    """Markdown for circular command."""
+    chains = data.get("chains", [])
+    lines.append("## Circular Dependencies")
+    lines.append("")
+    lines.append(f"**Found:** {len(chains)} circular chain(s)")
+    lines.append("")
+    for chain in chains[:10]:
+        path = chain.get("path", chain) if isinstance(chain, dict) else chain
+        if isinstance(path, list):
+            lines.append(f"- {' → '.join(str(p) for p in path)}")
+        else:
+            lines.append(f"- {path}")
+    lines.append("")
+
+
+def _md_handbook(data: Dict, lines: list) -> None:
+    """Markdown for handbook command."""
+    identity = data.get("identity", {})
+    meta = data.get("meta", {})
+    health = data.get("health", {})
+    structure = data.get("structure", {})
+    conventions = data.get("conventions", {})
+    risks = data.get("risks", [])
+    qr = data.get("quick_reference", {})
+
+    lines.append(f"# Project Handbook: {identity.get('name', 'unknown')}")
+    lines.append("")
+
+    desc = identity.get("description", "")
+    if desc:
+        lines.append(f"**{desc}**")
+        lines.append("")
+
+    fws = data.get("frameworks", [])
+    lines.append(f"Type: **{identity.get('type', 'unknown')}** | Version: {identity.get('version', '0.0.0')} | Frameworks: {', '.join(fws) if fws else 'none'}")
+    lines.append("")
+
+    lines.append(f"## Health: {health.get('score', 0)}/100")
+    lines.append(f"- Smells: {health.get('smells_count', 0)} | Critical: {health.get('critical', 0)} | Warning: {health.get('warning', 0)}")
+    lines.append("")
+
+    # Structure
+    dir_map = structure.get("directory_map", {})
+    if dir_map:
+        lines.append("## Structure")
+        for dir_path, desc in dir_map.items():
+            lines.append(f"- `{dir_path}` — {desc}")
+        lines.append("")
+
+    # Quick Reference
+    lines.append("## Quick Reference")
+    lines.append(f"- Files: {qr.get('total_files', 0)} | Functions: {qr.get('total_functions', 0)} | Classes: {qr.get('total_classes', 0)} | Exports: {qr.get('total_exports', 0)}")
+    lines.append("")
+
+    # Risks
+    if risks:
+        lines.append("## Risks")
+        for r in risks:
+            rtype = r.get("type", "")
+            count = r.get("count", 0)
+            desc = r.get("description", "")
+            if count:
+                lines.append(f"- {rtype.replace('_', ' ')}: {count}")
+            elif desc:
+                lines.append(f"- {desc}")
+        lines.append("")
+
+    # Conventions
+    naming = conventions.get("naming", {})
+    if naming:
+        lines.append("## Conventions")
+        for key, val in naming.items():
+            lines.append(f"- {key}: {val}")
+        lines.append("")
+
+    lines.append(f"Generated: {meta.get('generated_at', 'unknown')}")
+
+
+def _md_entrypoints(data: Dict, lines: list) -> None:
+    """Markdown for entrypoints command."""
+    lines.append("## Entrypoints")
+    lines.append("")
+    eps = data.get("entrypoints", [])
+    for ep in eps[:20]:
+        etype = ep.get("type", "")
+        file = ep.get("file", "")
+        line = ep.get("line", "")
+        label = ep.get("label", "")
+        extra = ""
+        if etype == "http_handler":
+            extra = f" `{ep.get('method', '')} {ep.get('path', '')}`"
+        lines.append(f"- [{etype}] `{file}:{line}` — {label}{extra}")
+    lines.append("")
+
+
+def _md_api_map(data: Dict, lines: list) -> None:
+    """Markdown for api-map command."""
+    lines.append("## API Routes")
+    lines.append("")
+    routes = data.get("routes", [])
+    for r in routes[:30]:
+        method = r.get("method", "GET")
+        path = r.get("path", "/")
+        handler = r.get("handler_name", "")
+        file = r.get("file", "")
+        auth = " [auth]" if r.get("auth_protected") else ""
+        lines.append(f"- **{method}** `{path}` → {handler} (`{file}`){auth}")
+    lines.append("")
+
+
+def _md_complexity(data: Dict, lines: list) -> None:
+    """Markdown for complexity command."""
+    stats = data.get("stats", {})
+    lines.append("## Complexity Analysis")
+    lines.append("")
+    lines.append(f"- Total functions: {stats.get('total_functions', 0)}")
+    lines.append(f"- Avg cyclomatic: {stats.get('avg_cyclomatic', 0):.1f} | Avg cognitive: {stats.get('avg_cognitive', 0):.1f}")
+    by_level = stats.get("by_complexity_level", {})
+    if by_level:
+        parts = [f"{k}: {v}" for k, v in by_level.items() if v > 0]
+        lines.append(f"- Levels: {', '.join(parts)}")
+    lines.append("")
+    hotspots = data.get("hotspots", [])
+    if hotspots:
+        lines.append("### Hotspots")
+        for hs in hotspots[:10]:
+            lines.append(f"- `{hs.get('file', '')}:{hs.get('line', '')}` — {hs.get('name', '')} (CC={hs.get('cyclomatic', 0)})")
+        lines.append("")
+
+
+def _md_secrets(data: Dict, lines: list) -> None:
+    """Markdown for secrets command."""
+    stats = data.get("stats", {})
+    lines.append("## Secrets Scan")
+    lines.append("")
+    lines.append(f"- Total secrets: {stats.get('total_secrets', 0)}")
+    lines.append("")
+    findings = data.get("findings", [])
+    if findings:
+        lines.append("### Findings")
+        for f in findings[:15]:
+            lines.append(f"- [{f.get('severity', '').upper()}] `{f.get('file', '')}:{f.get('line', '')}` — {f.get('type', '')}")
+        lines.append("")
+
+
+def _md_side_effect(data: Dict, lines: list) -> None:
+    """Markdown for side-effect command."""
+    stats = data.get("stats", {})
+    lines.append("## Side Effect Analysis")
+    lines.append("")
+    lines.append(f"- Pure: {stats.get('pure', 0)} | Impure: {stats.get('impure', 0)} | Purity ratio: {stats.get('purity_ratio', 0):.0%}")
+    effects = stats.get("effect_summary", {})
+    if effects:
+        parts = [f"{k}: {v}" for k, v in effects.items() if v > 0]
+        lines.append(f"- Effects: {', '.join(parts)}")
+    lines.append("")
+    functions = data.get("functions", [])
+    if functions:
+        lines.append("### Impure Functions")
+        for fn in functions[:15]:
+            if fn.get("classification") == "impure":
+                effects_list = ", ".join(e.get("type", "") for e in fn.get("side_effects", []))
+                lines.append(f"- `{fn.get('file', '')}:{fn.get('line', '')}` — {fn.get('name', '')} ({effects_list})")
+        lines.append("")
+
+
+# ─── Handbook Command ────────────────────────────────────────
+
+def _extract_project_identity(workspace: str) -> Dict[str, Any]:
+    """Extract project identity from package.json, pyproject.toml, or README."""
+    identity = {
+        "name": os.path.basename(workspace),
+        "description": "",
+        "version": "0.0.0",
+        "type": "unknown"
+    }
+
+    # Try package.json
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            identity["name"] = pkg.get("name", identity["name"])
+            identity["version"] = pkg.get("version", identity["version"])
+            identity["description"] = pkg.get("description", "")
+            # Detect type
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            if "next" in deps:
+                identity["type"] = "fullstack-web-app"
+            elif "express" in deps or "fastify" in deps or "koa" in deps:
+                identity["type"] = "backend-api"
+            elif "react" in deps or "vue" in deps or "svelte" in deps:
+                identity["type"] = "frontend-app"
+            else:
+                identity["type"] = "node-project"
+        except Exception:
+            pass
+
+    # Try pyproject.toml
+    pyproject_path = os.path.join(workspace, 'pyproject.toml')
+    if os.path.isfile(pyproject_path) and identity["type"] == "unknown":
+        try:
+            with open(pyproject_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Simple extraction without tomllib
+            import re as _re
+            name_match = _re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = _re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            if "fastapi" in content or "flask" in content or "django" in content:
+                identity["type"] = "backend-api"
+            elif "pytest" in content:
+                identity["type"] = "python-library"
+            else:
+                identity["type"] = "python-project"
+        except Exception:
+            pass
+
+    # Try Cargo.toml
+    cargo_path = os.path.join(workspace, 'Cargo.toml')
+    if os.path.isfile(cargo_path) and identity["type"] == "unknown":
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            import re as _re
+            name_match = _re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = _re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            identity["type"] = "rust-project"
+        except Exception:
+            pass
+
+    return identity
+
+
+def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
+    """Build a one-level-deep directory map with descriptions."""
+    ignore_dirs = {
+        'node_modules', '.git', 'dist', 'build', 'target',
+        '__pycache__', '.codelens', '.next', '.cache',
+        'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
+        '_archive', 'coverage', '.pytest_cache', '.tox',
+    }
+    dir_map = {}
+    try:
+        for entry in sorted(os.listdir(workspace)):
+            full = os.path.join(workspace, entry)
+            if os.path.isdir(full) and entry not in ignore_dirs and not entry.startswith('.'):
+                # Count source files in dir (one level)
+                src_count = 0
+                try:
+                    for f in os.listdir(full):
+                        if os.path.isfile(os.path.join(full, f)):
+                            ext = os.path.splitext(f)[1].lower()
+                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
+                                src_count += 1
+                except Exception:
+                    pass
+                desc = f"{src_count} source file{'s' if src_count != 1 else ''}" if src_count else "directory"
+                dir_map[entry + '/'] = desc
+    except Exception:
+        pass
+    return dir_map
+
+
+def _detect_conventions(workspace: str) -> Dict[str, Any]:
+    """Detect coding conventions from the codebase."""
+    conventions = {
+        "naming": {},
+        "patterns": {}
+    }
+
+    # Try to import convention_engine if it exists
+    try:
+        from convention_engine import detect_conventions
+        result = detect_conventions(workspace)
+        if result.get("status") == "ok":
+            return result.get("conventions", conventions)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    # Fallback: basic convention detection from filenames
+    import re as _re
+    files = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in {
+            'node_modules', '.git', 'dist', 'build', 'target',
+            '__pycache__', '.codelens', '.next', '.cache', 'vendor',
+            '.venv', 'venv', 'env', '_archive'
+        } and not d.startswith('.')]
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in {'.py', '.js', '.ts', '.tsx', '.rs'}:
+                files.append(fn)
+
+    # Detect file naming convention
+    snake_count = sum(1 for f in files if '_' in os.path.splitext(f)[0] and f == f.lower())
+    kebab_count = sum(1 for f in files if '-' in os.path.splitext(f)[0] and f == f.lower())
+    camel_count = sum(1 for f in files if _re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+    pascal_count = sum(1 for f in files if f[0].isupper() and f[0].isalpha())
+
+    if snake_count > kebab_count and snake_count > camel_count:
+        conventions["naming"]["files"] = "snake_case"
+    elif kebab_count > snake_count and kebab_count > camel_count:
+        conventions["naming"]["files"] = "kebab-case"
+    elif pascal_count > camel_count:
+        conventions["naming"]["files"] = "PascalCase"
+    elif camel_count > 0:
+        conventions["naming"]["files"] = "camelCase"
+
+    # Detect Python vs JS conventions
+    py_files = [f for f in files if f.endswith('.py')]
+    js_files = [f for f in files if f.endswith(('.js', '.ts', '.tsx'))]
+
+    if py_files:
+        py_snake = sum(1 for f in py_files if '_' in os.path.splitext(f)[0])
+        if py_snake > len(py_files) * 0.5:
+            conventions["naming"]["python_files"] = "snake_case"
+
+    if js_files:
+        js_kebab = sum(1 for f in js_files if '-' in os.path.splitext(f)[0])
+        js_camel = sum(1 for f in js_files if _re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+        if js_kebab > js_camel:
+            conventions["naming"]["javascript_files"] = "kebab-case"
+        elif js_camel > 0:
+            conventions["naming"]["javascript_files"] = "camelCase"
+
+    return conventions
+
+
+def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
+    """Generate .codelens/AGENT.md from handbook data."""
+    lines = []
+    identity = handbook.get("identity", {})
+    meta = handbook.get("meta", {})
+    health = handbook.get("health", {})
+    structure = handbook.get("structure", {})
+    conventions = handbook.get("conventions", {})
+    risks = handbook.get("risks", [])
+    qr = handbook.get("quick_reference", {})
+
+    lines.append(f"# Project Brief: {identity.get('name', 'unknown')}")
+    lines.append("")
+
+    # Overview
+    lines.append("## Overview")
+    desc = identity.get("description", "")
+    if desc:
+        lines.append(desc)
+    fws = handbook.get("frameworks", [])
+    if fws:
+        lines.append(f"Frameworks: {', '.join(fws)}")
+    ptype = identity.get("type", "")
+    if ptype != "unknown":
+        lines.append(f"Type: {ptype}")
+    lines.append(f"Version: {identity.get('version', '0.0.0')}")
+    lines.append("")
+
+    # Structure
+    dir_map = structure.get("directory_map", {})
+    if dir_map:
+        lines.append("## Structure")
+        for dir_path, desc in dir_map.items():
+            lines.append(f"- `{dir_path}` — {desc}")
+        lines.append("")
+
+    # Entry Points
+    entrypoints = structure.get("entrypoints", [])
+    if entrypoints:
+        lines.append("## Key Entry Points")
+        for ep in entrypoints[:15]:
+            lines.append(f"- `{ep.get('file', '')}:{ep.get('line', '')}` — {ep.get('label', ep.get('type', ''))} ({ep.get('type', '')})")
+        lines.append("")
+
+    # API Surface
+    api_routes = structure.get("api_routes", [])
+    if api_routes:
+        lines.append("## API Surface")
+        for r in api_routes[:20]:
+            lines.append(f"- {r.get('method', 'GET')} `{r.get('path', '/')}` — {r.get('handler', '')} ({r.get('file', '')})")
+        lines.append("")
+
+    # State Management
+    state = structure.get("state_management", [])
+    if state:
+        lines.append("## State Management")
+        for s in state:
+            lines.append(f"- `{s.get('name', '')}` ({s.get('type', '')}, {s.get('framework', '')}) — {s.get('file', '')}")
+        lines.append("")
+
+    # Conventions
+    naming = conventions.get("naming", {})
+    patterns = conventions.get("patterns", {})
+    if naming or patterns:
+        lines.append("## Conventions")
+        for key, val in naming.items():
+            lines.append(f"- {key}: {val}")
+        for key, val in patterns.items():
+            lines.append(f"- {key}: {val}")
+        lines.append("")
+
+    # Health
+    score = health.get("score", 0)
+    lines.append(f"## Health Score: {score}/100")
+    risk_parts = []
+    for r in risks:
+        rtype = r.get("type", "")
+        count = r.get("count", 0)
+        desc = r.get("description", "")
+        if count:
+            risk_parts.append(f"{count} {rtype.replace('_', ' ')}")
+        elif desc:
+            risk_parts.append(desc)
+    if risk_parts:
+        lines.append("- " + ", ".join(risk_parts))
+    lines.append("")
+
+    # Quick Reference
+    lines.append("## Quick Reference")
+    lines.append(f"- Files: {qr.get('total_files', 0)}")
+    lines.append(f"- Functions: {qr.get('total_functions', 0)}")
+    lines.append(f"- Classes: {qr.get('total_classes', 0)}")
+    lines.append(f"- Exports: {qr.get('total_exports', 0)}")
+    lines.append("")
+
+    langs = handbook.get("files_by_language", {})
+    if langs:
+        lines.append("## Languages")
+        for lang, count in sorted(langs.items(), key=lambda x: -x[1]):
+            lines.append(f"- {lang}: {count} files")
+        lines.append("")
+
+    lines.append(f"## Last Scanned: {meta.get('generated_at', 'unknown')}")
+    lines.append("")
+
+    content = "\n".join(lines)
+    codelens_dir = os.path.join(workspace, '.codelens')
+    os.makedirs(codelens_dir, exist_ok=True)
+    agent_md_path = os.path.join(codelens_dir, 'AGENT.md')
+    with open(agent_md_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
+def cmd_handbook(workspace: str) -> Dict[str, Any]:
+    """
+    Generate a comprehensive project handbook for AI agents.
+    Aggregates data from multiple engines into one output.
+    Also writes .codelens/handbook.json and .codelens/AGENT.md.
+    """
+    workspace = os.path.abspath(workspace)
+    config = load_config(workspace)
+    ensure_codelens_dir(workspace)
+
+    # 1. Identity — extract from package.json / pyproject.toml / README
+    identity = _extract_project_identity(workspace)
+
+    # 2. Run scan first (needed for registry data)
+    scan_result = cmd_scan(workspace)
+
+    # 3. Generate output files (outline.json, summary.json)
+    try:
+        _write_output_files(workspace, scan_result)
+    except Exception:
+        pass
+
+    # 4. Frameworks
+    try:
+        fw_result = detect_frameworks(workspace)
+        frameworks = fw_result.get("frameworks", [])
+    except Exception:
+        frameworks = config.get("frameworks", [])
+
+    # 5. Health (from smell engine)
+    try:
+        smell_result = detect_smells(workspace)
+        health = {
+            "score": smell_result.get("stats", {}).get("health_score", 0),
+            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+            "critical": smell_result.get("stats", {}).get("critical", 0),
+            "warning": smell_result.get("stats", {}).get("warning", 0),
+        }
+    except Exception:
+        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+
+    # 6. Entrypoints
+    try:
+        ep_result = map_entrypoints(workspace)
+        entrypoints = [
+            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+            for e in ep_result.get("entrypoints", [])[:30]
+        ]
+    except Exception:
+        entrypoints = []
+
+    # 7. API Routes
+    try:
+        api_result = map_api_routes(workspace)
+        api_routes = [
+            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+            for r in api_result.get("routes", [])[:50]
+        ]
+    except Exception:
+        api_routes = []
+
+    # 8. State management
+    try:
+        state_result = map_state(workspace)
+        state_stores = [
+            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+            for s in state_result.get("stores", [])[:20]
+        ]
+    except Exception:
+        state_stores = []
+
+    # 9. Risks (circular deps, dead code, secrets)
+    risks = []
+    try:
+        circ_result = detect_circular(workspace)
+        for chain in circ_result.get("chains", [])[:5]:
+            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+    except Exception:
+        pass
+    try:
+        dead_result = detect_dead_code(workspace)
+        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+        if dead_count > 0:
+            risks.append({"type": "dead_code", "count": dead_count})
+    except Exception:
+        pass
+    try:
+        secrets_result = detect_secrets(workspace)
+        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+        if secrets_count > 0:
+            risks.append({"type": "secrets", "count": secrets_count})
+    except Exception:
+        pass
+    try:
+        vuln_result = scan_vulnerabilities(workspace)
+        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+        if vuln_count > 0:
+            risks.append({"type": "vulnerabilities", "count": vuln_count})
+    except Exception:
+        pass
+
+    # 10. Directory map
+    directory_map = _build_directory_map(workspace, config)
+
+    # 11. Quick reference from summary
+    try:
+        summary = _compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+    except Exception:
+        summary = {}
+
+    # 12. Conventions (from convention_engine if available)
+    conventions = _detect_conventions(workspace)
+
+    # Build handbook
+    handbook = {
+        "meta": {
+            "workspace": workspace,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "codelens_version": "5.2.0"
+        },
+        "identity": identity,
+        "frameworks": frameworks,
+        "structure": {
+            "directory_map": directory_map,
+            "entrypoints": entrypoints,
+            "api_routes": api_routes,
+            "state_management": state_stores
+        },
+        "health": health,
+        "conventions": conventions,
+        "risks": risks,
+        "quick_reference": {
+            "total_files": summary.get("files", 0),
+            "total_functions": summary.get("functions", 0),
+            "total_classes": summary.get("classes", 0),
+            "total_exports": summary.get("exports", 0),
+            "backend_nodes": summary.get("backend_nodes", 0),
+            "backend_edges": summary.get("backend_edges", 0),
+            "frontend_classes": summary.get("frontend_classes", 0),
+            "frontend_ids": summary.get("frontend_ids", 0),
+        },
+        "files_by_language": summary.get("files_by_language", {})
+    }
+
+    # Write handbook.json
+    codelens_dir = os.path.join(workspace, '.codelens')
+    os.makedirs(codelens_dir, exist_ok=True)
+    handbook_path = os.path.join(codelens_dir, 'handbook.json')
+    with open(handbook_path, 'w', encoding='utf-8') as f:
+        json.dump(handbook, f, indent=2, ensure_ascii=False)
+
+    # Generate AGENT.md
+    _generate_agent_md(workspace, handbook)
+
+    return handbook
 
 
 # ─── Watch Command ────────────────────────────────────────────
@@ -1111,7 +2307,7 @@ _WATCH_EXTENSIONS = frozenset({
 })
 
 
-def _write_watch_output(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
+def _write_output_files(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
     """
     After a scan, generate outline.json and summary.json into .codelens/.
     Returns the summary dict for terminal display.
@@ -1129,7 +2325,7 @@ def _write_watch_output(workspace: str, scan_result: Dict[str, Any]) -> Dict[str
             json.dump(outline_data, f, indent=2, ensure_ascii=False)
 
         # Compute aggregate summary
-        summary = _compute_watch_summary(workspace, outline_data, scan_result)
+        summary = _compute_summary(workspace, outline_data, scan_result)
 
         # Write summary.json
         summary_path = os.path.join(codelens_dir, 'summary.json')
@@ -1142,7 +2338,7 @@ def _write_watch_output(workspace: str, scan_result: Dict[str, Any]) -> Dict[str
         return {}
 
 
-def _compute_watch_summary(
+def _compute_summary(
     workspace: str,
     outline_data: Dict[str, Any],
     scan_result: Dict[str, Any]
@@ -1276,7 +2472,7 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
             pass
 
         # Generate outline.json + summary.json
-        summary = _write_watch_output(workspace, scan_result)
+        summary = _write_output_files(workspace, scan_result)
         print(_format_watch_summary(summary, changed_count=len(changed)))
 
     # ─── Initial scan ──────────────────────────────────────
@@ -1292,7 +2488,7 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
         pass
 
     # Generate outline.json + summary.json
-    summary = _write_watch_output(workspace, scan_result)
+    summary = _write_output_files(workspace, scan_result)
     print(_format_watch_summary(summary))
 
     # ─── Start watcher ─────────────────────────────────────
@@ -1364,7 +2560,7 @@ def _watch_polling(
                 save_snapshot(workspace, frontend, backend)
             except Exception:
                 pass
-            summary = _write_watch_output(workspace, scan_result)
+            summary = _write_output_files(workspace, scan_result)
             print(_format_watch_summary(summary, changed_count=len(changed)))
 
         def on_change_callback(filepath):
@@ -1473,6 +2669,15 @@ def main():
     watch_parser.add_argument("workspace", nargs="?", default=None, help="Path to workspace root (auto-detected if omitted)")
     watch_parser.add_argument("--debounce", "-d", type=float, default=0.5,
                                help="Debounce interval in seconds (default: 0.5)")
+
+    # handbook command
+    handbook_parser = subparsers.add_parser("handbook", help="Generate project handbook for AI agents")
+    handbook_parser.add_argument("workspace", nargs="?", default=None, help="Path to workspace root (auto-detected if omitted)")
+
+    # ask command
+    ask_parser = subparsers.add_parser("ask", help="Ask a question in natural language")
+    ask_parser.add_argument("question", help="Natural language question about the codebase")
+    ask_parser.add_argument("workspace", nargs="?", default=None, help="Path to workspace root (auto-detected if omitted)")
 
     # init command
     init_parser = subparsers.add_parser("init", help="Initialize .codelens with auto-detected config")
@@ -1752,6 +2957,10 @@ def main():
     a11y_parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
                               help="Filter by severity")
 
+    # Global format option
+    parser.add_argument("--format", "-f", choices=["json", "markdown"], default="json",
+                        help="Output format (default: json)")
+
     # ─── Parse and dispatch ─────────────────────────────
 
     args = parser.parse_args()
@@ -1776,26 +2985,36 @@ def main():
                 save_snapshot(workspace, frontend, backend)
             except Exception:
                 pass
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            # Generate outline.json + summary.json
+            try:
+                _write_output_files(workspace, result)
+                result["outline_generated"] = True
+            except Exception:
+                result["outline_generated"] = False
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "query":
             result = cmd_query(args.name, workspace, args.domain, args.file)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "list":
             result = cmd_list(workspace, args.domain, args.filter_type)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "watch":
             cmd_watch(workspace, debounce=args.debounce)
 
+        elif args.command == "handbook":
+            result = cmd_handbook(workspace)
+            print(_format_output(result, args.format, args.command))
+
         elif args.command == "init":
             result = cmd_init(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "detect":
             result = cmd_detect(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         # ─── P1 Commands ────────────────────────────────────
 
@@ -1811,7 +3030,7 @@ def main():
                 whole_word=args.whole_word,
                 config=config
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "symbols":
             args.workspace = workspace
@@ -1824,7 +3043,7 @@ def main():
                 max_depth=args.depth,
                 domain=args.domain
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "impact":
             result = analyze_impact(
@@ -1833,7 +3052,22 @@ def main():
                 domain=args.domain,
                 depth=args.depth
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            # Add decision tree fields
+            if result.get("status") == "ok":
+                affected_count = len(result.get("affected", result.get("affected_files", [])))
+                if affected_count == 0:
+                    result["risk_level"] = "low"
+                    result["recommended_action"] = "Safe to proceed. No dependent code found."
+                elif affected_count <= 3:
+                    result["risk_level"] = "medium"
+                    result["recommended_action"] = "Proceed with caution. Review affected code before changing."
+                elif affected_count <= 10:
+                    result["risk_level"] = "high"
+                    result["recommended_action"] = "High risk. Thoroughly test all affected code after changes."
+                else:
+                    result["risk_level"] = "critical"
+                    result["recommended_action"] = "Critical risk. Consider refactoring to reduce dependencies first."
+            print(_format_output(result, args.format, args.command))
 
         # ─── P2 Commands ────────────────────────────────────
 
@@ -1844,26 +3078,27 @@ def main():
                 result = get_file_outline(args.file, workspace, detail_level=args.detail)
             else:
                 result = get_workspace_outline(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "missing-refs":
             result = detect_missing_refs(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "diff":
             if args.list_snapshots:
                 snaps = list_snapshots(workspace)
-                print(json.dumps({"snapshots": snaps}, indent=2, ensure_ascii=False))
+                result = {"snapshots": snaps}
+                print(_format_output(result, args.format, args.command))
             elif args.snapshot1 or args.snapshot2:
                 result = diff_snapshots(workspace, args.snapshot1, args.snapshot2)
-                print(json.dumps(result, indent=2, ensure_ascii=False))
+                print(_format_output(result, args.format, args.command))
             else:
                 result = diff_current_vs_last(workspace)
-                print(json.dumps(result, indent=2, ensure_ascii=False))
+                print(_format_output(result, args.format, args.command))
 
         elif args.command == "circular":
             result = detect_circular(workspace, domain=args.domain)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         # ─── P3 Commands ────────────────────────────────────
 
@@ -1874,7 +3109,76 @@ def main():
                 context_lines=args.context_lines,
                 include_code=not args.no_code
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            # Enrich with quality metrics
+            if result.get("found") and result.get("context"):
+                quality = {}
+                try:
+                    from complexity_engine import compute_complexity
+                    comp = compute_complexity(workspace, function_name=args.name)
+                    if comp.get("status") == "ok" and comp.get("result"):
+                        fn_data = comp["result"]
+                        if isinstance(fn_data, dict):
+                            quality["complexity"] = fn_data.get("cyclomatic", "N/A")
+                            quality["complexity_level"] = fn_data.get("complexity_level", "N/A")
+                        elif isinstance(fn_data, list) and fn_data:
+                            quality["complexity"] = fn_data[0].get("cyclomatic", "N/A")
+                            quality["complexity_level"] = fn_data[0].get("complexity_level", "N/A")
+                except Exception:
+                    pass
+
+                try:
+                    from sideeffect_engine import analyze_side_effects
+                    se = analyze_side_effects(workspace, function_name=args.name)
+                    if se.get("status") == "ok":
+                        analyses = se.get("analyses", [])
+                        if analyses:
+                            fn_se = analyses[0]
+                            quality["side_effects"] = fn_se.get("classification", "unknown") != "pure"
+                            quality["side_effect_types"] = [e.get("type") for e in fn_se.get("side_effects", [])]
+                        else:
+                            quality["side_effects"] = False
+                            quality["side_effect_types"] = []
+                except Exception:
+                    pass
+
+                # Determine safety from existing data
+                defn = result["context"].get("definition") or {}
+                status = defn.get("status", "")
+                ref_count = defn.get("ref_count", 0)
+
+                if status == "dead":
+                    quality["safety"] = "safe_to_remove"
+                elif ref_count == 0:
+                    quality["safety"] = "safe_to_modify"
+                elif ref_count <= 2:
+                    quality["safety"] = "caution"
+                else:
+                    quality["safety"] = "high_impact"
+
+                # Check if in smell top_priority
+                try:
+                    from smell_engine import detect_smells
+                    smells = detect_smells(workspace)
+                    for s in smells.get("top_priority", []):
+                        fn_name = s.get("fn", "")
+                        if fn_name == args.name:
+                            quality.setdefault("smells", []).append(s.get("category", ""))
+                except Exception:
+                    pass
+
+                # Test coverage hint
+                try:
+                    from testmap_engine import map_test_coverage
+                    tc = map_test_coverage(workspace, function_name=args.name)
+                    if tc.get("status") == "ok":
+                        coverage = tc.get("coverage", {})
+                        quality["test_coverage"] = "covered" if coverage.get("has_tests") else "untested"
+                except Exception:
+                    pass
+
+                if quality:
+                    result["context"]["quality"] = quality
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "dependents":
             if args.direction == "graph":
@@ -1883,11 +3187,11 @@ def main():
                 result = get_dependencies(args.file, workspace, depth=args.depth)
             else:
                 result = get_dependents(args.file, workspace, depth=args.depth)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "validate":
             result = validate_registry(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         # ─── v3 P0 Commands ─────────────────────────────────
 
@@ -1898,7 +3202,7 @@ def main():
                 sink=args.sink,
                 max_depth=args.depth
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "smell":
             result = detect_smells(
@@ -1906,7 +3210,28 @@ def main():
                 categories=args.categories,
                 severity_filter=args.severity
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            # Add actionable priority list
+            if result.get("status") == "ok":
+                top = result.get("top_priority", [])
+                actionable = []
+                for item in top[:10]:
+                    severity = item.get("severity", "info")
+                    if severity == "critical":
+                        action = "FIX_IMMEDIATELY"
+                    elif severity == "warning":
+                        action = "PLAN_FIX"
+                    else:
+                        action = "CONSIDER"
+                    actionable.append({
+                        "action": action,
+                        "category": item.get("category", ""),
+                        "file": item.get("file", ""),
+                        "line": item.get("line", 0),
+                        "message": item.get("message", ""),
+                        "suggestion": item.get("suggestion", "")
+                    })
+                result["actionable_items"] = actionable
+            print(_format_output(result, args.format, args.command))
 
         # ─── v3 P1 Commands ─────────────────────────────────
 
@@ -1916,7 +3241,7 @@ def main():
                 function_name=args.name,
                 file_filter=args.file
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "refactor-safe":
             result = check_refactor_safety(
@@ -1924,14 +3249,32 @@ def main():
                 action=args.action,
                 new_name=args.new_name
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "dead-code":
             result = detect_dead_code(
                 workspace,
                 categories=args.categories
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            # Add removal safety assessment
+            if result.get("status") == "ok":
+                total_dead = result.get("stats", {}).get("total_dead", 0)
+                if total_dead == 0:
+                    result["removal_safety"] = "n/a"
+                    result["dependency_count"] = 0
+                else:
+                    # Count items with references (riskier to remove)
+                    items = result.get("dead_items", result.get("items", []))
+                    with_refs = sum(1 for item in items if item.get("ref_count", 0) > 0)
+                    if with_refs == 0:
+                        result["removal_safety"] = "safe"
+                    elif with_refs < total_dead * 0.3:
+                        result["removal_safety"] = "mostly_safe"
+                    else:
+                        result["removal_safety"] = "caution"
+                    result["dependency_count"] = with_refs
+                    result["recommended_action"] = "Review before removing. Some dead code may still be referenced indirectly." if with_refs > 0 else "Safe to remove. No references found."
+            print(_format_output(result, args.format, args.command))
 
         # ─── v3 P2 Commands ─────────────────────────────────
 
@@ -1941,7 +3284,7 @@ def main():
                 error_type=args.error_type,
                 max_depth=args.depth
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "test-map":
             result = map_test_coverage(
@@ -1949,11 +3292,11 @@ def main():
                 function_name=args.function_name,
                 file_filter=args.file
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "config-drift":
             result = detect_config_drift(workspace)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         # ─── v3 P3 Commands ─────────────────────────────────
 
@@ -1963,7 +3306,7 @@ def main():
                 file_path=args.file,
                 function_name=args.function_name
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "ownership":
             result = analyze_ownership(
@@ -1971,48 +3314,52 @@ def main():
                 file_path=args.file,
                 function_name=args.function_name
             )
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "secrets":
             result = detect_secrets(workspace, severity=args.severity)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "entrypoints":
             result = map_entrypoints(workspace, entry_type=args.entry_type)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "api-map":
             result = map_api_routes(workspace, method=args.method, path_filter=args.path_filter)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "state-map":
             result = map_state(workspace, store_name=args.store_name)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "env-check":
             result = check_env_vars(workspace, var_name=args.var_name)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "debug-leak":
             result = detect_debug_leaks(workspace, category=args.category)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "complexity":
             result = compute_complexity(workspace, function_name=args.name,
                                          file_filter=args.file, threshold=args.threshold)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "regex-audit":
             result = audit_regex_patterns(workspace, severity=args.severity)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
         elif args.command == "a11y":
             result = audit_accessibility(workspace, category=args.category, severity=args.severity)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "vuln-scan":
             result = scan_vulnerabilities(workspace, severity=args.severity)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "perf-hint":
             result = detect_perf_hints(workspace, severity=args.severity, category=args.category)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
 
         elif args.command == "css-deep":
             result = analyze_css_deep(workspace, severity=args.severity, category=args.category)
-            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(_format_output(result, args.format, args.command))
+
+        elif args.command == "ask":
+            result = cmd_ask(args.question, workspace)
+            print(_format_output(result, args.format, result.get("query_interpretation", {}).get("interpreted_as", "ask")))
 
         else:
             parser.print_help()
@@ -2024,7 +3371,7 @@ def main():
             "error": str(e),
             "error_type": type(e).__name__
         }
-        print(json.dumps(error_result, indent=2, ensure_ascii=False), file=sys.stderr)
+        print(_format_output(error_result, args.format, args.command), file=sys.stderr)
         sys.exit(1)
 
 

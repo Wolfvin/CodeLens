@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v5 — Quick Reference
+# CodeLens v5.2 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -103,7 +103,7 @@ description: >
 
 ## Workspace Auto-Detect (v5.1)
 
-The `workspace` argument is now **optional** for ALL 39 commands.
+The `workspace` argument is now **optional** for ALL 41 commands.
 If omitted, CodeLens auto-detects via:
 1. Current directory (if has project markers: package.json, pyproject.toml, etc.)
 2. Parent directories (walk up to find project root)
@@ -117,7 +117,7 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 39 Commands Quick Reference
+## All 41 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|
@@ -127,39 +127,41 @@ $CLI smell             # Auto-detect → works!
 | 4 | `list` | P3 | List with filter |
 | 5 | `detect` | P3 | Detect frameworks |
 | 6 | `watch` | P3 | File watcher |
-| 7 | `search` | P1 | Regex search |
-| 8 | `symbols` | P1 | Registry symbol search |
-| 9 | `trace` | P1 | Call chain trace |
-| 10 | `impact` | P1 | Change impact analysis |
-| 11 | `outline` | P2 | File structure outline |
-| 12 | `missing-refs` | P2 | CSS/HTML mismatch |
-| 13 | `diff` | P2 | Registry diff |
-| 14 | `circular` | P2 | Circular dependency |
-| 15 | `context` | P1 | Rich symbol context |
-| 16 | `dependents` | P2 | Module import tracking |
-| 17 | `validate` | P3 | Registry sanity check |
-| 18 | `dataflow` | P0 | Source→sink analysis |
-| 19 | `smell` | P0 | Code smell detection |
-| 20 | `side-effect` | P1 | Pure vs impure |
-| 21 | `refactor-safe` | P1 | Rename/move safety |
-| 22 | `dead-code` | P1 | Enhanced dead code |
-| 23 | `stack-trace` | P2 | Error propagation |
-| 24 | `test-map` | P2 | Test coverage |
-| 25 | `config-drift` | P2 | Dependency drift |
-| 26 | `type-infer` | P3 | Type inference |
-| 27 | `ownership` | P3 | Code ownership |
-| 28 | `secrets` | P0 | Hardcoded secret scan |
-| 29 | `entrypoints` | P0 | Entry point mapping |
-| 30 | `api-map` | P1 | Route→handler mapping |
-| 31 | `state-map` | P1 | State management |
-| 32 | `env-check` | P1 | Environment audit |
-| 33 | `debug-leak` | P2 | Debug code detection |
-| 34 | `complexity` | P2 | Complexity scoring |
-| 35 | `regex-audit` | P3 | Regex safety audit |
-| 36 | `a11y` | P3 | Accessibility audit |
-| 37 | `vuln-scan` | P0 | CVE vulnerability scan |
-| 38 | `perf-hint` | P1 | Performance hints |
-| 39 | `css-deep` | P2 | Deep CSS analysis |
+| 7 | `handbook` | P0 | Project handbook for AI agents |
+| 8 | `ask` | P1 | Natural language query router |
+| 9 | `search` | P1 | Regex search |
+| 10 | `symbols` | P1 | Registry symbol search |
+| 11 | `trace` | P1 | Call chain trace |
+| 12 | `impact` | P1 | Change impact analysis |
+| 13 | `outline` | P2 | File structure outline |
+| 14 | `missing-refs` | P2 | CSS/HTML mismatch |
+| 15 | `diff` | P2 | Registry diff |
+| 16 | `circular` | P2 | Circular dependency |
+| 17 | `context` | P1 | Rich symbol context (+quality) |
+| 18 | `dependents` | P2 | Module import tracking |
+| 19 | `validate` | P3 | Registry sanity check |
+| 20 | `dataflow` | P0 | Source→sink analysis |
+| 21 | `smell` | P0 | Code smell detection |
+| 22 | `side-effect` | P1 | Pure vs impure |
+| 23 | `refactor-safe` | P1 | Rename/move safety |
+| 24 | `dead-code` | P1 | Enhanced dead code |
+| 25 | `stack-trace` | P2 | Error propagation |
+| 26 | `test-map` | P2 | Test coverage |
+| 27 | `config-drift` | P2 | Dependency drift |
+| 28 | `type-infer` | P3 | Type inference |
+| 29 | `ownership` | P3 | Code ownership |
+| 30 | `secrets` | P0 | Hardcoded secret scan |
+| 31 | `entrypoints` | P0 | Entry point mapping |
+| 32 | `api-map` | P1 | Route→handler mapping |
+| 33 | `state-map` | P1 | State management |
+| 34 | `env-check` | P1 | Environment audit |
+| 35 | `debug-leak` | P2 | Debug code detection |
+| 36 | `complexity` | P2 | Complexity scoring |
+| 37 | `regex-audit` | P3 | Regex safety audit |
+| 38 | `a11y` | P3 | Accessibility audit |
+| 39 | `vuln-scan` | P0 | CVE vulnerability scan |
+| 40 | `perf-hint` | P1 | Performance hints |
+| 41 | `css-deep` | P2 | Deep CSS analysis |
 
 ## CLI Usage Pattern
 
@@ -190,4 +192,9 @@ $CLI secrets
 $CLI vuln-scan
 $CLI perf-hint
 $CLI css-deep
+
+# Agent-first commands (NEW v5.2)
+$CLI handbook              # One-shot project orientation
+$CLI ask "dead code?"      # Natural language query
+$CLI context "fn" -f markdown  # Markdown output
 ```

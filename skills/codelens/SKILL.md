@@ -45,6 +45,17 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Performance Anti-Pattern Detection**: 8 categories — N+1 queries, sync blocking, memory leaks, expensive re-renders, large bundles, inefficient iterations, unoptimized images, cache misses
 - **Deep CSS Analysis**: Unused custom properties (--var), orphan @keyframes, specificity wars (!important overuse), duplicate property declarations, z-index abuse, non-standard @media breakpoints
 
+## What's New in v5.2 — Agent Optimization
+
+- **`handbook` command**: One-stop project orientation for AI agents. Aggregates identity, structure, health, conventions, risks, and quick reference into a single output. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`.
+- **`ask` command**: Natural language query router. Agents don't need to memorize 41 commands — just ask a question and CodeLens routes to the right tool.
+- **`--format markdown`**: Global flag on ALL commands. Output markdown instead of JSON for direct LLM consumption.
+- **`scan` generates `outline.json` + `summary.json`**: Previously only `watch` produced these AI-friendly files. Now `scan` does too.
+- **Decision trees in output**: `query` returns `action` + `action_reason`, `impact` returns `risk_level` + `recommended_action`, `smell` returns `actionable_items`, `dead-code` returns `removal_safety`.
+- **`context` enriched with quality metrics**: Adds `quality` block with complexity, side effects, safety assessment, smells, and test coverage.
+- **Convention detection**: New `convention_engine.py` detects naming conventions, file organization, import styles, component patterns, and error handling.
+- **`.codelens/AGENT.md`**: Auto-generated markdown project brief that can be included as system prompt context.
+
 ---
 
 ## Skill Location
@@ -165,13 +176,63 @@ python3 "$CODELENS_DIR/scripts/codelens.py" detect [/path/to/workspace]
 
 ```bash
 python3 "$CODELENS_DIR/scripts/codelens.py" watch [/path/to/workspace]
+
+# With custom debounce interval
+python3 "$CODELENS_DIR/scripts/codelens.py" watch --debounce 1.0
+```
+
+### 7. `codelens_handbook` — Project Handbook for AI Agents (NEW v5.2)
+
+One-stop project orientation. Aggregates data from 10+ engines into a single output. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`.
+
+**AI Use Case:** "I just landed on this project. Give me everything I need to know."
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" handbook [/path/to/workspace]
+
+# Markdown output (direct LLM consumption)
+python3 "$CODELENS_DIR/scripts/codelens.py" handbook --format markdown
+```
+
+**Returns:** identity (name, version, type, frameworks), structure (directory map, entrypoints, API routes, state management), health (score, smells, risks), conventions (naming, patterns), risks (circular deps, dead code, secrets, vulnerabilities), quick reference (file/function/class counts).
+
+### 8. `codelens_ask` — Natural Language Query (NEW v5.2)
+
+Ask a question in plain English. CodeLens routes to the appropriate command automatically.
+
+```bash
+python3 "$CODELENS_DIR/scripts/codelens.py" ask "where is authentication handled?"
+python3 "$CODELENS_DIR/scripts/codelens.py" ask "what functions are dead code?"
+python3 "$CODELENS_DIR/scripts/codelens.py" ask "which files use Redis?"
+python3 "$CODELENS_DIR/scripts/codelens.py" ask "what happens if I change verify_token"
+```
+
+**Supported queries:** "where is X", "dead code", "security", "how does X connect to Y", "API routes", "circular dependency", "test coverage", "performance", "overview", and more.
+
+---
+
+## Global Options (NEW v5.2)
+
+### `--format json|markdown`
+
+All commands support `--format markdown` for direct LLM consumption. JSON (default) is unchanged.
+
+```bash
+# JSON (default)
+python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" --format json
+
+# Markdown (for LLM prompt)
+python3 "$CODELENS_DIR/scripts/codelens.py" context "verify_token" --format markdown
+
+# Short form
+python3 "$CODELENS_DIR/scripts/codelens.py" smell -f markdown
 ```
 
 ---
 
 ## P1 Tools — Search, Trace, Impact
 
-### 7. `codelens_search` — Code Search
+### 9. `codelens_search` — Code Search
 
 Search regex pattern across the entire workspace. Like ripgrep but built-in.
 
@@ -899,7 +960,8 @@ When a user's request is vague and doesn't clearly map to a specific tool, use t
 | User reports a bug | `search` → `context` → `trace` → `missing-refs` | P1 |
 | User asks "is this secure?" | `secrets` → `dataflow` → `env-check` → `vuln-scan` | P0 |
 | User asks "is this production ready?" | `smell` → `complexity` → `debug-leak` → `dead-code` → `a11y` → `secrets` → `vuln-scan` | P0 |
-| User onboards to new codebase | `entrypoints` → `api-map` → `state-map` → `outline --all` | P0 |
+| User onboards to new codebase | `handbook` (single command replaces multi-step chain) | P0 |
+| User asks a vague question | `ask "question"` (NL router) | P1 |
 | User wants to rename/delete | `refactor-safe` → `impact` → `test-map` → rename → `scan --incremental` | P1 |
 | User deploys / pre-deploy check | `secrets` → `debug-leak` → `env-check` → `config-drift` → `vuln-scan` → `dead-code` | P0 |
 | User builds new feature | `query` → `context` → `side-effect` → write → `scan --incremental` → `missing-refs` | P1 |

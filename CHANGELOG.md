@@ -2,6 +2,23 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.2.0] — 2026-06-11
+
+### Added
+- `handbook` command — One-stop project orientation for AI agents. Aggregates identity, structure, health, conventions, risks, and quick reference. Writes `.codelens/handbook.json` and `.codelens/AGENT.md`
+- `ask` command — Natural language query router. 21 keyword pattern groups route plain English questions to the appropriate CodeLens command
+- `--format json|markdown` global flag on ALL commands. Markdown output for direct LLM consumption
+- `scan` now generates `outline.json` + `summary.json` in `.codelens/` (previously only `watch` did)
+- Decision trees in output: `query` returns `action` + `action_reason`, `impact` returns `risk_level` + `recommended_action`, `smell` returns `actionable_items`, `dead-code` returns `removal_safety` + `dependency_count`
+- `context` command enriched with `quality` block: complexity, side effects, safety assessment, smells, test coverage
+- `convention_engine.py` — Detects naming conventions, file organization, import styles, component patterns, error handling patterns
+- `.codelens/AGENT.md` auto-generated after `scan` and `handbook` — markdown project brief for system prompt context
+
+### Changed
+- Renamed `_write_watch_output` → `_write_output_files`, `_compute_watch_summary` → `_compute_summary` (no longer watch-specific)
+- Total commands: 39 → 41
+- Version: 5.1.0 → 5.2.0
+
 ## [5.1.0] — 2026-05-03
 
 ### Added
