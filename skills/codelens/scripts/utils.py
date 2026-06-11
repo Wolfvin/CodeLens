@@ -120,7 +120,7 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte', '.php'}
 
 
 # ─── Performance Safeguards ────────────────────────────────
@@ -279,6 +279,120 @@ def _human_size(size: int) -> str:
     return f"{size:.1f} TB"
 
 
+# ─── Source File Walking ────────────────────────────────────
+
+# Common source extensions used by multiple engines
+SOURCE_EXTENSIONS_ALL = {
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".rs", ".vue", ".svelte", ".php",
+    ".html", ".css", ".scss", ".less",
+}
+
+# Generated / lock / vendored file patterns — should be skipped by engines
+_GENERATED_PATTERNS = {
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock',
+    'composer.lock', 'Gemfile.lock', 'Cargo.lock', 'pipfile.lock', 'poetry.lock',
+    'go.sum', '.pnp.cjs', '.pnp.js',
+}
+
+
+def walk_source_files(
+    workspace: str,
+    extensions: Optional[set] = None,
+    max_files: int = MAX_FILES_DEFAULT,
+    ignore_dirs: Optional[frozenset] = None,
+) -> List[tuple]:
+    """Walk the workspace and yield source files matching the given extensions.
+
+    This is a shared utility used by multiple engines (smell, handbook, context,
+    ask) to avoid each engine reimplementing file discovery.
+
+    Args:
+        workspace: Absolute path to workspace root.
+        extensions: Set of file extensions to include (e.g., {'.js', '.ts'}).
+                    If None, uses SOURCE_EXTENSIONS_ALL.
+        max_files: Maximum number of files to return (performance safeguard).
+        ignore_dirs: Override for directories to ignore. Defaults to DEFAULT_IGNORE_DIRS.
+
+    Returns:
+        List of (rel_path, extension, content) tuples for each matching file.
+    """
+    workspace = os.path.abspath(workspace)
+    if extensions is None:
+        extensions = SOURCE_EXTENSIONS_ALL
+    if ignore_dirs is None:
+        ignore_dirs = DEFAULT_IGNORE_DIRS
+
+    results: List[tuple] = []
+    for root, dirs, filenames in os.walk(workspace):
+        # Prune ignored directories
+        rel_root = os.path.relpath(root, workspace)
+        parts = rel_root.replace('\\', '/').split('/')
+        if any(p in ignore_dirs for p in parts):
+            dirs.clear()
+            continue
+
+        # Don't descend into .codelens
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in extensions:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip generated/lock files
+            if is_generated_file(filename):
+                continue
+
+            content = safe_read_file(file_path)
+            if content is not None:
+                results.append((rel_path, ext, content))
+
+            if len(results) >= max_files:
+                return results
+
+    return results
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is a generated/lock/vendored file that should be skipped.
+
+    Args:
+        filename: Just the filename (not the full path), e.g. 'package-lock.json'.
+
+    Returns:
+        True if the file should be skipped during analysis.
+    """
+    fname_lower = filename.lower()
+
+    # Exact match for known lock/generated files
+    if fname_lower in _GENERATED_PATTERNS:
+        return True
+
+    # Minified files: *.min.js, *.min.css
+    if '.min.' in fname_lower:
+        return True
+
+    # Source maps
+    if fname_lower.endswith('.map'):
+        return True
+
+    # Declaration files
+    if fname_lower.endswith('.d.ts'):
+        return True
+
+    # Bundle/chunk files
+    if '.bundle.' in fname_lower or '.chunk.' in fname_lower:
+        return True
+
+    return False
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.10.0"

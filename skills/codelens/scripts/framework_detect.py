@@ -160,7 +160,44 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["electron"],
         "config_files": ["electron-builder.yml", "electron-builder.json"],
         "indicators": []
-    }
+    },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan", "bootstrap/app.php", "bootstrap/cache/config.php"],
+        "indicators": [".blade.php", "app/Http/Kernel.php", "app/Http/Middleware"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle", "symfony/symfony"],
+        "config_files": ["symfony.lock", "config/bundles.php"],
+        "indicators": []
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php", "wp-settings.php"],
+        "indicators": ["wp-content/", "wp-includes/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core", "drupal/drupal"],
+        "config_files": ["drupal/autoload.php"],
+        "indicators": ["sites/default/"]
+    },
+    "slim": {
+        "packages": [],
+        "composer_packages": ["slim/slim"],
+        "config_files": [],
+        "indicators": []
+    },
+    "lumen": {
+        "packages": [],
+        "composer_packages": ["laravel/lumen-framework"],
+        "config_files": [],
+        "indicators": []
+    },
 }
 
 
@@ -217,6 +254,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tauri": False,
         "has_electron": False,
         "has_rust_backend": False,
+        "has_laravel": False,
+        "has_symfony": False,
+        "has_wordpress": False,
+        "has_php": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -349,6 +390,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tauri"] = True
                 elif fw_name == "electron":
                     detected["has_electron"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                    detected["has_php"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                    detected["has_php"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                    detected["has_php"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*, src-tauri/*)
             found_in_subdir = False
@@ -471,7 +521,62 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if crate in cargo_deps and fw_name not in detected["frameworks"]:
                 detected["frameworks"].append(fw_name)
 
-    # 4. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
+    # 4. Check composer.json for PHP framework dependencies
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_deps.update(composer.get("require", {}).keys())
+            composer_deps.update(composer.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            logger.debug("Failed to parse composer.json", exc_info=True)
+
+    if composer_deps:
+        detected["has_php"] = True
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name in composer_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    elif fw_name == "symfony":
+                        detected["has_symfony"] = True
+                    elif fw_name == "wordpress":
+                        detected["has_wordpress"] = True
+                    break
+
+    # 4b. Check PHP framework config files and indicators
+    if not detected["has_php"]:
+        # Check for artisan (Laravel) or other PHP markers
+        if os.path.exists(os.path.join(workspace, "artisan")):
+            detected["has_php"] = True
+            if "laravel" not in detected["frameworks"]:
+                detected["frameworks"].append("laravel")
+                detected["has_laravel"] = True
+
+    # 4c. Check for any PHP files as a last resort
+    if not detected["has_php"]:
+        php_count = 0
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for f in files:
+                if f.endswith('.php'):
+                    php_count += 1
+                    break
+            if php_count > 0:
+                break
+        if php_count > 0:
+            detected["has_php"] = True
+
+    # 5. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
     need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
     if need_file_scan:
         for root, dirs, files in os.walk(workspace):
@@ -623,6 +728,15 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_capacitor"):
         config["frontend_paths"].extend(["src/", "www/"])
         config["backend_paths"].extend(["android/", "ios/"])
+
+    # PHP / Laravel specific paths
+    if fw.get("has_laravel"):
+        config["backend_paths"].extend(["app/", "routes/", "database/", "config/"])
+        config["frontend_paths"].extend(["resources/views/", "resources/js/", "resources/css/"])
+        config["ignore"].extend(["vendor/", "storage/"])
+    elif fw.get("has_php"):
+        config["backend_paths"].extend(["app/", "src/", "routes/", "config/"])
+        config["ignore"].append("vendor/")
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
