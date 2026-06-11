@@ -129,20 +129,20 @@ def compute_frontend_status(
     Compute status for a frontend entry.
 
     Priority:
-    1. collision (IDs: same id in >1 HTML element is always a collision;
-       classes: same class in >1 HTML element is normal, only flag if >5)
-    2. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
-    3. duplicate_ref (referenced from 2+ different files)
+    1. collision (IDs only: same id in >1 HTML element — invalid HTML)
+    2. duplicate_ref (classes: same class in >1 HTML element — normal; or referenced from 2+ different CSS/JS files)
+    3. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
     4. active (default, has CSS or JS references)
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Collision: ID appears in >1 HTML element (always an error — IDs must be unique)
-    # Classes: only flag collision if referenced from >5 HTML elements (normal to reuse classes)
+    # Collision: ID appears in >1 HTML element (invalid HTML, same ID used twice)
     if entry_type == "id" and len(html_refs) > 1:
         return "collision"
-    if entry_type == "class" and len(html_refs) > 5:
-        return "collision"
+
+    # Classes with multiple HTML refs is normal behavior, mark as duplicate_ref
+    if entry_type == "class" and len(html_refs) > 1:
+        return "duplicate_ref"
 
     # Dead: no CSS or JS references (defined in HTML but not styled or used)
     if ref_count == 0:
@@ -284,7 +284,7 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
         ref_count = len(refs["css"]) + len(refs["js"])
         status = compute_frontend_status(name, "class", refs["html"], refs["css"], refs["js"])
 
-        # Check duplicate_define across CSS - work on copies to avoid mutation
+        # Check duplicate_define across CSS
         css_paths = {}
         for css_ref in refs["css"]:
             p = css_ref.get("path", "")
@@ -293,20 +293,18 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             css_paths[p].append(css_ref)
 
         # Flag duplicate_define: same selector defined in same file 2+ times
-        flagged_css = []
         for path, path_refs in css_paths.items():
-            for i, ref in enumerate(path_refs):
-                ref_copy = dict(ref)  # copy to avoid mutating shared dicts
-                if i > 0:
-                    ref_copy["flag"] = "duplicate_define"
-                flagged_css.append(ref_copy)
+            if len(path_refs) > 1:
+                for i, ref in enumerate(path_refs):
+                    if i > 0:
+                        ref["flag"] = "duplicate_define"
 
         entry = {
             "name": name,
             "ref_count": ref_count,
             "status": status,
             "defined_in_html": refs["html"],
-            "css": flagged_css if flagged_css else refs["css"],
+            "css": refs["css"],
             "js": refs["js"]
         }
         classes.append(entry)

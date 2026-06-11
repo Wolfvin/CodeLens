@@ -324,12 +324,16 @@ class TSXParser(BaseParser):
         # Find which function this call is inside
         call_line = self.get_line(node)
         caller_id = None
+        best_scope_start = -1
+        best_scope_end = float('inf')
         for decl in fn_declarations:
             if decl["scope_start"] <= call_line - 1 <= decl["scope_end"]:
-                # Check if this is the innermost function
+                # Check if this is the innermost function (tightest enclosing scope)
                 if caller_id is None or \
-                   (decl["scope_start"] >= fn_declarations[0]["scope_start"]):
+                   (decl["scope_start"] >= best_scope_start and decl["scope_end"] <= best_scope_end):
                     caller_id = decl["node"]["id"]
+                    best_scope_start = decl["scope_start"]
+                    best_scope_end = decl["scope_end"]
 
         if not caller_id:
             return None

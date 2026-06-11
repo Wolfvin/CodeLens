@@ -4,9 +4,13 @@ Deep call chain tracing — follows the graph up (callers) and down (callees)
 to produce full impact chains for root cause analysis and change planning.
 """
 
+import json
+import logging
 import os
 from collections import deque
 from typing import Dict, List, Any, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def trace_symbol(
@@ -37,7 +41,11 @@ def trace_symbol(
     # ─── Backend Tracing ────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
-        backend = load_backend_registry(workspace)
+        try:
+            backend = load_backend_registry(workspace)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            backend = {"nodes": [], "edges": []}
+            logger.warning(f"Could not load backend registry: {e}")
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
@@ -110,7 +118,11 @@ def trace_symbol(
     # ─── Frontend Tracing ───────────────────────────────
     if domain in ("frontend", "auto"):
         from registry import load_frontend_registry
-        frontend = load_frontend_registry(workspace)
+        try:
+            frontend = load_frontend_registry(workspace)
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            frontend = {"classes": [], "ids": []}
+            logger.warning(f"Could not load frontend registry: {e}")
 
         # For frontend, "tracing" means following class/id references
         for cls in frontend.get("classes", []):

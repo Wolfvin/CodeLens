@@ -1,4 +1,4 @@
-# CodeLens v5 — Live Codebase Reference Intelligence
+# CodeLens v5.8 — Live Codebase Reference Intelligence
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
@@ -6,7 +6,7 @@ CodeLens is a CLI tool that gives AI agents **full visibility** into a codebase 
 
 ## Features
 
-- **39 CLI Commands** — From basic scan/query to vulnerability scanning and performance hints
+- **41 CLI Commands** — From basic scan/query to vulnerability scanning and performance hints
 - **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, SCSS
 - **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, and more
 - **Incremental Scanning** — Only re-parse changed files for speed
@@ -58,7 +58,7 @@ python3 scripts/codelens.py smell              # Auto-detect workspace
 | Command | Description |
 |---------|-------------|
 | `init [workspace]` | Initialize .codelens config with auto-detected frameworks |
-| `scan [workspace] [--incremental]` | Scan workspace and build registry |
+| `scan [workspace] [--incremental] [--full]` | Scan workspace and build registry (`--full` forces full rescan) |
 | `query "name" [workspace] [--domain] [--file]` | Pre-write check: does this name already exist? |
 | `list [workspace] [--domain] [--filter]` | List entries with filter (dead, collision, duplicate, etc.) |
 | `detect [workspace]` | Detect frameworks and show recommended config |
@@ -161,7 +161,7 @@ codelens/
 │   ├── changelog.md            # Version changelog
 │   └── agent-integration.md    # AI agent integration guide
 └── scripts/
-    ├── codelens.py             # CLI entry point (39 commands)
+    ├── codelens.py             # CLI entry point (41 commands)
     ├── registry.py             # Registry read/write/build
     ├── base_parser.py          # Base tree-sitter parser
     ├── grammar_loader.py       # Lazy tree-sitter grammar loader

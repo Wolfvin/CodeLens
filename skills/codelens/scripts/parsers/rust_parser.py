@@ -71,9 +71,11 @@ class RustParser(BaseParser):
         nodes = []
         edges = []
 
-        # Track current impl context
+        # Track current impl context with proper scope management
         current_impl_for = None
         current_trait_name = None
+        # Stack of (impl_for, trait_name, end_byte) for scope tracking
+        impl_scope_stack = []
 
         # Find all function items and impl items
         fn_declarations = []
@@ -81,8 +83,21 @@ class RustParser(BaseParser):
         def visit(node: Node, _, depth):
             nonlocal current_impl_for, current_trait_name
 
+            # Pop impl scopes that have ended (node starts after scope ended)
+            while impl_scope_stack and node.start_byte >= impl_scope_stack[-1][2]:
+                impl_scope_stack.pop()
+                if impl_scope_stack:
+                    current_impl_for, current_trait_name = impl_scope_stack[-1][0], impl_scope_stack[-1][1]
+                else:
+                    current_impl_for = None
+                    current_trait_name = None
+
             if node.type == 'impl_item':
-                current_impl_for, current_trait_name = self._parse_impl(node, source)
+                impl_for, trait_name = self._parse_impl(node, source)
+                # Push current scope, then set new context
+                impl_scope_stack.append((impl_for, trait_name, node.end_byte))
+                current_impl_for = impl_for
+                current_trait_name = trait_name
 
             elif node.type == 'function_item':
                 decl = self._parse_function_item(node, source, file_path,
@@ -91,14 +106,7 @@ class RustParser(BaseParser):
                     fn_declarations.append(decl)
                     nodes.append(decl["node"])
 
-                # Reset impl for after processing the function inside it
-                # (impl contains functions, so we keep context while inside)
-
         self.walk_tree(tree, source, visit)
-
-        # Reset impl tracking for second pass
-        current_impl_for = None
-        current_trait_name = None
 
         # Second pass: find all function calls within each function's scope
         for decl in fn_declarations:

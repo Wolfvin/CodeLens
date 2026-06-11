@@ -89,14 +89,10 @@ def compute_summary(workspace, outline_data, scan_result):
         for cls in outline.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
-    be_raw_nodes = scan_result.get('backend', {}).get('nodes', [])
-    be_raw_edges = scan_result.get('backend', {}).get('edges', [])
-    fe_raw_classes = scan_result.get('frontend', {}).get('classes', [])
-    fe_raw_ids = scan_result.get('frontend', {}).get('ids', [])
-    be_nodes = len(be_raw_nodes) if isinstance(be_raw_nodes, list) else (be_raw_nodes if isinstance(be_raw_nodes, int) else 0)
-    be_edges = len(be_raw_edges) if isinstance(be_raw_edges, list) else (be_raw_edges if isinstance(be_raw_edges, int) else 0)
-    fe_classes = len(fe_raw_classes) if isinstance(fe_raw_classes, list) else (fe_raw_classes if isinstance(fe_raw_classes, int) else 0)
-    fe_ids = len(fe_raw_ids) if isinstance(fe_raw_ids, list) else (fe_raw_ids if isinstance(fe_raw_ids, int) else 0)
+    be_nodes = scan_result.get('backend', {}).get('nodes', 0)
+    be_edges = scan_result.get('backend', {}).get('edges', 0)
+    fe_classes = scan_result.get('frontend', {}).get('classes', 0)
+    fe_ids = scan_result.get('frontend', {}).get('ids', 0)
 
     return {
         'workspace': workspace,
