@@ -27,6 +27,9 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".go", ".rb", ".vue", ".svelte",
 }
 
+MAX_FILES_PER_RUN = 3000
+MAX_RESULTS_PER_CATEGORY = 100
+
 # ReDoS-indicating patterns (nested quantifiers, overlapping alternatives)
 REDOS_PATTERNS = [
     # Nested quantifiers: (a+)+, (a*)*, (a+)*, (a*)+
@@ -117,7 +120,9 @@ REGEX_DEFINITION_PATTERNS = {
 def audit_regex_patterns(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN,
+    max_results_per_category: int = MAX_RESULTS_PER_CATEGORY,
 ) -> Dict[str, Any]:
     """
     Audit regex patterns across the workspace for security and correctness issues.
@@ -143,8 +148,14 @@ def audit_regex_patterns(
     findings: List[Dict] = []
     all_patterns: List[Dict] = []  # All discovered regex patterns
     files_scanned = 0
+    truncated = False
+    category_counts: Dict[str, int] = defaultdict(int)
 
     for root, dirs, filenames in os.walk(workspace):
+        if files_scanned >= max_files:
+            truncated = True
+            break
+
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
@@ -165,6 +176,9 @@ def audit_regex_patterns(
                 continue
 
             files_scanned += 1
+            if files_scanned >= max_files:
+                truncated = True
+
             lines = content.split('\n')
 
             # ─── Extract regex patterns from the file ────
@@ -172,23 +186,58 @@ def audit_regex_patterns(
             all_patterns.extend(file_patterns)
 
             # ─── Check for unsafe constructors ───────────
-            _check_unsafe_constructors(content, lines, ext, rel_path, findings)
+            if category_counts["unsafe_constructor"] < max_results_per_category:
+                prev = len(findings)
+                _check_unsafe_constructors(content, lines, ext, rel_path, findings)
+                category_counts["unsafe_constructor"] += len(findings) - prev
+                if category_counts["unsafe_constructor"] >= max_results_per_category:
+                    truncated = True
+            else:
+                truncated = True
 
             # ─── Analyze each pattern ────────────────────
             for pat_info in file_patterns:
                 pattern_str = pat_info["pattern"]
 
                 # ReDoS vulnerability
-                _check_redos(pattern_str, pat_info, findings)
+                if category_counts["redos_vulnerable"] < max_results_per_category:
+                    prev = len(findings)
+                    _check_redos(pattern_str, pat_info, findings)
+                    category_counts["redos_vulnerable"] += len(findings) - prev
+                    if category_counts["redos_vulnerable"] >= max_results_per_category:
+                        truncated = True
+                else:
+                    truncated = True
 
                 # Overly broad patterns
-                _check_overly_broad(pattern_str, pat_info, ext, findings)
+                if category_counts["overly_broad"] < max_results_per_category:
+                    prev = len(findings)
+                    _check_overly_broad(pattern_str, pat_info, ext, findings)
+                    category_counts["overly_broad"] += len(findings) - prev
+                    if category_counts["overly_broad"] >= max_results_per_category:
+                        truncated = True
+                else:
+                    truncated = True
 
                 # Incorrect escaping
-                _check_incorrect_escaping(pattern_str, pat_info, ext, findings)
+                if category_counts["incorrect_escaping"] < max_results_per_category:
+                    prev = len(findings)
+                    _check_incorrect_escaping(pattern_str, pat_info, ext, findings)
+                    category_counts["incorrect_escaping"] += len(findings) - prev
+                    if category_counts["incorrect_escaping"] >= max_results_per_category:
+                        truncated = True
+                else:
+                    truncated = True
 
                 # Performance issues
-                _check_performance(pattern_str, pat_info, findings)
+                if category_counts["performance"] < max_results_per_category:
+                    prev = len(findings)
+                    _check_performance(pattern_str, pat_info, findings)
+                    category_counts["performance"] += len(findings) - prev
+                    if category_counts["performance"] >= max_results_per_category:
+                        truncated = True
+                else:
+                    truncated = True
 
     # Apply severity filter
     if severity:
@@ -214,6 +263,7 @@ def audit_regex_patterns(
         "stats": {
             "total_patterns": len(all_patterns),
             "files_scanned": files_scanned,
+            "truncated": truncated,
             "vulnerable": vulnerable_count,
             "by_category": dict(by_category),
             "by_severity": dict(by_severity),

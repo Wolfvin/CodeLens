@@ -36,6 +36,9 @@ SOURCE_EXTENSIONS = {
     ".json", ".toml", ".cfg", ".ini", ".conf",
 }
 
+# Performance limits for large codebases
+MAX_FILES_PER_RUN = 3000
+
 # ─── Secret Pattern Definitions ────────────────────────────────
 
 SECRET_PATTERNS = {
@@ -288,7 +291,8 @@ ENTROPY_EXCLUSION_PATTERNS = [
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_PER_RUN
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -310,6 +314,7 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
+    truncated = False
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -322,6 +327,11 @@ def detect_secrets(
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
+
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
@@ -351,6 +361,9 @@ def detect_secrets(
                 entropy_findings = _scan_file_entropy(content, rel_path, ext)
                 findings.extend(entropy_findings)
 
+        if truncated:
+            break
+
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
     for env_f in env_files:
@@ -379,7 +392,7 @@ def detect_secrets(
         "status": "ok",
         "workspace": workspace,
         "severity_filter": severity,
-        "stats": stats,
+        "stats": {**stats, "truncated": truncated},
         "risk": risk,
         "findings": findings[:200],  # Cap to avoid explosion
         "env_exposed": env_exposed,

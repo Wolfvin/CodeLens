@@ -139,6 +139,14 @@ def get_symbol_context(
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
+        # Build file index for O(1) nearby symbol lookup
+        from collections import defaultdict
+        file_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+        for n in nodes:
+            f = n.get("file", "")
+            if f:
+                file_to_nodes[f].append(n)
+
         # Exact match first
         exact_node = None
         for node in nodes:
@@ -226,15 +234,16 @@ def get_symbol_context(
                 context["imports"] = _get_file_imports(workspace, node["file"])
 
             # Nearby symbols (other functions in same file)
+            node_file = node.get("file", "")
             context["nearby_symbols"] = [
                 {
                     "fn": n["fn"],
                     "line": n.get("line", 0),
                     "status": n.get("status", "active")
                 }
-                for n in nodes
-                if n.get("file") == node.get("file") and n["id"] != node["id"]
-            ]
+                for n in file_to_nodes.get(node_file, [])
+                if n["id"] != node["id"]
+            ][:50]  # Cap at 50 nearby symbols to avoid output bloat
 
     found = context["definition"] is not None
 

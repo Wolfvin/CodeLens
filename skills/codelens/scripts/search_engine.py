@@ -97,8 +97,8 @@ def search_workspace(
         target_extensions = {file_type if file_type.startswith('.') else f'.{file_type}'}
 
     # Build ignore set from config
-    ignore_dirs = DEFAULT_IGNORE_DIRS.copy()
-    ignore_files = DEFAULT_IGNORE_FILES.copy()
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
+    ignore_files = set(DEFAULT_IGNORE_FILES)
     if config:
         for pattern_str in config.get("ignore", []):
             clean = pattern_str.rstrip("/")

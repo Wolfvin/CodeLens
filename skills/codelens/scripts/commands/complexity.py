@@ -16,12 +16,17 @@ def add_args(parser):
                         help="Sort results by metric")
     parser.add_argument("--limit", type=int, default=None,
                         help="Max number of functions to return")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Max files to scan (default 3000)")
 
 
 def execute(args, workspace):
+    kwargs = {}
+    if args.max_files is not None:
+        kwargs["max_files"] = args.max_files
     return compute_complexity(workspace, function_name=args.name,
                               file_filter=args.file, threshold=args.threshold,
-                              sort_by=args.sort_by, limit=args.limit)
+                              sort_by=args.sort_by, limit=args.limit, **kwargs)
 
 
 register_command("complexity", "Compute cyclomatic/cognitive complexity", add_args, execute)

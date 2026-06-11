@@ -25,17 +25,22 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--quick", action="store_true",
+                        help="Skip slow analysis engines for faster results")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace)
+    return cmd_handbook(workspace, quick=getattr(args, 'quick', False))
 
 
-def cmd_handbook(workspace: str) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
+
+    When quick=True, skips the slowest engines (secrets, smell, entrypoints, vuln-scan)
+    and applies per-engine timeouts.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -73,9 +78,12 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
 
     # 3. Generate output files (outline.json, summary.json)
     try:
-        write_output_files(workspace, scan_result)
+        write_output_files(workspace, scan_result, max_files=2000)
     except Exception:
         logger.warning("Failed to write output files", exc_info=True)
+
+    # Collect risks from all engines (initialized early so timeout handlers can append)
+    risks = []
 
     # 4. Frameworks
     try:
@@ -86,28 +94,30 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         frameworks = config.get("frameworks", [])
 
     # 5. Health (from smell engine)
-    try:
-        smell_result = detect_smells(workspace)
-        health = {
-            "score": smell_result.get("stats", {}).get("health_score", 0),
-            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-            "critical": smell_result.get("stats", {}).get("critical", 0),
-            "warning": smell_result.get("stats", {}).get("warning", 0),
-        }
-    except Exception:
-        logger.warning("Health detection failed", exc_info=True)
-        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    if not quick:
+        try:
+            smell_result = detect_smells(workspace, max_files=500)
+            health = {
+                "score": smell_result.get("stats", {}).get("health_score", 0),
+                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+                "critical": smell_result.get("stats", {}).get("critical", 0),
+                "warning": smell_result.get("stats", {}).get("warning", 0),
+            }
+        except Exception:
+            logger.warning("Health detection failed", exc_info=True)
 
     # 6. Entrypoints
-    try:
-        ep_result = map_entrypoints(workspace)
-        entrypoints = [
-            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-            for e in ep_result.get("entrypoints", [])[:30]
-        ]
-    except Exception:
-        logger.warning("Entrypoint mapping failed", exc_info=True)
-        entrypoints = []
+    entrypoints = []
+    if not quick:
+        try:
+            ep_result = map_entrypoints(workspace, max_files=500)
+            entrypoints = [
+                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+                for e in ep_result.get("entrypoints", [])[:30]
+            ]
+        except Exception:
+            logger.warning("Entrypoint mapping failed", exc_info=True)
 
     # 7. API Routes
     try:
@@ -131,42 +141,43 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         logger.warning("State management mapping failed", exc_info=True)
         state_stores = []
 
-    # 9. Risks (circular deps, dead code, secrets)
-    risks = []
+    # 9. Risks (circular deps, dead code, secrets) — risks list already initialized above
     try:
-        circ_result = detect_circular(workspace)
+        circ_result = detect_circular(workspace, max_cycles=20)
         for chain in circ_result.get("chains", [])[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
     try:
-        dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+        dead_result = detect_dead_code(workspace, max_files=2000)
+        dead_count = dead_result.get("stats", {}).get("total_dead_code", 0)
         if dead_count > 0:
             risks.append({"type": "dead_code", "count": dead_count})
     except Exception:
         logger.warning("Dead code detection failed", exc_info=True)
-    try:
-        secrets_result = detect_secrets(workspace)
-        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-        if secrets_count > 0:
-            risks.append({"type": "secrets", "count": secrets_count})
-    except Exception:
-        logger.warning("Secrets detection failed", exc_info=True)
-    try:
-        vuln_result = scan_vulnerabilities(workspace)
-        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-        if vuln_count > 0:
-            risks.append({"type": "vulnerabilities", "count": vuln_count})
-    except Exception:
-        logger.warning("Vulnerability scan failed", exc_info=True)
+    if not quick:
+        try:
+            secrets_result = detect_secrets(workspace, max_files=500)
+            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+            if secrets_count > 0:
+                risks.append({"type": "secrets", "count": secrets_count})
+        except Exception:
+            logger.warning("Secrets detection failed", exc_info=True)
+        try:
+            vuln_result = scan_vulnerabilities(workspace)
+            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+            if vuln_count > 0:
+                risks.append({"type": "vulnerabilities", "count": vuln_count})
+        except Exception:
+            logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
     try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        outline_max = 1000 if quick else 2000
+        summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=outline_max), scan_result)
     except Exception:
         logger.warning("Summary computation failed", exc_info=True)
         summary = {}

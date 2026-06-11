@@ -89,7 +89,8 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
@@ -109,6 +110,8 @@ def get_workspace_outline(
 
     outlines = []
     errors = []
+    files_processed = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -127,17 +130,27 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            # File limit to prevent timeout on huge repos
+            if files_processed >= max_files:
+                truncated = True
+                break
+
             result = get_file_outline(file_path, workspace, detail_level="minimal")
+            files_processed += 1
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+
+        if truncated:
+            break
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
         "outlines": outlines,
+        "truncated": truncated,
         "errors": errors if errors else None
     }
 
