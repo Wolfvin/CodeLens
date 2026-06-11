@@ -153,6 +153,63 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
         "indicators": []
     },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan", ".env.example"],
+        "indicators": ["app/Http/Kernel.php", "app/Http/Middleware/", "routes/web.php", "routes/api.php"],
+        "file_patterns": [".blade.php"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle", "symfony/flex"],
+        "config_files": ["symfony.lock", "bin/console"],
+        "indicators": ["config/bundles.php", "src/Kernel.php"],
+        "file_patterns": [".twig"]
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php", "wp-config-sample.php"],
+        "indicators": ["wp-includes/", "wp-admin/", "wp-content/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core", "drupal/core-recommended"],
+        "config_files": ["drupal.settings.php"],
+        "indicators": ["modules/", "sites/default/"]
+    },
+    "codeigniter": {
+        "packages": [],
+        "composer_packages": ["codeigniter4/framework", "codeigniter/framework"],
+        "config_files": [],
+        "indicators": ["app/Config/", "system/"]
+    },
+    "yii": {
+        "packages": [],
+        "composer_packages": ["yiisoft/yii2", "yiisoft/yii2-app-basic"],
+        "config_files": [],
+        "indicators": ["@app", "views/layouts/"]
+    },
+    "slim": {
+        "packages": [],
+        "composer_packages": ["slim/slim"],
+        "config_files": [],
+        "indicators": []
+    },
+    "lumen": {
+        "packages": [],
+        "composer_packages": ["laravel/lumen-framework"],
+        "config_files": [],
+        "indicators": ["bootstrap/app.php"]
+    },
+    "cakephp": {
+        "packages": [],
+        "composer_packages": ["cakephp/cakephp"],
+        "config_files": [],
+        "indicators": ["src/Controller/", "src/Template/"]
+    },
 }
 
 
@@ -326,10 +383,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_rust_backend": False,
+        "has_php": False,
+        "has_laravel": False,
+        "has_symfony": False,
+        "has_wordpress": False,
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
         "lockfile": None,
+        "php_lockfile": None,
     }
 
     # Detect lockfile type
@@ -342,6 +404,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     ]:
         if os.path.exists(os.path.join(workspace, lockfile)):
             detected["lockfile"] = name
+            break
+
+    # Detect PHP lockfile type
+    for php_lock, name in [
+        ("composer.lock", "composer"),
+    ]:
+        if os.path.exists(os.path.join(workspace, php_lock)):
+            detected["php_lockfile"] = name
             break
 
     # 1. Discover all package.json files (monorepo-aware)
@@ -390,6 +460,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                    detected["has_php"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                    detected["has_php"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                    detected["has_php"] = True
                 break
 
     # 3. Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)
@@ -504,6 +583,93 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if fw_name == "tauri":
                     detected["has_tauri"] = True
                     detected["has_rust_backend"] = True
+                break
+
+    # ─── PHP framework detection (composer.json) ─────────────
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        detected["has_php"] = True
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            # Collect require and require-dev packages
+            for dep_key in ("require", "require-dev"):
+                deps = composer_data.get(dep_key, {})
+                for pkg_name in deps:
+                    composer_deps.add(pkg_name.lower())
+        except (json.JSONDecodeError, IOError):
+            logger.debug("Failed to parse composer.json", exc_info=True)
+
+    # Also check for PHP files even without composer.json
+    if not detected["has_php"]:
+        for root, dirs, files in os.walk(workspace):
+            rel_root = os.path.relpath(root, workspace)
+            if should_ignore_dir(rel_root):
+                dirs.clear()
+                continue
+            for f in files:
+                if f.endswith('.php'):
+                    detected["has_php"] = True
+                    break
+            if detected["has_php"]:
+                break
+
+    # Check composer deps against PHP framework signatures
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        composer_pkgs = sig.get("composer_packages", [])
+        for pkg_name in composer_pkgs:
+            if pkg_name.lower() in composer_deps:
+                detected["frameworks"].append(fw_name)
+                if fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                break
+
+    # Check PHP framework config files and indicators
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        if not sig.get("composer_packages") and not sig.get("config_files") and not sig.get("indicators"):
+            continue
+        # Only check PHP frameworks that have config_files or indicators
+        if not sig.get("composer_packages") and fw_name not in ("laravel", "symfony", "wordpress", "drupal", "codeigniter", "yii", "slim", "lumen", "cakephp"):
+            continue
+
+        found = False
+        # Check config files
+        for cfg_file in sig.get("config_files", []):
+            if os.path.exists(os.path.join(workspace, cfg_file)):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                found = True
+                break
+
+        if found:
+            continue
+
+        # Check indicators (directory/file patterns)
+        for indicator in sig.get("indicators", []):
+            # Indicators can be paths like "app/Http/Kernel.php" or "routes/web.php"
+            if os.path.exists(os.path.join(workspace, indicator)):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
+                found = True
                 break
 
     # Also detect Tauri from config file presence (deep scan for monorepo)
@@ -710,8 +876,67 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
     config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
 
+    # PHP / Laravel path configuration
+    if fw.get("has_laravel"):
+        # Laravel directory structure
+        config["frontend_paths"].extend([
+            "resources/views/",       # Blade templates
+            "resources/js/",          # Frontend JS
+            "resources/css/",         # Frontend CSS
+            "public/",
+        ])
+        config["backend_paths"].extend([
+            "app/Http/Controllers/",
+            "app/Http/Middleware/",
+            "app/Models/",
+            "app/Services/",
+            "app/Repositories/",
+            "app/Providers/",
+            "app/",
+            "routes/",
+            "config/",
+            "database/",
+        ])
+        # Add vendor/ to ignore list (Composer dependencies)
+        if "vendor/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("vendor/")
+        # Add storage/ to ignore list (Laravel storage)
+        if "storage/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("storage/")
+    elif fw.get("has_symfony"):
+        config["frontend_paths"].extend([
+            "templates/",             # Twig templates
+            "assets/",
+            "public/",
+        ])
+        config["backend_paths"].extend([
+            "src/Controller/",
+            "src/Service/",
+            "src/Repository/",
+            "src/Entity/",
+            "src/",
+            "config/",
+        ])
+        if "vendor/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("vendor/")
+        if "var/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("var/")
+    elif fw.get("has_php"):
+        # Generic PHP project
+        config["backend_paths"].extend([
+            "src/",
+            "app/",
+            "lib/",
+            "public/",
+        ])
+        if "vendor/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("vendor/")
+
     # Store monorepo info
     config["is_monorepo"] = is_monorepo
     config["lockfile"] = fw.get("lockfile")
+    config["php_lockfile"] = fw.get("php_lockfile")
+    config["has_php"] = fw.get("has_php", False)
+    config["has_laravel"] = fw.get("has_laravel", False)
 
     return config

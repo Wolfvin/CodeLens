@@ -5,6 +5,43 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Added
+
+- **Full PHP language support** — CodeLens now supports PHP as a first-class language alongside JS/TS, Python, and Rust. This closes the biggest language gap in CodeLens, enabling analysis of the most popular server-side language.
+- **PHP fallback parser** (`scripts/parsers/fallback_php.py`): Regex-based parser that extracts functions, classes (with methods, properties, constants), interfaces, traits, enums (PHP 8.1+), namespaces, use/import statements (including group use), class method visibility (public/private/protected/static), and class categories (controller, model, middleware, etc. based on Laravel naming conventions). Also detects Laravel-specific patterns: Eloquent model relationships ($fillable, $guarded, $hidden, $casts, $table, hasOne/hasMany/belongsTo/etc.), route definitions, middleware registrations, event listeners, and Artisan command signatures.
+- **Blade template parser** (`scripts/parsers/blade_parser.py`): Parses `.blade.php` files for HTML classes/IDs, Blade directives (@if, @foreach, @section, @yield, @include, etc.), template inheritance (@extends), section definitions, component usage (<x-component>, @component), includes, and stack/push operations. Blade classes/IDs are integrated into the frontend registry.
+- **PHP framework detection** (`scripts/framework_detect.py`): Added detection for 9 PHP frameworks via `composer.json` dependencies, config files, and directory indicators:
+  - **Laravel** — detected via `laravel/framework` in composer.json, `artisan` file, `app/Http/Kernel.php`, `routes/web.php`, `routes/api.php`
+  - **Symfony** — detected via `symfony/framework-bundle`, `symfony.lock`, `bin/console`, `src/Kernel.php`
+  - **WordPress** — detected via `johnpbloch/wordpress`, `wp-config.php`, `wp-includes/`
+  - **Drupal** — detected via `drupal/core`, `modules/`, `sites/default/`
+  - **CodeIgniter** — detected via `codeigniter4/framework`, `app/Config/`
+  - **Yii** — detected via `yiisoft/yii2`
+  - **Slim** — detected via `slim/slim`
+  - **Lumen** — detected via `laravel/lumen-framework`, `bootstrap/app.php`
+  - **CakePHP** — detected via `cakephp/cakephp`, `src/Controller/`
+- **Laravel path auto-configuration** (`scripts/framework_detect.py`): When Laravel is detected, `get_recommended_config()` automatically sets correct `frontend_paths` (resources/views/, resources/js/, resources/css/, public/) and `backend_paths` (app/Http/Controllers/, app/Models/, app/Services/, routes/, config/, database/). Also adds `vendor/` and `storage/` to ignore list.
+- **Laravel route extraction** (`scripts/apimap_engine.py`): The `api-map` command now extracts routes from Laravel route files:
+  - `Route::get/post/put/patch/delete/options/any` with controller handlers `[Controller::class, 'method']`
+  - `Route::resource` and `Route::apiResource` (generates full CRUD endpoint set)
+  - `Route::group` with prefix and middleware
+  - `Route::middleware` chains
+  - Route prefix chains via `->prefix()`
+  - Chained middleware detection via `->middleware()`
+- **Symfony route extraction** (`scripts/apimap_engine.py`): Supports both PHP 8 attributes (`#[Route('/path', methods: ['GET'])]`) and Doctrine annotations (`@Route("/path", methods={"GET"})`).
+- **Slim route extraction** (`scripts/apimap_engine.py`): Supports `$app->get/post/put/delete/patch('/path', ...)` patterns.
+- **PHP entrypoint patterns** (`scripts/entrypoints_engine.py`):
+  - Laravel route handlers as `http_handler` entrypoints
+  - Laravel Artisan command signatures as `cli_command` entrypoints
+  - Laravel Event::listen as `event_handler` entrypoints
+  - Symfony #[Route] attributes as `http_handler` entrypoints
+- **Composer.lock detection** (`scripts/framework_detect.py`): Detects `composer.lock` and exposes as `php_lockfile` in detection results.
+- **PHP detection flag** (`scripts/framework_detect.py`): `has_php` flag set when `.php` files or `composer.json` are found, even without a recognized framework.
+- **Scan command PHP support** (`scripts/commands/scan.py`): `discover_files()` now categorizes `.php` and `.blade.php` files. Scan results include `php` and `blade` in `files_scanned` and `php_parsed`/`blade_parsed` counts. PHP nodes/edges are merged into backend registry alongside Rust, JS, and Python data.
+- **Storage directory auto-ignore** (`scripts/utils.py`): Added `storage/` to `DEFAULT_IGNORE_DIRS` for Laravel projects.
+
 ## [5.8.0] — 2026-06-12
 
 ### Added

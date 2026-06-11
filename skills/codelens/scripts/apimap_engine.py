@@ -37,7 +37,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql",
+    ".graphql", ".gql", ".php",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -161,6 +161,11 @@ def map_api_routes(
                 py_mw = _extract_python_middleware(content, rel_path)
                 global_middleware.extend(py_mw)
 
+            # ─── PHP: Laravel / Symfony / Slim ────────────────
+            elif ext == ".php":
+                php_routes = _extract_php_routes(content, rel_path, frameworks_detected)
+                routes.extend(php_routes)
+
             # ─── GraphQL ──────────────────────────────────────
             elif ext in {".graphql", ".gql"}:
                 gql_routes = _extract_graphql_schema(content, rel_path)
@@ -234,15 +239,20 @@ def map_api_routes(
     # Build middleware map
     for route in routes:
         for mw in route.get("middleware_chain", []):
-            middleware_map[mw["name"]].append({
+            # Middleware can be a string (name only) or a dict with metadata
+            mw_name = mw if isinstance(mw, str) else mw.get("name", "unknown")
+            mw_type = "unknown" if isinstance(mw, str) else mw.get("type", "unknown")
+            middleware_map[mw_name].append({
                 "route": f"{route['method']} {route['path']}",
-                "type": mw.get("type", "unknown"),
+                "type": mw_type,
             })
 
     # Detect auth-protected vs public
     for route in routes:
         has_auth = any(
-            mw.get("type") == "auth"
+            (mw.get("type") == "auth" if isinstance(mw, dict)
+             else mw.lower() in AUTH_MIDDLEWARE_PATTERNS if isinstance(mw, str)
+             else False)
             for mw in route.get("middleware_chain", [])
         )
         route["auth_protected"] = has_auth
@@ -1804,7 +1814,12 @@ def _generate_recommendations(
 
     # No CORS middleware detected
     has_cors = any(
-        any(mw.get("type") == "cors" for mw in r.get("middleware_chain", []))
+        any(
+            (mw.get("type") == "cors" if isinstance(mw, dict)
+             else mw.lower() in CORS_MIDDLEWARE_PATTERNS if isinstance(mw, str)
+             else False)
+            for mw in r.get("middleware_chain", [])
+        )
         for r in routes
     )
     if not has_cors and any(f in frameworks for f in {"express", "fastify", "koa", "hono", "flask", "fastapi"}):
@@ -2025,3 +2040,370 @@ def _snake_to_camel(name: str) -> str:
     """
     parts = name.split('_')
     return parts[0] + ''.join(word.capitalize() for word in parts[1:])
+
+
+# ─── PHP / Laravel Route Extraction ────────────────────────────────
+
+# Laravel route methods that map to HTTP verbs
+_LARAVEL_ROUTE_METHODS = {"get", "post", "put", "patch", "delete", "options", "any"}
+
+# Route group middleware patterns
+_LARAVEL_MIDDLEWARE_RE = re.compile(
+    r"->middleware\s*\(\s*['\"]([\w.:-]+)['\"]",
+)
+
+# Route group prefix patterns
+_LARAVEL_PREFIX_RE = re.compile(
+    r"->prefix\s*\(\s*['\"]([^'\"]+)['\"]",
+)
+
+
+def _extract_php_routes(content: str, rel_path: str,
+                        frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """
+    Extract API routes from PHP source files.
+
+    Supports:
+    - Laravel: Route::get/post/put/patch/delete/options/any
+    - Laravel: Route::resource, Route::apiResource, Route::group
+    - Laravel: Route::middleware, Route::prefix
+    - Symfony: #[Route] attributes, Annotations
+    - Slim: $app->get/post/put/delete/patch
+    - Generic: Simple regex-based extraction
+
+    Returns list of route dicts compatible with the main route format.
+    """
+    routes: List[Dict[str, Any]] = []
+
+    # Detect if this is a route file
+    is_laravel_route = ('routes/' in rel_path or 'Route::' in content[:2000])
+    is_slim_route = '$app->' in content[:2000] and any(f'->{m}(' in content for m in _LARAVEL_ROUTE_METHODS)
+    is_symfony = '#[Route' in content or '@Route' in content
+
+    if not (is_laravel_route or is_slim_route or is_symfony):
+        return routes
+
+    # ─── Laravel Route Extraction ─────────────────────────────
+    if is_laravel_route or 'Route::' in content:
+        frameworks_detected.add("laravel")
+        routes.extend(_extract_laravel_routes(content, rel_path))
+
+    # ─── Symfony Route Extraction ─────────────────────────────
+    if is_symfony:
+        frameworks_detected.add("symfony")
+        routes.extend(_extract_symfony_routes(content, rel_path))
+
+    # ─── Slim Route Extraction ────────────────────────────────
+    if is_slim_route and 'Route::' not in content:
+        frameworks_detected.add("slim")
+        routes.extend(_extract_slim_routes(content, rel_path))
+
+    return routes
+
+
+def _extract_laravel_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """
+    Extract routes from Laravel route files.
+
+    Handles:
+    - Route::get('/path', [Controller::class, 'method'])
+    - Route::post('/path', [Controller::class, 'method'])
+    - Route::resource('name', Controller::class)
+    - Route::apiResource('name', Controller::class)
+    - Route::group([...], function() { ... })
+    - Route::middleware('auth')->group(...)
+    - Chained: Route::get(...)->name('...')->middleware('...')
+    """
+    routes: List[Dict[str, Any]] = []
+
+    # Track route group context (prefix, middleware)
+    # We'll parse linearly and track state
+    group_prefix = ""
+    group_middleware: List[str] = []
+
+    # Simple approach: scan line by line for Route:: calls
+    lines = content.split('\n')
+    current_group_middleware = []
+    current_group_prefix = ""
+    brace_depth = 0
+
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+            continue
+
+        # Track Route::group context
+        group_match = re.search(r'Route::group\s*\(\s*\[([^\]]*)\]', stripped)
+        if group_match:
+            group_body = group_match.group(1)
+            # Extract prefix from group
+            prefix_match = re.search(r"['\"]prefix['\"]\s*=>\s*['\"]([^'\"]+)['\"]", group_body)
+            if prefix_match:
+                current_group_prefix = prefix_match.group(1)
+            # Extract middleware from group
+            mw_matches = re.findall(r"['\"]middleware['\"]\s*=>\s*['\"]([\w.:-]+)['\"]", group_body)
+            if mw_matches:
+                current_group_middleware = list(mw_matches)
+            continue
+
+        # Track Route::middleware chains
+        middleware_chain_match = re.search(r"Route::middleware\s*\(\s*['\"]([\w.:-]+)['\"]", stripped)
+        if middleware_chain_match:
+            current_group_middleware = [middleware_chain_match.group(1)]
+            continue
+
+        # Track prefix chains
+        prefix_chain_match = re.search(r"->prefix\s*\(\s*['\"]([^'\"]+)['\"]", stripped)
+        if prefix_chain_match and 'Route::' not in stripped.split('->prefix')[0]:
+            current_group_prefix = prefix_chain_match.group(1)
+            continue
+
+        # ─── Standard route: Route::get('/path', ...) ─────────
+        route_pattern = re.compile(
+            r'Route::(get|post|put|patch|delete|options|any)'
+            r'\s*\(\s*'
+            r"['\"]([^'\"]+)['\"]"       # Path
+            r'\s*,\s*'
+            r'(?:'
+            r"\[([\w\\]+)::class\s*,\s*['\"](\w+)['\"]\]"  # [Controller::class, 'method']
+            r"|"
+            r"([\w\\]+)::class"                                # Controller::class (invokable)
+            r"|"
+            r"function\s*\("                                   # Closure
+            r")"
+        )
+        for m in route_pattern.finditer(stripped):
+            method = m.group(1).upper()
+            if method == 'ANY':
+                method = 'ANY'
+            path = m.group(2)
+            # Ensure path starts with /
+            if not path.startswith('/'):
+                path = '/' + path
+
+            # Apply group prefix
+            if current_group_prefix:
+                path = '/' + current_group_prefix.rstrip('/') + path
+
+            handler_name = "anonymous"
+            controller = None
+            if m.group(3) and m.group(4):
+                controller = m.group(3).rsplit('\\', 1)[-1]
+                handler_name = f"{controller}::{m.group(4)}"
+            elif m.group(5):
+                controller = m.group(5).rsplit('\\', 1)[-1]
+                handler_name = f"{controller}::__invoke"
+
+            # Check for chained middleware
+            chained_mw = re.findall(r"->middleware\s*\(\s*['\"]([\w.:-]+)['\"]", stripped)
+            all_mw = current_group_middleware + chained_mw
+
+            is_auth = any(mw.lower() in AUTH_MIDDLEWARE_PATTERNS for mw in all_mw)
+
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": all_mw,
+                "request_type": None,
+                "response_type": None,
+                "framework": "laravel",
+                "auth_protected": is_auth,
+                "deprecated": False,
+            })
+
+        # ─── Resource routes: Route::resource('name', Controller::class) ───
+        resource_pattern = re.compile(
+            r'Route::(apiResource|resource)'
+            r'\s*\(\s*'
+            r"['\"]([^'\"]+)['\"]"       # Resource name
+            r'\s*,\s*'
+            r"([\w\\]+)::class"
+        )
+        for m in resource_pattern.finditer(stripped):
+            resource_type = m.group(1)
+            resource_name = m.group(2)
+            controller = m.group(3).rsplit('\\', 1)[-1]
+
+            # Apply group prefix
+            prefix = '/' + current_group_prefix.rstrip('/') if current_group_prefix else ''
+
+            # Resource routes generate multiple endpoints
+            if resource_type == 'apiResource':
+                resource_routes = [
+                    ("GET", f"{prefix}/{resource_name}", "index"),
+                    ("POST", f"{prefix}/{resource_name}", "store"),
+                    ("GET", f"{prefix}/{resource_name}/{{id}}", "show"),
+                    ("PUT", f"{prefix}/{resource_name}/{{id}}", "update"),
+                    ("PATCH", f"{prefix}/{resource_name}/{{id}}", "update"),
+                    ("DELETE", f"{prefix}/{resource_name}/{{id}}", "destroy"),
+                ]
+            else:
+                resource_routes = [
+                    ("GET", f"{prefix}/{resource_name}", "index"),
+                    ("GET", f"{prefix}/{resource_name}/create", "create"),
+                    ("POST", f"{prefix}/{resource_name}", "store"),
+                    ("GET", f"{prefix}/{resource_name}/{{id}}", "show"),
+                    ("GET", f"{prefix}/{resource_name}/{{id}}/edit", "edit"),
+                    ("PUT", f"{prefix}/{resource_name}/{{id}}", "update"),
+                    ("PATCH", f"{prefix}/{resource_name}/{{id}}", "update"),
+                    ("DELETE", f"{prefix}/{resource_name}/{{id}}", "destroy"),
+                ]
+
+            # Check for chained middleware
+            chained_mw = re.findall(r"->middleware\s*\(\s*['\"]([\w.:-]+)['\"]", stripped)
+            all_mw = current_group_middleware + chained_mw
+            is_auth = any(mw.lower() in AUTH_MIDDLEWARE_PATTERNS for mw in all_mw)
+
+            for http_method, route_path, method_name in resource_routes:
+                routes.append({
+                    "method": http_method,
+                    "path": route_path,
+                    "handler_name": f"{controller}::{method_name}",
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": all_mw,
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "laravel",
+                    "auth_protected": is_auth,
+                    "deprecated": False,
+                })
+
+    return routes
+
+
+def _extract_symfony_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """
+    Extract routes from Symfony controllers using PHP 8 attributes
+    or Doctrine annotations.
+
+    Handles:
+    - #[Route('/path', name: 'route_name', methods: ['GET'])]
+    - #[Route('/path', methods: ['GET', 'POST'])]
+    - @Route("/path", name="route_name", methods={"GET"})
+    """
+    routes: List[Dict[str, Any]] = []
+
+    # PHP 8 Attribute syntax: #[Route(...)]
+    attr_pattern = re.compile(
+        r'#\[Route\s*\(\s*'
+        r"['\"]([^'\"]+)['\"]"         # Path
+        r'(?:'
+        r"[^]]*?methods\s*:\s*\[([^\]]+)\]"  # methods: ['GET', 'POST']
+        r')?',
+        re.DOTALL
+    )
+    for m in attr_pattern.finditer(content):
+        path = m.group(1)
+        methods_str = m.group(2) if m.group(2) else "'GET'"
+        methods = [meth.strip().strip("'\"") for meth in methods_str.split(',')]
+        methods = [m.upper() for m in methods if m]
+
+        line = content[:m.start()].count('\n') + 1
+
+        for method in methods or ['GET']:
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": "symfony_action",
+                "file": rel_path,
+                "line": line,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "symfony",
+                "auth_protected": False,
+                "deprecated": False,
+            })
+
+    # Doctrine Annotation syntax: @Route(...)
+    annot_pattern = re.compile(
+        r'@Route\s*\(\s*'
+        r"['\"]([^'\"]+)['\"]"         # Path
+        r'(?:'
+        r'[^)]*?methods\s*=\s*\{([^}]+)\}'  # methods={"GET", "POST"}
+        r')?',
+        re.DOTALL
+    )
+    for m in annot_pattern.finditer(content):
+        path = m.group(1)
+        methods_str = m.group(2) if m.group(2) else '"GET"'
+        methods = [meth.strip().strip('"\'') for meth in methods_str.split(',')]
+        methods = [m.upper() for m in methods if m]
+
+        line = content[:m.start()].count('\n') + 1
+
+        for method in methods or ['GET']:
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": "symfony_action",
+                "file": rel_path,
+                "line": line,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "symfony",
+                "auth_protected": False,
+                "deprecated": False,
+            })
+
+    return routes
+
+
+def _extract_slim_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """
+    Extract routes from Slim framework applications.
+
+    Handles:
+    - $app->get('/path', function(...) { ... })
+    - $app->post('/path', [Controller::class, 'method'])
+    - $app->group('/prefix', function($app) { ... })
+    """
+    routes: List[Dict[str, Any]] = []
+
+    route_pattern = re.compile(
+        r'\$app->(get|post|put|delete|patch|options|any)'
+        r'\s*\(\s*'
+        r"['\"]([^'\"]+)['\"]"       # Path
+        r'\s*,\s*'
+        r'(?:'
+        r"\[([\w\\]+)::class\s*,\s*['\"](\w+)['\"]\]"
+        r"|"
+        r"function\s*\("
+        r")"
+    )
+
+    for m in route_pattern.finditer(content):
+        method = m.group(1).upper()
+        path = m.group(2)
+        if not path.startswith('/'):
+            path = '/' + path
+
+        handler_name = "anonymous"
+        if m.group(3) and m.group(4):
+            controller = m.group(3).rsplit('\\', 1)[-1]
+            handler_name = f"{controller}::{m.group(4)}"
+
+        line = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": method,
+            "path": path,
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "slim",
+            "auth_protected": False,
+            "deprecated": False,
+        })
+
+    return routes

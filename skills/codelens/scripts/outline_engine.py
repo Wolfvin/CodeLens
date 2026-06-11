@@ -62,6 +62,8 @@ def get_file_outline(
         outline = _outline_rust(content, detail_level)
     elif ext == '.py':
         outline = _outline_python(content, detail_level)
+    elif ext == '.php':
+        outline = _outline_php(content, detail_level)
     elif ext in ('.html', '.htm'):
         outline = _outline_html(content, detail_level)
     elif ext in ('.css', '.scss', '.less', '.sass'):
@@ -103,7 +105,7 @@ def get_workspace_outline(
             ignore_dirs.add(p.rstrip("/"))
 
     source_extensions = {
-        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py',
+        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.php',
         '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
     }
 
@@ -769,9 +771,82 @@ def _detect_language(ext: str) -> str:
     mapping = {
         '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
         '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'tsx',
-        '.rs': 'rust', '.py': 'python',
+        '.rs': 'rust', '.py': 'python', '.php': 'php',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
         '.vue': 'vue', '.svelte': 'svelte'
     }
     return mapping.get(ext, 'unknown')
+
+
+def _outline_php(content: str, detail_level: str = "standard") -> Dict:
+    """Generate a lightweight outline for PHP files using regex."""
+    import re
+    functions = []
+    classes = []
+    interfaces = []
+    traits = []
+    enums = []
+    imports = []
+
+    # Namespace
+    ns_match = re.search(r'namespace\s+([\w\\]+)\s*;', content)
+    namespace = ns_match.group(1) if ns_match else None
+
+    # Use statements
+    for m in re.finditer(r'use\s+([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
+        imports.append({"name": m.group(2) or m.group(1).rsplit('\\', 1)[-1], "path": m.group(1)})
+
+    # Classes
+    for m in re.finditer(r'(?:abstract\s+|final\s+)*class\s+(\w+)', content):
+        line = content[:m.start()].count('\n') + 1
+        classes.append({"name": m.group(1), "line": line})
+
+    # Interfaces
+    for m in re.finditer(r'interface\s+(\w+)', content):
+        line = content[:m.start()].count('\n') + 1
+        interfaces.append({"name": m.group(1), "line": line})
+
+    # Traits
+    for m in re.finditer(r'trait\s+(\w+)', content):
+        line = content[:m.start()].count('\n') + 1
+        traits.append({"name": m.group(1), "line": line})
+
+    # Enums
+    for m in re.finditer(r'enum\s+(\w+)', content):
+        line = content[:m.start()].count('\n') + 1
+        enums.append({"name": m.group(1), "line": line})
+
+    # Functions (top-level only, skip class methods)
+    class_ranges = []
+    for m in re.finditer(r'(?:abstract\s+|final\s+)*class\s+\w+', content):
+        start_line = content[:m.start()].count('\n') + 1
+        brace_pos = content.find('{', m.start())
+        if brace_pos >= 0:
+            depth = 0
+            for i in range(brace_pos, len(content)):
+                if content[i] == '{': depth += 1
+                elif content[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_line = content[:i].count('\n') + 1
+                        class_ranges.append((start_line, end_line))
+                        break
+
+    for m in re.finditer(r'function\s+(\w+)\s*\(', content):
+        line = content[:m.start()].count('\n') + 1
+        # Skip if inside a class
+        if any(start <= line <= end for start, end in class_ranges):
+            continue
+        functions.append({"name": m.group(1), "line": line})
+
+    return {
+        "language": "php",
+        "namespace": namespace,
+        "functions": functions,
+        "classes": classes,
+        "interfaces": interfaces,
+        "traits": traits,
+        "enums": enums,
+        "imports": imports,
+    }

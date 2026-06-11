@@ -30,7 +30,7 @@ DEFAULT_IGNORE_DIRS = frozenset({
     'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
-    'storybook-static', '.storybook',
+    'storybook-static', '.storybook', 'storage',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
@@ -189,7 +189,7 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Safe File Reading ──────────────────────────────────────
