@@ -4,7 +4,7 @@ import os
 import json
 import struct
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from utils import logger, DEFAULT_IGNORE_DIRS
 from commands import register_command
@@ -48,13 +48,16 @@ BUILT_OUTPUT_DIRS = {
     'output', 'release', 'pkg', 'compiled', 'bundle',
 }
 
+# Max source map file size to parse (5MB)
+MAX_SOURCE_MAP_SIZE = 5 * 1024 * 1024
+
 
 def add_args(parser):
     """Add artifact-scan-specific arguments."""
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--deep", action="store_true",
-                        help="Deep scan: attempt to extract symbols from .wasm text format")
+                        help="Deep scan: parse source maps and extract WASM exports")
 
 
 def execute(args, workspace):
@@ -147,6 +150,18 @@ def cmd_artifact_scan(workspace: str, deep: bool = False) -> Dict[str, Any]:
                             entry["avg_line_length"] = len(content) / max(lines, 1)
                             if entry["avg_line_length"] > 500:
                                 entry["obfuscation_hint"] = "Very long lines suggest minification or obfuscation"
+                            # In deep mode, try to find sourceMappingURL
+                            if deep:
+                                sourcemap_match = None
+                                for line in content.split('\n')[-5:]:  # Check last 5 lines
+                                    if 'sourceMappingURL' in line:
+                                        import re
+                                        sm = re.search(r'sourceMappingURL=(\S+)', line)
+                                        if sm:
+                                            sourcemap_match = sm.group(1).rstrip('*/').strip()
+                                            break
+                                if sourcemap_match:
+                                    entry["source_mapping_url"] = sourcemap_match
                     except IOError:
                         pass
 
@@ -159,10 +174,16 @@ def cmd_artifact_scan(workspace: str, deep: bool = False) -> Dict[str, Any]:
 
             # Check for source maps
             if filename_lower.endswith('.map') or filename_lower.endswith('.js.map') or filename_lower.endswith('.css.map'):
-                source_maps.append({
+                sm_entry = {
                     "path": rel_path,
                     "size_bytes": file_size,
-                })
+                }
+                # In deep mode, parse the source map JSON
+                if deep and file_size < MAX_SOURCE_MAP_SIZE:
+                    parsed = _parse_source_map(file_path)
+                    if parsed:
+                        sm_entry.update(parsed)
+                source_maps.append(sm_entry)
 
     # Summary
     total_artifacts = len(binaries) + len(minified_files) + len(source_maps)
@@ -202,12 +223,58 @@ def cmd_artifact_scan(workspace: str, deep: bool = False) -> Dict[str, Any]:
     return result
 
 
+def _parse_source_map(file_path: str) -> Optional[Dict[str, Any]]:
+    """Parse a source map file and extract key information.
+    
+    Source maps are JSON files with version, sources, names, and mappings
+    that allow reconstructing the original source from minified output.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            data = json.load(f)
+        
+        result = {}
+        
+        # Extract source file references
+        sources = data.get('sources', [])
+        if sources:
+            result["sources"] = sources[:50]  # Cap at 50
+            result["source_count"] = len(sources)
+        
+        # Extract names (original identifiers before minification)
+        names = data.get('names', [])
+        if names:
+            result["names_count"] = len(names)
+            result["names_sample"] = names[:20]  # Show first 20 original names
+        
+        # Source map version
+        version = data.get('version', None)
+        if version:
+            result["version"] = version
+        
+        # Source root
+        source_root = data.get('sourceRoot', None)
+        if source_root:
+            result["source_root"] = source_root
+        
+        # Check for x_google_ignoreList (Chrome DevTools feature)
+        ignore_list = data.get('x_google_ignoreList', [])
+        if ignore_list:
+            result["ignored_sources"] = len(ignore_list)
+        
+        return result
+    except (json.JSONDecodeError, IOError, ValueError):
+        return None
+
+
 def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[str, Any]:
     """Analyze a .wasm file for metadata.
     
     Reads only the WASM header and section headers — never reads the full
     binary content into memory. Uses seek() to skip over section payloads,
     so even a 100MB .wasm file is handled in constant time.
+    
+    In deep mode, also extracts export names from the export section (7).
     """
     info = {
         "is_valid_wasm": False,
@@ -235,7 +302,13 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                 # Scan section headers — cap at 50 sections to avoid
                 # pathological inputs and guarantee termination
                 sections = {}
+                export_names = []
+                import_entries = []
+
                 for _ in range(50):
+                    # Record position before reading section header
+                    pos_before = f.tell()
+                    
                     section_id_byte = f.read(1)
                     if not section_id_byte:
                         break
@@ -244,35 +317,157 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                     section_size = _read_leb128(f)
                     section_name = WASM_SECTION_NAMES.get(section_id, f"unknown_{section_id}")
 
-                    if section_id == 0 and section_size > 0 and section_size < 10000:
-                        # Custom section — read the name (first bytes are name_len + name)
+                    # Position at start of section payload
+                    payload_start = f.tell()
+
+                    if section_id == 0 and section_size > 0 and section_size < 100000:
+                        # Custom section — read the name using LEB128 for proper decoding
                         try:
-                            name_len_byte = f.read(1)
-                            if name_len_byte:
-                                name_len = name_len_byte[0]
-                                name = f.read(name_len).decode('utf-8', errors='replace')
-                                sections.setdefault("custom", []).append(name)
-                                # Skip rest of custom section payload
-                                remaining = section_size - 1 - name_len
-                                if remaining > 0:
-                                    f.seek(remaining, 1)
-                                continue
+                            name_len = _read_leb128(f)
+                            if name_len > 0 and name_len < 10000:
+                                name_bytes = f.read(name_len)
+                                if name_bytes:
+                                    name = name_bytes.decode('utf-8', errors='replace')
+                                    sections.setdefault("custom", []).append(name)
                         except (IOError, ValueError):
                             pass
-                    else:
-                        sections[section_name] = sections.get(section_name, 0) + 1
+                        # Skip to end of section
+                        section_end = payload_start + section_size
+                        f.seek(section_end)
+                        continue
+                    
+                    sections[section_name] = sections.get(section_name, 0) + 1
+
+                    # Deep mode: extract export names from export section (id=7)
+                    if deep and section_id == 7 and section_size < 1000000:
+                        try:
+                            export_names = _read_wasm_exports(f, section_size)
+                        except (IOError, ValueError, struct.error):
+                            pass
+                    
+                    # Deep mode: extract import entries from import section (id=2)
+                    if deep and section_id == 2 and section_size < 1000000:
+                        try:
+                            import_entries = _read_wasm_imports(f, section_size)
+                        except (IOError, ValueError, struct.error):
+                            pass
 
                     # Skip section payload using seek (constant time, no memory use)
-                    if section_size > 0:
-                        f.seek(section_size, 1)
+                    section_end = payload_start + section_size
+                    f.seek(section_end)
 
                 if sections:
                     info["sections"] = sections
+                
+                if export_names:
+                    info["exports"] = export_names
+                    info["export_count"] = len(export_names)
+                
+                if import_entries:
+                    info["imports"] = import_entries
+                    info["import_count"] = len(import_entries)
 
     except (IOError, OSError):
         pass
 
     return info
+
+
+def _read_wasm_exports(f, section_size: int) -> List[str]:
+    """Read export names from a WASM export section.
+    
+    Export section format:
+    - count (LEB128): number of exports
+    - For each export:
+      - name_len (LEB128): length of export name
+      - name (bytes): export name
+      - kind (1 byte): 0=func, 1=table, 2=memory, 3=global
+      - index (LEB128): index of the exported item
+    """
+    names = []
+    count = _read_leb128(f)
+    # Cap to prevent pathological cases
+    count = min(count, 500)
+    
+    for _ in range(count):
+        name_len = _read_leb128(f)
+        if name_len > 0 and name_len < 1000:
+            name_bytes = f.read(name_len)
+            if name_bytes:
+                name = name_bytes.decode('utf-8', errors='replace')
+                kind = f.read(1)
+                index = _read_leb128(f)
+                kind_names = {0: 'function', 1: 'table', 2: 'memory', 3: 'global'}
+                kind_name = kind_names.get(kind[0] if kind else -1, 'unknown') if kind else 'unknown'
+                names.append(f"{name} ({kind_name})")
+        else:
+            # Skip malformed entry
+            break
+    
+    return names
+
+
+def _read_wasm_imports(f, section_size: int) -> List[str]:
+    """Read import entries from a WASM import section.
+    
+    Import section format:
+    - count (LEB128): number of imports
+    - For each import:
+      - module_len (LEB128): length of module name
+      - module (bytes): module name
+      - name_len (LEB128): length of field name
+      - name (bytes): field name
+      - desc (1 byte + optional LEB128): import descriptor
+    """
+    imports = []
+    count = _read_leb128(f)
+    count = min(count, 500)
+    
+    for _ in range(count):
+        module_len = _read_leb128(f)
+        if module_len > 0 and module_len < 1000:
+            module_name = f.read(module_len).decode('utf-8', errors='replace')
+        else:
+            break
+        
+        name_len = _read_leb128(f)
+        if name_len > 0 and name_len < 1000:
+            field_name = f.read(name_len).decode('utf-8', errors='replace')
+        else:
+            break
+        
+        # Read import descriptor kind (1 byte)
+        kind_byte = f.read(1)
+        if kind_byte:
+            kind = kind_byte[0]
+            kind_names = {0: 'function', 1: 'table', 2: 'memory', 3: 'global'}
+            kind_name = kind_names.get(kind, 'unknown')
+            
+            # Read remaining descriptor bytes
+            if kind == 0:  # function: index (LEB128)
+                _read_leb128(f)
+            elif kind == 1:  # table: elem_type(1) + limits
+                f.read(1)
+                _read_limits(f)
+            elif kind == 2:  # memory: limits
+                _read_limits(f)
+            elif kind == 3:  # global: type(1) + mutability(1)
+                f.read(2)
+            
+            imports.append(f"{module_name}.{field_name} ({kind_name})")
+        else:
+            break
+    
+    return imports
+
+
+def _read_limits(f) -> None:
+    """Read WASM limits (min+optional max) from import descriptor."""
+    flags_byte = f.read(1)
+    if flags_byte:
+        _read_leb128(f)  # min
+        if flags_byte[0] & 1:  # has max
+            _read_leb128(f)  # max
 
 
 def _read_leb128(f) -> int:

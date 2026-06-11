@@ -264,8 +264,19 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
     files_scanned = 0
     by_category: Dict[str, int] = {}
 
+    # Directories that contain binary artifacts - don't skip these in binary scan
+    RE_DIRS = {'dist', 'build', 'out', 'bin', 'target', 'output', 'release', 'pkg', 'compiled', 'bundle'}
+
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        # Skip ignored dirs but allow RE_DIRS (which commonly contain binaries)
+        filtered_dirs = []
+        for d in dirs:
+            if d.startswith('.'):
+                continue
+            if d in DEFAULT_IGNORE_DIRS and d not in RE_DIRS:
+                continue
+            filtered_dirs.append(d)
+        dirs[:] = filtered_dirs
         if '.codelens' in root:
             dirs.clear()
             continue
@@ -351,6 +362,233 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
     }
 
 
+# ─── Generated File Detection ──────────────────────────────
+
+GENERATED_FILE_PATTERNS = frozenset({
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'uv.lock',
+    'go.sum', 'composer.lock', 'mix.lock',
+    '.DS_Store', 'Thumbs.db', 'desktop.ini',
+    'yarn-error.log', 'npm-debug.log',
+})
+
+GENERATED_FILE_PREFIXES = (
+    '.eslintcache', '.stylelintcache',
+)
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped during analysis.
+
+    Detects lock files, OS-generated files, and other artifacts that
+    are not hand-written source code.
+
+    Args:
+        filename: Just the filename (not the full path).
+
+    Returns:
+        True if the file appears to be auto-generated.
+    """
+    if filename in GENERATED_FILE_PATTERNS:
+        return True
+    for prefix in GENERATED_FILE_PREFIXES:
+        if filename.startswith(prefix):
+            return True
+    # .min.js / .min.css are generated (minified) files
+    lower = filename.lower()
+    if '.min.js' in lower or '.min.css' in lower:
+        return True
+    return False
+
+
+# ─── Tauri Artifact Scanning ────────────────────────────────
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri application artifacts.
+
+    Detects Tauri applications by looking for tauri.conf.json,
+    src-tauri/ directory, and Cargo.toml with tauri dependency.
+    Extracts IPC command/handler mappings, capabilities, and
+    security configuration.
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with Tauri analysis results, or None if no Tauri app detected.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Check for Tauri markers
+    tauri_conf = None
+    src_tauri_dir = None
+    cargo_toml_path = None
+
+    # Check root-level tauri.conf.json
+    root_conf = os.path.join(workspace, 'tauri.conf.json')
+    if os.path.isfile(root_conf):
+        tauri_conf = root_conf
+
+    # Check src-tauri directory
+    root_src_tauri = os.path.join(workspace, 'src-tauri')
+    if os.path.isdir(root_src_tauri):
+        src_tauri_dir = root_src_tauri
+        nested_conf = os.path.join(root_src_tauri, 'tauri.conf.json')
+        if os.path.isfile(nested_conf) and not tauri_conf:
+            tauri_conf = nested_conf
+        nested_cargo = os.path.join(root_src_tauri, 'Cargo.toml')
+        if os.path.isfile(nested_cargo):
+            cargo_toml_path = nested_cargo
+
+    # Also check apps/* subdirectories for monorepo
+    if not tauri_conf and not src_tauri_dir:
+        for subdir_name in ('apps', 'packages', 'src'):
+            subdir = os.path.join(workspace, subdir_name)
+            if not os.path.isdir(subdir):
+                continue
+            try:
+                for entry in os.listdir(subdir):
+                    entry_path = os.path.join(subdir, entry)
+                    if not os.path.isdir(entry_path):
+                        continue
+                    st = os.path.join(entry_path, 'src-tauri')
+                    if os.path.isdir(st):
+                        src_tauri_dir = st
+                        tc = os.path.join(st, 'tauri.conf.json')
+                        if os.path.isfile(tc):
+                            tauri_conf = tc
+                        ct = os.path.join(st, 'Cargo.toml')
+                        if os.path.isfile(ct):
+                            cargo_toml_path = ct
+                        break
+            except OSError:
+                pass
+        if src_tauri_dir:
+            pass  # found it
+
+    if not tauri_conf and not src_tauri_dir:
+        return None
+
+    result: Dict[str, Any] = {
+        "is_tauri_app": True,
+        "tauri_conf_path": os.path.relpath(tauri_conf, workspace) if tauri_conf else None,
+        "src_tauri_dir": os.path.relpath(src_tauri_dir, workspace) if src_tauri_dir else None,
+        "ipc_commands": [],
+        "capabilities": [],
+        "security": {},
+        "sidecar_binaries": [],
+    }
+
+    # Parse tauri.conf.json
+    if tauri_conf:
+        try:
+            with open(tauri_conf, 'r', encoding='utf-8') as f:
+                conf = json.load(f)
+
+            # Extract app info
+            app_info = conf.get('app', conf.get('package', {}))
+            if isinstance(app_info, dict):
+                result["app_name"] = app_info.get('title', app_info.get('name', ''))
+
+            # Security: CSP headers
+            security = conf.get('app', {}).get('security', {})
+            if security:
+                result["security"]["csp"] = security.get('csp', 'not set')
+                result["security"]["asset_protocol"] = security.get(
+                    'assetProtocol', {}).get('enableScope', 'not set')
+                result["security"]["dangerous_disable_asset_csp_modification"] = \
+                    security.get('dangerousDisableAssetCspModification', False)
+
+            # Sidecar binaries
+            external_bin = conf.get('plugins', {}).get('updater', {}).get('endpoints', [])
+            if external_bin:
+                result["sidecar_binaries"] = external_bin
+
+            # Check for window configuration
+            windows = conf.get('app', {}).get('windows', [])
+            if windows:
+                result["windows_count"] = len(windows)
+                result["security"]["devtools"] = any(
+                    w.get('devtools', False) for w in windows
+                )
+
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Parse Cargo.toml for tauri dependency
+    if cargo_toml_path:
+        try:
+            with open(cargo_toml_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if 'tauri' in cargo_content:
+                result["has_tauri_dependency"] = True
+                # Extract tauri features
+                import re
+                features_match = re.search(
+                    r'tauri\s*=.*features\s*=\s*\[([^\]]+)\]', cargo_content)
+                if features_match:
+                    result["tauri_features"] = [
+                        f.strip().strip('"').strip("'")
+                        for f in features_match.group(1).split(',')
+                    ]
+        except IOError:
+            pass
+
+    # Scan for IPC command handlers in Rust source
+    if src_tauri_dir:
+        src_dir = os.path.join(src_tauri_dir, 'src')
+        if os.path.isdir(src_dir):
+            import re
+            for root, dirs, files in os.walk(src_dir):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS]
+                for fname in files:
+                    if not fname.endswith('.rs'):
+                        continue
+                    fpath = os.path.join(root, fname)
+                    content = safe_read_file(fpath)
+                    if not content:
+                        continue
+                    # Find .invoke_handler() commands
+                    for m in re.finditer(
+                        r'#\[tauri::command\]\s*(?:\n\s*pub\s+async\s+fn|\n\s*pub\s+fn)\s+(\w+)',
+                        content
+                    ):
+                        result["ipc_commands"].append({
+                            "name": m.group(1),
+                            "file": os.path.relpath(fpath, workspace),
+                        })
+                    # Find .generate_handler! macro calls
+                    for m in re.finditer(
+                        r'generate_handler!\[([^\]]+)\]', content
+                    ):
+                        handlers = [h.strip().strip(',') for h in m.group(1).split() if h.strip().strip(',')]
+                        for h in handlers:
+                            if h and not any(c["name"] == h for c in result["ipc_commands"]):
+                                result["ipc_commands"].append({
+                                    "name": h,
+                                    "file": os.path.relpath(fpath, workspace),
+                                    "from_macro": True,
+                                })
+
+    # Scan for capabilities/permissions
+    if src_tauri_dir:
+        caps_dir = os.path.join(src_tauri_dir, 'capabilities')
+        if os.path.isdir(caps_dir):
+            for fname in os.listdir(caps_dir):
+                if fname.endswith('.json'):
+                    try:
+                        with open(os.path.join(caps_dir, fname), 'r', encoding='utf-8') as f:
+                            cap = json.load(f)
+                        result["capabilities"].append({
+                            "file": fname,
+                            "permissions": cap.get('permissions', []),
+                        })
+                    except (json.JSONDecodeError, IOError):
+                        pass
+
+    return result
+
+
 def _binary_category(ext: str) -> str:
     """Map file extension to binary category."""
     if ext in {'.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
@@ -389,4 +627,4 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.1.0"

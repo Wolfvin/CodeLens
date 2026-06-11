@@ -147,6 +147,22 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["CMakeLists.txt"],
         "indicators": []
     },
+    # WASM frameworks and tools
+    "wasm-bindgen": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["wasm-bindgen"]
+    },
+    "wasm-pack": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["wasm-pack"]
+    },
+    "emscripten": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["emscripten", "EMSCRIPTEN"]
+    },
 }
 
 
@@ -478,6 +494,65 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
                 break
+
+    # 8. Detect WASM frameworks and tools
+    # Check Cargo.toml for wasm-bindgen dependency
+    for cargo_name in ('Cargo.toml', 'src-tauri/Cargo.toml'):
+        cargo_path = os.path.join(workspace, cargo_name)
+        if os.path.isfile(cargo_path):
+            try:
+                with open(cargo_path, 'r', encoding='utf-8') as f:
+                    cargo_content = f.read()
+                if 'wasm-bindgen' in cargo_content and 'wasm-bindgen' not in detected["frameworks"]:
+                    detected["frameworks"].append("wasm-bindgen")
+                if 'wasm-pack' in cargo_content and 'wasm-pack' not in detected["frameworks"]:
+                    detected["frameworks"].append("wasm-pack")
+            except IOError:
+                pass
+
+    # Check for .wasm files in the workspace (indicates WASM usage)
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            if f.endswith('.wasm'):
+                # Don't add a framework, but note it in unsupported_langs
+                if "wasm" not in detected["unsupported_langs"]:
+                    detected["unsupported_langs"].append("wasm")
+                break
+        else:
+            continue
+        break  # Only need to find one .wasm file
+
+    # Check for emscripten markers
+    emscripten_markers = ['emscripten', 'EMSCRIPTEN', 'emcc']
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            if f.endswith(('.js', '.html', '.cfg', '.py')):
+                fpath = os.path.join(root, f)
+                try:
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                        content = fh.read(8192)
+                        for marker in emscripten_markers:
+                            if marker in content and 'emscripten' not in detected["frameworks"]:
+                                detected["frameworks"].append("emscripten")
+                                break
+                except IOError:
+                    pass
+        if 'emscripten' in detected["frameworks"]:
+            break
 
     return detected
 

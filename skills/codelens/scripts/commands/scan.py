@@ -34,23 +34,27 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--reverse-engineering", "--re", action="store_true",
+                        help="Include dist/build/minified files for reverse engineering analysis")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    reverse_engineering = getattr(args, 'reverse_engineering', False)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, reverse_engineering=reverse_engineering)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, reverse_engineering: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    If reverse_engineering=True, include dist/build/minified files normally ignored.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -66,7 +70,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         save_config(workspace, config)
 
     # Discover files
-    files = discover_files(workspace, config)
+    files = discover_files(workspace, config, reverse_engineering=reverse_engineering)
 
     # Check if incremental scan is possible
     changed_files = None
@@ -567,6 +571,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
+        "reverse_engineering": reverse_engineering,
         "changed_files_count": len(changed_files) if changed_files else 0,
         "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
         "lang_note": _build_lang_note(fw) if fw else None,
@@ -593,11 +598,20 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
 
 
-def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
+def discover_files(workspace: str, config: Dict, reverse_engineering: bool = False) -> Dict[str, List[str]]:
     """
     Discover all relevant source files in the workspace.
     Returns categorized file lists.
+    
+    If reverse_engineering=True, includes files in dist/, build/, and
+    .min.js/.min.css files that are normally ignored.
     """
+    # Directories normally ignored but included in RE mode
+    RE_ONLY_DIRS = {'dist', 'build', 'out', '.next', '.nuxt', 'bin', 'target',
+                     'output', 'release', 'pkg', 'compiled', 'bundle'}
+    # Extensions normally ignored but included in RE mode
+    RE_ONLY_EXTENSIONS = {'.min.js', '.min.css', '.bundle.js', '.chunk.js'}
+
     files = {
         "html": [],
         "css": [],
@@ -607,7 +621,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "rust": [],
         "python": [],
         "vue": [],
-        "svelte": []
+        "svelte": [],
+        "artifacts": []  # Binary/compiled artifacts found in RE mode
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -617,8 +632,17 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         # when the workspace directory name contains an ignore pattern substring
         # (e.g., workspace named "test-target" would falsely match "target/")
         if should_ignore(rel_root, config):
-            dirs.clear()
-            continue
+            # In RE mode, allow dist/build/out directories
+            if reverse_engineering:
+                parts = rel_root.replace('\\', '/').split('/')
+                if not any(p in RE_ONLY_DIRS for p in parts):
+                    dirs.clear()
+                    continue
+                # else: allow this directory, but still skip .git, node_modules, etc.
+                dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '__pycache__', '.codelens'}]
+            else:
+                dirs.clear()
+                continue
 
         # Don't descend into .codelens
         if '.codelens' in root:
@@ -630,9 +654,22 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
             rel_path = os.path.relpath(file_path, workspace)
 
             if should_ignore(rel_path, config):
-                continue
+                # In RE mode, allow minified/bundled files
+                if reverse_engineering:
+                    fn_lower = filename.lower()
+                    is_re_file = any(fn_lower.endswith(p) for p in RE_ONLY_EXTENSIONS)
+                    if not is_re_file:
+                        continue
+                else:
+                    continue
 
             ext = os.path.splitext(filename)[1].lower()
+            fn_lower = filename.lower()
+
+            # Check for minified/bundled files in RE mode
+            if reverse_engineering and any(fn_lower.endswith(p) for p in RE_ONLY_EXTENSIONS):
+                files["js_backend"].append(file_path)  # Parse as JS backend
+                continue
 
             if ext in ('.html', '.htm'):
                 files["html"].append(file_path)
@@ -642,7 +679,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["tsx"].append(file_path)
             elif ext == '.tsx':
                 files["tsx"].append(file_path)
-            elif ext in ('.js', '.ts'):
+            elif ext in ('.js', '.ts', '.mjs', '.cjs'):
                 if ext == '.ts' and is_frontend_file(rel_path, config):
                     files["tsx"].append(file_path)
                 elif is_frontend_file(rel_path, config):
@@ -661,6 +698,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
+            elif reverse_engineering and ext in ('.wasm', '.so', '.dll', '.dylib',
+                                                  '.exe', '.pyc', '.pyo', '.class',
+                                                  '.o', '.a', '.lib'):
+                files["artifacts"].append(file_path)
 
     return files
 

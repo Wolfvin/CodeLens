@@ -5,6 +5,24 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.0] — 2026-06-12
+
+### Added
+- **Reverse Engineering mode for scan**: New `--reverse-engineering` / `--re` flag on `scan` command. Includes dist/, build/, out/ directories and .min.js/.min.css files that are normally ignored. Also detects binary artifacts (.wasm, .so, .dll, etc.) in RE mode.
+- **WASM deep analysis**: `artifact-scan --deep` now extracts export names and import entries from WASM binaries. Shows function/table/memory/global exports with their types, and module.field import references.
+- **Source map JSON parsing**: `artifact-scan --deep` now parses source map files and extracts original source file references, name counts, version, source root, and x_google_ignoreList.
+- **sourceMappingURL detection**: Minified files are now scanned for `//# sourceMappingURL=` comments in deep mode.
+- **`is_generated_file()` utility**: New utility function to detect auto-generated files (lock files, OS files, minified files). Used by refactor-safe engine.
+- **`scan_tauri_artifacts()` utility**: Full Tauri application analysis — detects tauri.conf.json, extracts IPC commands from Rust source, capabilities/permissions, CSP headers, sidecar binaries, and security configuration.
+- **WASM framework detection**: Framework detection now identifies wasm-bindgen, wasm-pack, and emscripten projects. Also detects .wasm files in workspace.
+- **`.mjs`/`.cjs` support**: `discover_files()` in scan command now handles .mjs and .cjs file extensions.
+- **Minified CSS skip**: cssdeep_engine now skips .min.css files to avoid false positives on minified stylesheets.
+
+### Fixed
+- **refactor_safe ImportError**: `is_generated_file` was missing from `utils.py`, causing refactor-safe command to crash on import. Now properly implemented.
+- **binary-scan ImportError**: `scan_tauri_artifacts` was missing from `utils.py`, causing binary-scan command to crash. Now fully implemented with comprehensive Tauri analysis.
+- **WASM section parsing robustness**: Custom section name length is now read as LEB128 (not single byte), matching the WASM spec. Section end positions are computed as absolute offsets instead of relative seeks, preventing position drift on malformed files.
+
 ## [5.7.2] — 2026-06-12
 
 ### Fixed
