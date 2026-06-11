@@ -2,6 +2,35 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.8.0] — 2026-06-11
+
+### Added
+- **Frontend dashboard** (`src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`):
+  - Overview tab with quick start guide and API status
+  - Graph tab with node type breakdown, cluster view, and node table
+  - Commands tab with interactive command runner and quick command buttons
+  - Health tab with score visualization and recommendations
+  - Dark theme matching the Neural Workspace design system
+- **`handbook` and `ask` command support** in the REST API and WebSocket:
+  - Added to `ALLOWED_COMMANDS` whitelist in `commandRunner.ts`
+  - Added `handbook()` and `ask()` method wrappers to `CommandRunner` class
+  - Added to `CODELENS_COMMANDS` type definitions in `neural.ts`
+- **Normalizer handlers** for `handbook` and `ask` commands:
+  - `normalizeHandbook`: Creates project node + risk nodes from handbook output
+  - `normalizeAsk`: Delegates to scan normalizer for structured results, falls back to info node
+- **Informative API root** (`GET /api`): Returns name, version, status, endpoints, and command count
+
+### Changed
+- **analysisStore**: Removed hardcoded `/home/z/my-project` workspace default — now defaults to empty string
+- **tsconfig.json**: Added `_archive` to `exclude` list to prevent TypeScript from checking archived code
+- **commandRunner.ts**: Fixed `CODELENS_SCRIPT` type from `string | undefined` to `string` with empty-string fallback for type safety
+- **Security**: Removed `.env` from git tracking (was accidentally committed with credentials)
+
+### Fixed
+- `commandRunner.ts`: `CODELENS_SCRIPT` was `undefined` type, causing TypeScript overload resolution failure in `execFileAsync`
+- `page.tsx`: `unknown` type in JSX expression caused `TS2322` — fixed with explicit null check and `String()` wrapper
+- Root API route returned `{ message: "Hello, world!" }` instead of useful server information
+
 ## [5.3.0] — 2026-06-11
 
 ### Architecture

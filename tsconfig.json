@@ -41,6 +41,7 @@
     "examples",
     "skills",
     "mini-services",
-    "__tests__"
+    "__tests__",
+    "_archive"
   ]
 }

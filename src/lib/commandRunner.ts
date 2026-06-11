@@ -12,9 +12,9 @@ const execFileAsync = promisify(execFile)
 // Path to codelens CLI — MUST be set via environment variables.
 // No hardcoded fallbacks: if these are missing, the server throws a clear error.
 const CODELENS_PYTHON = process.env.CODELENS_PYTHON
-const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
+const CODELENS_SCRIPT: string = process.env.CODELENS_SCRIPT
   ? path.resolve(process.env.CODELENS_SCRIPT)
-  : undefined
+  : ''
 
 if (!CODELENS_PYTHON) {
   throw new Error(
@@ -45,7 +45,7 @@ const ALLOWED_COMMANDS = new Set([
   'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y', 'perf-hint',
   'css-deep', 'refactor-safe', 'side-effect', 'stack-trace', 'test-map',
   'config-drift', 'type-infer', 'ownership', 'entrypoints', 'api-map',
-  'state-map', 'regex-audit',
+  'state-map', 'regex-audit', 'handbook', 'ask',
 ])
 
 /**
@@ -99,7 +99,7 @@ class CommandRunner {
     const safeArgs = sanitizeArgs(args)
 
     try {
-      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON, [CODELENS_SCRIPT, command, ...safeArgs], {
+      const { stdout, stderr } = await execFileAsync(CODELENS_PYTHON!, [CODELENS_SCRIPT, command, ...safeArgs], {
         timeout: COMMAND_TIMEOUT,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
       })
@@ -414,6 +414,16 @@ class CommandRunner {
   /** Detect frameworks in workspace */
   async detect(workspace: string): Promise<any> {
     return this.execute('detect', [workspace])
+  }
+
+  /** Generate project handbook for AI agents */
+  async handbook(workspace: string): Promise<any> {
+    return this.execute('handbook', [workspace])
+  }
+
+  /** Natural language query router */
+  async ask(query: string, workspace: string): Promise<any> {
+    return this.execute('ask', [query, workspace])
   }
 }
 
