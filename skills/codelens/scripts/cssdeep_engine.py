@@ -473,90 +473,128 @@ def _detect_specificity_wars(content: str, rel_path: str) -> List[Dict[str, Any]
     - Deeply nested selectors (e.g., .a .b .c .d .e)
     - Overly qualified selectors (e.g., div#id.class)
     - Individual !important usage (aggregated per-file in Phase 3)
+
+    v6: Tracks brace depth to distinguish CSS rule selectors from property
+    values that happen to contain braces (rgba(), var(), calc(), etc.).
+    Only extracts selectors at brace depth 0 (top-level rules).
     """
     findings: List[Dict[str, Any]] = []
 
+    # v6: State machine approach — track brace depth so we only
+    # extract selectors from the top level of the CSS file.
+    # This prevents false positives from CSS property values like
+    # "rgba(0, 0, 0, 0.1)" or "var(--ds-gray-alpha-600)".
     lines = content.split('\n')
+    brace_depth = 0
 
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # Skip comments, at-rules (except we parse them elsewhere), and declarations
+        # Skip comments
         if not stripped or stripped.startswith('/*') or stripped.startswith('//'):
             continue
-        if stripped.startswith('@') and not stripped.startswith('@media'):
-            continue
-        # Only process lines that look like selectors (end with { or ,)
-        if '{' not in stripped and not stripped.endswith(','):
-            continue
 
-        # Extract the selector part (before {)
-        selector_part = stripped.split('{')[0].strip()
-        if not selector_part:
-            continue
+        # Track brace depth for this line
+        # We need to process opening and closing braces carefully
+        # to distinguish rule-level braces from value-level braces.
 
-        # Skip @media lines
-        if selector_part.startswith('@'):
-            continue
+        # v6: Check if this line is a CSS declaration (property: value) at the current depth.
+        # A declaration has a colon BEFORE any opening brace at this level.
+        # e.g., "  color: rgba(0, 0, 0, 0.1);" — the { inside rgba() is not a rule start.
+        is_declaration = False
+        if brace_depth > 0:
+            # Check if line looks like a CSS property declaration
+            decl_match = re.match(r'^[\s-]*[\w-]+\s*:', stripped)
+            if decl_match:
+                is_declaration = True
 
-        # Handle multiple selectors separated by comma
-        selectors = [s.strip() for s in selector_part.split(',')]
+        # Only process lines at brace depth 0 (top-level) as potential selectors.
+        # Lines at depth > 0 are inside rule bodies and can't be selectors.
+        if brace_depth == 0 and not is_declaration:
+            if not stripped.startswith('@') and '{' in stripped:
+                # This might be a selector — extract the part before {
+                # But first, count braces in this line to update depth
+                opening = stripped.count('{')
+                closing = stripped.count('}')
+                brace_depth += opening - closing
 
-        for selector in selectors:
-            if not selector:
-                continue
+                # Extract the selector part (before the FIRST {)
+                selector_part = stripped.split('{')[0].strip()
+                if not selector_part:
+                    continue
 
-            # Count combinator depth (spaces between selectors indicate nesting)
-            # Split by combinators: space, >, +, ~
-            parts = re.split(r'\s+[>+~]?\s*', selector)
-            parts = [p.strip() for p in parts if p.strip()]
+                # v6: Validate that this is actually a selector, not a property value.
+                # Real CSS selectors should:
+                # 1. Not start with a digit (property values often start with 0, 1px, etc.)
+                # 2. Not contain CSS value functions like rgba(), var(), calc()
+                # 3. Not be a bare value like "0px 1px 1px"
+                if re.match(r'^[\d]', selector_part):
+                    continue  # Starts with a digit — not a selector
+                if re.match(r'^(from|to)\s', selector_part, re.IGNORECASE):
+                    continue  # Keyframe from/to — not a selector
+                if re.search(r'\b(rgba?|hsla?|var|calc|clamp|min|max|env|url|linear-gradient|radial-gradient|conic-gradient)\s*\(', selector_part):
+                    continue  # Contains CSS value functions — not a selector
+                # Skip if the "selector" looks like a CSS value with units
+                if re.match(r'^[\d.]+\s*(px|em|rem|%|vh|vw|deg|s|ms)', selector_part):
+                    continue
 
-            depth = len(parts)
+                # Handle multiple selectors separated by comma
+                selectors = [s.strip() for s in selector_part.split(',')]
 
-            # Count IDs, classes, and element selectors
-            id_count = selector.count('#')
-            class_count = selector.count('.')
+                for selector in selectors:
+                    if not selector:
+                        continue
 
-            # Detect overly qualified: element + id + class like div#id.class
-            has_element = bool(re.match(r'^[a-zA-Z][\w-]*', parts[0]) if parts else False)
-            is_overqualified = has_element and id_count > 0 and class_count > 0
+                    # Count combinator depth (spaces between selectors indicate nesting)
+                    parts = re.split(r'\s+[>+~]?\s*', selector)
+                    parts = [p.strip() for p in parts if p.strip()]
 
-            if depth >= SPECIFICITY_DEPTH_CRITICAL:
-                findings.append({
-                    "type": "css_issue",
-                    "category": "specificity_wars",
-                    "severity": "high",
-                    "file": rel_path,
-                    "line": i + 1,
-                    "detail": f"Excessively deep selector nesting ({depth} levels): '{selector}'",
-                    "name": selector[:80],
-                    "fix_suggestion": (
-                        "Reduce nesting depth. Use BEM methodology or CSS modules "
-                        "to flatten selector specificity."
-                    ),
-                })
-            elif depth >= SPECIFICITY_DEPTH_THRESHOLD:
-                findings.append({
-                    "type": "css_issue",
-                    "category": "specificity_wars",
-                    "severity": "medium",
-                    "file": rel_path,
-                    "line": i + 1,
-                    "detail": f"Deeply nested selector ({depth} levels): '{selector}'",
-                    "name": selector[:80],
-                    "fix_suggestion": (
-                        "Consider flattening this selector. Prefer single-class selectors "
-                        "or BEM naming (e.g., .block__element--modifier)."
-                    ),
-                })
+                    depth = len(parts)
 
-            if is_overqualified:
-                findings.append({
-                    "type": "css_issue",
-                    "category": "specificity_wars",
-                    "severity": "medium",
-                    "file": rel_path,
-                    "line": i + 1,
+                    # Count IDs, classes, and element selectors
+                    id_count = selector.count('#')
+                    class_count = selector.count('.')
+
+                    # Detect overly qualified: element + id + class like div#id.class
+                    has_element = bool(re.match(r'^[a-zA-Z][\w-]*', parts[0]) if parts else False)
+                    is_overqualified = has_element and id_count > 0 and class_count > 0
+
+                    if depth >= SPECIFICITY_DEPTH_CRITICAL:
+                        findings.append({
+                            "type": "css_issue",
+                            "category": "specificity_wars",
+                            "severity": "high",
+                            "file": rel_path,
+                            "line": i + 1,
+                            "detail": f"Excessively deep selector nesting ({depth} levels): '{selector}'",
+                            "name": selector[:80],
+                            "fix_suggestion": (
+                                "Reduce nesting depth. Use BEM methodology or CSS modules "
+                                "to flatten selector specificity."
+                            ),
+                        })
+                    elif depth >= SPECIFICITY_DEPTH_THRESHOLD:
+                        findings.append({
+                            "type": "css_issue",
+                            "category": "specificity_wars",
+                            "severity": "medium",
+                            "file": rel_path,
+                            "line": i + 1,
+                            "detail": f"Deeply nested selector ({depth} levels): '{selector}'",
+                            "name": selector[:80],
+                            "fix_suggestion": (
+                                "Consider flattening this selector. Prefer single-class selectors "
+                                "or BEM naming (e.g., .block__element--modifier)."
+                            ),
+                        })
+
+                    if is_overqualified:
+                        findings.append({
+                            "type": "css_issue",
+                            "category": "specificity_wars",
+                            "severity": "medium",
+                            "file": rel_path,
+                            "line": i + 1,
                     "detail": f"Overly qualified selector: '{selector}' — combines element, ID, and class",
                     "name": selector[:80],
                     "fix_suggestion": (
@@ -564,6 +602,14 @@ def _detect_specificity_wars(content: str, rel_path: str) -> List[Dict[str, Any]
                         "Use just the class or ID selector alone."
                     ),
                 })
+        else:
+            # v6: Track brace depth even for lines that aren't selectors
+            # so we know when we're inside a rule body vs at top level
+            opening = stripped.count('{')
+            closing = stripped.count('}')
+            brace_depth += opening - closing
+            if brace_depth < 0:
+                brace_depth = 0
 
     return findings
 

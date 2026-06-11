@@ -220,17 +220,46 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
 
 
 def _extract_project_identity(workspace: str) -> Dict[str, Any]:
-    """Extract project identity from package.json, pyproject.toml, or README."""
+    """Extract project identity from package.json, pyproject.toml, or README.
+
+    v6: Removed unknown-type guard on Cargo.toml, added combined/polyglot type
+    detection, sub-directory package.json scanning, and monorepo-specific types.
+    """
     identity = {
         "name": os.path.basename(workspace),
         "description": "",
         "version": "0.0.0",
-        "type": "unknown"
+        "type": "unknown",
+        # v6: monorepo & sub-dir info
+        "is_monorepo": False,
+        "monorepo_tools": [],
+        "subdir_frameworks": {},
     }
+
+    has_package_json = False
+    has_cargo_toml = False
+    has_pyproject = False
+    js_type = None  # v6: track JS-derived type separately for polyglot detection
+    python_type = None  # v6: track Python-derived type separately
+    rust_type = None  # v6: track Rust-derived type separately
+
+    # v6: Check monorepo indicators first
+    _MONOREPO_INDICATORS = {
+        "turbo.json": "turborepo",
+        "pnpm-workspace.yaml": "pnpm-workspace",
+        "lerna.json": "lerna",
+        "nx.json": "nx",
+    }
+    for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
+        if os.path.isfile(os.path.join(workspace, indicator_file)):
+            identity["is_monorepo"] = True
+            if tool_name not in identity["monorepo_tools"]:
+                identity["monorepo_tools"].append(tool_name)
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
+        has_package_json = True
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
@@ -239,19 +268,65 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             if "next" in deps:
-                identity["type"] = "fullstack-web-app"
+                js_type = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
-                identity["type"] = "backend-api"
+                js_type = "backend-api"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
-                identity["type"] = "frontend-app"
+                js_type = "frontend-app"
             else:
-                identity["type"] = "node-project"
+                js_type = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
 
+    # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
+    _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
+    for subdir in _MONOREPO_SUBDIRS:
+        subdir_path = os.path.join(workspace, subdir)
+        if not os.path.isdir(subdir_path):
+            continue
+        try:
+            for entry in sorted(os.listdir(subdir_path)):
+                entry_pkg = os.path.join(subdir_path, entry, "package.json")
+                if not os.path.isfile(entry_pkg):
+                    continue
+                try:
+                    with open(entry_pkg, 'r', encoding='utf-8') as f:
+                        pkg = json.load(f)
+                    sub_deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                    rel_subdir = os.path.join(subdir, entry)
+                    subdir_fws = []
+                    # v6: Detect frameworks from sub-directory deps
+                    if "next" in sub_deps:
+                        subdir_fws.append("next.js")
+                        if js_type is None:
+                            js_type = "fullstack-web-app"
+                    if "react" in sub_deps:
+                        subdir_fws.append("react")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "vue" in sub_deps:
+                        subdir_fws.append("vue")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "svelte" in sub_deps:
+                        subdir_fws.append("svelte")
+                        if js_type is None:
+                            js_type = "frontend-app"
+                    if "express" in sub_deps or "fastify" in sub_deps:
+                        subdir_fws.append("express")
+                        if js_type is None:
+                            js_type = "backend-api"
+                    if subdir_fws:
+                        identity["subdir_frameworks"][rel_subdir] = subdir_fws
+                except Exception:
+                    pass
+        except OSError:
+            pass
+
     # Try pyproject.toml
     pyproject_path = os.path.join(workspace, 'pyproject.toml')
-    if os.path.isfile(pyproject_path) and identity["type"] == "unknown":
+    if os.path.isfile(pyproject_path):
+        has_pyproject = True
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -262,17 +337,18 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if ver_match:
                 identity["version"] = ver_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
-                identity["type"] = "backend-api"
+                python_type = "backend-api"
             elif "pytest" in content:
-                identity["type"] = "python-library"
+                python_type = "python-library"
             else:
-                identity["type"] = "python-project"
+                python_type = "python-project"
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
 
-    # Try Cargo.toml
+    # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')
-    if os.path.isfile(cargo_path) and identity["type"] == "unknown":
+    if os.path.isfile(cargo_path):
+        has_cargo_toml = True
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -282,9 +358,42 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            identity["type"] = "rust-project"
+            rust_type = "rust-project"
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
+
+    # v6: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+
+    if len(active_types) >= 2:
+        # Polyglot project — build a combined type string
+        type_parts = []
+        if rust_type:
+            type_parts.append("rust")
+        if js_type:
+            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
+        if python_type:
+            type_parts.append("python")
+        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
+    elif len(active_types) == 1:
+        identity["type"] = active_types[0]
+        # v6: If monorepo indicators found, append -monorepo suffix
+        if identity["is_monorepo"]:
+            identity["type"] = active_types[0] + "-monorepo"
+    # If no type detected, remains "unknown"
+
+    # v6: When frameworks are found in subdirectory package.json files,
+    #     update the identity type if it's still generic
+    if identity["subdir_frameworks"] and identity["type"] in ("node-project", "unknown"):
+        all_fws = set()
+        for fws in identity["subdir_frameworks"].values():
+            all_fws.update(fws)
+        if "next.js" in all_fws:
+            identity["type"] = "fullstack-web-app"
+        elif "react" in all_fws or "vue" in all_fws or "svelte" in all_fws:
+            identity["type"] = "frontend-app"
+        if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
+            identity["type"] += "-monorepo"
 
     return identity
 

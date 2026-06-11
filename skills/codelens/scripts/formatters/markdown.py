@@ -448,20 +448,46 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     lines.append("## Dead Code Analysis")
     lines.append("")
     lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
-    lines.append(f"- Unreachable: {stats.get('unreachable', 0)} | Unused exports: {stats.get('unused_exports', 0)} | Zombie CSS: {stats.get('zombie_css', 0)}")
+    by_cat = stats.get("by_category", {})
+    parts = []
+    if by_cat.get("unreachable", 0):
+        parts.append(f"Unreachable: {by_cat['unreachable']}")
+    if by_cat.get("unused_exports", 0):
+        parts.append(f"Unused exports: {by_cat['unused_exports']}")
+    if by_cat.get("unused_vars", 0):
+        parts.append(f"Unused vars: {by_cat['unused_vars']}")
+    if by_cat.get("zombie_css", 0):
+        parts.append(f"Zombie CSS: {by_cat['zombie_css']}")
+    if by_cat.get("registry_dead", 0):
+        parts.append(f"Registry dead: {by_cat['registry_dead']}")
+    if parts:
+        lines.append("- " + " | ".join(parts))
     removal_safety = data.get("removal_safety", "")
     if removal_safety:
         lines.append(f"- **Removal safety:** {removal_safety}")
     lines.append("")
-    items = data.get("dead_items", data.get("items", []))
-    if items:
-        lines.append("### Items")
-        for item in items[:15]:
+
+    # Show items from each category
+    results = data.get("results", {})
+    shown = 0
+    max_show = 20
+
+    for cat_name, items in results.items():
+        if not items or shown >= max_show:
+            continue
+        lines.append(f"### {cat_name.replace('_', ' ').title()}")
+        lines.append("")
+        for item in items[:10]:
             file = item.get("file", "")
             line = item.get("line", "")
             dtype = item.get("type", item.get("category", ""))
             name = item.get("name", item.get("fn", ""))
-            lines.append(f"- `{file}:{line}` — {dtype}: {name}")
+            msg = item.get("message", "")
+            if msg:
+                lines.append(f"- `{file}:{line}` — {name}: {msg}")
+            else:
+                lines.append(f"- `{file}:{line}` — {dtype}: {name}")
+            shown += 1
         lines.append("")
 
 
@@ -557,7 +583,9 @@ def _md_entrypoints(data: Dict, lines: list) -> None:
         extra = ""
         if etype == "http_handler":
             extra = f" `{ep.get('method', '')} {ep.get('path', '')}`"
-        lines.append(f"- [{etype}] `{file}:{line}` — {label}{extra}")
+        # Use angle brackets to avoid markdown link reference interpretation.
+        # [main] gets consumed as a markdown link ref, showing "ain]" instead.
+        lines.append(f"- <{etype}> `{file}:{line}` — {label}{extra}")
     lines.append("")
 
 

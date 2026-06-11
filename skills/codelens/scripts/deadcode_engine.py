@@ -14,6 +14,7 @@ timeout on very large codebases (100k+ files).
 
 import os
 import re
+import json
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -140,6 +141,13 @@ def detect_dead_code(
             results[cat] = results[cat][:max_results]
             truncated = True
 
+    # v6: Use the backend registry's ref_count data when available.
+    #     Functions with ref_count == 0 and status == "dead" from the scan
+    #     should be reported as dead code.
+    registry_dead = _detect_dead_from_registry(workspace)
+    if registry_dead:
+        results["registry_dead"] = registry_dead[:max_results]
+
     # Compute totals
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
@@ -158,11 +166,18 @@ def detect_dead_code(
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Detect code that comes after return/throw/break/continue and is therefore unreachable."""
+    """Detect code that comes after return/throw/break/continue and is therefore unreachable.
+
+    v6: Fixed function scope tracking by using brace depth tracking instead of
+    resetting in_function on every closing brace. Now only exits function scope
+    when the brace depth returns to the level it was at before the function started.
+    """
     items = []
     lines = content.split('\n')
 
-    # Track function scope boundaries
+    # v6: Track brace depth to know when a function truly ends
+    brace_depth = 0           # current brace nesting level
+    function_start_depth = -1  # brace depth when the current function started
     in_function = False
     found_terminal = False
     terminal_line = 0
@@ -170,6 +185,14 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
 
     for i, line in enumerate(lines):
         stripped = line.strip()
+
+        # v6: Update brace depth for every line (even comments/blanks may contain braces)
+        if ext != ".py":
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
 
         # Skip empty lines and comments
         if not stripped or stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
@@ -182,14 +205,18 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             if re.match(r'(?:export\s+)?(?:async\s+)?function\s+\w+', stripped):
                 in_function = True
                 found_terminal = False
+                function_start_depth = brace_depth  # v6: record depth at function start
         elif ext == ".py":
             if re.match(r'(?:async\s+)?def\s+\w+', stripped):
                 in_function = True
                 found_terminal = False
+                # For Python, track the indentation of the def line
+                function_indent = len(line) - len(line.lstrip())
         elif ext == ".rs":
             if re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+', stripped):
                 in_function = True
                 found_terminal = False
+                function_start_depth = brace_depth  # v6: record depth at function start
 
         # Detect terminal statements
         if in_function:
@@ -198,17 +225,18 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
 
-            # Detect closing brace (function end)
-            if ext != ".py" and stripped == '}':
+            # v6: Detect function end via brace depth — only end function when
+            #     depth returns to the level before the function started.
+            #     This avoids resetting on every '}' (e.g. if-blocks inside functions).
+            if ext != ".py" and brace_depth < function_start_depth:
                 in_function = False
                 found_terminal = False
                 continue
 
             # Check if we're at a lower indentation (function ended in Python)
             if ext == ".py" and in_function and found_terminal:
-                base_indent = len(lines[terminal_line - 1]) - len(lines[terminal_line - 1].lstrip())
                 current_indent = len(line) - len(line.lstrip()) if stripped else 0
-                if current_indent <= base_indent and stripped:
+                if current_indent <= function_indent and stripped:
                     in_function = False
                     found_terminal = False
                     continue
@@ -263,6 +291,10 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
+            # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
+            #     would be more accurate. Constants like API_URL, MAX_RETRIES are
+            #     typically used across files — skipping avoids false positives.
+            #     TODO: Cross-file reference check for ALL_CAPS vars.
             if var_name.isupper():  # Constants are often used elsewhere
                 continue
 
@@ -290,6 +322,10 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'self', 'cls', 'main', 'logger'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
+            # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
+            #     would be more accurate. Module-level constants are often imported
+            #     by other files — skipping avoids false positives.
+            #     TODO: Cross-file reference check for ALL_CAPS vars.
             if var_name.isupper():
                 continue
 
@@ -421,6 +457,65 @@ def _detect_unused_exports(
                 })
 
     return unused[:50]
+
+def _detect_dead_from_registry(workspace: str) -> List[Dict]:
+    """v6: Read the backend registry from .codelens/backend.json and report
+    functions with ref_count == 0 and status == 'dead' as dead code."""
+    registry_path = os.path.join(workspace, '.codelens', 'backend.json')
+    if not os.path.isfile(registry_path):
+        return []
+
+    try:
+        with open(registry_path, 'r', encoding='utf-8') as f:
+            registry = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return []
+
+    dead_items = []
+    nodes = registry.get("nodes", [])
+    if not isinstance(nodes, list):
+        return []
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        ref_count = node.get("ref_count", -1)
+        status = node.get("status", "")
+        # Backend registry uses "fn" for function name, not "name"
+        name = node.get("fn", "") or node.get("name", "")
+        file_path = node.get("file", "")
+        line = node.get("line", 0)
+        node_type = node.get("type", "function")
+        impl_for = node.get("impl_for", "")
+        is_pub = node.get("pub", False)
+
+        # v6: Report functions with ref_count == 0 and status == "dead"
+        # But skip: main() functions (entry points), pub functions (public API),
+        # and functions in test files
+        if ref_count == 0 and status == "dead":
+            # Skip main functions — they're entry points, not dead code
+            if name == "main":
+                continue
+            # Skip pub functions — they're public API, likely used externally
+            if is_pub:
+                continue
+            # Skip test fixtures and example files
+            if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
+                continue
+
+            display_name = f"{impl_for}::{name}" if impl_for else name
+            dead_items.append({
+                "file": file_path,
+                "line": line,
+                "name": display_name,
+                "type": node_type,
+                "severity": "warning",
+                "message": f"{node_type.capitalize()} '{display_name}' has zero references (marked dead in registry)",
+                "suggestion": f"Remove unused {node_type} '{display_name}' or add a reference where needed."
+            })
+
+    return dead_items
+
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:
     """Detect CSS classes defined but never used in HTML/JS/TSX."""
