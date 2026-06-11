@@ -71,11 +71,11 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     # ─── Check 2: Unregistered files ───────────────────
+    # Only check source code extensions — config/data files are not expected in the registry
     source_extensions = {
         '.html', '.htm', '.css', '.scss', '.less', '.sass',
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.vue', '.svelte',
-        '.json', '.toml', '.yaml', '.yml',
     }
     ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
                    "__pycache__", ".codelens", ".next", ".cache", "vendor"}

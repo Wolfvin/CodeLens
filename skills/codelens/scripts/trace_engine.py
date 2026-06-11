@@ -172,6 +172,7 @@ def _bfs_trace(
     """
     chain = []
     visited: Set[str] = set()
+    reported_cycles: Set[str] = set()  # Track reported cycles to avoid duplicates
     queue = deque()
 
     # Start node
@@ -206,6 +207,11 @@ def _bfs_trace(
                 # Skip trivial self-loops (function calls itself at depth 0→1)
                 if neighbor_id == start_id and depth <= 1:
                     continue
+                # Deduplicate: skip if we've already reported this cycle at this depth
+                cycle_key = f"{neighbor_id}@{depth}"
+                if cycle_key in reported_cycles:
+                    continue
+                reported_cycles.add(cycle_key)
                 if neighbor_id in node_by_id:
                     n = node_by_id[neighbor_id]
                     chain.append({

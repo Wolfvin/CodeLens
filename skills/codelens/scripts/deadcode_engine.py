@@ -152,14 +152,6 @@ def detect_dead_code(
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
 
-    # Compute removal safety and recommended action
-    removal_safety = "safe" if total == 0 else "caution"
-    recommended_action = "No dead code found." if total == 0 else (
-        f"Found {total} dead code item(s) across {len(by_category)} category(ies). "
-        f"Review and remove unreachable code, unused exports, and zombie CSS. "
-        f"Run with --format markdown for detailed removal guidance."
-    )
-
     return {
         "status": "ok",
         "workspace": workspace,
@@ -170,9 +162,7 @@ def detect_dead_code(
             "truncated": truncated
         },
         "results": {k: v for k, v in results.items() if v},
-        "categories_checked": list(categories),
-        "removal_safety": removal_safety,
-        "recommended_action": recommended_action
+        "categories_checked": list(categories)
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
@@ -449,24 +439,11 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
-        # Skip config files consumed by tools at runtime (not imported by app code)
-        # e.g., postcss.config.mjs, tailwind.config.ts, next.config.mjs, vite.config.ts
-        if any(x in file_path for x in ['.config.mjs', '.config.js', '.config.ts', '.config.cjs',
-                                          'jest.config', 'wdio.conf', 'playwright.config',
-                                          'vitest.config', 'webpack.config', 'rollup.config',
-                                          'tsconfig.json', 'biome.json']):
-            continue
-
-        # Skip middleware files — they're consumed by the framework, not imported
-        if 'middleware' in file_path.lower():
-            continue
-
         for export in exports:
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup',
-                        'config', 'middleware', 'withPWA', 'defineConfig', 'defineCloudflareConfig'}:
+            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
             if name not in all_imported_names:
@@ -515,16 +492,13 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
         # v6: Report functions with ref_count == 0 and status == "dead"
         # But skip: main() functions (entry points), pub functions (public API),
-        # Tauri IPC commands (exposed to frontend), and functions in test files
+        # and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
             if name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
-                continue
-            # Skip Tauri IPC commands — they're called from the frontend via invoke()
-            if node.get("is_tauri_command") or status == "ipc_exposed":
                 continue
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
@@ -546,8 +520,6 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:
     """Detect CSS classes defined but never used in HTML/JS/TSX."""
-    import re as _re
-
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
@@ -555,33 +527,32 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
         logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
-    zombie = []
+    # Load Tailwind detector to skip Tailwind utility classes
+    try:
+        from parsers.tailwind_detector import is_tailwind_class
+        has_tailwind_check = True
+    except ImportError:
+        has_tailwind_check = False
 
-    # Valid CSS class name pattern: starts with letter, underscore, or hyphen;
-    # contains only letters, digits, underscores, hyphens.
-    # Filters out false positives like ".(version", ".===", ".`@${...}`", etc.
-    _VALID_CSS_CLASS = _re.compile(r'^[a-zA-Z_\-][a-zA-Z0-9_\-]*$')
+    zombie = []
 
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
-        class_name = cls["name"]
-
-        # Skip obviously invalid CSS class names (false positives from parsing)
-        if not _VALID_CSS_CLASS.match(class_name):
-            continue
-
-        # Skip class names that look like template expressions or code artifacts
-        if any(ch in class_name for ch in ('$', '{', '}', '(', ')', '=', '+', '*', '#', '@', '!', '|', '<', '>', '~', '`', "'", '"')):
-            continue
-
+        name = cls["name"]
         if cls["status"] == "dead" and not cls.get("js"):
+            # Skip Tailwind utility classes — they're framework-defined, not user-defined
+            if has_tailwind_check and is_tailwind_class(name):
+                continue
+            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
+            if not re.match(r'^[a-zA-Z_]', name):
+                continue
             zombie.append({
                 "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
                 "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": class_name,
+                "class": name,
                 "severity": "info",
-                "message": f"CSS class '.{class_name}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{class_name}' or add to HTML/JSX."
+                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
+                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
             })
 
     return zombie[:50]

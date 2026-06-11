@@ -68,10 +68,18 @@ def is_tailwind_class(name: str, config: Optional[Dict] = None) -> bool:
     """
     Check if a class name looks like a Tailwind utility class.
     Uses prefix matching against known Tailwind patterns.
+    Handles Tailwind !important prefix (e.g., '!bg-red-500') and
+    combined state+important prefixes (e.g., 'hover:!bg-red-500').
     """
+    # Handle Tailwind !important prefix: !bg-red-500 → bg-red-500
+    check_name = name.lstrip('!')
+    if check_name != name:
+        # Name had ! prefix — check the remainder
+        return is_tailwind_class(check_name, config)
+
     # Check against known prefixes
     for prefix in TAILWIND_PREFIXES:
-        if name.startswith(prefix) or name == prefix.rstrip('-'):
+        if check_name.startswith(prefix) or check_name == prefix.rstrip('-'):
             return True
 
     # Check responsive/state prefixes: sm:flex, md:text-lg, hover:bg-red-500, dark:bg-gray-900
@@ -79,15 +87,17 @@ def is_tailwind_class(name: str, config: Optional[Dict] = None) -> bool:
                       'active:', 'disabled:', 'group-hover:', 'dark:', 'first:',
                       'last:', 'odd:', 'even:', 'visited:', 'motion-safe:', 'motion-reduce:']
     for sp in state_prefixes:
-        if name.startswith(sp):
-            remainder = name[len(sp):]
+        if check_name.startswith(sp):
+            remainder = check_name[len(sp):]
+            # Handle !important after state prefix: hover:!bg-red-500
+            remainder = remainder.lstrip('!')
             for prefix in TAILWIND_PREFIXES:
                 if remainder.startswith(prefix.rstrip('-')) or remainder == prefix.rstrip('-'):
                     return True
 
     # Check for negative values: -mt-4, -mx-2
-    if name.startswith('-'):
-        remainder = name[1:]
+    if check_name.startswith('-'):
+        remainder = check_name[1:]
         for prefix in TAILWIND_PREFIXES:
             if remainder.startswith(prefix.rstrip('-')):
                 return True
@@ -95,7 +105,7 @@ def is_tailwind_class(name: str, config: Optional[Dict] = None) -> bool:
     # Check custom prefix from config
     if config and 'prefix' in config:
         custom_prefix = config['prefix']
-        if name.startswith(custom_prefix):
+        if check_name.startswith(custom_prefix):
             return True
 
     return False
