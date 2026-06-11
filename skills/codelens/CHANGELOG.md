@@ -5,21 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.2.0] — 2026-06-12
+## [6.1.0] — 2026-06-12
 
 ### Added
-- **Tauri IPC invoke() extraction in TSX parser**: `TSXParser._parse_call()` now detects `invoke('commandName')` patterns and creates edges with `ipc_bridge` and `ipc_call` metadata, enabling direct resolution of TypeScript IPC calls to Rust `#[tauri::command]` handlers.
-- **Tauri IPC invoke() extraction in JS backend parser**: Same invoke() detection added to `JSBackendParser` for `.ts` service files.
-- **IPC-aware API map engine**: New `_extract_tauri_ipc_calls()` and `_extract_tauri_rust_commands()` functions detect `invoke()` call sites as `IPC_CALL` routes and `#[tauri::command]` as `IPC_HANDLER` routes. Tauri IPC is now detected as a `tauri_ipc` framework in the api-map output.
-- **Tauri IPC bridge section in handbook**: Handbook now includes a `tauri_ipc_bridge` section showing matched pairs between frontend `invoke()` calls and Rust command handlers, plus unmatched calls/handlers.
-- **IPC-aware ask command routing**: New keyword patterns for Tauri IPC queries ("tauri command", "ipc bridge", "invoke", "frontend backend", "cross-language", "rust command") route to `api-map` with high priority.
-- **Improved edge resolver for IPC edges**: New `_match_ipc_command()` function with 3-tier matching strategy (direct ipc_name, case conversion, fn_name). Processes `ipc_call=True` edges from TSX/JS parsers in Pass 1, then falls back to unresolved edge matching in Pass 2.
+
+- **Tauri IPC route detection in `api-map`**: Automatically detects `#[tauri::command]` annotated Rust functions as IPC routes. Also scans JS/TS files for `invoke("command_name")` calls and links them to Rust handlers. Routes appear with `method: "IPC"` and `type: "tauri_ipc"`.
+- **Indonesian colloquial triggers in `ask`**: Documented Indonesian phrases ("kok lama ya", "aneh nih", "bantu cek", "aman ga", etc.) now actually work in the `ask` command's keyword matching and pattern routing.
+- **`--full` flag for scan command**: Force full rescan even when a registry exists. Usage: `codelens scan --full`. Clears existing registry files before scanning.
+- **`scan_binary_artifacts()` utility**: New function in `utils.py` that scans workspaces for binary/compiled artifacts (`.so`, `.dll`, `.exe`, `.wasm`, `.pyc`, `.class`, etc.). Powers the `binary-scan` command.
+- **State-map deduplication**: Stores with the same `(name, framework)` key are now merged instead of appearing as duplicates. Additional definition sites are recorded in `also_defined_in`.
 
 ### Fixed
-- **React hook dead-code false positives**: Variables matching `useXxx` pattern (React hooks) are no longer flagged as "declared but never used" when exported or defined as arrow functions, since they are always used cross-file via imports.
-- **Exported variable dead-code false positives**: Variables declared on lines containing the `export` keyword are now skipped in unused variable detection, as they are consumed by other files.
-- **React Context misclassified in state-map**: Variables ending in "Context" or assigned `createContext()` are now properly skipped by the module-level state detector, preventing double-detection as both "react_context" and "module_level_js".
-- **"how does" pattern lower priority**: The generic "how does" trace pattern now has `low` confidence instead of `medium`, preventing it from overriding more specific IPC/framework patterns.
+
+- **CRITICAL: `ask` command crash with NameError**: `search_symbols` was referenced in the fallback block but never imported, causing `NameError: name 'search_symbols' is not defined` when context lookup failed. Now uses a lazy import.
+- **CRITICAL: `binary-scan` command broken**: Referenced `scan_binary_artifacts` from `utils.py` but the function didn't exist. Added the implementation.
+- **HIGH: Handbook `quick_reference` all zeros**: When `compute_summary()` returned empty data, the handbook showed all zeros. Now falls back to loading registry files directly and counting source files from disk.
+- **MEDIUM: Flask false positive in framework detection**: Removed generic `app.py` from Flask config files. Added source-level verification that checks for actual `from flask import` statements before declaring Flask detected.
+- **MEDIUM: State-map duplicate entries**: Same store appearing multiple times across files. Now deduplicates by `(name, framework)` key, merging slices/actions/consumers.
+
+### Tested Against
+
+Real-world testing on 3 diverse open-source repositories:
+- **Tauri** (tauri-apps/tauri) — Rust + TypeScript monorepo with Svelte, Tauri IPC (4150 nodes, 99635 edges)
+- **FastAPI** (fastapi/fastapi) — Python + TypeScript hybrid (4649 nodes, 11588 edges)
+- **Nuxt** (nuxt/nuxt) — Vue SFC monorepo (1284 nodes, 18987 edges)
 
 ## [6.0.0] — 2026-06-12
 

@@ -53,6 +53,10 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "who imports": 1, "who uses": 1, "who depends": 1,
     "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
 
+    # Indonesian colloquial (weight 2)
+    "lama": 2, "aneh": 2, "cek": 2, "bersihkan": 2, "aman": 2,
+    "lambat": 2, "rapikan": 2, "cari": 2,
+
     # Generic words (weight 0) — ignored for scoring
     "the": 0, "a": 0, "an": 0, "me": 0, "my": 0,
     "this": 0, "that": 0, "it": 0, "is": 0, "are": 0,
@@ -123,6 +127,7 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
             and result.get("status") == "not_found"):
         symbol = args.get("name", "")
         if symbol:
+            from search_engine import search_symbols
             search_result = search_symbols(workspace, symbol, domain="all", fuzzy=True)
             if search_result.get("results"):
                 search_result["query_interpretation"] = {
@@ -269,6 +274,14 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         # Env configuration
         (["how to configure", "configuration", "config check", "env setup"],
          "env-check", {}, "high"),
+
+        # Indonesian colloquial triggers
+        (["kok lama", "lambat", "lama ya"], "perf-hint", {}, "high"),
+        (["aneh nih", "aneh"], "search", {"name": _extract_symbol_name}, "medium"),
+        (["bantu cek", "cek"], "smell", {}, "high"),
+        (["bersihkan", "rapikan"], "debug-leak", {}, "high"),
+        (["aman ga", "aman tidak", "aman ga nih"], "secrets", {}, "high"),
+        (["cari"], "symbols", {"name": _extract_symbol_name}, "medium"),
 
         # ─── Generic patterns (scored lower by keyword weight) ────
 
