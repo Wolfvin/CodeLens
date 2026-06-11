@@ -5,64 +5,55 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.1] — 2026-06-12
-
-### Fixed
-
-- **CRITICAL: 6 broken commands restored** — `scan`, `ask`, `handbook`, `env-check`, `refactor-safe`, and `watch` commands failed to import due to missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `resolve_tauri_ipc_from_apimap`, `scan_binary_artifacts`, `scan_tauri_artifacts`). All missing symbols have been implemented in their respective modules (`utils.py`, `edge_resolver.py`).
-- **CRITICAL: Dead-code total count always showed 0** — Three consumers (markdown formatter, dead_code command, handbook) used `stats.get('total_dead', 0)` while the engine returns `total_dead_code`. Fixed key name in all three locations.
-- **HIGH: Rust build.rs false positive in debug-leak** — `println!()` in `build.rs` is the canonical way to emit cargo directives and should not be flagged as a debug leak. Added exclusion for `println!()` in files ending with `build.rs` (but still flags `eprintln!()` which is typically actual debug output).
-- **pyproject.toml duplicate version keys** — Four `version =` lines in `[project]` section collapsed to single `version = "5.9.1"`.
+## [5.8.2] — 2026-06-12
 
 ### Added
 
-- **Rust workspace detection** (`scripts/framework_detect.py`): New fields in `detect_frameworks()` output: `has_cargo_workspace` (bool), `rust_edition` (str or None), `cargo_crate_count` (int). Detects `[workspace]` section in Cargo.toml and counts workspace members.
-- **Circular dependency trait-impl filtering** (`scripts/circular_engine.py`): Rust conversion trait implementations (`from_*`, `into_*`, `try_from_*`, `try_into_*`, `to_*`, `as_*`) create apparent circular chains that are intentional bidirectional conversions. These are now classified as `info` severity instead of `warning`. Long chains (>8 nodes) are also downgraded to `info` as they are likely name-matching artifacts.
-- **Shared constants in utils.py**: `MAX_FILE_SIZE` (500KB), `MAX_FILES_DEFAULT` (3000), `time_budget_expired()` function, `is_generated_file()` function — provides centralized definitions that engines can import instead of redefining locally.
-- **Binary artifact scanning** (`utils.py`): `scan_binary_artifacts()` and `scan_tauri_artifacts()` functions for the `binary-scan` and `ask` commands.
-- **Tauri IPC edge resolution** (`edge_resolver.py`): `resolve_tauri_ipc_from_apimap()` function for cross-language edge resolution between TypeScript `invoke()` calls and Rust `#[tauri::command]` handlers.
-
-### Test Target Documentation
-
-- **surrealdb/surrealdb** (GitHub): Used as test target for v5.9.1 — a multi-model document-graph database written in Rust with 1635 .rs files, 20 .py files, 16671 backend nodes, and 104464 edges. Large Rust workspace with 21 crates. Testing revealed: 6 broken commands (all fixed), debug-leak false positives on build.rs (fixed), dead-code total count bug (fixed), 1732 circular dependencies mostly from trait impls (filtered). Health score: 70/100 with 610 critical smells (mostly god objects in Rust impl blocks).
-
-## [5.9.0] — 2026-06-12
-
-### Added
-
-- **Tauri reverse engineering analysis** (`scripts/utils.py` → `scan_tauri_artifacts()`): Deep analysis of Tauri applications for security auditing and reverse engineering. New capabilities:
-  - IPC command/handler mapping: Scans Rust source for `#[tauri::command]` functions, `generate_handler!` macro registrations, and `invoke()` calls from TypeScript frontend. Maps which commands exist, which are registered, and which are called from the UI.
-  - Capabilities/permissions security audit: Parses all `capabilities/*.json` files and flags dangerous permissions (`shell:allow-execute`, `shell:allow-spawn`, `fs:allow-write-file`, etc.) with severity ratings. Detects permissive filesystem scopes (`**` wildcards).
-  - Sidecar binary analysis: Detects `externalBin` entries in tauri.conf.json, checks for source availability, and flags closed-source/proprietary sidecar risks.
-  - Updater security audit: Analyzes updater configuration for insecure HTTP endpoints, missing signing keys, and install mode settings.
-  - WebView security audit: Flags missing CSP (Content Security Policy), permissive asset protocol scope (`**` wildcards), and other webview misconfigurations.
-  - Deep-link scheme analysis: Detects registered URL schemes and warns about potential URL-scheme injection vulnerabilities.
-  - Build script analysis: Scans `build.rs` for filesystem and process operations.
-  - URI scheme protocol detection: Finds `register_uri_scheme_protocol` calls in Rust source.
-  - Security summary with risk level classification (critical/high/moderate).
-- **Enhanced `binary-scan` command** (`scripts/commands/binary_scan.py`): Now automatically includes Tauri RE analysis when a Tauri project is detected. Returns `tauri_analysis` key with full RE findings.
-- **Rust monorepo detection** (`scripts/framework_detect.py`): `_discover_workspace_package_jsons()` now also detects:
-  - `Cargo.toml` with `[workspace]` section → `cargo-workspace` indicator
-  - `crates/` directory with 2+ `Cargo.toml` files → `cargo-crates` indicator
-  - `pnpm-workspace.yaml` presence → `pnpm-workspace` indicator (even without `packages:` list)
-  - `package.json` workspaces field → `npm-workspaces` indicator
-- **Monorepo tools field** (`scripts/framework_detect.py`): `detect_frameworks()` now returns `monorepo_tools` list (e.g., `["pnpm-workspace", "cargo-crates"]`) to identify which monorepo mechanisms were detected.
-- **Ask command Tauri routing** (`scripts/commands/ask.py`): Added 17 new keyword patterns for binary/RE queries (binary, exe, sidecar, tauri command, ipc command, capabilities, webview security, csp, etc.). Queries like "what Tauri commands are available" now correctly route to `binary-scan` instead of `context`.
+- **Go framework detection** (`scripts/framework_detect.py`): Parse `go.mod` to detect Go projects and their web frameworks (Gin, Echo, Fiber, Chi, Cobra). New `has_go_backend` flag in detection output. Go-specific `backend_paths` (`cmd/`, `internal/`, `pkg/`) in recommended config.
+- **PHP framework detection** (`scripts/framework_detect.py`): Parse `composer.json` to detect PHP projects and their frameworks (Laravel, Symfony, Flarum, WordPress, Drupal, Slim). New `has_php_backend` flag. PHP-specific paths (`app/`, `routes/`, `resources/views/`) in recommended config.
+- **Go API route extraction** (`scripts/apimap_engine.py`): New `_extract_go_routes()` function that detects REST API routes from Go web frameworks — Gin/Echo/Chi/Fiber (`r.GET("/path", handler)`), Gorilla mux (`r.HandleFunc("/path", handler).Methods("GET")`), and stdlib (`http.HandleFunc`). Also detects route groups (`r.Group("/api/v1")`).
+- **PHP API route extraction** (`scripts/apimap_engine.py`): New `_extract_php_routes()` function that detects routes from Laravel (`Route::get('/path', ...)`), Flarum/Slim (`$app->get('/path', ...)`), and generic PHP routers. New `_parse_php_handler()` helper for parsing PHP handler syntax (`[Controller::class, 'method']`, `Controller@method`, closures).
+- **Go project type in handbook** (`scripts/commands/handbook.py`): New `go_type` detection from `go.mod` — `go-cli` for Cobra-based CLIs, `go-project` for general Go projects. Module name extraction from `module` directive.
+- **PHP project type in handbook** (`scripts/commands/handbook.py`): New `php_type` detection from `composer.json` — `laravel-app`, `flarum-app`, `symfony-app`, `php-project`. Name and description extracted from composer.json.
+- **Polyglot type detection for Go/PHP** (`scripts/commands/handbook.py`): Go and PHP types now participate in polyglot detection, producing types like `go-js-polyglot`, `php-js-polyglot`.
+- **Missing utility functions** (`scripts/utils.py`): Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired()`, `is_generated_file()`, `scan_binary_artifacts()`, `scan_tauri_artifacts()` — all previously imported but not defined, causing 6 commands to fail on startup.
+- **Missing Tauri IPC resolver** (`scripts/edge_resolver.py`): Added `resolve_tauri_ipc_from_apimap()` — previously imported but not defined, causing `scan`, `handbook`, `ask`, and `watch` commands to fail on startup.
 
 ### Fixed
 
-- **CRITICAL: Monorepo detection false negative** — Projects with `pnpm-workspace.yaml` but no `packages:` list (like clash-verge-rev which has `allowBuilds` instead) were incorrectly classified as non-monorepo. Now uses structural indicators (pnpm-workspace.yaml presence, Cargo workspace, crates/ directory) in addition to multiple package.json count.
-- **HIGH: Version mismatch** — `utils.py` had version 5.7.1 while CHANGELOG documented 5.8.0. Unified to 5.9.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
-
-### Changed
-
-- **`_discover_workspace_package_jsons()` return type**: Now returns `tuple[list[str], list[str]]` — (package_json_paths, monorepo_indicators) instead of just `list[str]`. All callers updated.
-- **`_collect_deps_from_package_jsons()` signature**: Now accepts optional `monorepo_indicators` parameter to augment monorepo detection beyond just multiple package.json files.
-- **`detect_frameworks()` output**: Now includes `monorepo_tools` field with list of detected monorepo mechanisms.
+- **CRITICAL: 6 commands failed to load on startup** — `scan`, `ask`, `env-check`, `handbook`, `refactor-safe`, and `watch` all failed with `ImportError` because `utils.py` was missing `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `scan_binary_artifacts`, `scan_tauri_artifacts`, and `edge_resolver.py` was missing `resolve_tauri_ipc_from_apimap`. Added all missing symbols.
+- **HIGH: Framework detection false positives from test files** — The file-pattern walk for `.vue` and `.svelte` files scanned test/benchmark directories, causing Rust projects like `bat` (which has `.vue`/`.svelte` syntax test fixtures) to be incorrectly detected as "vue + svelte". Added test directory exclusion (`tests/`, `benchmarks/`, `testdata/`, `vendor/`, etc.) during framework file scanning.
+- **HIGH: Go/PHP projects detected as "unknown"** — Framework detection only checked `package.json`, `requirements.txt`, `pyproject.toml`, and `Cargo.toml`. No `go.mod` or `composer.json` parsing existed. Added full Go and PHP dependency parsing.
+- **HIGH: Handbook classified Go/PHP projects incorrectly** — PocketBase (Go) was "unknown", Flarum (PHP) was "node-project". Added `go.mod` and `composer.json` parsing to `_extract_project_identity()`.
+- **MEDIUM: Pure Rust projects had incorrect frontend_paths** — Projects like `bat` got `frontend_paths: ["src/client/", ...]` even though they have no frontend. Now pure Rust projects (no Vue/React/Svelte detected) get empty `frontend_paths`.
+- **MEDIUM: PHP route detection false positives** — `$this->get('config_key')` and `$settings->get('var_name')` were incorrectly detected as HTTP routes. Now the generic PHP pattern requires the path to start with `/` or contain `/` to be considered a route.
 
 ### Test Target Documentation
 
-- **clash-verge-rev/clash-verge-rev** (GitHub): Used as test target for v5.9.0 — the most popular Tauri app on GitHub (~125k stars). Complex VPN/proxy management app with Rust backend + React frontend. Monorepo with pnpm workspace + 6 Rust crates. Testing revealed: 2 sidecar binaries (verge-mihomo, verge-mihomo-alpha), missing CSP (null), wildcard asset protocol scope (**), shell:allow-execute + shell:allow-spawn permissions, 2 deep-link schemes, signed updater with 3 endpoints. Security findings: 1 high (missing CSP), 1 high (permissive asset protocol), 2 critical (shell permissions), 1 info (signed updates).
+- **sharkdp/bat** (GitHub): Rust CLI tool (cat clone with syntax highlighting). 14MB repo, 67 Rust files, 7 Python files. Tests: Rust parser, CLI entrypoint detection, framework false-positive prevention (vue/svelte test fixtures), pure Rust project config. Results: 1716 backend nodes, 10400 edges, 65 critical smells, 47 circular deps, correct `rust-project` type.
+- **mingrammer/diagrams** (GitHub): Python diagram-as-code generator. 119MB repo, 265 Python files. Tests: Python parser, API mapping (non-REST), dead code detection. Results: 2867 backend nodes, 607 edges, correct `python-library` type, 100 health score.
+- **pocketbase/pocketbase** (GitHub): Go backend-as-a-service. 22MB repo, 452 Go files + 249 JS files. Tests: Go parser, Go API route extraction (Gin-style), Go framework detection (cobra), Go project type. Results: 474 backend nodes, 7144 edges, 30+ Go API routes detected, correct `go-cli` type.
+- **flarum/framework** (GitHub): PHP forum framework (monorepo). 37MB repo, 1452 PHP files + 1077 JS files + 54 Blade templates. Tests: PHP/Blade parser, PHP route extraction, PHP framework detection (flarum), polyglot type detection. Results: 6336 backend nodes, 47222 edges, correct `php-js-polyglot` type, Flarum framework detected.
+
+## [5.8.1] — 2026-06-12
+
+### Added
+
+- **React Router detection** (`scripts/apimap_engine.py`): New `_extract_react_router_routes()` function that detects `<Route path="...">` JSX elements, `createBrowserRouter`, and `useRoutes` patterns. Runs before Vue Router detection to prevent false positives. Returns routes with `"framework": "react-router"`.
+
+### Fixed
+
+- **HIGH: `dependents` command ignored workspace argument** — When running `codelens dependents /path/to/workspace`, the workspace path was consumed by the `file` positional argument, causing auto-detect to find a different workspace (typically the parent directory). Added auto-swap logic: if the `file` argument is a directory with project markers (`.codelens/`, `package.json`, `Cargo.toml`, etc.), treat it as the workspace instead.
+- **HIGH: `config-drift` Rust import parsing was too greedy** — The regex `r'use\s+([^;]+);'` matched `use` inside comments (e.g., `// use this for relay connections;`) and across lines, producing nonsensical "missing dependencies" like "relay connections (no direct/mDNS)...". Now parses line-by-line, skips `//` and `/*` comment lines, strips inline comments, and validates crate names are alphanumeric. Also handles grouped imports (`use foo::{bar, baz}`).
+- **HIGH: `handbook` monorepo detection was incomplete** — Only checked for turbo.json, pnpm-workspace.yaml, lerna.json, nx.json. Missed bun-based monorepos (which use `bun.lock` without a workspace config file) and structural monorepos (multiple `package.json` in `apps/` or `packages/`). Added `bun.lock` to indicators and structural detection via sub-directory package.json count.
+- **HIGH: Rust `main()` classified as dead code** — The `dead-code` command reported Rust `main()` functions as dead (ref_count: 0). Now handles qualified names like `crate::main` by extracting the bare name (`name.split('::')[-1]`), and explicitly skips `main` in `.rs` files as entry points.
+- **HIGH: `debug-leak` false positives on Rust `println!`/`eprintln!`** — All 3101 Rust `println!`/`eprintln!` calls were flagged as debug leaks, but these are standard output mechanisms in Rust CLI/apps (equivalent to `console.log` in Node.js CLI tools). Now only flags them when inside `#[test]` functions or when the line contains debug patterns (`dbg!`, `TODO`, `FIXME`, etc.). Reduced false positives from 3101 to ~187 on Spacedrive test target.
+- **HIGH: `api-map` incorrectly detected vue-router in React projects** — React Router routes in TSX files (using `<Route path="...">`) were misidentified as Vue Router. Added React Router detection that runs before Vue Router, and updated Vue Router detection to early-return for TSX/JSX files that contain React Router patterns. Also tightened Vue Router's fallback `has_route_pattern` check to only apply in `.vue` files.
+- **MEDIUM: `validate` reported `.toml`/`.json` files as unregistered** — Config and data files (`.toml`, `.json`, `.yaml`, `.lock`, `.md`, etc.) are not parsed by CodeLens and were always reported as "unregistered". Separated `source_extensions` from config extensions, eliminating hundreds of false positive reports.
+
+### Test Target Documentation
+
+- **spacedriveapp/spacedrive** (GitHub): Used as a test target — a large open-source cross-platform file manager built with Tauri v2 + React + Rust. 38k+ stars, 88MB repo, 1166 Rust files, 405 TSX/TS files, 11 Python adapter files. Monorepo structure with `apps/` (tauri, mobile, web, server, cli, gpui-photo-grid), `packages/` (interface, ts-client, assets), `core/`, `crates/`, and `extensions/`. Test results: 7699 backend nodes, 60166 edges, 943 CSS classes, 6 frameworks detected (react, tailwind, zustand, vite, tauri, axum), 5162 code smells (health 70), 4 secrets, 1 CVE, 248 circular deps, 525 dead code, 572 perf hints, 278 a11y issues. All 7 bugs discovered and fixed during this test were specific to large polyglot Tauri monorepos.
 
 ## [5.8.0] — 2026-06-12
 

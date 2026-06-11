@@ -1,6 +1,7 @@
 """Shared utilities for CodeLens."""
 
 import os
+import re
 import json
 import logging
 from datetime import datetime, timezone
@@ -204,6 +205,191 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
             seen.add(key)
             unique.append(c)
     return unique
+
+
+# ─── Shared Constants ────────────────────────────────────────
+
+MAX_FILE_SIZE = 500 * 1024        # 500KB — max file size to read
+MAX_FILES_DEFAULT = 3000          # Default max files to scan
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
+
+    Args:
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
+
+    Returns:
+        True if the budget has been exceeded.
+    """
+    import time
+    return (time.time() - start_time) > budget_sec
+
+
+# Known generated/lock file patterns to skip during analysis
+_GENERATED_FILE_PATTERNS = {
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'pdm.lock',
+    'go.sum', 'composer.lock', 'mix.lock',
+    '.eslintrc.js', '.eslintrc.cjs', '.prettierrc.js',
+    'tsconfig.tsbuildinfo',
+}
+
+
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is a generated/lock file that should be skipped.
+
+    Args:
+        filename: Just the filename (not full path).
+
+    Returns:
+        True if the file is a generated or lock file.
+    """
+    if filename in _GENERATED_FILE_PATTERNS:
+        return True
+    # Minified files
+    if '.min.' in filename:
+        return True
+    # Auto-generated protobuf / gRPC files
+    if filename.endswith('.pb.go') or filename.endswith('_pb2.py'):
+        return True
+    # Generated GraphQL types
+    if filename.endswith('generated.ts') or filename.endswith('generated.js'):
+        return True
+    return False
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary/executable artifacts.
+
+    Detects compiled binaries, sidecar executables, and other non-source
+    artifacts that might be bundled with the project.
+
+    Args:
+        workspace: Absolute path to workspace root.
+
+    Returns:
+        Dict with binary_artifacts list, summary stats, and recommendations.
+    """
+    workspace = os.path.abspath(workspace)
+    artifacts = []
+    binary_extensions = {
+        '.exe', '.dll', '.so', '.dylib', '.bin', '.app',
+        '.wasm', '.node',
+    }
+    sidecar_dirs = {'sidecars', 'binaries', 'bin', 'scripts'}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        rel_root = os.path.relpath(root, workspace)
+        is_sidecar = any(part in sidecar_dirs for part in rel_root.replace('\\', '/').split('/'))
+
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in binary_extensions or is_sidecar:
+                fpath = os.path.join(root, fn)
+                try:
+                    fsize = os.path.getsize(fpath)
+                except OSError:
+                    fsize = 0
+                artifacts.append({
+                    "file": os.path.relpath(fpath, workspace),
+                    "type": "sidecar" if is_sidecar else ext,
+                    "size_bytes": fsize,
+                    "risk": "high" if ext in {'.exe', '.dll', '.so'} else "low",
+                })
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "binary_artifacts": artifacts,
+        "stats": {
+            "total_artifacts": len(artifacts),
+            "high_risk": sum(1 for a in artifacts if a["risk"] == "high"),
+            "sidecar_count": sum(1 for a in artifacts if a["type"] == "sidecar"),
+        },
+    }
+
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan for Tauri-specific configuration and IPC patterns.
+
+    Detects tauri.conf.json, Cargo.toml tauri dependency, and
+    invoke() calls in frontend code.
+
+    Args:
+        workspace: Absolute path to workspace root.
+
+    Returns:
+        Dict with Tauri analysis, or None if not a Tauri project.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Check if this is a Tauri project
+    tauri_conf = os.path.join(workspace, "src-tauri", "tauri.conf.json")
+    cargo_toml = os.path.join(workspace, "src-tauri", "Cargo.toml")
+
+    is_tauri = False
+    config_path = None
+
+    if os.path.isfile(tauri_conf):
+        is_tauri = True
+        config_path = tauri_conf
+    elif os.path.isfile(cargo_toml):
+        try:
+            with open(cargo_toml, 'r', encoding='utf-8', errors='ignore') as f:
+                if 'tauri' in f.read().lower():
+                    is_tauri = True
+                    config_path = cargo_toml
+        except IOError:
+            pass
+
+    if not is_tauri:
+        return None
+
+    # Scan for invoke() calls in frontend
+    invoke_commands = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root or 'src-tauri' in root:
+            dirs.clear()
+            continue
+
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in {'.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte'}:
+                continue
+            fpath = os.path.join(root, fn)
+            rel = os.path.relpath(fpath, workspace)
+            try:
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+
+            for m in re.finditer(r'invoke\s*\(\s*["\']([^"\']+)["\']', content):
+                cmd_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                invoke_commands.append({
+                    "command": cmd_name,
+                    "file": rel,
+                    "line": line_num,
+                })
+
+    return {
+        "is_tauri": True,
+        "config_path": os.path.relpath(config_path, workspace) if config_path else None,
+        "invoke_commands": invoke_commands,
+        "stats": {
+            "total_invoke_commands": len(invoke_commands),
+            "unique_commands": len(set(c["command"] for c in invoke_commands)),
+        },
+    }
 
 
 # ─── Version ────────────────────────────────────────────────

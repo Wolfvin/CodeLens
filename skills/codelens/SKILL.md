@@ -31,28 +31,34 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
-  v6.2 adds: Full C/C++ and Go language support — fallback parsers, outline extraction, complexity analysis, all engines now scan C/C++ and Go files. Tauri IPC edge resolver implemented. Critical import errors fixed.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, C/C++, Go, PHP, Blade.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.2
+# CodeLens v5.8.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.2
+## What's New in v5.8.2
 
-- **C/C++ full support**: New `fallback_cpp.py` parser extracts functions, methods, structs, typedefs, preprocessor macros, and call edges from `.c`, `.h`, `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx` files. Outline engine supports C/C++. Complexity engine supports C/C++ including preprocessor conditionals. All 17 analysis engines now scan C/C++ files.
-- **Go full support**: New `fallback_go.py` parser extracts functions, methods, types, and call edges from `.go` files. Outline engine supports Go. Complexity engine supports Go. All analysis engines now scan Go files.
-- **Tauri IPC edge resolver**: `resolve_tauri_ipc_from_apimap()` now implemented — resolves cross-language edges between frontend `invoke('commandName')` calls and Rust `#[tauri::command]` handlers, with snake_case ↔ camelCase matching.
-- **Critical bug fixes**: Fixed 2 ImportError crashes that prevented `scan`, `handbook`, `ask`, `env-check` commands from loading. Fixed C/C++ and Go files being discovered but never parsed.
+- **CRITICAL FIX: 6 commands now load** — `scan`, `ask`, `env-check`, `handbook`, `refactor-safe`, `watch` all failed with ImportError on startup. Added all missing symbols (`MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired`, `is_generated_file`, `scan_binary_artifacts`, `scan_tauri_artifacts` to utils.py; `resolve_tauri_ipc_from_apimap` to edge_resolver.py).
+- **Go framework detection**: Parse `go.mod` to detect Go projects — Gin, Echo, Fiber, Chi, Cobra frameworks. New `has_go_backend` flag.
+- **PHP framework detection**: Parse `composer.json` to detect PHP projects — Laravel, Symfony, Flarum, WordPress, Drupal, Slim. New `has_php_backend` flag.
+- **Go API route extraction**: Detect REST routes from Gin/Echo/Chi/Fiber, Gorilla mux, and stdlib `http.HandleFunc`. Route groups supported.
+- **PHP API route extraction**: Detect routes from Laravel `Route::get()`, Flarum/Slim `$app->get()`. Handler syntax parsing for `[Controller::class, 'method']`, `Controller@method`.
+- **Go/PHP project types in handbook**: `go-cli` (Cobra), `go-project`, `laravel-app`, `flarum-app`, `symfony-app`, `php-project`. Polyglot types like `go-js-polyglot`, `php-js-polyglot`.
+- **Framework detection false-positive fix**: Test/benchmark directories now excluded from `.vue`/`.svelte` file scanning. Rust projects like `bat` no longer falsely detected as "vue + svelte".
 
-## What's New in v6.0
+## What's New in v5.8.1
 
-- **NestJS route extraction**: `api-map` now detects NestJS `@Controller`, `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch` decorators and correctly extracts REST paths with controller prefixes. Previously, NestJS decorators were misidentified as TypeGraphQL `@Query` decorators, producing incorrect `QUERY.fieldName` routes instead of proper `GET /path` routes.
-- **Tailwind v4 false-positive elimination**: `missing-refs` now recognizes 200+ Tailwind utility class patterns including arbitrary values (`w-[100px]`), data attribute variants (`data-[slot=...]`), group/peer variants, container queries (`@sm:`), arbitrary variants (`[&_...]`), star wildcard (`**:`), and negative values (`-mt-4`). On Cal.com (1145 TSX files with Tailwind), this reduced false positives from 262 to near-zero.
-- **State-map over-matching fix**: `state-map` no longer classifies TypeScript type exports, enums, Zod schemas, and PascalCase constants as "global" state. Added PascalCase filtering (skip unless value is clearly mutable `{}`/`[]`/`new`), enum/type suffix filtering (`Enum`, `Schema`, `Args`, `Input`, etc.), Zod/Yup validation schema filtering, and conservative matching for function-call values (only include if name contains state keywords like "cache", "store", "queue"). Reduced from 1052 false-positive stores to approximately 50 real state items on Cal.com.
-- **Entrypoint config-file filtering**: `entrypoints` now skips 20+ config file patterns (playwright.config.ts, vitest.config.ts, biome.json, turbo.json, etc.) from `module_export` detection. These files contain `export default` but are not application entry points. Reduced false-positive entry points on Cal.com.
+- **React Router detection**: New `_extract_react_router_routes()` — detects `<Route path="...">` in JSX, `createBrowserRouter`, `useRoutes`. Prevents vue-router false positives in React projects.
+- **`dependents` command fix**: Workspace path was consumed by `file` arg, causing wrong workspace detection. Added auto-swap when `file` is a directory with project markers.
+- **`config-drift` Rust parsing fix**: Greedy regex `use\s+([^;]+);` matched `use` in comments, producing nonsensical "missing dependencies". Now parses line-by-line, skips comments, validates crate names.
+- **`handbook` monorepo detection**: Added `bun.lock` indicator and structural detection (multiple `package.json` in `apps/`/`packages/`). Correctly identifies bun-based monorepos like Spacedrive.
+- **Rust `main()` dead code fix**: `main()` in `.rs` files no longer reported as dead code — it's an entry point.
+- **Rust `println!`/`eprintln!` debug-leak fix**: Standard Rust output macros are no longer flagged as debug leaks (was 3101 false positives → ~187 real). Only flagged in `#[test]` functions or with debug patterns.
+- **`api-map` vue-router false positive fix**: React Router routes in TSX files no longer misidentified as Vue Router.
+- **`validate` config file noise fix**: `.toml`, `.json`, `.yaml`, `.lock`, `.md` files no longer reported as "unregistered".
 
 ## What's New in v5.8
 

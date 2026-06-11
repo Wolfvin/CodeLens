@@ -17,7 +17,6 @@ Framework Detection & Route Extraction:
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
-14. SvelteKit — file-based routes (+page, +server, +layout, +error)
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -30,7 +29,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -39,22 +38,10 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql",
-    ".php",
+    ".go", ".php",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
-
-# Valid HTTP methods in uppercase (for validation of extracted method names)
-VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
-
-# Non-router objects whose .get/.post/.delete etc. calls should NOT be treated as routes
-NON_ROUTER_OBJECTS = {
-    "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
-    "res", "req", "ctx", "request", "response", "result", "data",
-    "props", "state", "config", "options", "headers",
-    "localStorage", "sessionStorage", "document", "window",
-    "cache", "store", "db", "query", "client",
-}
 
 # Known middleware identifiers
 AUTH_MIDDLEWARE_PATTERNS = {
@@ -163,14 +150,6 @@ def map_api_routes(
                 py_mw = _extract_python_middleware(content, rel_path)
                 global_middleware.extend(py_mw)
 
-            # ─── PHP: Laravel / Symfony / Slim ─────────────────
-            elif ext == ".php":
-                php_routes = _extract_php_routes(content, rel_path, frameworks_detected)
-                routes.extend(php_routes)
-
-                php_mw = _extract_php_middleware(content, rel_path)
-                global_middleware.extend(php_mw)
-
             # ─── GraphQL ──────────────────────────────────────
             elif ext in {".graphql", ".gql"}:
                 gql_routes = _extract_graphql_schema(content, rel_path)
@@ -213,31 +192,46 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
-            # ─── Tauri IPC invoke() calls ─────────────────────
+            # ─── React Router ──────────────────────────────────
+            # Must detect BEFORE Vue Router to avoid false positives.
+            # React Router uses <Route path="..."> in JSX, createBrowserRouter,
+            # and useRoutes — these patterns must not be confused with Vue Router.
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                tauri_ipc_routes = _extract_tauri_ipc_calls(content, rel_path)
-                if tauri_ipc_routes:
-                    frameworks_detected.add("tauri_ipc")
-                    routes.extend(tauri_ipc_routes)
+                react_routes = _extract_react_router_routes(content, rel_path)
+                if react_routes:
+                    frameworks_detected.add("react-router")
+                    routes.extend(react_routes)
 
-            # ─── Tauri #[tauri::command] handlers ─────────────
-            if ext == ".rs":
-                tauri_cmd_routes = _extract_tauri_rust_commands(content, rel_path)
-                if tauri_cmd_routes:
-                    frameworks_detected.add("tauri_ipc")
-                    routes.extend(tauri_cmd_routes)
+            # ─── Vue Router ──────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"}:
+                vue_routes = _extract_vue_router_routes(content, rel_path)
+                if vue_routes:
+                    frameworks_detected.add("vue-router")
+                    routes.extend(vue_routes)
 
-    # ─── SvelteKit file-based routes ─────────────────────────
-    sveltekit_routes = _detect_sveltekit_routes(workspace, config)
-    if sveltekit_routes:
-        frameworks_detected.add("sveltekit")
-        routes.extend(sveltekit_routes)
+            # ─── Go API Routes ────────────────────────────────
+            elif ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path, frameworks_detected)
+                routes.extend(go_routes)
 
-    # ─── Tauri IPC routes ─────────────────────────────────────
-    tauri_routes = _detect_tauri_ipc_routes(workspace)
-    if tauri_routes:
-        frameworks_detected.add("tauri_ipc")
-        routes.extend(tauri_routes)
+            # ─── PHP API Routes ────────────────────────────────
+            elif ext == ".php":
+                php_routes = _extract_php_routes(content, rel_path, frameworks_detected)
+                routes.extend(php_routes)
+
+            # ─── Tauri IPC Commands ────────────────────────────
+            elif ext == ".rs":
+                tauri_routes = _extract_tauri_commands(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
+
+            # ─── Tauri invoke() calls (frontend) ──────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                invoke_routes = _extract_tauri_invokes(content, rel_path)
+                if invoke_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(invoke_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -317,239 +311,6 @@ def map_api_routes(
     }
 
 
-# ─── Tauri IPC Routes ─────────────────────────────────────────
-
-def _detect_tauri_ipc_routes(workspace: str) -> List[Dict[str, Any]]:
-    """Detect Tauri IPC commands from Rust backend and JS/TS frontend.
-
-    Tauri uses Rust functions annotated with ``#[tauri::command]`` that are
-    invoked from JavaScript via ``invoke("command_name")``.  This scanner:
-
-    1. Detects if the workspace is a Tauri project (src-tauri/tauri.conf.json
-       or src-tauri/Cargo.toml with a tauri dependency).
-    2. Walks Rust files for ``#[tauri::command]`` annotated functions and
-       extracts the function name as the IPC command name.
-    3. Walks JS/TS files for ``invoke("command_name")`` calls and links them
-       to the Rust commands.
-
-    Returns:
-        List of route dicts with type "tauri_ipc".
-    """
-    routes: List[Dict[str, Any]] = []
-
-    # ── Step 1: Check if this is a Tauri project ───────────────
-    is_tauri = False
-    tauri_src_dir = os.path.join(workspace, "src-tauri")
-    tauri_conf = os.path.join(tauri_src_dir, "tauri.conf.json")
-    tauri_cargo = os.path.join(tauri_src_dir, "Cargo.toml")
-
-    if os.path.isfile(tauri_conf):
-        is_tauri = True
-    elif os.path.isfile(tauri_cargo):
-        try:
-            with open(tauri_cargo, 'r', encoding='utf-8', errors='ignore') as f:
-                cargo_content = f.read()
-            if 'tauri' in cargo_content:
-                is_tauri = True
-        except IOError:
-            pass
-
-    # Also check for tauri.conf.json nested deeper (monorepo)
-    if not is_tauri:
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            if '.codelens' in root:
-                dirs.clear()
-                continue
-            for fn in filenames:
-                if fn == 'tauri.conf.json':
-                    is_tauri = True
-                    # Remember the parent as the tauri src dir
-                    tauri_src_dir = os.path.dirname(root)
-                    break
-            if is_tauri:
-                break
-
-    if not is_tauri:
-        return routes
-
-    # ── Step 2: Scan Rust files for #[tauri::command] ──────────
-    # Map: command_name → { file, line, fn_name }
-    rust_commands: Dict[str, Dict[str, Any]] = {}
-
-    rust_extensions = {".rs"}
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in rust_extensions:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
-
-            # Find #[tauri::command] followed by a function definition
-            # Pattern matches:
-            #   #[tauri::command]
-            #   fn my_command(...) -> ...
-            for m in re.finditer(
-                r'#\[tauri::command\]\s*(?:\n\s*(?:#\[.*\]\s*\n\s*)*)?(?:pub\s+)?fn\s+(\w+)',
-                content
-            ):
-                fn_name = m.group(1)
-                line_num = content[:m.start()].count('\n') + 1
-
-                # Tauri uses snake_case command names by default, but the
-                # invoke() call uses camelCase.  Store both forms.
-                camel_name = _snake_to_camel(fn_name)
-
-                rust_commands[fn_name] = {
-                    "file": rel_path,
-                    "line": line_num,
-                    "fn_name": fn_name,
-                    "camel_name": camel_name,
-                }
-
-                rust_commands[camel_name] = {
-                    "file": rel_path,
-                    "line": line_num,
-                    "fn_name": fn_name,
-                    "camel_name": camel_name,
-                }
-
-    # ── Step 3: Scan JS/TS files for invoke() calls ────────────
-    js_invokes: Dict[str, List[Dict[str, Any]]] = {}  # command_name → [{file, line}]
-
-    js_extensions = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in js_extensions:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip files in src-tauri (those are Rust-side, not JS consumers)
-            if 'src-tauri' in rel_path:
-                continue
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
-
-            # Match invoke("command_name") or invoke('command_name')
-            # Also match invoke({ cmd: "command_name" }) for older Tauri versions
-            for inv_m in re.finditer(
-                r'invoke\s*\(\s*["\'](\w+)["\']', content
-            ):
-                cmd_name = inv_m.group(1)
-                line_num = content[:inv_m.start()].count('\n') + 1
-                js_invokes.setdefault(cmd_name, []).append({
-                    "file": rel_path,
-                    "line": line_num,
-                })
-
-            # Also match invoke({ cmd: "command_name" })
-            for inv_m in re.finditer(
-                r'invoke\s*\(\s*\{\s*cmd\s*:\s*["\'](\w+)["\']', content
-            ):
-                cmd_name = inv_m.group(1)
-                line_num = content[:inv_m.start()].count('\n') + 1
-                js_invokes.setdefault(cmd_name, []).append({
-                    "file": rel_path,
-                    "line": line_num,
-                })
-
-    # ── Step 4: Build route entries ─────────────────────────────
-    # Use the snake_case Rust fn names as canonical keys to avoid duplicates
-    seen_fn_names: Set[str] = set()
-    for cmd_key, cmd_info in rust_commands.items():
-        fn_name = cmd_info["fn_name"]
-        if fn_name in seen_fn_names:
-            continue
-        seen_fn_names.add(fn_name)
-
-        # Find JS callers for both snake_case and camelCase forms
-        callers = []
-        for caller in js_invokes.get(fn_name, []):
-            callers.append(caller)
-        for caller in js_invokes.get(cmd_info["camel_name"], []):
-            callers.append(caller)
-
-        route = {
-            "method": "IPC",
-            "path": f"tauri://ipc/{fn_name}",
-            "handler_name": fn_name,
-            "file": cmd_info["file"],
-            "line": cmd_info["line"],
-            "type": "tauri_ipc",
-            "middleware_chain": [],
-            "auth_protected": False,
-            "request_type": "TauriInvoke",
-            "response_type": "TauriResult",
-            "js_callers": callers,
-        }
-        routes.append(route)
-
-    # Add invoke() calls that don't match any known Rust command
-    matched_cmds: Set[str] = set()
-    for cmd_key in rust_commands:
-        info = rust_commands[cmd_key]
-        matched_cmds.add(info["fn_name"])
-        matched_cmds.add(info["camel_name"])
-
-    for cmd_name, callers in js_invokes.items():
-        if cmd_name in matched_cmds:
-            continue
-        for caller in callers:
-            route = {
-                "method": "IPC",
-                "path": f"tauri://ipc/{cmd_name}",
-                "handler_name": f"(unresolved: {cmd_name})",
-                "file": caller["file"],
-                "line": caller["line"],
-                "type": "tauri_ipc",
-                "middleware_chain": [],
-                "auth_protected": False,
-                "request_type": "TauriInvoke",
-                "response_type": "unknown",
-                "js_callers": [caller],
-            }
-            routes.append(route)
-
-    return routes
-
-
-def _snake_to_camel(name: str) -> str:
-    """Convert a snake_case name to camelCase.
-
-    Examples:
-        get_user_name → getUserName
-        my_command → myCommand
-        already → already
-    """
-    parts = name.split('_')
-    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
-
-
 # ─── JS Route Extraction ───────────────────────────────────────
 
 def _extract_js_routes(
@@ -562,7 +323,7 @@ def _extract_js_routes(
     # Detect which framework by import/require patterns
     is_express = bool(re.search(r'(?:require|import).*[\'\"]express[\'\"]', content))
     is_fastify = bool(re.search(r'(?:require|import).*[\'\"]fastify[\'\"]', content))
-    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|ko[\'\"]koa[\'\"]', content))
+    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|(?:require|import).*[\'\"]koa[\'\"]', content))
     is_hono = bool(re.search(r'(?:require|import).*[\'\"]hono[\'\"]', content))
 
     if is_express:
@@ -613,6 +374,42 @@ def _extract_js_routes(
             })
 
     # Direct method calls: app.get('/path', ...), router.post('/path', ...)
+    # Expanded skip list: objects that are NOT web routers but have .get/.post/.delete methods
+    NON_ROUTER_OBJECTS = {
+        # Built-in / standard library
+        "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
+        "WeakMap", "WeakSet", "Date", "RegExp", "Error", "Symbol", "Proxy",
+        "Reflect", "Int8Array", "Uint8Array", "Float32Array", "Float64Array",
+        # Web API objects with .get/.set/.delete
+        "request", "response", "headers", "cache", "store", "session",
+        "localStorage", "sessionStorage", "indexedDB", "cookie", "cookies",
+        "formData", "searchParams", "params", "query", "body", "url", "URL",
+        "navigator", "document", "window", "history", "location",
+        # Node.js objects with .get/.set/.delete
+        "process", "env", "config", "options", "args", "argv",
+        # Common non-router patterns
+        "db", "database", "redis", "mongo", "postgres", "pool", "client",
+        "socket", "io", "transport", "adapter", "driver", "connection",
+        "emitter", "eventEmitter", "bus", "dispatcher", "broker",
+        "logger", "metrics", "tracer", "span",
+        "state", "ref", "snapshot", "observer", "subscription",
+        "map", "set", "weakMap", "weakSet", "dict", "registry",
+        "collection", "list", "queue", "stack", "heap",
+        "repo", "repository", "service", "manager", "controller",
+        "ctx", "context", "req", "res", "next",
+        # DOM / browser APIs
+        "element", "node", "attr", "style", "classList",
+    }
+
+    # Known router variable names — if the object matches one of these,
+    # the route is very likely legitimate even without a leading /
+    ROUTER_VAR_NAMES = {
+        "app", "router", "server", "fastify", "hono", "koa", "express",
+        "api", "routes", "endpoints", "apiRouter", "authRouter",
+        "publicRouter", "privateRouter", "adminRouter", "v1Router",
+        "v2Router", "apiV1", "apiV2", "restRouter", "graphqlRouter",
+    }
+
     for m in re.finditer(
         r'(\w+)\s*\.\s*(get|post|put|delete|patch|head|options)\s*\(\s*[\'"`]([^\'"`]*)[\'"`]',
         content
@@ -621,14 +418,17 @@ def _extract_js_routes(
         http_method = m.group(2).upper()
         route_path = m.group(3)
 
-        # Skip non-route method calls
+        # Skip known non-router objects
         if obj_name in NON_ROUTER_OBJECTS:
             continue
         if http_method.lower() not in HTTP_METHODS:
             continue
 
-        # Skip paths that don't look like routes (e.g., cookie names, header names)
-        if not route_path.startswith('/'):
+        # v6: Require route paths to start with '/' for non-router objects.
+        # This eliminates false positives from headers.get('user-agent'),
+        # cache.get('message'), map.delete('key'), etc.
+        is_known_router = obj_name in ROUTER_VAR_NAMES or obj_name in router_vars
+        if not is_known_router and not route_path.startswith('/'):
             continue
 
         line_num = content[:m.start()].count('\n') + 1
@@ -864,31 +664,15 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
             stripped
         )
         if m:
-            mw_path = m.group(1)
-            # Only treat as route-scoped middleware if the path looks like a real route
-            # (starts with /) — filter out cookie names, variable names, etc.
-            if not mw_path.startswith('/'):
-                # Might be a config string (e.g., cookie secret), not a route path
-                # Treat as global middleware instead
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
-                middleware.append({
-                    "name": mw_name,
-                    "type": mw_type,
-                    "scope": "global",
-                    "file": rel_path,
-                    "line": i + 1,
-                })
-            else:
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
-                middleware.append({
-                    "name": mw_name,
-                    "type": mw_type,
-                    "scope": f"path:{mw_path}",
-                    "file": rel_path,
-                    "line": i + 1,
-                })
+            mw_name = m.group(2)
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": f"path:{m.group(1)}",
+                "file": rel_path,
+                "line": i + 1,
+            })
 
     return middleware
 
@@ -904,9 +688,7 @@ def _extract_nextjs_routes(
     # pages/api/* pattern
     if 'pages/api/' in rel_path or 'pages\\api\\' in rel_path:
         # Convert file path to API route
-        # In monorepos, the path might be "apps/readest-app/src/pages/api/..."
-        # We need to find "pages/api" anywhere in the path, not just at the start
-        api_path = re.sub(r'^.*?pages[/\\]api', '/api', rel_path)
+        api_path = re.sub(r'^pages[/\\]api', '/api', rel_path)
         api_path = re.sub(r'\.(js|ts|mjs|cjs)$', '', api_path)
         api_path = api_path.replace('\\', '/')
         # Handle [param] → :param
@@ -924,10 +706,6 @@ def _extract_nextjs_routes(
                 content
             ):
                 http_method = (method_match.group(1) or method_match.group(2)).upper()
-                # Validate that this is actually an HTTP method, not a random string
-                # (e.g., 'HOUR', 'DAY', 'WEEK' from date-fns switch statements)
-                if http_method not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 line_num = content[:method_match.start()].count('\n') + 1
                 routes.append({
                     "method": http_method,
@@ -1079,292 +857,6 @@ def _extract_nuxt_routes(
     return routes
 
 
-# ─── SvelteKit Routes ─────────────────────────────────────────
-
-def _detect_sveltekit_routes(
-    workspace: str, config: Optional[Dict] = None
-) -> List[Dict[str, Any]]:
-    """Detect SvelteKit file-based routes from the src/routes/ directory.
-
-    SvelteKit uses file-system routing:
-      +page.svelte        → page route (GET)
-      +page.ts            → page load function
-      +page.server.ts     → page server-side load / actions
-      +server.ts / +server.js → API endpoint (exports GET, POST, etc.)
-      +layout.svelte      → layout component
-      +layout.ts          → layout load function
-      +layout.server.ts   → layout server-side load
-      +error.svelte       → error page
-
-    Dynamic segments use [param] syntax, e.g.:
-      src/routes/blog/[slug]/+page.svelte → /blog/:slug
-    """
-    routes: List[Dict[str, Any]] = []
-    routes_dir = os.path.join(workspace, "src", "routes")
-
-    # Quick check: SvelteKit must have src/routes/ directory
-    if not os.path.isdir(routes_dir):
-        return routes
-
-    # Also check for svelte.config.js or vite.config with SvelteKit
-    has_sveltekit_config = os.path.isfile(os.path.join(workspace, "svelte.config.js")) \
-                        or os.path.isfile(os.path.join(workspace, "svelte.config.ts"))
-    # If no svelte.config but src/routes exists with SvelteKit files, still detect
-
-    # SvelteKit special filenames and their route types
-    SERVER_FILES = {"+server.ts", "+server.js", "+server.mjs", "+server.cjs"}
-    PAGE_FILES = {"+page.svelte", "+page.ts", "+page.js", "+page.server.ts", "+page.server.js"}
-    LAYOUT_FILES = {"+layout.svelte", "+layout.ts", "+layout.js", "+layout.server.ts", "+layout.server.js"}
-    ERROR_FILES = {"+error.svelte", "+error.ts", "+error.js"}
-
-    all_special_files = SERVER_FILES | PAGE_FILES | LAYOUT_FILES | ERROR_FILES
-    found_sveltekit_file = False
-
-    for root, dirs, filenames in os.walk(routes_dir):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-
-        for filename in filenames:
-            if filename not in all_special_files:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            # Convert directory path to route path
-            # e.g. src/routes/api/users/+server.ts → /api/users
-            route_dir = os.path.relpath(root, routes_dir)
-            if route_dir == '.':
-                route_path = '/'
-            else:
-                route_path = '/' + route_dir.replace(os.sep, '/')
-
-            # Handle SvelteKit dynamic segments: [param] → :param, [...param] → :param*
-            route_path = re.sub(r'\[\.\.\.(\w+)\]', r':\1*', route_path)
-            route_path = re.sub(r'\[([^\]]+)\]', r':\1', route_path)
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                content = ""
-
-            # ─── +server.ts/js — API endpoints with HTTP method exports ───
-            if filename in SERVER_FILES:
-                found_sveltekit_file = True
-                methods_found = []
-
-                # Pattern 1: export async function GET / POST / etc.
-                for m in re.finditer(
-                    r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)',
-                    content
-                ):
-                    http_method = m.group(1).upper()
-                    line_num = content[:m.start()].count('\n') + 1
-                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
-
-                # Pattern 2: export const GET = ... / export const POST = ...
-                for m in re.finditer(
-                    r'export\s+const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*=',
-                    content
-                ):
-                    http_method = m.group(1).upper()
-                    line_num = content[:m.start()].count('\n') + 1
-                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
-
-                # Pattern 3: export { GET, POST } (re-exports)
-                for m in re.finditer(
-                    r'export\s+\{\s*([^\}]+)\}\s*',
-                    content
-                ):
-                    for method_name in re.findall(
-                        r'\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
-                        m.group(1)
-                    ):
-                        http_method = method_name.upper()
-                        line_num = content[:m.start()].count('\n') + 1
-                        methods_found.append({"method": http_method, "handler": method_name, "line": line_num})
-
-                if methods_found:
-                    for mf in methods_found:
-                        routes.append({
-                            "method": mf["method"],
-                            "path": _normalize_path(route_path),
-                            "handler_name": mf["handler"],
-                            "file": rel_path,
-                            "line": mf["line"],
-                            "middleware_chain": [],
-                            "request_type": None,
-                            "response_type": None,
-                            "framework": "sveltekit",
-                            "type": "api_endpoint",
-                        })
-                else:
-                    # No method exports found — still register as a generic endpoint
-                    routes.append({
-                        "method": "ALL",
-                        "path": _normalize_path(route_path),
-                        "handler_name": "+server",
-                        "file": rel_path,
-                        "line": 1,
-                        "middleware_chain": [],
-                        "request_type": None,
-                        "response_type": None,
-                        "framework": "sveltekit",
-                        "type": "api_endpoint",
-                    })
-
-            # ─── +page.svelte / +page.ts / +page.server.ts — page routes ───
-            elif filename in PAGE_FILES:
-                found_sveltekit_file = True
-
-                # Determine handler name from content
-                handler_name = "+page"
-                line_num = 1
-                if ".server." in filename:
-                    # Look for load function or actions export
-                    load_match = re.search(
-                        r'export\s+(?:async\s+)?function\s+load\b',
-                        content
-                    )
-                    actions_match = re.search(
-                        r'export\s+const\s+actions\s*=',
-                        content
-                    )
-                    if load_match:
-                        handler_name = "load"
-                        line_num = content[:load_match.start()].count('\n') + 1
-                    elif actions_match:
-                        handler_name = "actions"
-                        line_num = content[:actions_match.start()].count('\n') + 1
-                elif filename.endswith(".ts") or filename.endswith(".js"):
-                    load_match = re.search(
-                        r'export\s+(?:async\s+)?function\s+load\b',
-                        content
-                    )
-                    if load_match:
-                        handler_name = "load"
-                        line_num = content[:load_match.start()].count('\n') + 1
-
-                # +page.server.ts with actions → also emit POST for form actions
-                if ".server." in filename:
-                    actions_match = re.search(
-                        r'export\s+const\s+actions\s*=',
-                        content
-                    )
-                    if actions_match:
-                        actions_line = content[:actions_match.start()].count('\n') + 1
-                        # Find named actions (e.g. actions: { create, delete })
-                        named_actions = re.findall(
-                            r'actions\s*:\s*\{([^}]+)\}',
-                            content
-                        )
-                        action_names = []
-                        for block in named_actions:
-                            action_names.extend(re.findall(r'(\w+)\s*:', block))
-
-                        # Emit POST for default action
-                        routes.append({
-                            "method": "POST",
-                            "path": _normalize_path(route_path),
-                            "handler_name": "actions",
-                            "file": rel_path,
-                            "line": actions_line,
-                            "middleware_chain": [],
-                            "request_type": None,
-                            "response_type": None,
-                            "framework": "sveltekit",
-                            "type": "page",
-                        })
-
-                        # Emit POST for each named action
-                        for action_name in action_names:
-                            routes.append({
-                                "method": "POST",
-                                "path": _normalize_path(route_path),
-                                "handler_name": action_name,
-                                "file": rel_path,
-                                "line": actions_line,
-                                "middleware_chain": [],
-                                "request_type": None,
-                                "response_type": None,
-                                "framework": "sveltekit",
-                                "type": "page",
-                            })
-
-                routes.append({
-                    "method": "GET",
-                    "path": _normalize_path(route_path),
-                    "handler_name": handler_name,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "sveltekit",
-                    "type": "page",
-                })
-
-            # ─── +layout.svelte / +layout.ts / +layout.server.ts — layouts ───
-            elif filename in LAYOUT_FILES:
-                found_sveltekit_file = True
-
-                handler_name = "+layout"
-                line_num = 1
-                if ".server." in filename:
-                    load_match = re.search(
-                        r'export\s+(?:async\s+)?function\s+load\b',
-                        content
-                    )
-                    if load_match:
-                        handler_name = "load"
-                        line_num = content[:load_match.start()].count('\n') + 1
-                elif filename.endswith(".ts") or filename.endswith(".js"):
-                    load_match = re.search(
-                        r'export\s+(?:async\s+)?function\s+load\b',
-                        content
-                    )
-                    if load_match:
-                        handler_name = "load"
-                        line_num = content[:load_match.start()].count('\n') + 1
-
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path(route_path),
-                    "handler_name": handler_name,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "sveltekit",
-                    "type": "layout",
-                })
-
-            # ─── +error.svelte / +error.ts — error pages ───
-            elif filename in ERROR_FILES:
-                found_sveltekit_file = True
-
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path(route_path),
-                    "handler_name": "+error",
-                    "file": rel_path,
-                    "line": 1,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "sveltekit",
-                    "type": "error",
-                })
-
-    # Only return routes if we actually found SvelteKit files
-    # (a bare src/routes/ dir without +files is not a SvelteKit project)
-    if not found_sveltekit_file:
-        return []
-
-    return routes
-
-
 # ─── Python Routes (Flask / FastAPI / Django) ─────────────────
 
 def _extract_python_routes(
@@ -1409,12 +901,8 @@ def _extract_python_routes(
             mw_chain = _extract_python_decorator_middleware(content, m.start(), rel_path, line_num)
 
             for method in methods:
-                method_upper = method.upper()
-                # Validate HTTP method
-                if method_upper not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 routes.append({
-                    "method": method_upper,
+                    "method": method.upper(),
                     "path": _normalize_path(route_path),
                     "handler_name": handler_name,
                     "file": rel_path,
@@ -1513,12 +1001,8 @@ def _extract_python_routes(
             line_num = content[:m.start()].count('\n') + 1
 
             for method in methods:
-                method_upper = method.upper()
-                # Validate HTTP method
-                if method_upper not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 routes.append({
-                    "method": method_upper,
+                    "method": method.upper(),
                     "path": f"/{handler_name}",
                     "handler_name": handler_name,
                     "file": rel_path,
@@ -2408,301 +1892,634 @@ def _generate_recommendations(
     return recommendations
 
 
-# ─── Tauri IPC Detection ──────────────────────────────────────
+# ─── React Router ────────────────────────────────────────────────
 
-def _extract_tauri_ipc_calls(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract Tauri IPC invoke() call sites from TypeScript/JavaScript files.
+def _extract_react_router_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract React Router route definitions from a JS/TSX file.
+    
+    Detects:
+    - <Route path="..." element={...} /> in JSX
+    - createBrowserRouter([{ path: "..." }])
+    - useRoutes([{ path: "..." }])
+    - React Router v6 data APIs (loader, action)
+    
+    This must run BEFORE Vue Router detection to prevent false positives
+    where React Router JSX patterns are misidentified as Vue Router routes.
+    """
+    routes = []
+    
+    # Only detect React Router in files that have react-router imports or JSX Route elements
+    has_react_router = bool(re.search(
+        r'(?:from\s+[\'"]react-router|createBrowserRouter|useRoutes|'
+        r'<Route\s|<Routes\s)',
+        content
+    ))
+    
+    if not has_react_router:
+        return []
+    
+    # Extract <Route path="..." element={...} /> patterns (JSX syntax)
+    for m in re.finditer(r'<Route\s+[^>]*?path\s*=\s*["\']([^"\']+)["\']', content):
+        route_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract surrounding attributes
+        tag_content = content[m.start():m.start() + 500]
+        
+        # Element/component
+        element_match = re.search(r'element\s*=\s*\{(<\w+|{)', tag_content)
+        component_match = re.search(r'component\s*=\s*\{(\w+)', tag_content)
+        
+        component = None
+        if element_match:
+            component = element_match.group(1).strip('<{')
+        elif component_match:
+            component = component_match.group(1)
+        
+        # Skip empty paths (layout wrappers)
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": "GET",
+            "path": route_path,
+            "handler_name": component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "react-router",
+            "type": "page_route",
+            "component": component,
+            "lazy_loaded": "lazy" in tag_content.lower(),
+        }
+        
+        routes.append(route)
+    
+    # Extract createBrowserRouter/useRoutes patterns: { path: "..." }
+    # Only extract if not already found via JSX above (avoid duplicates)
+    found_paths = {r["path"] for r in routes}
+    for m in re.finditer(r'\{\s*path\s*:\s*["\']([^"\']+)["\']', content):
+        route_path = m.group(1)
+        if route_path in found_paths:
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract context for component/loader info
+        context = content[m.start():m.start() + 500]
+        
+        element_match = re.search(r'element\s*:\s*(?:<(\w+)|{)', context)
+        loader_match = re.search(r'loader\s*:\s*(\w+)', context)
+        
+        component = None
+        if element_match:
+            component = element_match.group(1)
+        elif loader_match:
+            component = loader_match.group(1)
+        
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": "GET",
+            "path": route_path,
+            "handler_name": component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "react-router",
+            "type": "page_route",
+            "component": component,
+        }
+        
+        routes.append(route)
+    
+    return routes
+
+
+# ─── Vue Router ────────────────────────────────────────────────
+
+def _extract_vue_router_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Vue Router route definitions from a JS/TS/Vue file.
+    
+    Detects:
+    - new VueRouter({ routes: [...] })
+    - createRouter({ routes: [...] })
+    - Individual route objects: { path: '/xxx', component: YYY, name: 'ZZZ' }
+    - Nested routes with children
+    - Dynamic routes: /user/:id
+    - Route meta (auth, title, etc.)
+    """
+    routes = []
+    
+    # Don't detect vue-router in React TSX/JSX files — these are React Router patterns.
+    # Check for React Router first to avoid false positives.
+    if rel_path.endswith('.tsx') or rel_path.endswith('.jsx'):
+        has_react_router = bool(re.search(
+            r'(?:from\s+[\'"]react-router|createBrowserRouter|useRoutes|<Route\s)',
+            content
+        ))
+        if has_react_router:
+            return []
+    
+    # Only scan files that have vue-router imports or route definitions
+    has_vue_router = bool(re.search(
+        r'(?:from\s+[\'"]vue-router[\'"]|import\s+.*vue-router|'
+        r'VueRouter|createRouter|new\s+Router)',
+        content
+    ))
+    
+    # Also check for route-like patterns even without explicit vue-router import
+    # (some projects re-export the router), but ONLY for .vue files or files
+    # that don't have React Router patterns (to avoid false positives).
+    has_route_pattern = False
+    if rel_path.endswith('.vue'):
+        has_route_pattern = bool(re.search(r'path\s*:\s*[\'"][/:]', content))
+    
+    if not has_vue_router and not has_route_pattern:
+        return []
+    
+    # Extract route objects: { path: '/xxx', component: YYY, name: 'ZZZ' }
+    # Match both quoted and unquoted paths
+    for m in re.finditer(
+        r'\{\s*path\s*:\s*[\'"]([^\'"]+)[\'"]',
+        content
+    ):
+        route_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract surrounding context (up to 500 chars) for name, component, meta
+        context = content[m.start():m.start() + 500]
+        
+        # Route name
+        name_match = re.search(r'name\s*:\s*[\'"]([^\'"]+)[\'"]', context)
+        route_name = name_match.group(1) if name_match else None
+        
+        # Component
+        comp_match = re.search(
+            r'component\s*:\s*(?:\(\)\s*=>\s*import\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)|'
+            r'(\w+))',
+            context
+        )
+        component = None
+        is_lazy = False
+        if comp_match:
+            if comp_match.group(1):  # Lazy import
+                component = comp_match.group(1)
+                is_lazy = True
+            elif comp_match.group(2):
+                component = comp_match.group(2)
+        
+        # Meta (auth, title, etc.)
+        meta_match = re.search(r'meta\s*:\s*\{([^}]+)\}', context)
+        meta_info = {}
+        if meta_match:
+            meta_str = meta_match.group(1)
+            # Extract key meta fields
+            if 'auth' in meta_str or 'requireAuth' in meta_str:
+                meta_info["auth"] = True
+            title_match = re.search(r'title\s*:\s*[\'"]([^\'"]+)[\'"]', meta_str)
+            if title_match:
+                meta_info["title"] = title_match.group(1)
+            icon_match = re.search(r'icon\s*:\s*[\'"]([^\'"]+)[\'"]', meta_str)
+            if icon_match:
+                meta_info["icon"] = icon_match.group(1)
+        
+        # Determine HTTP method — Vue Router uses GET for page routes
+        # But also detect API-like paths
+        method = "GET"
+        if '/api/' in route_path:
+            method = "GET"  # Vue Router doesn't specify method
+        
+        # Determine if it's a redirect
+        redirect_match = re.search(r'redirect\s*:\s*[\'"]([^\'"]+)[\'"]', context)
+        is_redirect = bool(redirect_match)
+        
+        # Skip empty paths (used for layout wrappers)
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": method,
+            "path": route_path,
+            "handler_name": route_name or component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "vue-router",
+            "type": "page_route",
+            "component": component,
+            "lazy_loaded": is_lazy,
+        }
+        
+        if route_name:
+            route["route_name"] = route_name
+        if meta_info:
+            route["meta"] = meta_info
+        if is_redirect:
+            route["redirect_to"] = redirect_match.group(1)
+            route["type"] = "redirect"
+        if meta_info.get("auth"):
+            route["auth_protected"] = True
+        
+        routes.append(route)
+    
+    # Extract nested routes (children: [...])
+    # These are already captured by the path pattern above, but we add
+    # parent path context when possible
+    for m in re.finditer(r'children\s*:\s*\[', content):
+        line_num = content[:m.start()].count('\n') + 1
+        # The parent route's path is typically a few lines above
+        # We already capture children routes individually
+    
+    return routes
+
+
+# ─── Tauri IPC Command Extraction ────────────────────────────────
+
+def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC command handlers from Rust source files.
+
+    Detects functions annotated with #[tauri::command] which are exposed
+    to the frontend via invoke('command_name'). These form the IPC API
+    layer of a Tauri application.
+
+    Handles:
+    - #[tauri::command] fn name(...) → IPC command
+    - #[tauri::command(rename_all = "snake_case")] → respects rename
+    - Multiple commands per file
+    - Async commands: async fn name(...)
+    """
+    routes = []
+    lines = content.split('\n')
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Detect #[tauri::command] attribute
+        if '#[tauri::command' in line:
+            # Collect the full attribute (may span multiple lines)
+            attr_text = line
+            while i < len(lines) - 1 and not lines[i].rstrip().endswith(']'):
+                i += 1
+                attr_text += lines[i]
+
+            # Look for the function definition after the attribute
+            fn_line_idx = i
+            fn_name = None
+            is_async = False
+            is_pub = False
+
+            # Search forward for the fn declaration (up to 5 lines)
+            for offset in range(0, 6):
+                search_idx = fn_line_idx + offset
+                if search_idx >= len(lines):
+                    break
+                search_line = lines[search_idx]
+
+                if 'async' in search_line and 'fn' in search_line:
+                    is_async = True
+                if search_line.strip().startswith('pub '):
+                    is_pub = True
+
+                fn_match = _rust_fn_name_regex().search(search_line)
+                if fn_match:
+                    fn_name = fn_match.group(1)
+                    fn_line_idx = search_idx
+                    break
+
+            if fn_name:
+                ipc_name = _snake_to_camel(fn_name)
+
+                rename_match = re.search(r'rename_all\s*=\s*"([^"]+)"', attr_text)
+                if rename_match:
+                    rename_style = rename_match.group(1)
+                    if rename_style == "camelCase":
+                        ipc_name = _snake_to_camel(fn_name)
+                    elif rename_style == "snake_case":
+                        ipc_name = fn_name
+                    elif rename_style == "PascalCase":
+                        ipc_name = fn_name.capitalize()
+
+                rename_single = re.search(r'rename\s*=\s*"([^"]+)"', attr_text)
+                if rename_single:
+                    ipc_name = rename_single.group(1)
+
+                routes.append({
+                    "method": "IPC",
+                    "path": f"invoke('{ipc_name}')",
+                    "handler_name": fn_name,
+                    "handler_name_ipc": ipc_name,
+                    "file": rel_path,
+                    "line": fn_line_idx + 1,
+                    "middleware_chain": [],
+                    "request_type": "TauriIPC",
+                    "response_type": "TauriResult",
+                    "framework": "tauri",
+                    "auth_protected": False,
+                    "deprecated": False,
+                    "is_async": is_async,
+                    "is_pub": is_pub,
+                })
+
+        i += 1
+
+    return routes
+
+
+def _extract_tauri_invokes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri invoke() calls from frontend JS/TS source files.
 
     Detects patterns like:
-    - invoke('getProfiles')
-    - invoke<string>('getProfiles')
-    - invoke("getProfiles")
-
-    Each invoke() call is recorded as an IPC_CALL route, which can then be
-    matched against Rust #[tauri::command] handlers by the edge resolver.
+    - invoke('command_name', { args })
+    - invoke<string>('command_name')
     """
     routes = []
 
-    # Match invoke('commandName') or invoke<string>('commandName')
-    # The command name is always the first string argument
-    invoke_pattern = re.compile(
-        r'invoke\s*(?:<[^>]*>)?\s*\(\s*["\']([a-zA-Z_][a-zA-Z0-9_]*)["\']',
-        re.MULTILINE
-    )
+    invoke_patterns = [
+        r"""invoke\s*(?:<[^>]+>)?\s*\(\s*['"`]([\w]+)['"`]""",
+    ]
 
-    for match in invoke_pattern.finditer(content):
-        cmd_name = match.group(1)
-        line = content[:match.start()].count('\n') + 1
+    for pattern in invoke_patterns:
+        for match in re.finditer(pattern, content):
+            command_name = match.group(1)
+            line_num = content[:match.start()].count('\n') + 1
 
-        routes.append({
-            "method": "IPC_CALL",
-            "path": f"ipc://{cmd_name}",
-            "handler_name": cmd_name,
-            "handler_name_ipc": cmd_name,  # camelCase name as used in invoke()
-            "file": rel_path,
-            "line": line,
-            "middleware_chain": [],
-            "auth_protected": False,
-            "deprecated": False,
-        })
+            routes.append({
+                "method": "IPC_CALL",
+                "path": f"invoke('{command_name}')",
+                "handler_name": command_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": "TauriInvoke",
+                "response_type": None,
+                "framework": "tauri",
+                "auth_protected": False,
+                "deprecated": False,
+            })
 
     return routes
 
 
-def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract Rust #[tauri::command] function declarations.
+# ─── Rust / Tauri Helpers ────────────────────────────────────────
 
-    These are the Rust-side handlers that respond to IPC invoke() calls
-    from the frontend. Each command is recorded as an IPC_HANDLER route.
+_rust_fn_re = None
 
-    Also detects:
-    - #[tauri::command(rename_all = "snake_case")] — custom naming
-    - pub async fn command_name() — async Tauri commands
-    """
-    routes = []
 
-    # Match #[tauri::command(...)] followed by fn declaration
-    # Handle multi-line attribute + fn
-    tauri_cmd_pattern = re.compile(
-        r'#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-        re.MULTILINE
-    )
-
-    for match in tauri_cmd_pattern.finditer(content):
-        fn_name = match.group(1)
-        line = content[:match.start()].count('\n') + 1
-
-        # Convert snake_case Rust name to camelCase IPC name
-        # (Tauri's default naming convention)
-        ipc_name = _snake_to_camel(fn_name)
-
-        # Check for rename_all attribute
-        attr_text = match.group(0)
-        rename_match = re.search(r'rename_all\s*=\s*"([^"]+)"', attr_text)
-        naming_style = rename_match.group(1) if rename_match else "camelCase"
-
-        routes.append({
-            "method": "IPC_HANDLER",
-            "path": f"ipc://{ipc_name}",
-            "handler_name": fn_name,
-            "handler_name_ipc": ipc_name,
-            "file": rel_path,
-            "line": line,
-            "middleware_chain": [],
-            "auth_protected": False,
-            "deprecated": False,
-            "naming_style": naming_style,
-            "rust_fn_name": fn_name,
-        })
-
-    return routes
+def _rust_fn_name_regex():
+    """Lazy-compiled regex for Rust function name extraction."""
+    global _rust_fn_re
+    if _rust_fn_re is None:
+        _rust_fn_re = re.compile(r'\bfn\s+(\w+)\s*[<(]')
+    return _rust_fn_re
 
 
 def _snake_to_camel(name: str) -> str:
-    """Convert snake_case to camelCase for Tauri IPC naming."""
-    if '_' not in name:
-        return name
+    """Convert a snake_case name to camelCase."""
     parts = name.split('_')
     return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
 
 
-# ─── PHP Route Extraction (Laravel / Symfony / Slim) ─────────
+# ─── Go API Route Extraction ────────────────────────────────────
 
-# PHP language constructs and control keywords to skip when matching function calls
-_PHP_SKIP_NAMES = frozenset({
-    'if', 'else', 'elseif', 'while', 'for', 'foreach', 'switch', 'case',
-    'return', 'new', 'throw', 'catch', 'try', 'echo', 'print', 'isset',
-    'unset', 'empty', 'list', 'array', 'function', 'class', 'include',
-    'require', 'include_once', 'require_once', 'define', 'defined',
-    'var_dump', 'dd', 'dump', 'abort', 'redirect', 'view', 'response',
-    'back', 'route', 'url', 'asset', 'mix', 'public_path', 'storage_path',
-    'base_path', 'resource_path', 'config', 'env', 'app_path',
-})
+def _extract_go_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract API routes from Go source files.
 
+    Detects patterns from common Go web frameworks:
+    - Gin:       r.GET("/path", handler), r.POST("/path", handler)
+    - Echo:      e.GET("/path", handler), e.POST("/path", handler)
+    - Fiber:     app.Get("/path", handler), app.Post("/path", handler)
+    - Chi:       r.Get("/path", handler), r.Post("/path", handler)
+    - Stdlib:    mux.HandleFunc("/path", handler), http.HandleFunc
+    - Gorilla:   r.HandleFunc("/path", handler).Methods("GET")
 
-def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
-    """Extract routes from PHP files — Laravel, Symfony, Slim, and vanilla PHP."""
-    routes: List[Dict[str, Any]] = []
+    Also detects route groups:
+    - g := r.Group("/api/v1")
+    """
+    routes = []
+    lines = content.split('\n')
 
-    # ─── Laravel Routes ──────────────────────────────────────
-    # Route::get('/path', [Controller::class, 'method'])
-    # Route::post('/path', [Controller::class, 'method'])
-    # Route::put('/path', [Controller::class, 'method'])
-    # Route::delete('/path', [Controller::class, 'method'])
-    # Route::patch('/path', [Controller::class, 'method'])
-    # Route::options('/path', [Controller::class, 'method'])
-    # Route::any('/path', [Controller::class, 'method'])
-    # Route::resource('/path', Controller::class)
-    # Route::apiResource('/path', Controller::class)
-    # Route::middleware('auth')->get('/path', ...)
-    # Route::group(['middleware' => 'auth', 'prefix' => 'api'], function() { ... })
+    # Track route group prefixes
+    group_prefixes: Dict[str, str] = {}  # var_name → prefix
 
-    laravel_route_pattern = re.compile(
-        r"""Route::(get|post|put|delete|patch|options|any)\s*\(\s*   # Route::method(
-            ['"]([^'"]+)['"]                                                # '/path'
-            \s*,\s*                                                         # ,
-            (?:                                                              # handler group
-                \[([\w\\]+)::class\s*,\s*['"](\w+)['"]\]                  # [Controller::class, 'method']
-                |                                                           # OR
-                ['"]([\w\\]+)@(\w+)['"]                                    # 'Controller@method'
-                |                                                           # OR
-                function\s*\(                                               # Closure
-            )""",
-        re.VERBOSE
+    # Pattern 1: Route group definitions
+    # g := r.Group("/api/v1") or apiGroup := router.Group("/api")
+    group_pattern = re.compile(
+        r'(\w+)\s*:?=\s*\w+\.Group\s*\(\s*["\']([^"\']+)["\']'
     )
 
-    for m in laravel_route_pattern.finditer(content):
-        method = m.group(1).upper()
-        path = m.group(2)
-        handler_name = m.group(4) or m.group(6) or "anonymous"
-        controller = m.group(3) or m.group(5) or None
-        line = content[:m.start()].count('\n') + 1
+    # Pattern 2: HTTP method registrations
+    # Gin/Echo/Chi: r.GET("/path", handler)
+    # Fiber: app.Get("/path", handler)
+    # Stdlib/Gorilla: mux.HandleFunc("/path", handler)
+    go_http_patterns = [
+        # Gin/Echo/Chi style: r.GET("/path", handler) or r.Group.GET("/path", handler)
+        (re.compile(
+            r'(\w+(?:\.\w+)*)\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)'
+        ), "gin"),
+        # Gorilla mux: r.HandleFunc("/path", handler).Methods("GET")
+        (re.compile(
+            r'(\w+)\.HandleFunc\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)\s*\)'
+        ), "gorilla"),
+        # Stdlib: http.HandleFunc("/path", handler)
+        (re.compile(
+            r'http\.HandleFunc\s*\(\s*["\']([^"\']+)["\']\s*,\s*(\w+)\s*\)'
+        ), "stdlib"),
+    ]
 
-        frameworks_detected.add("laravel")
+    # First pass: extract group prefixes
+    for line in lines:
+        m = group_pattern.search(line)
+        if m:
+            var_name = m.group(1)
+            prefix = m.group(2)
+            group_prefixes[var_name] = prefix
 
-        # Check for middleware in the same chain (e.g., Route::middleware('auth')->get(...))
-        middleware_chain = _extract_laravel_route_middleware(content, m.start())
+    # Second pass: extract routes
+    for i, line in enumerate(lines):
+        stripped = line.strip()
 
-        routes.append({
-            "method": method,
-            "path": path,
-            "handler_name": f"{controller}::{handler_name}" if controller else handler_name,
-            "file": rel_path,
-            "line": line,
-            "middleware_chain": middleware_chain,
-            "request_type": None,
-            "response_type": None,
-            "framework": "laravel",
-            "auth_protected": any(mw.get("type") == "auth" for mw in middleware_chain),
-            "deprecated": False,
-        })
-
-    # Laravel Route::resource and Route::apiResource
-    resource_pattern = re.compile(
-        r"""Route::(resource|apiResource)\s*\(\s*
-            ['"]([^'"]+)['"]\s*,\s*
-            ([\w\\]+)::class""",
-        re.VERBOSE
-    )
-    for m in resource_pattern.finditer(content):
-        route_type = m.group(1)
-        path = m.group(2)
-        controller = m.group(3)
-        line = content[:m.start()].count('\n') + 1
-
-        frameworks_detected.add("laravel")
-
-        # Resource routes generate standard CRUD routes
-        resource_methods = {
-            "resource": [
-                ("GET", f"{path}", "index"),
-                ("GET", f"{path}/create", "create"),
-                ("POST", f"{path}", "store"),
-                ("GET", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "show"),
-                ("GET", f"{path}/{{{path.rsplit('/', 1)[-1]}}}/edit", "edit"),
-                ("PUT", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "update"),
-                ("DELETE", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "destroy"),
-            ],
-            "apiResource": [
-                ("GET", f"{path}", "index"),
-                ("POST", f"{path}", "store"),
-                ("GET", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "show"),
-                ("PUT", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "update"),
-                ("DELETE", f"{path}/{{{path.rsplit('/', 1)[-1]}}}", "destroy"),
-            ],
-        }
-
-        for http_method, route_path, action in resource_methods.get(route_type, []):
-            middleware_chain = _extract_laravel_route_middleware(content, m.start())
-            routes.append({
-                "method": http_method,
-                "path": route_path,
-                "handler_name": f"{controller}::{action}",
-                "file": rel_path,
-                "line": line,
-                "middleware_chain": middleware_chain,
-                "request_type": None,
-                "response_type": None,
-                "framework": "laravel",
-                "auth_protected": any(mw.get("type") == "auth" for mw in middleware_chain),
-                "deprecated": False,
-            })
-
-    # ─── Slim Framework Routes ──────────────────────────────
-    # $app->get('/path', function ($request, $response) { ... });
-    # $app->post('/path', ClassName::class . ':method');
-    slim_pattern = re.compile(
-        r"""\$\w+->(get|post|put|delete|patch|options)\s*\(\s*
-            ['"]([^'"]+)['"]""",
-        re.VERBOSE
-    )
-    for m in slim_pattern.finditer(content):
-        method = m.group(1).upper()
-        path = m.group(2)
-        line = content[:m.start()].count('\n') + 1
-
-        # Only count as Slim if we see $app or $slim patterns
-        if '$app' in content[:m.start() + 200] or 'Slim' in content[:5000]:
-            frameworks_detected.add("slim")
-            routes.append({
-                "method": method,
-                "path": path,
-                "handler_name": "anonymous",
-                "file": rel_path,
-                "line": line,
-                "middleware_chain": [],
-                "request_type": None,
-                "response_type": None,
-                "framework": "slim",
-                "auth_protected": False,
-                "deprecated": False,
-            })
-
-    # ─── Symfony Routes (Annotations/Attributes) ──────────
-    # #[Route('/path', name: 'route_name', methods: ['GET'])]
-    # #[Route('/path', methods: ['POST'])]
-    # Only match in controller files (containing class definitions with "Controller" in name)
-    symfony_attr_pattern = re.compile(
-        r"""#\[\s*Route\s*\(\s*
-            ['"](/[^'"]+)['"]                               # path must start with /
-            (?:[^)]*methods\s*:\s*\[([^\]]+)\])?             # methods (optional)
-            """,
-        re.VERBOSE
-    )
-    for m in symfony_attr_pattern.finditer(content):
-        path = m.group(1)
-        methods_str = m.group(2) or "'GET'"
-        line = content[:m.start()].count('\n') + 1
-
-        # Verify this is actually a Symfony route attribute, not something else
-        # Check that the attribute is Route specifically (not ReturnTypeWillChange, etc.)
-        attr_text = content[max(0, m.start()-5):m.start()+10]
-        if '#[Route' not in attr_text and '#[\\Symfony' not in attr_text:
+        # Skip comments
+        if stripped.startswith('//') or stripped.startswith('/*'):
             continue
 
-        # Parse methods
-        methods = re.findall(r"['\"](\w+)['\"]", methods_str)
-        if not methods:
-            methods = ["GET"]
+        # Pattern 1: Gin/Echo/Chi/Fiber style
+        for pattern, fw_name in go_http_patterns[:1]:
+            for m in pattern.finditer(line):
+                receiver = m.group(1)
+                method_raw = m.group(2)
+                path = m.group(3)
+                handler = m.group(4)
 
-        frameworks_detected.add("symfony")
+                # Normalize method
+                method = method_raw.upper()
 
-        # Find the method this attribute is attached to
-        after_attr = content[m.end():m.end() + 500]
-        fn_match = re.search(r'function\s+(\w+)\s*\(', after_attr)
-        handler_name = fn_match.group(1) if fn_match else "anonymous"
+                # Check for group prefix
+                prefix = group_prefixes.get(receiver, '')
+                full_path = prefix + path if prefix else path
 
-        for http_method in methods:
+                routes.append({
+                    "method": method,
+                    "path": full_path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                    "group": prefix if prefix else None,
+                })
+                frameworks_detected.add(fw_name)
+
+        # Pattern 2: Gorilla mux HandleFunc
+        for pattern, fw_name in go_http_patterns[1:2]:
+            for m in pattern.finditer(line):
+                path = m.group(2)
+                handler = m.group(3)
+
+                # Look for .Methods("GET") on the same or next line
+                method = "ANY"
+                context = line
+                if i + 1 < len(lines):
+                    context += lines[i + 1]
+                method_match = re.search(r'\.Methods\s*\(\s*["\'](\w+)["\']', context)
+                if method_match:
+                    method = method_match.group(1).upper()
+
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+                frameworks_detected.add(fw_name)
+
+        # Pattern 3: Stdlib http.HandleFunc
+        for pattern, fw_name in go_http_patterns[2:]:
+            for m in pattern.finditer(line):
+                path = m.group(1)
+                handler = m.group(2)
+
+                routes.append({
+                    "method": "ANY",
+                    "path": path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": fw_name,
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+                frameworks_detected.add(fw_name)
+
+    return routes
+
+
+# ─── PHP API Route Extraction ────────────────────────────────────
+
+def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract API routes from PHP source files.
+
+    Detects patterns from common PHP web frameworks:
+    - Laravel:   Route::get('/path', [Controller::class, 'method'])
+    - Symfony:   $app->get('/path', 'Controller::method')
+    - Flarum:    $this->get('/path', 'controller')
+    - Slim:      $app->get('/path', Controller::class . ':method')
+    - Generic:   $router->get('/path', handler)
+    """
+    routes = []
+    lines = content.split('\n')
+
+    # Pattern 1: Laravel Route facade
+    # Route::get('/path', [Controller::class, 'method'])
+    # Route::post('/path', 'Controller@method')
+    # Route::put('/path', closure)
+    laravel_pattern = re.compile(
+        r'Route::(get|post|put|delete|patch|any|match)\s*\(\s*'
+        r'(?:\[([^\]]*)\]\s*,\s*)?["\']([^"\']+)["\']'
+        r'\s*(?:,\s*(.+?))?\s*\)'
+    )
+
+    # Pattern 2: Generic PHP router
+    # $app->get('/path', ...), $router->post('/path', ...)
+    # $this->get('/path', ...), $this->post('/path', ...)
+    # NOTE: Skip patterns that don't look like HTTP routes:
+    #   - $this->get('setting_name') — settings getter, not a route
+    #   - $this->get('config.key') — config getter
+    #   - $app->get('some_var') — variable accessor
+    # A real route path starts with '/' or contains '/' (e.g., '/api/users')
+    generic_pattern = re.compile(
+        r'(?:\$\w+|this)\s*->\s*(get|post|put|delete|patch|any)\s*\(\s*["\']((?:/|[^"\']*/)[^"\']*)["\']'
+        r'\s*(?:,\s*(.+?))?\s*\)'
+    )
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+            continue
+
+        # Try Laravel pattern
+        for m in laravel_pattern.finditer(line):
+            method_raw = m.group(1)
+            methods_str = m.group(2)  # For Route::match(['get', 'post'], ...)
+            path = m.group(3)
+            handler_raw = m.group(4) or ''
+
+            # Determine HTTP methods
+            methods = [method_raw.upper()]
+            if method_raw == 'match' and methods_str:
+                methods = [m.strip().strip("'\"").upper() for m in methods_str.split(',')]
+
+            # Parse handler
+            handler_name = _parse_php_handler(handler_raw)
+
+            for method in methods:
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": i + 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "laravel",
+                    "auth_protected": False,
+                    "deprecated": False,
+                })
+            frameworks_detected.add("laravel")
+
+        # Try generic pattern
+        for m in generic_pattern.finditer(line):
+            method_raw = m.group(1)
+            path = m.group(2)
+            handler_raw = m.group(3) or ''
+
+            handler_name = _parse_php_handler(handler_raw)
+
             routes.append({
-                "method": http_method.upper(),
+                "method": method_raw.upper(),
                 "path": path,
                 "handler_name": handler_name,
                 "file": rel_path,
-                "line": line,
+                "line": i + 1,
                 "middleware_chain": [],
                 "request_type": None,
                 "response_type": None,
-                "framework": "symfony",
+                "framework": "php-generic",
                 "auth_protected": False,
                 "deprecated": False,
             })
@@ -2710,61 +2527,39 @@ def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[st
     return routes
 
 
-def _extract_laravel_route_middleware(content: str, route_pos: int) -> List[Dict[str, Any]]:
-    """Extract middleware from a Laravel route chain preceding a route definition.
+def _parse_php_handler(handler_raw: str) -> str:
+    """Parse a PHP route handler string into a readable name.
 
-    Handles patterns like:
-    - Route::middleware('auth')->get(...)
-    - Route::middleware(['auth', 'throttle'])->get(...)
+    Handles:
+    - [Controller::class, 'method'] → Controller::method
+    - 'Controller@method' → Controller@method
+    - Controller::class . ':method' → Controller::method
+    - 'controller_class' → controller_class
+    - Closure/Callable → 'closure'
     """
-    middleware_chain: List[Dict[str, Any]] = []
+    handler = handler_raw.strip()
 
-    # Look backwards from route_pos for middleware chain
-    before = content[max(0, route_pos - 500):route_pos]
+    # Array syntax: [Controller::class, 'method']
+    arr_match = re.search(r"(\w+)::class\s*,\s*['\"](\w+)['\"]", handler)
+    if arr_match:
+        return f"{arr_match.group(1)}::{arr_match.group(2)}"
 
-    # Match Route::middleware('name') or Route::middleware(['name1', 'name2'])
-    mw_pattern = re.compile(r"""middleware\s*\(\s*
-                                (?:\[([^\]]+)\] | ['"]([^'"]+)['"])
-                                \s*\)""", re.VERBOSE)
-    for m in mw_pattern.finditer(before):
-        if m.group(1):
-            # Array of middleware
-            names = re.findall(r"['\"]([\w.]+)['\"]", m.group(1))
-        else:
-            names = [m.group(2)]
+    # @ syntax: Controller@method
+    if '@' in handler:
+        return handler.strip("'\"")
 
-        for name in names:
-            mw_type = "unknown"
-            if name in AUTH_MIDDLEWARE_PATTERNS or name in ('auth', 'auth:api', 'verified', 'signed'):
-                mw_type = "auth"
-            elif name in CORS_MIDDLEWARE_PATTERNS or name == 'cors':
-                mw_type = "cors"
-            elif name in RATE_LIMIT_PATTERNS or name == 'throttle':
-                mw_type = "rate_limit"
-            elif name in VALIDATION_PATTERNS:
-                mw_type = "validation"
+    # ::class . ':method' syntax
+    class_method = re.search(r"(\w+)::class\s*\.\s*['\"]:(\w+)['\"]", handler)
+    if class_method:
+        return f"{class_method.group(1)}::{class_method.group(2)}"
 
-            middleware_chain.append({
-                "name": name,
-                "type": mw_type,
-            })
+    # Simple string: 'method_name'
+    simple = re.search(r"['\"](\w+)['\"]", handler)
+    if simple:
+        return simple.group(1)
 
-    return middleware_chain
+    # Closure/function callback
+    if 'function' in handler or 'Closure' in handler:
+        return 'closure'
 
-
-def _extract_php_middleware(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract middleware registrations from PHP files.
-
-    Note: PHP middleware alias definitions (e.g., 'auth' => Authenticate::class)
-    are NOT treated as global middleware. They are just name→class mappings.
-    Only route-level middleware (from Route::middleware() chains) are attached
-    to routes. Global middleware is handled differently in Laravel (Kernel.php
-    $middleware array) and would require parsing the actual array structure.
-
-    We skip extracting PHP middleware aliases here to avoid incorrectly attaching
-    ALL registered middleware to ALL routes (which was causing every Laravel route
-    to appear auth-protected).
-    """
-    # PHP middleware aliases are just definitions, not applications.
-    # Don't return them as global middleware.
-    return []
+    return handler[:50] if handler else 'unknown'
