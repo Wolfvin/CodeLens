@@ -474,11 +474,34 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
+    # Parse Go files
+    go_data = []
+    if files["go"]:
+        from parsers.fallback_go import parse_go_fallback
+
+        for path in files["go"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_go_fallback(content, os.path.relpath(path, workspace))
+                go_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("backend", {}).get("functions", []),
+                    "edges": refs.get("backend", {}).get("edges", []),
+                    "types": refs.get("backend", {}).get("types", []),
+                    "imports": refs.get("backend", {}).get("imports", []),
+                    "package": refs.get("package", ""),
+                })
+            except IOError:
+                logger.debug(f"Failed to read Go file: {path}")
+
     # Build backend registry with edge resolution
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data
+        new_parsed_data = rust_data + js_backend_data + python_data + go_data
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -489,7 +512,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data:
+        for item in rust_data + js_backend_data + python_data + go_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
 
@@ -521,9 +544,11 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "rust": len(files["rust"]),
             "python": len(files["python"]),
             "vue": len(files["vue"]),
-            "svelte": len(files["svelte"])
+            "svelte": len(files["svelte"]),
+            "go": len(files["go"])
         },
         "python_parsed": len(python_data),
+        "go_parsed": len(go_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -552,7 +577,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "rust": [],
         "python": [],
         "vue": [],
-        "svelte": []
+        "svelte": [],
+        "go": []
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -604,6 +630,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["vue"].append(file_path)
             elif ext == '.svelte':
                 files["svelte"].append(file_path)
+            elif ext == '.go':
+                files["go"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
 

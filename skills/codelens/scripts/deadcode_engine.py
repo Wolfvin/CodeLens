@@ -21,7 +21,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
+    ".py", ".rs", ".go", ".vue", ".svelte", ".css", ".scss", ".less"
 }
 
 # Performance limits for large codebases
@@ -99,13 +99,13 @@ def detect_dead_code(
             lines = content.split('\n')
 
             # ─── Unreachable Code ────────────────────────
-            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
                 if len(results["unreachable"]) < max_results:
                     unreachable = _detect_unreachable_code(content, ext, rel_path)
                     results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
-            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
                 if len(results["unused_vars"]) < max_results:
                     unused = _detect_unused_variables(content, ext, rel_path)
                     results["unused_vars"].extend(unused)
@@ -116,6 +116,9 @@ def detect_dead_code(
 
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".go":
+                _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
 
         if truncated:
             break
@@ -217,10 +220,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
                 function_start_depth = brace_depth  # v6: record depth at function start
+        elif ext == ".go":
+            if re.match(r'(?:func\s+)\w+', stripped):
+                in_function = True
+                found_terminal = False
+                function_start_depth = brace_depth
 
         # Detect terminal statements
         if in_function:
-            if re.match(r'(?:return|throw|break|continue)\s', stripped):
+            if re.match(r'(?:return|throw|break|continue|panic)\s', stripped):
                 found_terminal = True
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
@@ -419,6 +427,53 @@ def _collect_py_exports_imports(
             "type": "python_definition",
             "line": line_num
         })
+
+def _collect_go_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Go exports and imports (uppercase = exported)."""
+    # Go imports
+    for m in re.finditer(r'import\s+"([^"]+)"', content):
+        imports[rel_path].add(m.group(1).split('/')[-1])
+    import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+    if import_block:
+        for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+            imports[rel_path].add(m.group(1).split('/')[-1])
+
+    # Go exports (uppercase = exported)
+    for m in re.finditer(r'^func\s+(\w+)\s*\(', content, re.MULTILINE):
+        fn_name = m.group(1)
+        if fn_name[0].isupper():
+            exports[rel_path].append({
+                "name": fn_name,
+                "type": "go_exported_func",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^type\s+(\w+)\s+', content, re.MULTILINE):
+        type_name = m.group(1)
+        if type_name[0].isupper():
+            exports[rel_path].append({
+                "name": type_name,
+                "type": "go_exported_type",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^var\s+(\w+)', content, re.MULTILINE):
+        var_name = m.group(1)
+        if var_name[0].isupper():
+            exports[rel_path].append({
+                "name": var_name,
+                "type": "go_exported_var",
+                "line": content[:m.start()].count('\n') + 1
+            })
+    for m in re.finditer(r'^const\s+(\w+)', content, re.MULTILINE):
+        const_name = m.group(1)
+        if const_name[0].isupper():
+            exports[rel_path].append({
+                "name": const_name,
+                "type": "go_exported_const",
+                "line": content[:m.start()].count('\n') + 1
+            })
 
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],

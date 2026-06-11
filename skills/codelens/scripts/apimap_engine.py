@@ -17,6 +17,11 @@ Framework Detection & Route Extraction:
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
+14. Go stdlib  — http.HandleFunc, http.Handle, mux.HandleFunc
+15. Gin        — r.GET/POST/PUT/DELETE/PATCH
+16. Echo       — e.GET/POST/PUT/DELETE/PATCH
+17. Chi        — r.Get/Post/Put/Delete/Patch
+18. Fiber      — app.Get/Post/Put/Delete/Patch
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -36,7 +41,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".proto",
+    ".py", ".rs", ".go", ".vue", ".svelte", ".proto",
     ".graphql", ".gql",
 }
 
@@ -197,6 +202,11 @@ def map_api_routes(
                 if vue_routes:
                     frameworks_detected.add("vue-router")
                     routes.extend(vue_routes)
+
+            # ─── Go HTTP Routes ────────────────────────────────
+            elif ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path, frameworks_detected)
+                routes.extend(go_routes)
 
             # ─── Tauri IPC Commands ────────────────────────────
             elif ext == ".rs":
@@ -1001,6 +1011,222 @@ def _find_next_python_function(content: str, offset: int) -> str:
     m = re.search(r'def\s+(\w+)', remaining)
     if m:
         return m.group(1)
+    return "anonymous"
+
+
+def _extract_go_routes(
+    content: str, rel_path: str, frameworks: Set[str]
+) -> List[Dict[str, Any]]:
+    """Extract HTTP routes from Go source files.
+
+    Detects routes from:
+    - Standard library: http.HandleFunc, http.Handle, mux.HandleFunc, mux.Handle
+    - Gin: r.GET/POST/PUT/DELETE/PATCH, router.GET/POST/...
+    - Echo: e.GET/POST/..., echo.GET/POST/...
+    - Chi: r.Get/Post/Put/Delete/Patch, mux.Get/Post/...
+    - Fiber: app.Get/Post/Put/Delete/Patch
+    """
+    routes = []
+
+    # Detect which Go framework is in use
+    is_gin = bool(re.search(r'(?:"github\.com/gin-gonic/gin"|gin\.)', content))
+    is_echo = bool(re.search(r'(?:"github\.com/labstack/echo|echo\.)', content))
+    is_chi = bool(re.search(r'(?:"github\.com/go-chi/chi|chi\.)', content))
+    is_fiber = bool(re.search(r'(?:"github\.com/gofiber/fiber|fiber\.)', content))
+    is_stdlib = bool(re.search(r'"net/http"', content))
+
+    if is_gin:
+        frameworks.add("gin")
+    if is_echo:
+        frameworks.add("echo")
+    if is_chi:
+        frameworks.add("chi")
+    if is_fiber:
+        frameworks.add("fiber")
+    if is_stdlib and not is_gin and not is_echo and not is_chi and not is_fiber:
+        frameworks.add("go-stdlib")
+
+    # ─── Standard library: http.HandleFunc("/path", handler) ──────
+    for m in re.finditer(
+        r'(\w+)\s*\.\s*HandleFunc\s*\(\s*"([^"]+)"',
+        content
+    ):
+        obj_name = m.group(1)
+        route_path = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Infer handler from second argument
+        handler_name = _find_go_handler_name(content, m.end())
+
+        framework = "go-stdlib"
+        if obj_name not in ("http", "mux", "router", "r", "defaultMux"):
+            framework = "go-stdlib"
+
+        routes.append({
+            "method": "ANY",
+            "path": _normalize_path(route_path),
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": framework,
+        })
+
+    # ─── Standard library: http.Handle("/path", handler) ──────────
+    for m in re.finditer(
+        r'(\w+)\s*\.\s*Handle\s*\(\s*"([^"]+)"',
+        content
+    ):
+        obj_name = m.group(1)
+        route_path = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Skip if this was already caught as HandleFunc
+        already_found = any(
+            r["line"] == line_num and r["method"] == "ANY"
+            for r in routes
+        )
+        if already_found:
+            continue
+
+        handler_name = _find_go_handler_name(content, m.end())
+
+        routes.append({
+            "method": "ANY",
+            "path": _normalize_path(route_path),
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "go-stdlib",
+        })
+
+    # ─── Gin: r.GET("/path", ...), router.POST("/path", ...) ──────
+    if is_gin:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]*)"',
+            content
+        ):
+            http_method = m.group(2).upper()
+            route_path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+            handler_name = _find_go_handler_name(content, m.end())
+
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "gin",
+            })
+
+    # ─── Echo: e.GET("/path", ...), echo.POST("/path", ...) ───────
+    if is_echo:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]*)"',
+            content
+        ):
+            http_method = m.group(2).upper()
+            route_path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Avoid double-counting if Gin is also detected
+            already_found = any(
+                r["line"] == line_num and r["method"] == http_method and r["framework"] == "gin"
+                for r in routes
+            )
+            if already_found:
+                continue
+
+            handler_name = _find_go_handler_name(content, m.end())
+
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "echo",
+            })
+
+    # ─── Chi: r.Get("/path", ...), mux.Post("/path", ...) ─────────
+    if is_chi:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*"([^"]*)"',
+            content
+        ):
+            http_method = m.group(2).upper()
+            route_path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+            handler_name = _find_go_handler_name(content, m.end())
+
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "chi",
+            })
+
+    # ─── Fiber: app.Get("/path", ...), app.Post("/path", ...) ─────
+    if is_fiber:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options|Use)\s*\(\s*"([^"]*)"',
+            content
+        ):
+            http_method = m.group(2).upper()
+            if http_method == "USE":
+                http_method = "ANY"
+            route_path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+            handler_name = _find_go_handler_name(content, m.end())
+
+            routes.append({
+                "method": http_method,
+                "path": _normalize_path(route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "fiber",
+            })
+
+    return routes
+
+
+def _find_go_handler_name(content: str, offset: int) -> str:
+    """Find the handler function name after a Go route registration call.
+
+    Looks for patterns like:
+    - handlerFunc,   → handlerFunc
+    - handlerFunc)   → handlerFunc
+    - handlers.HandlerName,  → HandlerName
+    """
+    remaining = content[offset:offset + 200]
+    # Match the next identifier after the path argument (skip comma/whitespace)
+    m = re.search(r',\s*(?:\w+\s*\.\s*)?(\w+)', remaining)
+    if m:
+        name = m.group(1)
+        # Filter out obvious non-handler names
+        if name not in ("nil", "func", "true", "false"):
+            return name
     return "anonymous"
 
 

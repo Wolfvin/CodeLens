@@ -125,6 +125,37 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    # Go frameworks
+    "gin": {
+        "packages": [],
+        "go_packages": ["github.com/gin-gonic/gin"],
+        "config_files": [],
+        "indicators": []
+    },
+    "echo": {
+        "packages": [],
+        "go_packages": ["github.com/labstack/echo"],
+        "config_files": [],
+        "indicators": []
+    },
+    "chi": {
+        "packages": [],
+        "go_packages": ["github.com/go-chi/chi"],
+        "config_files": [],
+        "indicators": []
+    },
+    "fiber": {
+        "packages": [],
+        "go_packages": ["github.com/gofiber/fiber"],
+        "config_files": [],
+        "indicators": []
+    },
+    "gorm": {
+        "packages": [],
+        "go_packages": ["gorm.io/gorm", "github.com/jinzhu/gorm"],
+        "config_files": [],
+        "indicators": []
+    },
     # RPC / API frameworks
     "trpc": {
         "packages": ["@trpc/server", "@trpc/client"],
@@ -326,6 +357,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_rust_backend": False,
+        "has_go_backend": False,
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
@@ -545,6 +577,76 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_rust_backend"] and cargo_deps:
         detected["has_rust_backend"] = True
 
+    # 4b. Detect Go project
+    go_mod_path = os.path.join(workspace, "go.mod")
+    go_files_found = False
+    if os.path.exists(go_mod_path):
+        detected["has_go_backend"] = True
+        if "go" not in detected["frameworks"]:
+            detected["frameworks"].append("go")
+        # Parse module path from go.mod
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip().startswith('module '):
+                        detected["go_module"] = line.strip().split(' ', 1)[1].strip()
+                        break
+        except IOError:
+            pass
+    else:
+        # Check for .go files as fallback
+        for root, dirs, files in os.walk(workspace):
+            rel_root = os.path.relpath(root, workspace)
+            if should_ignore_dir(rel_root):
+                dirs.clear()
+                continue
+            for f in files:
+                if f.endswith('.go'):
+                    go_files_found = True
+                    break
+            if go_files_found:
+                break
+        if go_files_found:
+            detected["has_go_backend"] = True
+            if "go" not in detected["frameworks"]:
+                detected["frameworks"].append("go")
+
+    # 4c. Parse go.mod for Go framework dependencies
+    if detected.get("has_go_backend") and os.path.exists(go_mod_path):
+        go_deps = set()
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                in_require = False
+                for line in f:
+                    stripped = line.strip()
+                    if stripped == 'require (':
+                        in_require = True
+                        continue
+                    if stripped == ')' and in_require:
+                        in_require = False
+                        continue
+                    if in_require:
+                        parts = stripped.split()
+                        if parts:
+                            go_deps.add(parts[0].lower())
+                    elif stripped.startswith('require '):
+                        # Single-line require: require "pkg" v1.0.0
+                        parts = stripped.split()
+                        if len(parts) >= 2:
+                            go_deps.add(parts[1].lower())
+        except IOError:
+            pass
+
+        # Check go deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            go_pkgs = sig.get("go_packages", [])
+            for pkg_name in go_pkgs:
+                if pkg_name.lower() in go_deps:
+                    detected["frameworks"].append(fw_name)
+                    break
+
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
@@ -705,6 +807,13 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # Go backend — add Go-specific paths and ignore patterns
+    if fw.get("has_go_backend"):
+        config["backend_paths"].extend(["cmd/", "internal/", "pkg/", "api/", "handlers/", "services/", "repository/"])
+        # Go vendor directory should be ignored
+        if "vendor/" not in config.get("ignore", []):
+            config.setdefault("ignore", []).append("vendor/")
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

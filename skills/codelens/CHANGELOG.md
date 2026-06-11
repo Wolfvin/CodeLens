@@ -5,6 +5,33 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.1] — 2026-06-12
+
+### Added
+
+- **Full Go language support**: CodeLens now supports Go as a first-class language with 11 total supported languages.
+  - **Go fallback parser** (`scripts/parsers/fallback_go.py`): Regex-based Go parser that extracts functions, methods (with receiver), structs, interfaces, type aliases, imports, package clauses, and call edges. Handles Go-specific syntax like `func (r *Receiver) Name()`.
+  - **Go outline support** (`scripts/outline_engine.py`): New `_outline_go()` function extracts functions (with method/receiver info), structs, interfaces, type aliases, imports, exports (uppercase = exported), and package-level variables/constants.
+  - **Go framework detection** (`scripts/framework_detect.py`): Detects Go projects via `go.mod` or `.go` file presence. Parses `go.mod` for module path and dependencies. New framework signatures: `gin`, `echo`, `chi`, `fiber`, `gorm`. New `has_go_backend` flag. Go-specific backend paths (`cmd/`, `internal/`, `pkg/`, `api/`, etc.) and vendor/ ignore pattern.
+  - **Go scan support** (`scripts/commands/scan.py`): Go files are now discovered, parsed, and included in the backend registry. New `go` category in `files_scanned` and `go_parsed` count.
+  - **Go entrypoint detection** (`scripts/entrypoints_engine.py`): Detects `func main()`, `func init()`, `func Test*(t *testing.T)`, `func Benchmark*(b *testing.B)`, and Go CLI flag patterns.
+  - **Go API route detection** (`scripts/apimap_engine.py`): New `_extract_go_routes()` function supporting 5 Go HTTP frameworks: stdlib `net/http`, Gin, Echo, Chi, and Fiber. Detects framework from import paths.
+  - **Go test mapping** (`scripts/testmap_engine.py`): Detects `*_test.go` test files, `func Test*`/`func Benchmark*`/`func Example*`/`func Fuzz*` test functions, and precise `foo.go` → `foo_test.go` source-to-test mapping.
+  - **Go environment audit** (`scripts/envcheck_engine.py`): New `_extract_go_env_refs()` detects `os.Getenv()`, `os.LookupEnv()`, `viper.GetString()`, and env var fallback patterns.
+  - **Go config drift** (`scripts/configdrift_engine.py`): Detects Go project type via `go.mod`, parses `require (...)` blocks for declared dependencies, and classifies Go imports as external/stdlib/relative.
+  - **Go data flow analysis** (`scripts/dataflow_engine.py`): Added Go source patterns (os.Getenv, os.Args, flag.String, http responses, gin/echo context params) and sink patterns (db.Exec, os.Create, exec.Command, template.Execute).
+  - **Go dead code detection** (`scripts/deadcode_engine.py`): Added Go to unreachable code detection, new `_collect_go_exports_imports()` for Go export/import tracking (uppercase = exported).
+  - **Go ownership tracking** (`scripts/ownership_engine.py`): Added `func` pattern to function search regex, added `.go: 1` to key file priorities.
+  - **Go context analysis** (`scripts/context_engine.py`): Added Go import extraction (single and block imports) to `_get_file_imports()`.
+  - **Go smell detection** (`scripts/smell_engine.py`): Added Go-specific function extraction (`func` keyword), deep nesting (tab-based), and parameter count patterns.
+  - **Go workspace auto-detect** (`scripts/codelens.py`): Added `.go` to the workspace auto-detection fallback chain.
+  - **`.go` added to all engine extension sets**: SOURCE_EXTENSIONS in complexity, deadcode, entrypoints, perfhints, secrets, statemap, configdrift, dataflow, typeinfer, sideeffect, envcheck, ownership, testmap, apimap engines. Also in outline, validate, search, utils, and convention engines.
+
+### Fixed
+
+- **Svelte/Vue outline KeyError** (`scripts/outline_engine.py`): Fixed `KeyError: 'classes'` crash when scanning Svelte or Vue files. The `_outline_vue()` and `_outline_svelte()` functions created `script` dicts without a `classes` key, but `_extract_js_outline_regex()` tried to append to `outline["classes"]`. Added `classes` key to both outline templates.
+- **Performance: safe_read_file in smell_engine** (`scripts/smell_engine.py`): Replaced raw `open()/read()` calls with `safe_read_file()` which skips files over 200KB and minified/bundled files. This prevents timeouts on repos with large generated files.
+
 ## [5.8.0] — 2026-06-12
 
 ### Added

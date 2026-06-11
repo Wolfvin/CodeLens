@@ -23,7 +23,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less", ".html"
+    ".py", ".rs", ".go", ".vue", ".svelte", ".css", ".scss", ".less", ".html"
 }
 
 
@@ -438,7 +438,8 @@ def _find_function(workspace: str, function_name: str, file_path: Optional[str] 
                 r'(?:function\s+' + re.escape(function_name) +
                 r'|(?:const|let|var)\s+' + re.escape(function_name) +
                 r'\s*=|def\s+' + re.escape(function_name) +
-                r'|(?:pub\s+)?fn\s+' + re.escape(function_name) + r')\s*[\(=]',
+                r'|(?:pub\s+)?fn\s+' + re.escape(function_name) +
+                r'|func\s+' + re.escape(function_name) + r')\s*[\(=]',
                 content
             ):
                 line_num = content[:m.start()].count('\n') + 1
@@ -530,7 +531,7 @@ def _compute_age_analysis(blame_data: List[Dict]) -> Dict[str, Any]:
 def _find_key_files(workspace: str) -> List[str]:
     """Find key source files in the workspace for sampling."""
     key_files = []
-    priorities = {".py": 1, ".rs": 1, ".ts": 2, ".tsx": 2, ".js": 3, ".jsx": 3}
+    priorities = {".py": 1, ".rs": 1, ".go": 1, ".ts": 2, ".tsx": 2, ".js": 3, ".jsx": 3}
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]

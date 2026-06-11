@@ -70,6 +70,8 @@ def get_file_outline(
         outline = _outline_vue(content, detail_level)
     elif ext == '.svelte':
         outline = _outline_svelte(content, detail_level)
+    elif ext == '.go':
+        outline = _outline_go(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -103,7 +105,7 @@ def get_workspace_outline(
             ignore_dirs.add(p.rstrip("/"))
 
     source_extensions = {
-        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py',
+        '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
         '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
     }
 
@@ -320,7 +322,7 @@ def _outline_css(content: str, detail: str) -> Dict:
 def _outline_vue(content: str, detail: str) -> Dict:
     """Outline for Vue SFC files."""
     import re
-    outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "exports": []}, "style": {"selectors": []}}
+    outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     # Split sections
     template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
@@ -352,7 +354,7 @@ def _outline_vue(content: str, detail: str) -> Dict:
 def _outline_svelte(content: str, detail: str) -> Dict:
     """Outline for Svelte component files."""
     import re
-    outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "exports": []}, "style": {"selectors": []}}
+    outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
     style_match = re.search(r'<style[^>]*>(.*?)</style>', content, re.DOTALL)
@@ -378,6 +380,114 @@ def _outline_svelte(content: str, detail: str) -> Dict:
     if style_match:
         css_outline = _outline_css(style_match.group(1), detail)
         outline["style"]["selectors"] = css_outline.get("selectors", [])
+
+    return outline
+
+
+def _outline_go(content: str, detail: str) -> Dict:
+    """Outline for Go source files."""
+    import re
+    outline = {
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "types": [],
+        "imports": [],
+        "exports": [],
+        "variables": [],
+    }
+
+    # Package detection
+    pkg_match = re.search(r'^package\s+(\w+)', content, re.MULTILINE)
+    if pkg_match:
+        outline["package"] = pkg_match.group(1)
+
+    # Import extraction (both single and block imports)
+    import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
+    if import_block:
+        for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
+            outline["imports"].append({"text": m.group(1)})
+    else:
+        single_import = re.search(r'import\s+"([^"]+)"', content)
+        if single_import:
+            outline["imports"].append({"text": single_import.group(1)})
+
+    lines = content.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Function declarations (with optional receiver)
+        m = re.match(r'^func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(', stripped)
+        if m:
+            fn_name = m.group(1)
+            is_method = bool(re.match(r'^func\s+\(', stripped))
+            receiver = None
+            if is_method:
+                recv_match = re.match(r'^func\s+\(\s*\w+\s+(?:\*?)(\w+)\s*\)', stripped)
+                if recv_match:
+                    receiver = recv_match.group(1)
+            
+            # Check if exported (starts with uppercase)
+            is_exported = fn_name[0].isupper() if fn_name else False
+            
+            entry = {"name": fn_name, "line": line_num, "method": is_method}
+            if receiver:
+                entry["receiver"] = receiver
+            outline["functions"].append(entry)
+            
+            if is_exported:
+                outline["exports"].append({"name": fn_name, "line": line_num, "kind": "function"})
+            continue
+
+        # Struct declarations
+        m = re.match(r'^type\s+(\w+)\s+struct\s*\{', stripped)
+        if m:
+            type_name = m.group(1)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["classes"].append({"name": type_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "struct"})
+            continue
+
+        # Interface declarations
+        m = re.match(r'^type\s+(\w+)\s+interface\s*\{', stripped)
+        if m:
+            type_name = m.group(1)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["interfaces"].append({"name": type_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "interface"})
+            continue
+
+        # Type aliases
+        m = re.match(r'^type\s+(\w+)\s+(?!struct\b|interface\b)(\w[\w.]*)\s*$', stripped)
+        if m:
+            type_name = m.group(1)
+            alias_of = m.group(2)
+            is_exported = type_name[0].isupper() if type_name else False
+            outline["types"].append({"name": type_name, "alias_of": alias_of, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": type_name, "line": line_num, "kind": "type"})
+            continue
+
+        # Package-level var declarations
+        m = re.match(r'^var\s+(\w+)', stripped)
+        if m:
+            var_name = m.group(1)
+            is_exported = var_name[0].isupper() if var_name else False
+            outline["variables"].append({"name": var_name, "line": line_num})
+            if is_exported:
+                outline["exports"].append({"name": var_name, "line": line_num, "kind": "var"})
+            continue
+
+        # Package-level const declarations
+        m = re.match(r'^const\s+(\w+)', stripped)
+        if m:
+            const_name = m.group(1)
+            is_exported = const_name[0].isupper() if const_name else False
+            outline["variables"].append({"name": const_name, "line": line_num, "const": True})
+            if is_exported:
+                outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
 
     return outline
 
@@ -769,7 +879,7 @@ def _detect_language(ext: str) -> str:
     mapping = {
         '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
         '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'tsx',
-        '.rs': 'rust', '.py': 'python',
+        '.rs': 'rust', '.py': 'python', '.go': 'go',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
         '.vue': 'vue', '.svelte': 'svelte'

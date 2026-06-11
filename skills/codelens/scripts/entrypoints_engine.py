@@ -28,7 +28,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
+    ".py", ".rs", ".go", ".vue", ".svelte",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -75,6 +75,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "rust_main_fn",
+            },
+            # Go
+            {
+                "regex": r'func\s+main\s*\(',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "go_main_fn",
+            },
+            # Go init
+            {
+                "regex": r'func\s+init\s*\(',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "go_init_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -397,6 +413,14 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "structopt_parser",
             },
+            # Go flag.String / flag.Bool / flag.Int
+            {
+                "regex": r'flag\.(?:String|Bool|Int|Int64|Uint|Uint64|Float64|Duration|Var)\s*\(',
+                "language": {".go"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "go_flag",
+            },
         ],
     },
 
@@ -668,6 +692,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 1,
                 "label": "rust_tokio_test",
+            },
+            # Go Test\*
+            {
+                "regex": r'func\s+(Test\w+)\s*\(\s*\w+\s+\*?testing\.T\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_test",
+            },
+            # Go Benchmark\*
+            {
+                "regex": r'func\s+(Benchmark\w+)\s*\(\s*\w+\s+\*?testing\.B\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_benchmark",
             },
         ],
     },

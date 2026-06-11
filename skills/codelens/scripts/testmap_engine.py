@@ -19,12 +19,13 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
 TEST_FILE_PATTERNS = [
     r'\.test\.(?:js|ts|tsx|jsx|mjs)$',
     r'\.spec\.(?:js|ts|tsx|jsx|mjs)$',
     r'_test\.(?:py|rs)$',
+    r'_test\.go$',
     r'test_(\w+)\.py$',
     r'/__tests__/',
     r'/tests/',
@@ -207,6 +208,22 @@ def _parse_source_file(content: str, ext: str, rel_path: str) -> Dict:
         for m in re.finditer(r'use\s+([^;]+);', content):
             imports.append(m.group(1).strip())
 
+    elif ext == ".go":
+        # Go functions (skip test/benchmark functions in source files)
+        for m in re.finditer(r'func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(', content):
+            name = m.group(1)
+            if not name.startswith(('Test', 'Benchmark', 'Example', 'Fuzz')):
+                functions.append(name)
+
+        # Go imports
+        for m in re.finditer(r'import\s+(?:"([^"]+)"|\(([^)]+)\))', content, re.DOTALL):
+            if m.group(1):
+                imports.append(m.group(1))
+            elif m.group(2):
+                # Multi-line import block
+                for imp_m in re.finditer(r'"([^"]+)"', m.group(2)):
+                    imports.append(imp_m.group(1))
+
     return {"functions": functions, "imports": imports}
 
 
@@ -250,6 +267,41 @@ def _parse_test_file(content: str, ext: str, rel_path: str) -> Dict:
         for m in re.finditer(r'#\[test\]\s*(?:\n\s*#\[.*\]\s*)*\s*fn\s+(\w+)', content):
             test_names.append(m.group(1))
 
+    elif ext == ".go":
+        # Go test functions: func TestXxx(t *testing.T)
+        for m in re.finditer(r'func\s+(Test\w+)\s*\([^)]*\*testing\.T\)', content):
+            test_names.append(m.group(1))
+            # Extract the function being tested from TestXxx
+            tested_name = m.group(1)[4:]  # Strip "Test" prefix
+            if tested_name:
+                # Try both PascalCase and camelCase variants
+                tested_functions.add(tested_name)
+                tested_functions.add(tested_name[0].lower() + tested_name[1:])
+
+        # Go benchmark functions: func BenchmarkXxx(b *testing.B)
+        for m in re.finditer(r'func\s+(Benchmark\w+)\s*\([^)]*\*testing\.B\)', content):
+            test_names.append(m.group(1))
+            bench_name = m.group(1)[9:]  # Strip "Benchmark" prefix
+            if bench_name:
+                tested_functions.add(bench_name)
+                tested_functions.add(bench_name[0].lower() + bench_name[1:])
+
+        # Go example functions: func ExampleXxx()
+        for m in re.finditer(r'func\s+(Example\w+)\s*\(', content):
+            test_names.append(m.group(1))
+
+        # Go fuzz functions: func FuzzXxx(f *testing.F)
+        for m in re.finditer(r'func\s+(Fuzz\w+)\s*\([^)]*\*testing\.F\)', content):
+            test_names.append(m.group(1))
+
+        # Go imports
+        for m in re.finditer(r'import\s+(?:"([^"]+)"|\(([^)]+)\))', content, re.DOTALL):
+            if m.group(1):
+                imports.append(m.group(1))
+            elif m.group(2):
+                for imp_m in re.finditer(r'"([^"]+)"', m.group(2)):
+                    imports.append(imp_m.group(1))
+
     return {
         "test_names": test_names,
         "imports": imports,
@@ -270,7 +322,14 @@ def _find_tests_for_function(
     for test_path, test_info in test_files.items():
         # Strategy 1: File name matching (auth.test.ts → auth.ts)
         test_basename = os.path.basename(test_path)
-        if src_basename in test_basename:
+        # Go: precise mapping foo.go → foo_test.go (same directory)
+        if src_path.endswith('.go'):
+            src_dir = os.path.dirname(src_path)
+            test_dir = os.path.dirname(test_path)
+            if src_dir == test_dir and test_basename == f"{src_basename}_test.go":
+                matches.append(test_path)
+                continue
+        elif src_basename in test_basename:
             matches.append(test_path)
             continue
 
@@ -363,8 +422,8 @@ def _find_orphan_tests(
 
     for test_path in test_files:
         test_basename = os.path.splitext(os.path.basename(test_path))[0]
-        # Remove .test/.spec suffix
-        base_name = re.sub(r'\.(test|spec)$', '', test_basename)
+        # Remove .test/.spec suffix (JS/TS) or _test suffix (Go/Rust/Python)
+        base_name = re.sub(r'(?:\.(test|spec)|_test)$', '', test_basename)
 
         has_source = False
         for src_path in source_files:

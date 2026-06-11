@@ -64,10 +64,13 @@ SOURCE_PATTERNS = {
             r"std::env::var",
             r"dotenv::var",
             r"env!\(",
+            r"os\.Getenv",
+            r"os\.LookupEnv",
+            r"viper\.GetString",
         ],
         "label": "env_var",
         "severity": "low",
-        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs"}
+        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs", ".go"}
     },
     # File system reads
     "file_reads": {
@@ -92,10 +95,30 @@ SOURCE_PATTERNS = {
             r"resp\.body",
             r"HttpResponse",
             r"reqwest::get",
+            r"http\.Get",
+            r"http\.Post",
         ],
         "label": "api_response",
         "severity": "medium",
-        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs"}
+        "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs", ".py", ".rs", ".go"}
+    },
+
+    # Go user input
+    "go_user_input": {
+        "patterns": [
+            r"os\.Args",
+            r"flag\.(?:String|Bool|Int|Int64)\s*\(",
+            r"r\.URL\.Query",
+            r"r\.FormValue",
+            r"r\.PostFormValue",
+            r"c\.Param\s*\(",
+            r"c\.Query\s*\(",
+            r"c\.PostForm\s*\(",
+            r"c\.Bind\s*\(",
+        ],
+        "label": "user_input",
+        "severity": "high",
+        "languages": {".go"}
     },
 }
 
@@ -129,6 +152,9 @@ SINK_PATTERNS = {
             r"\{\!\s*\w+\s*!\}",  # Unescaped template
             r"res\.(?:send|write|end)\s*\(",
             r"response\.(?:write|send)\s*\(",
+            r"fmt\.Fprintf\s*\(\s*w\s*,",
+            r"w\.Write\s*\(",
+            r"template\.Execute\s*\(",
         ],
         "label": "html_output",
         "severity": "critical",
@@ -148,6 +174,7 @@ SINK_PATTERNS = {
             r"subprocess\.(?:call|run|Popen)",
             r"Command::new",
             r"std::process::Command",
+            r"exec\.Command\s*\(",
         ],
         "label": "command_execution",
         "severity": "critical",
@@ -162,6 +189,9 @@ SINK_PATTERNS = {
             r"open\s*\([^)]*['\"]w",
             r"std::fs::write",
             r"File::create",
+            r"os\.Create\s*\(",
+            r"os\.WriteFile\s*\(",
+            r"ioutil\.WriteFile\s*\(",
         ],
         "label": "file_write",
         "severity": "high",
@@ -264,7 +294,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
 
 def trace_dataflow(

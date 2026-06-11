@@ -43,7 +43,7 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".html", ".vue", ".svelte",
+    ".py", ".rs", ".go", ".html", ".vue", ".svelte",
     ".json", ".yaml", ".yml",
 }
 

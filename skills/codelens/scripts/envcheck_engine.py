@@ -37,7 +37,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
+    ".py", ".rs", ".go", ".vue", ".svelte",
 }
 
 ENV_FILE_PATTERNS = {
@@ -118,6 +118,9 @@ def check_env_vars(
 
                 elif ext == ".rs":
                     _extract_rust_env_refs(content, rel_path, env_vars)
+
+                elif ext == ".go":
+                    _extract_go_env_refs(content, rel_path, env_vars)
 
             # ─── .env file scanning ───────────────────────
             elif filename in ENV_FILE_PATTERNS or filename.startswith('.env'):
@@ -392,6 +395,42 @@ def _extract_rust_env_refs(
         for m in re.finditer(r'option_env!\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
             _register_env_ref(
                 env_vars, m.group(1), rel_path, i + 1, line.strip(), True
+            )
+
+
+# ─── Go Env Var Extraction ────────────────────────────────────
+
+def _extract_go_env_refs(
+    content: str, rel_path: str, env_vars: Dict[str, Dict[str, Any]]
+):
+    """Extract environment variable references from Go source files."""
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('//'):
+            continue
+
+        # os.Getenv("VAR")
+        for m in re.finditer(r'os\.Getenv\s*\(\s*"([^"]+)"', line):
+            has_fallback = 'if' in line[:m.start()] or ', ok' in line or 'else' in line[m.end():]
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), has_fallback
+            )
+
+        # os.LookupEnv("VAR")
+        for m in re.finditer(r'os\.LookupEnv\s*\(\s*"([^"]+)"', line):
+            # LookupEnv returns (value, ok) — typically has fallback via ok check
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), True
+            )
+
+        # viper.GetString("VAR") and similar viper methods
+        for m in re.finditer(r'viper\.GetString\s*\(\s*"([^"]+)"', line):
+            _register_env_ref(
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), False
             )
 
 
