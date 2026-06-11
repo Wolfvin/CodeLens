@@ -204,31 +204,25 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
-            # ─── Tauri IPC invoke() calls ─────────────────────
+            # ─── Tauri IPC ─────────────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                tauri_ipc_routes = _extract_tauri_ipc_calls(content, rel_path)
-                if tauri_ipc_routes:
-                    frameworks_detected.add("tauri_ipc")
-                    routes.extend(tauri_ipc_routes)
+                tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
 
-            # ─── Tauri #[tauri::command] handlers ─────────────
+            # ─── Tauri IPC (Rust side) ─────────────────────────
             if ext == ".rs":
-                tauri_cmd_routes = _extract_tauri_rust_commands(content, rel_path)
-                if tauri_cmd_routes:
-                    frameworks_detected.add("tauri_ipc")
-                    routes.extend(tauri_cmd_routes)
+                tauri_rs_routes = _extract_tauri_rust_commands(content, rel_path)
+                if tauri_rs_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_rs_routes)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
         frameworks_detected.add("sveltekit")
         routes.extend(sveltekit_routes)
-
-    # ─── Tauri IPC routes ─────────────────────────────────────
-    tauri_routes = _detect_tauri_ipc_routes(workspace)
-    if tauri_routes:
-        frameworks_detected.add("tauri_ipc")
-        routes.extend(tauri_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -306,239 +300,6 @@ def map_api_routes(
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
     }
-
-
-# ─── Tauri IPC Routes ─────────────────────────────────────────
-
-def _detect_tauri_ipc_routes(workspace: str) -> List[Dict[str, Any]]:
-    """Detect Tauri IPC commands from Rust backend and JS/TS frontend.
-
-    Tauri uses Rust functions annotated with ``#[tauri::command]`` that are
-    invoked from JavaScript via ``invoke("command_name")``.  This scanner:
-
-    1. Detects if the workspace is a Tauri project (src-tauri/tauri.conf.json
-       or src-tauri/Cargo.toml with a tauri dependency).
-    2. Walks Rust files for ``#[tauri::command]`` annotated functions and
-       extracts the function name as the IPC command name.
-    3. Walks JS/TS files for ``invoke("command_name")`` calls and links them
-       to the Rust commands.
-
-    Returns:
-        List of route dicts with type "tauri_ipc".
-    """
-    routes: List[Dict[str, Any]] = []
-
-    # ── Step 1: Check if this is a Tauri project ───────────────
-    is_tauri = False
-    tauri_src_dir = os.path.join(workspace, "src-tauri")
-    tauri_conf = os.path.join(tauri_src_dir, "tauri.conf.json")
-    tauri_cargo = os.path.join(tauri_src_dir, "Cargo.toml")
-
-    if os.path.isfile(tauri_conf):
-        is_tauri = True
-    elif os.path.isfile(tauri_cargo):
-        try:
-            with open(tauri_cargo, 'r', encoding='utf-8', errors='ignore') as f:
-                cargo_content = f.read()
-            if 'tauri' in cargo_content:
-                is_tauri = True
-        except IOError:
-            pass
-
-    # Also check for tauri.conf.json nested deeper (monorepo)
-    if not is_tauri:
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            if '.codelens' in root:
-                dirs.clear()
-                continue
-            for fn in filenames:
-                if fn == 'tauri.conf.json':
-                    is_tauri = True
-                    # Remember the parent as the tauri src dir
-                    tauri_src_dir = os.path.dirname(root)
-                    break
-            if is_tauri:
-                break
-
-    if not is_tauri:
-        return routes
-
-    # ── Step 2: Scan Rust files for #[tauri::command] ──────────
-    # Map: command_name → { file, line, fn_name }
-    rust_commands: Dict[str, Dict[str, Any]] = {}
-
-    rust_extensions = {".rs"}
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in rust_extensions:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
-
-            # Find #[tauri::command] followed by a function definition
-            # Pattern matches:
-            #   #[tauri::command]
-            #   fn my_command(...) -> ...
-            for m in re.finditer(
-                r'#\[tauri::command\]\s*(?:\n\s*(?:#\[.*\]\s*\n\s*)*)?(?:pub\s+)?fn\s+(\w+)',
-                content
-            ):
-                fn_name = m.group(1)
-                line_num = content[:m.start()].count('\n') + 1
-
-                # Tauri uses snake_case command names by default, but the
-                # invoke() call uses camelCase.  Store both forms.
-                camel_name = _snake_to_camel(fn_name)
-
-                rust_commands[fn_name] = {
-                    "file": rel_path,
-                    "line": line_num,
-                    "fn_name": fn_name,
-                    "camel_name": camel_name,
-                }
-
-                rust_commands[camel_name] = {
-                    "file": rel_path,
-                    "line": line_num,
-                    "fn_name": fn_name,
-                    "camel_name": camel_name,
-                }
-
-    # ── Step 3: Scan JS/TS files for invoke() calls ────────────
-    js_invokes: Dict[str, List[Dict[str, Any]]] = {}  # command_name → [{file, line}]
-
-    js_extensions = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in js_extensions:
-                continue
-
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip files in src-tauri (those are Rust-side, not JS consumers)
-            if 'src-tauri' in rel_path:
-                continue
-
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
-
-            # Match invoke("command_name") or invoke('command_name')
-            # Also match invoke({ cmd: "command_name" }) for older Tauri versions
-            for inv_m in re.finditer(
-                r'invoke\s*\(\s*["\'](\w+)["\']', content
-            ):
-                cmd_name = inv_m.group(1)
-                line_num = content[:inv_m.start()].count('\n') + 1
-                js_invokes.setdefault(cmd_name, []).append({
-                    "file": rel_path,
-                    "line": line_num,
-                })
-
-            # Also match invoke({ cmd: "command_name" })
-            for inv_m in re.finditer(
-                r'invoke\s*\(\s*\{\s*cmd\s*:\s*["\'](\w+)["\']', content
-            ):
-                cmd_name = inv_m.group(1)
-                line_num = content[:inv_m.start()].count('\n') + 1
-                js_invokes.setdefault(cmd_name, []).append({
-                    "file": rel_path,
-                    "line": line_num,
-                })
-
-    # ── Step 4: Build route entries ─────────────────────────────
-    # Use the snake_case Rust fn names as canonical keys to avoid duplicates
-    seen_fn_names: Set[str] = set()
-    for cmd_key, cmd_info in rust_commands.items():
-        fn_name = cmd_info["fn_name"]
-        if fn_name in seen_fn_names:
-            continue
-        seen_fn_names.add(fn_name)
-
-        # Find JS callers for both snake_case and camelCase forms
-        callers = []
-        for caller in js_invokes.get(fn_name, []):
-            callers.append(caller)
-        for caller in js_invokes.get(cmd_info["camel_name"], []):
-            callers.append(caller)
-
-        route = {
-            "method": "IPC",
-            "path": f"tauri://ipc/{fn_name}",
-            "handler_name": fn_name,
-            "file": cmd_info["file"],
-            "line": cmd_info["line"],
-            "type": "tauri_ipc",
-            "middleware_chain": [],
-            "auth_protected": False,
-            "request_type": "TauriInvoke",
-            "response_type": "TauriResult",
-            "js_callers": callers,
-        }
-        routes.append(route)
-
-    # Add invoke() calls that don't match any known Rust command
-    matched_cmds: Set[str] = set()
-    for cmd_key in rust_commands:
-        info = rust_commands[cmd_key]
-        matched_cmds.add(info["fn_name"])
-        matched_cmds.add(info["camel_name"])
-
-    for cmd_name, callers in js_invokes.items():
-        if cmd_name in matched_cmds:
-            continue
-        for caller in callers:
-            route = {
-                "method": "IPC",
-                "path": f"tauri://ipc/{cmd_name}",
-                "handler_name": f"(unresolved: {cmd_name})",
-                "file": caller["file"],
-                "line": caller["line"],
-                "type": "tauri_ipc",
-                "middleware_chain": [],
-                "auth_protected": False,
-                "request_type": "TauriInvoke",
-                "response_type": "unknown",
-                "js_callers": [caller],
-            }
-            routes.append(route)
-
-    return routes
-
-
-def _snake_to_camel(name: str) -> str:
-    """Convert a snake_case name to camelCase.
-
-    Examples:
-        get_user_name → getUserName
-        my_command → myCommand
-        already → already
-    """
-    parts = name.split('_')
-    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
 
 
 # ─── JS Route Extraction ───────────────────────────────────────
@@ -2399,98 +2160,93 @@ def _generate_recommendations(
     return recommendations
 
 
-# ─── Tauri IPC Detection ──────────────────────────────────────
+# ─── Tauri IPC Route Extraction ────────────────────────────────
 
-def _extract_tauri_ipc_calls(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract Tauri IPC invoke() call sites from TypeScript/JavaScript files.
+def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC invoke() calls from TypeScript/JavaScript frontend code.
 
     Detects patterns like:
-    - invoke('getProfiles')
-    - invoke<string>('getProfiles')
-    - invoke("getProfiles")
+    - invoke('commandName')
+    - invoke<Type>('commandName')
+    - await invoke('commandName', { args })
 
-    Each invoke() call is recorded as an IPC_CALL route, which can then be
-    matched against Rust #[tauri::command] handlers by the edge resolver.
+    These represent the frontend side of Tauri's IPC bridge, where the
+    TypeScript code calls a Rust #[tauri::command] handler.
     """
     routes = []
 
-    # Match invoke('commandName') or invoke<string>('commandName')
-    # The command name is always the first string argument
-    invoke_pattern = re.compile(
-        r'invoke\s*(?:<[^>]*>)?\s*\(\s*["\']([a-zA-Z_][a-zA-Z0-9_]*)["\']',
-        re.MULTILINE
-    )
-
-    for match in invoke_pattern.finditer(content):
-        cmd_name = match.group(1)
-        line = content[:match.start()].count('\n') + 1
+    # Pattern: invoke('commandName') or invoke<Type>('commandName')
+    for m in re.finditer(
+        r"invoke(?:<[^>]*>)?\s*\(\s*['\"]([a-zA-Z_]\w*)['\"]",
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
 
         routes.append({
             "method": "IPC_CALL",
-            "path": f"ipc://{cmd_name}",
-            "handler_name": cmd_name,
-            "handler_name_ipc": cmd_name,  # camelCase name as used in invoke()
+            "path": f"ipc://{command_name}",
+            "handler_name": command_name,
+            "handler_name_ipc": command_name,  # camelCase as used in invoke()
             "file": rel_path,
-            "line": line,
+            "line": line_num,
             "middleware_chain": [],
-            "auth_protected": False,
-            "deprecated": False,
+            "request_type": None,
+            "response_type": None,
+            "framework": "tauri",
         })
 
     return routes
 
 
 def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract Rust #[tauri::command] function declarations.
+    """Extract Tauri #[tauri::command] declarations from Rust backend code.
 
-    These are the Rust-side handlers that respond to IPC invoke() calls
-    from the frontend. Each command is recorded as an IPC_HANDLER route.
+    Detects patterns like:
+    - #[tauri::command]\npub fn command_name(...)
+    - #[tauri::command]\nasync fn command_name(...)
 
-    Also detects:
-    - #[tauri::command(rename_all = "snake_case")] — custom naming
-    - pub async fn command_name() — async Tauri commands
+    These represent the Rust side of Tauri's IPC bridge — the handlers
+    that the frontend calls via invoke().
     """
     routes = []
 
-    # Match #[tauri::command(...)] followed by fn declaration
-    # Handle multi-line attribute + fn
-    tauri_cmd_pattern = re.compile(
-        r'#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)',
-        re.MULTILINE
-    )
+    # Pattern: #[tauri::command] followed by fn declaration within 5 lines
+    for m in re.finditer(r'#\[tauri::command', content):
+        # Find the fn declaration after this attribute
+        search_start = m.end()
+        search_text = content[search_start:search_start + 200]
 
-    for match in tauri_cmd_pattern.finditer(content):
-        fn_name = match.group(1)
-        line = content[:match.start()].count('\n') + 1
+        fn_match = re.search(
+            r'(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_]\w*)',
+            search_text
+        )
+        if fn_match:
+            fn_name = fn_match.group(1)
+            # Compute actual line number
+            line_num = content[:m.start()].count('\n') + 1
 
-        # Convert snake_case Rust name to camelCase IPC name
-        # (Tauri's default naming convention)
-        ipc_name = _snake_to_camel(fn_name)
+            # Convert snake_case Rust name to camelCase IPC name
+            ipc_name = _snake_to_camel(fn_name)
 
-        # Check for rename_all attribute
-        attr_text = match.group(0)
-        rename_match = re.search(r'rename_all\s*=\s*"([^"]+)"', attr_text)
-        naming_style = rename_match.group(1) if rename_match else "camelCase"
-
-        routes.append({
-            "method": "IPC_HANDLER",
-            "path": f"ipc://{ipc_name}",
-            "handler_name": fn_name,
-            "handler_name_ipc": ipc_name,
-            "file": rel_path,
-            "line": line,
-            "middleware_chain": [],
-            "auth_protected": False,
-            "deprecated": False,
-            "naming_style": naming_style,
-            "rust_fn_name": fn_name,
-        })
+            routes.append({
+                "method": "IPC",
+                "path": f"ipc://{ipc_name}",
+                "handler_name": fn_name,
+                "handler_name_ipc": ipc_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "tauri",
+            })
 
     return routes
 
 
 def _snake_to_camel(name: str) -> str:
-    """Convert snake_case to camelCase for Tauri IPC naming."""
+    """Convert snake_case Rust function name to camelCase for Tauri IPC naming."""
     if '_' not in name:
         return name
     parts = name.split('_')

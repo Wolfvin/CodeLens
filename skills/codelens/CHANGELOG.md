@@ -8,29 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [6.1.0] — 2026-06-12
 
 ### Added
-
-- **Tauri IPC route detection in `api-map`**: Automatically detects `#[tauri::command]` annotated Rust functions as IPC routes. Also scans JS/TS files for `invoke("command_name")` calls and links them to Rust handlers. Routes appear with `method: "IPC"` and `type: "tauri_ipc"`.
-- **Indonesian colloquial triggers in `ask`**: Documented Indonesian phrases ("kok lama ya", "aneh nih", "bantu cek", "aman ga", etc.) now actually work in the `ask` command's keyword matching and pattern routing.
-- **`--full` flag for scan command**: Force full rescan even when a registry exists. Usage: `codelens scan --full`. Clears existing registry files before scanning.
-- **`scan_binary_artifacts()` utility**: New function in `utils.py` that scans workspaces for binary/compiled artifacts (`.so`, `.dll`, `.exe`, `.wasm`, `.pyc`, `.class`, etc.). Powers the `binary-scan` command.
-- **State-map deduplication**: Stores with the same `(name, framework)` key are now merged instead of appearing as duplicates. Additional definition sites are recorded in `also_defined_in`.
+- **Tauri IPC invoke() extraction in TSX/JS/TS parsers**: When `invoke('commandName')` is detected, the command name is extracted from the first string argument instead of treating it as a call to a function named "invoke". The edge is marked with `is_ipc_call: True` for the edge resolver.
+- **Tauri IPC direct edge resolution**: The edge resolver now handles `is_ipc_call` edges by matching the command name against the `ipc_name` index (camelCase) and via case conversion against Rust function names (snake_case). Creates `ipc_bridge` edges between TypeScript callers and Rust #[tauri::command] handlers.
+- **Tauri IPC routes in API map**: The `api-map` engine now detects both frontend `invoke('cmdName')` calls (as `IPC_CALL` routes) and Rust `#[tauri::command]` declarations (as `IPC` routes). Returns `ipc://commandName` paths.
+- **Tauri IPC Bridge section in AGENT.md/handbook**: The handbook now includes a "Tauri IPC Bridge" section showing all IPC commands, their status (active/ipc_exposed), their Rust files, and which TypeScript functions call them.
+- **_extract_invoke_command() method**: Added to TSXParser, JSBackendParser, and TSBackendParser for extracting the Tauri command name from invoke() call arguments.
+- **_extract_tauri_ipc_routes() function**: Added to apimap_engine for detecting invoke() patterns in JS/TS files.
+- **_extract_tauri_rust_commands() function**: Added to apimap_engine for detecting #[tauri::command] declarations in Rust files.
+- **_build_tauri_ipc_section() function**: Added to handbook command for building the Tauri IPC section.
 
 ### Fixed
-
-- **CRITICAL: `ask` command crash with NameError**: `search_symbols` was referenced in the fallback block but never imported, causing `NameError: name 'search_symbols' is not defined` when context lookup failed. Now uses a lazy import.
-- **CRITICAL: `binary-scan` command broken**: Referenced `scan_binary_artifacts` from `utils.py` but the function didn't exist. Added the implementation.
-- **HIGH: Handbook `quick_reference` all zeros**: When `compute_summary()` returned empty data, the handbook showed all zeros. Now falls back to loading registry files directly and counting source files from disk.
-- **MEDIUM: Flask false positive in framework detection**: Removed generic `app.py` from Flask config files. Added source-level verification that checks for actual `from flask import` statements before declaring Flask detected.
-- **MEDIUM: State-map duplicate entries**: Same store appearing multiple times across files. Now deduplicates by `(name, framework)` key, merging slices/actions/consumers.
-
-### Tested Against
-
-Real-world testing on 3 diverse open-source repositories:
-- **Tauri** (tauri-apps/tauri) — Rust + TypeScript monorepo with Svelte, Tauri IPC (4150 nodes, 99635 edges)
-- **FastAPI** (fastapi/fastapi) — Python + TypeScript hybrid (4649 nodes, 11588 edges)
-- **Nuxt** (nuxt/nuxt) — Vue SFC monorepo (1284 nodes, 18987 edges)
-
-## [6.0.0] — 2026-06-12
+- **Zero IPC bridge edges for Tauri apps**: Previously, invoke() calls were treated as calls to a function named "invoke", creating 0 IPC bridge edges. Now invoke('getProfiles') correctly creates an edge to the Rust `get_profiles` command. Verified on Clash Verge Rev (78 Tauri commands, 86 IPC bridge edges — was 0).
+- **Tauri commands incorrectly marked as "ipc_exposed"**: 77/78 commands were stuck in "ipc_exposed" status because no IPC edges connected them to callers. After the fix, 77/78 are now "active" with proper ref_count.
+- **API map empty for Tauri apps**: api-map returned 0 routes for Tauri desktop apps because no Tauri-specific patterns were detected. Now returns 162 IPC routes (84 IPC_CALL + 78 IPC) for Clash Verge Rev.
 
 ### Added
 - **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).

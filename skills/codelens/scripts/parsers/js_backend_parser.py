@@ -81,11 +81,14 @@ class JSBackendParser(BaseParser):
             # Find calls within this function's body
             fn_calls = self._find_calls_in_scope(decl["body_node"], source, file_path)
             for call_info in fn_calls:
-                edges.append({
+                edge = {
                     "from": decl["node"]["id"],
                     "to_fn": call_info["fn_name"],
                     "via_self": call_info.get("via_self", False)
-                })
+                }
+                if call_info.get("is_ipc_call"):
+                    edge["is_ipc_call"] = True
+                edges.append(edge)
 
         return {"nodes": nodes, "edges": edges}
 
@@ -151,31 +154,9 @@ class JSBackendParser(BaseParser):
             "scope_end": node.end_point.row
         }
 
-    @staticmethod
-    def _unwrap_fn_from_parens(node: Node) -> Optional[Node]:
-        """Unwrap arrow_function or function_expression from parenthesized_expression.
-
-        Handles nested parentheses: ((...args) => { ... })
-        Returns the innermost function node, or None.
-        """
-        for inner in node.children:
-            if inner.type in ('arrow_function', 'function_expression'):
-                return inner
-            elif inner.type == 'parenthesized_expression':
-                result = JSBackendParser._unwrap_fn_from_parens(inner)
-                if result:
-                    return result
-        return None
-
     def _parse_variable_declarator(self, node: Node, source: bytes,
                                     file_path: str) -> Optional[Dict]:
-        """Parse a variable_declarator that contains an arrow function or function expression.
-
-        Also handles cases where the function is wrapped in parentheses:
-            const name = ((...args) => { ... })
-        In tree-sitter, this produces a parenthesized_expression wrapping
-        the arrow_function, so we need to look inside it.
-        """
+        """Parse a variable_declarator that contains an arrow function or function expression."""
         name_node = None
         value_node = None
         is_async = False
@@ -189,13 +170,6 @@ class JSBackendParser(BaseParser):
                 for vc in child.children:
                     if vc.type == 'async':
                         is_async = True
-            elif child.type == 'parenthesized_expression':
-                # Unwrap: const name = ((...args) => { ... })
-                value_node = self._unwrap_fn_from_parens(child)
-                if value_node:
-                    for vc in value_node.children:
-                        if vc.type == 'async':
-                            is_async = True
 
         if not name_node or not value_node:
             return None
@@ -302,7 +276,8 @@ class JSBackendParser(BaseParser):
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:
         """Parse a call_expression node to extract the called function name.
 
-        Also detects Tauri IPC invoke() calls and marks them with ipc_bridge metadata.
+        For Tauri invoke() calls, extracts the command name from the first
+        string argument and marks it as is_ipc_call for the edge resolver.
         """
         func_node = node.child_by_field_name('function')
         if not func_node:
@@ -316,14 +291,12 @@ class JSBackendParser(BaseParser):
             if name in SKIP_NAMES:
                 return None
 
-            # ─── Tauri IPC invoke() detection ───────────────────
-            # Detect: invoke('commandName')
+            # ─── Tauri invoke() detection ────────────────────────────
+            # Extract the command name from the first string argument.
             if name == 'invoke':
-                ipc_cmd_name = self._extract_invoke_command(node, source)
-                if ipc_cmd_name:
-                    return {"fn_name": ipc_cmd_name, "ipc_bridge": True, "ipc_call": True}
-                # invoke() without string literal — still mark as IPC
-                return {"fn_name": "invoke", "ipc_bridge": True}
+                ipc_cmd = self._extract_invoke_command(node, source)
+                if ipc_cmd:
+                    return {"fn_name": ipc_cmd, "is_ipc_call": True}
 
             return {"fn_name": name}
 
@@ -343,12 +316,12 @@ class JSBackendParser(BaseParser):
                                    'appendChild', 'removeChild', 'insertBefore'):
                     return None
 
-                # ─── Tauri IPC obj.invoke() detection ───────────
-                # Detect: somePlugin.invoke('cmd')
+                # ─── Tauri invoke via module import ────────────────────
+                # Handle: tauri.invoke('cmd') or api.invoke('cmd')
                 if method_name == 'invoke':
-                    ipc_cmd_name = self._extract_invoke_command(node, source)
-                    if ipc_cmd_name:
-                        return {"fn_name": ipc_cmd_name, "ipc_bridge": True, "ipc_call": True}
+                    ipc_cmd = self._extract_invoke_command(node, source)
+                    if ipc_cmd:
+                        return {"fn_name": ipc_cmd, "is_ipc_call": True}
 
                 # Check if it's self.method()
                 if obj_node and self.get_text(obj_node, source) == 'self':
@@ -361,19 +334,26 @@ class JSBackendParser(BaseParser):
 
         return None
 
-    def _extract_invoke_command(self, call_node: Node, source: bytes) -> Optional[str]:
-        """Extract the command name from a Tauri invoke() call."""
-        args_node = call_node.child_by_field_name('arguments')
+    def _extract_invoke_command(self, node: Node, source: bytes) -> Optional[str]:
+        """Extract the Tauri command name from an invoke() call's first argument.
+
+        Handles patterns like:
+        - invoke('commandName')
+        - invoke<Type>('commandName')
+
+        Returns the command name string, or None if not found.
+        """
+        args_node = node.child_by_field_name('arguments')
         if not args_node:
             return None
+
         for child in args_node.children:
             if child.type == 'string':
                 text = self.get_text(child, source)
-                # Strip quotes
-                if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
-                    return text[1:-1]
-            elif child.type == 'template_string':
-                text = self.get_text(child, source)
-                if '${' not in text:
-                    return text.strip('`')
+                if (text.startswith("'") and text.endswith("'")) or \
+                   (text.startswith('"') and text.endswith('"')):
+                    value = text[1:-1]
+                    import re
+                    if value and re.match(r'^[a-zA-Z_][\\w]*$', value):
+                        return value
         return None

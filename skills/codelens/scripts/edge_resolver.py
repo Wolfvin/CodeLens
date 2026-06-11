@@ -128,9 +128,41 @@ def resolve_edges(
         to_fn = edge.get("to_fn", "")
         via_self = edge.get("via_self", False)
         call_object = edge.get("call_object")
+        is_ipc_call = edge.get("is_ipc_call", False)
 
         # Try to resolve the target
         target_node = None
+
+        # ─── Tauri IPC direct resolution ──────────────────────────────
+        # When the parser detected an invoke('cmdName') call and marked it
+        # with is_ipc_call=True, the to_fn is the actual Tauri command name
+        # (camelCase). Try to match it directly against the ipc_name index
+        # or via case conversion against Rust function names.
+        if is_ipc_call:
+            # Try IPC name index first (camelCase → Rust #[tauri::command])
+            if to_fn in ipc_name_to_nodes:
+                candidates = ipc_name_to_nodes[to_fn]
+                if candidates:
+                    target_node = candidates[0]
+
+            # Try snake_case conversion (in case parser gave us Rust name)
+            if not target_node:
+                alt_key = _to_alternate_case(to_fn)
+                if alt_key in fn_name_to_nodes:
+                    # Prefer Tauri command nodes
+                    candidates = fn_name_to_nodes[alt_key]
+                    tauri_candidates = [c for c in candidates if c.get("is_tauri_command")]
+                    if tauri_candidates:
+                        target_node = tauri_candidates[0]
+                    elif candidates:
+                        target_node = candidates[0]
+
+            # Try direct fn name match (in case parser gave us snake_case Rust name)
+            if not target_node and to_fn in fn_name_to_nodes:
+                candidates = fn_name_to_nodes[to_fn]
+                tauri_candidates = [c for c in candidates if c.get("is_tauri_command")]
+                if tauri_candidates:
+                    target_node = tauri_candidates[0]
 
         # 1. Direct match: to_fn matches a function name
         if to_fn in fn_name_to_nodes:
@@ -221,6 +253,9 @@ def resolve_edges(
             }
             if via_self:
                 resolved_edge["via_self"] = True
+            # Mark Tauri IPC bridge edges for visibility in context/trace
+            if is_ipc_call:
+                resolved_edge["ipc_bridge"] = True
             resolved_edges.append(resolved_edge)
         else:
             # Unresolved — external or not yet scanned
