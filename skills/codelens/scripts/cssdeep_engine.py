@@ -43,6 +43,10 @@ HTML_JS_EXTENSIONS = {
     ".html", ".htm", ".jsx", ".tsx", ".js", ".mjs", ".cjs", ".ts",
 }
 
+# Performance limits
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
+MAX_FINDINGS = 500           # Cap total findings
+
 # ─── Thresholds ────────────────────────────────────────────────
 
 SPECIFICITY_DEPTH_THRESHOLD = 4       # Number of combinators to flag
@@ -141,6 +145,10 @@ def analyze_css_deep(
             rel_path = os.path.relpath(file_path, workspace)
 
             try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    css_files_scanned += 1
+                    continue
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
@@ -207,6 +215,10 @@ def analyze_css_deep(
             rel_path = os.path.relpath(file_path, workspace)
 
             try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    html_js_files_scanned += 1
+                    continue
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
@@ -894,14 +906,14 @@ def _extract_style_block(content: str, ext: str) -> Optional[str]:
     """
     if ext == ".vue":
         # Vue SFC: <style ...>...</style>
-        m = re.search(r'<style[^>]*>(.*?)</style>', content, re.DOTALL)
+        m = re.search(r'<style[^>]*>([\s\S]{0,50000}?)</style>', content)
         if m:
             return m.group(1)
         return ""
 
     if ext == ".svelte":
         # Svelte: <style>...</style>
-        m = re.search(r'<style[^>]*>(.*?)</style>', content, re.DOTALL)
+        m = re.search(r'<style[^>]*>([\s\S]{0,50000}?)</style>', content)
         if m:
             return m.group(1)
         return ""

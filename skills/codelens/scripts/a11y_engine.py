@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -32,6 +32,11 @@ TEMPLATE_EXTENSIONS = {
     ".html", ".htm", ".jsx", ".tsx", ".js", ".ts",
     ".vue", ".svelte",
 }
+
+# Performance limits
+MAX_FILE_SIZE = 200 * 1024   # 200KB — skip files larger than this
+MAX_ISSUES_PER_CATEGORY = 100 # Cap issues per category
+MAX_ISSUES_TOTAL = 500        # Cap total issues across all categories
 
 # WCAG 2.1 mapping for each category
 WCAG_MAPPING = {
@@ -230,6 +235,11 @@ def audit_accessibility(
             except IOError:
                 continue
 
+            # Skip oversized files
+            if len(content) > MAX_FILE_SIZE:
+                files_scanned += 1
+                continue
+
             files_scanned += 1
             lines = content.split('\n')
 
@@ -237,40 +247,40 @@ def audit_accessibility(
             template_type = _detect_template_type(content, ext)
 
             # ─── Missing Alt ─────────────────────────────
-            if "missing_alt" in categories:
+            if "missing_alt" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_missing_alt(content, lines, rel_path, template_type, issues)
 
             # ─── Missing Label ───────────────────────────
-            if "missing_label" in categories:
+            if "missing_label" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_missing_label(content, lines, rel_path, template_type, issues)
 
             # ─── ARIA Issues ─────────────────────────────
-            if "aria_issues" in categories:
+            if "aria_issues" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_aria_issues(content, lines, rel_path, template_type, issues)
 
             # ─── Keyboard Navigation ─────────────────────
-            if "keyboard_nav" in categories:
+            if "keyboard_nav" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_keyboard_nav(content, lines, rel_path, template_type, issues)
 
             # ─── Semantic HTML ───────────────────────────
-            if "semantic_html" in categories:
+            if "semantic_html" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_semantic_html(content, lines, rel_path, template_type, issues)
 
             # ─── Color Contrast ──────────────────────────
-            if "color_contrast" in categories:
+            if "color_contrast" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_color_contrast(content, lines, rel_path, template_type, issues)
 
             # ─── Heading Order (collect for later) ───────
-            if "heading_order" in categories:
+            if "heading_order" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 file_headings = _collect_headings(content, lines, rel_path, template_type)
                 all_headings.extend(file_headings)
 
             # ─── Link Text ───────────────────────────────
-            if "link_text" in categories:
+            if "link_text" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_link_text(content, lines, rel_path, template_type, issues)
 
             # ─── Focus Management ────────────────────────
-            if "focus_management" in categories:
+            if "focus_management" in categories and len(issues) < MAX_ISSUES_TOTAL:
                 _check_focus_management(content, lines, rel_path, template_type, issues)
 
     # ─── Heading Order Analysis (cross-file) ─────────────
@@ -280,6 +290,9 @@ def audit_accessibility(
     # Apply severity filter
     if severity:
         issues = [i for i in issues if i["severity"] == severity]
+
+    # Cap total issues to prevent runaway output
+    issues = issues[:MAX_ISSUES_TOTAL]
 
     # ─── Aggregate Stats ──────────────────────────────────
     by_category = defaultdict(int)
@@ -741,7 +754,7 @@ def _check_semantic_html(
 ) -> None:
     """Detect non-semantic elements where semantic ones should be used."""
     # Check for <b> and <i> tags
-    for m in re.finditer(r'<(b|i|u)>(.*?)</\1>', content, re.DOTALL):
+    for m in re.finditer(r'<(b|i|u)>([^<]{0,200}?)</\1>', content):
         tag = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         text = m.group(2).strip()[:50]
@@ -972,7 +985,7 @@ def _check_link_text(
 ) -> None:
     """Detect vague or uninformative link text."""
     # Find <a> tags with text content
-    for m in re.finditer(r'<a\s+([^>]*?)>(.*?)</a>', content, re.DOTALL):
+    for m in re.finditer(r'<a\s+([^>]{0,500}?)>([^<]{0,200}?)</a>', content):
         attrs = m.group(1)
         text = m.group(2).strip()
         line_num = content[:m.start()].count('\n') + 1

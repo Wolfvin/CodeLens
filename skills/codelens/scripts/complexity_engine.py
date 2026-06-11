@@ -1064,8 +1064,9 @@ def _remove_comments(code: str, ext: str) -> str:
     """Remove comments to avoid false positive matches."""
     result = code
 
-    # Block comments
-    result = re.sub(r'/\*.*?\*/', '', result, flags=re.DOTALL)
+    # Block comments — use non-greedy with bounded quantifier to avoid catastrophic backtracking
+    # on files with /* but no matching */
+    result = re.sub(r'/\*[\s\S]{0,50000}?\*/', '', result)
 
     # Line comments
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs"}:

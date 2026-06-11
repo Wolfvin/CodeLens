@@ -31,54 +31,12 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
-    # Monorepo / CI / docs directories that rarely contain source code
-    '.changeset', '.github', '.circleci', '.gitlab',
-    'docs', 'doc', 'scratchpad', 'patches',
-    'out', '.output', '.serverless', '.terraform',
-    '.turbo', '.vercel', '.netlify',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
 })
-
-
-# ─── Path-Segment-Aware Ignore Check ──────────────────────────
-
-def should_ignore_dir(rel_root: str, ignore_dirs: frozenset = DEFAULT_IGNORE_DIRS) -> bool:
-    """Check if a relative directory path should be ignored.
-    
-    Uses path-segment-aware matching to avoid false positives.
-    For example, "target" matches "project/target/" but NOT
-    "project/test-target/" because the ignore name must be a
-    complete path segment.
-    
-    Args:
-        rel_root: Relative path from workspace root (e.g., "src", "node_modules/pkg")
-        ignore_dirs: Set of directory names to ignore (without trailing slash)
-    
-    Returns:
-        True if the directory should be ignored.
-    """
-    normalized = rel_root.replace('\\', '/')
-    
-    for ignore in ignore_dirs:
-        # Check if any path segment matches the ignore name
-        # Segment at start: "node_modules/pkg" starts with "node_modules/"
-        if normalized.startswith(ignore + '/'):
-            return True
-        # Segment in middle: "src/node_modules/pkg" contains "/node_modules/"
-        if '/' + ignore + '/' in normalized:
-            return True
-        # Segment at end: "src/target" ends with "/target"
-        if normalized.endswith('/' + ignore):
-            return True
-        # Exact match: "node_modules" == "node_modules"
-        if normalized == ignore:
-            return True
-    
-    return False
 
 # ─── Output File Generation ─────────────────────────────────
 
@@ -119,19 +77,18 @@ def compute_summary(workspace, outline_data, scan_result):
     files_by_lang = {}
 
     for outline in outline_data.get('outlines', []):
-        # Access the nested outline dict — get_file_outline returns
-        # {"status": "ok", "file": ..., "outline": {functions, classes, ...}}
-        inner = outline.get('outline', outline)
-        lang = inner.get('language', outline.get('language', 'unknown'))
+        lang = outline.get('language', 'unknown')
         files_by_lang[lang] = files_by_lang.get(lang, 0) + 1
-        total_functions += len(inner.get('functions', []))
-        total_classes += len(inner.get('classes', []))
-        total_interfaces += len(inner.get('interfaces', []))
-        total_types += len(inner.get('types', []))
-        total_exports += len(inner.get('exports', []))
-        total_components += len(inner.get('components', []))
-        total_imports += len(inner.get('imports', []))
-        for cls in inner.get('classes', []):
+        # Outline data may be nested under 'outline' key or at top level
+        ol = outline.get('outline', outline)
+        total_functions += len(ol.get('functions', []))
+        total_classes += len(ol.get('classes', []))
+        total_interfaces += len(ol.get('interfaces', []))
+        total_types += len(ol.get('types', []))
+        total_exports += len(ol.get('exports', []))
+        total_components += len(ol.get('components', []))
+        total_imports += len(ol.get('imports', []))
+        for cls in ol.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)
@@ -200,4 +157,49 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.7.0"
+
+
+# ─── Safe File Reading ──────────────────────────────────────
+
+# Default maximum file size for engines that scan source files.
+# Files larger than this are skipped to avoid slow regex/memory issues.
+DEFAULT_MAX_FILE_SIZE = 200 * 1024  # 200KB
+
+
+def safe_read_file(file_path: str, max_size: int = DEFAULT_MAX_FILE_SIZE) -> Optional[str]:
+    """
+    Safely read a file with size checking.
+
+    Returns file content as string, or None if the file:
+    - doesn't exist or can't be read
+    - exceeds max_size
+    - appears to be minified/bundled (few lines with very long average length)
+
+    This function should be used by all engine scanners instead of raw open()/read().
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+
+        # Detect minified/bundled files: very few lines with very long average length
+        # These are not human-written code and should be skipped
+        line_count = content.count('\n') + 1
+        if line_count < 50 and len(content) > 0:
+            avg_line_len = len(content) / line_count
+            if avg_line_len > 500:
+                return None
+
+        # Skip files that are almost certainly auto-generated
+        first_500 = content[:500].lower()
+        minified_markers = ['/*!', 'minified', 'uglify', 'webpack/bootstrap', 'bundled']
+        if any(marker in first_500 for marker in minified_markers):
+            return None
+
+        return content
+    except (IOError, OSError):
+        return None

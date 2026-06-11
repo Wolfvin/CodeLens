@@ -19,10 +19,10 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
-
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -43,6 +43,11 @@ LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 
+# Performance limits
+MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this
+MAX_LINE_LENGTH = 500       # Lines longer than this indicate minified/bundled files
+MAX_RESULTS_PER_CATEGORY = 100  # Cap results per category to avoid explosion
+PER_FILE_TIMEOUT_SEC = 8    # Max seconds per file across all detectors
 
 def detect_smells(
     workspace: str,
@@ -80,7 +85,6 @@ def detect_smells(
 
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
-    production_files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -97,22 +101,36 @@ def detect_smells(
             rel_path = os.path.relpath(file_path, workspace)
 
             try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE:
+                    files_scanned += 1
+                    continue
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
                 continue
 
-            files_scanned += 1
             lines = content.split('\n')
             line_count = len(lines)
 
-            # Track if this is a docs/examples/test file for scoring
-            is_docs_or_example = _is_docs_or_example(rel_path)
-            if not is_docs_or_example:
-                production_files_scanned += 1
+            # Skip minified/bundled files (very long lines = not human-written code)
+            if line_count > 0 and line_count < 50:
+                avg_line_len = len(content) / line_count
+                if avg_line_len > MAX_LINE_LENGTH:
+                    files_scanned += 1
+                    continue
+
+            # Skip files that are almost certainly auto-generated
+            first_lines = '\n'.join(lines[:5]).lower()
+            if any(marker in first_lines for marker in ['/*!', '/*!', 'minified', 'uglify', 'webpack', 'bundled']):
+                files_scanned += 1
+                continue
+
+            files_scanned += 1
+            file_start = time.monotonic()
 
             # Large file detection
-            if "large_file" in categories:
+            if "large_file" in categories and len(all_smells["large_file"]) < MAX_RESULTS_PER_CATEGORY:
                 if line_count > LARGE_FILE_LINES_CRITICAL:
                     all_smells["large_file"].append({
                         "file": rel_path,
@@ -130,38 +148,46 @@ def detect_smells(
                         "suggestion": "Consider splitting into smaller modules."
                     })
 
+            # Per-file timeout check before running expensive detectors
+            if time.monotonic() - file_start > PER_FILE_TIMEOUT_SEC:
+                continue
+
             # Long function detection
-            if "long_fn" in categories:
+            if "long_fn" in categories and len(all_smells["long_fn"]) < MAX_RESULTS_PER_CATEGORY:
                 fns = _detect_long_functions(content, ext, rel_path)
                 all_smells["long_fn"].extend(fns)
 
+            # Per-file timeout check
+            if time.monotonic() - file_start > PER_FILE_TIMEOUT_SEC:
+                continue
+
             # Deep nesting detection
-            if "deep_nesting" in categories:
+            if "deep_nesting" in categories and len(all_smells["deep_nesting"]) < MAX_RESULTS_PER_CATEGORY:
                 nested = _detect_deep_nesting(content, ext, rel_path)
                 all_smells["deep_nesting"].extend(nested)
 
             # Too many parameters
-            if "many_params" in categories:
+            if "many_params" in categories and len(all_smells["many_params"]) < MAX_RESULTS_PER_CATEGORY:
                 params = _detect_many_params(content, ext, rel_path)
                 all_smells["many_params"].extend(params)
 
             # Callback hell
-            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"} and len(all_smells["callback_hell"]) < MAX_RESULTS_PER_CATEGORY:
                 cb = _detect_callback_hell(content, rel_path)
                 all_smells["callback_hell"].extend(cb)
 
             # Magic values
-            if "magic_values" in categories:
+            if "magic_values" in categories and len(all_smells["magic_values"]) < MAX_RESULTS_PER_CATEGORY:
                 magic = _detect_magic_values(content, ext, rel_path)
                 all_smells["magic_values"].extend(magic)
 
             # Complex conditionals
-            if "complex_conditional" in categories:
+            if "complex_conditional" in categories and len(all_smells["complex_conditional"]) < MAX_RESULTS_PER_CATEGORY:
                 conds = _detect_complex_conditionals(content, ext, rel_path)
                 all_smells["complex_conditional"].extend(conds)
 
             # God object (classes/modules with too many methods)
-            if "god_object" in categories:
+            if "god_object" in categories and len(all_smells["god_object"]) < MAX_RESULTS_PER_CATEGORY:
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
 
@@ -200,25 +226,9 @@ def detect_smells(
     # Problem: always returns 0 for medium+ projects.
     # New formula: density-based tiers + critical ratio adjustment
     # Weight info-level smells less so they don't inflate density
-    # Use production_files_scanned for health score (exclude docs/examples/tests)
-    # so that documentation code doesn't penalize the project health
-    score_files = max(production_files_scanned, 1)
-    # Count smells in production code only for health score
-    prod_smells = 0
-    prod_critical = 0
-    prod_warning = 0
-    for cat in all_smells.values():
-        for s in cat:
-            fpath = s.get("file", "")
-            if not _is_docs_or_example(fpath):
-                prod_smells += 1
-                if s.get("severity") == "critical":
-                    prod_critical += 1
-                elif s.get("severity") == "warning":
-                    prod_warning += 1
-    prod_info = prod_smells - prod_critical - prod_warning
-    weighted_smells = prod_critical * 3 + prod_warning * 1 + prod_info * 0.1
-    density = weighted_smells / score_files  # weighted smells per production file
+    files_scanned_safe = max(files_scanned, 1)
+    weighted_smells = critical_count * 3 + warning_count * 1 + info_count * 0.1
+    density = weighted_smells / files_scanned_safe  # weighted smells per file
 
     if density <= 0.5:
         base_score = 95
@@ -237,8 +247,8 @@ def detect_smells(
     else:
         base_score = 8
 
-    # Critical penalty: based on critical count per production file (capped)
-    critical_per_file = prod_critical / score_files
+    # Critical penalty: based on critical count per file (capped)
+    critical_per_file = critical_count / files_scanned_safe
     if critical_per_file <= 1:
         critical_penalty = 0
     elif critical_per_file <= 5:
@@ -251,7 +261,7 @@ def detect_smells(
         critical_penalty = min(25, int(critical_per_file * 0.5))
 
     # Critical ratio adjustment: fewer criticals relative to total = healthier
-    critical_ratio = prod_critical / max(prod_smells, 1)
+    critical_ratio = critical_count / max(total_smells, 1)
     if critical_ratio < 0.1:
         ratio_bonus = 5
     elif critical_ratio < 0.3:
@@ -292,7 +302,6 @@ def detect_smells(
         "top_priority": top_smells[:20],
         "categories_checked": list(categories)
     }
-
 
 # ─── Individual Smell Detectors ────────────────────────────────
 
@@ -358,7 +367,6 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _find_function_end(lines: List[str], start: int, ext: str) -> int:
     """Find the end line of a function starting at `start`."""
     if ext == ".py":
@@ -385,7 +393,6 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
                         return i + 1
         return min(start + 300, len(lines))
 
-
 def _extract_fn_name_js(line: str) -> str:
     """Extract function name from JS/TS line."""
     m = re.search(r'function\s+(\w+)', line)
@@ -395,7 +402,6 @@ def _extract_fn_name_js(line: str) -> str:
     if m:
         return m.group(1)
     return "anonymous"
-
 
 def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect deeply nested code blocks.
@@ -475,7 +481,6 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         })
 
     return smells
-
 
 def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions with too many parameters."""
@@ -574,7 +579,6 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
     """Detect callback hell / deeply nested promises."""
     smells = []
@@ -626,7 +630,6 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
             callback_depth = 0
 
     return smells
-
 
 def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect magic numbers and strings (unexplained constants)."""
@@ -712,7 +715,6 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect overly complex conditional expressions."""
     smells = []
@@ -746,7 +748,6 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
             })
 
     return smells
-
 
 def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect god objects (classes/modules with too many methods)."""
@@ -837,7 +838,6 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     return smells
 
-
 def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     """Detect potential duplicate code patterns across files (lightweight)."""
     smells = []
@@ -894,7 +894,6 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             })
 
     return smells[:30]  # Cap results
-
 
 def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
     """Detect inconsistent coding patterns across the workspace."""
@@ -1004,40 +1003,3 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
         })
 
     return smells
-
-
-def _is_docs_or_example(rel_path: str) -> bool:
-    """Check if a file path is in a documentation, examples, or test directory.
-
-    These files are excluded from health score calculations since they
-    are not production code and typically have different quality standards.
-    Note: rel_path may start without a leading slash (e.g., "docs_src/foo.py"),
-    so we check both "/dir/" (middle of path) and "dir/" (start of path).
-    """
-    # Normalize to have leading slash for consistent matching
-    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
-    docs_indicators = [
-        '/docs/', '/doc/', '/documentation/',
-        '/examples/', '/example/', '/demos/', '/demo/',
-        '/docs_src/', '/snippets/',
-        '/tutorial/', '/tutorials/', '/guides/',
-        '/tests/', '/test/', '/__tests__/', '/spec/',
-        '/fixtures/', '/fixture/',
-        '/migrations/',
-    ]
-    # Also match paths that START with these directory names
-    # (no leading slash in rel_path, e.g., "tests/foo.py" or "docs_src/bar.py")
-    start_indicators = [
-        'docs/', 'doc/', 'documentation/',
-        'examples/', 'example/', 'demos/', 'demo/',
-        'docs_src/', 'snippets/',
-        'tutorial/', 'tutorials/', 'guides/',
-        'tests/', 'test/', '__tests__/', 'spec/',
-        'fixtures/', 'fixture/',
-        'migrations/',
-    ]
-    return (any(indicator in normalized for indicator in docs_indicators) or
-            any(rel_path.startswith(indicator) for indicator in start_indicators))
-
-# _is_docs_or_example is defined above. Note: paths like "docs_src/foo.py"
-# start without a leading slash, so we also match on path-starts-with.
