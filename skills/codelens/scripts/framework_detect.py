@@ -169,6 +169,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_electron": False,
+        "has_rust_backend": False,
         "css_preprocessor": None,
         "module_system": None
     }
@@ -374,6 +375,24 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "svelte" not in detected["frameworks"]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
+
+    # 5a. Detect Rust project (Cargo.toml presence)
+    # Any workspace with a Cargo.toml has a Rust backend/component
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip:
+            continue
+        if 'Cargo.toml' in files:
+            if not detected["has_rust_backend"]:
+                detected["has_rust_backend"] = True
+                # Add "rust" to frameworks if not already there
+                if "rust" not in detected["frameworks"]:
+                    detected["frameworks"].append("rust")
+            break  # One Cargo.toml is enough
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
