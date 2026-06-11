@@ -157,7 +157,7 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
         "workspace": workspace,
         "total_issues": total_issues,
         "issues": issues,
-        "summary": {
+        "stats": {
             "css_no_html": len(issues["css_no_html"]),
             "html_no_css": len(issues["html_no_css"]),
             "css_id_no_html": len(issues["css_id_no_html"]),

@@ -179,12 +179,13 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     if cls["name"] == query_name:
                         action, action_reason = _get_query_action(cls["status"])
                         return {
+                            "status": "ok",
                             "found": True,
                             "type": "class",
                             "domain": "frontend",
                             "name": cls["name"],
                             "ref_count": cls["ref_count"],
-                            "status": cls["status"],
+                            "entry_status": cls["status"],
                             "action": action,
                             "action_reason": action_reason,
                             "css": cls.get("css", []),
@@ -195,12 +196,13 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     if id_entry["name"] == query_name:
                         action, action_reason = _get_query_action(id_entry["status"])
                         return {
+                            "status": "ok",
                             "found": True,
                             "type": "id",
                             "domain": "frontend",
                             "name": id_entry["name"],
                             "ref_count": id_entry["ref_count"],
-                            "status": id_entry["status"],
+                            "entry_status": id_entry["status"],
                             "action": action,
                             "action_reason": action_reason,
                             "defined_in_html": id_entry.get("defined_in_html", []),
@@ -225,6 +227,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             node_status = node.get("status", "active")
             action, action_reason = _get_query_action(node_status)
             result = {
+                "status": "ok",
                 "found": True,
                 "type": "function",
                 "domain": "backend",
@@ -351,6 +354,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
             # Return fuzzy matches as a list (not a single result)
             return {
+                "status": "ok",
                 "found": True,
                 "type": "function_fuzzy",
                 "domain": "backend",
@@ -363,6 +367,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             }
 
     return {
+        "status": "ok",
         "found": True,
         "type": "multi_match",
         "query": query_name,

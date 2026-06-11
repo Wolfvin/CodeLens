@@ -183,6 +183,41 @@ def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SE
     return (time.time() - start_time) > budget_sec
 
 
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped in analysis.
+
+    Covers lock files, minified files, build artifacts, and common
+    generated patterns (e.g., Cargo.lock, package-lock.json, .d.ts).
+
+    Args:
+        filename: Just the file name (not the full path).
+
+    Returns:
+        True if the file appears to be auto-generated.
+    """
+    generated_patterns = {
+        'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+        'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'uv.lock',
+        'go.sum', 'composer.lock', 'mix.lock',
+        'tsconfig.tsbuildinfo', 'next-env.d.ts',
+    }
+    if filename in generated_patterns:
+        return True
+    # .d.ts declaration files
+    if filename.endswith('.d.ts') or filename.endswith('.d.mts') or filename.endswith('.d.cts'):
+        return True
+    # Minified files
+    if '.min.' in filename:
+        return True
+    # Source maps
+    if filename.endswith('.map') or filename.endswith('.js.map') or filename.endswith('.css.map'):
+        return True
+    # Auto-generated suffixes
+    if filename.endswith('.generated.ts') or filename.endswith('.generated.js'):
+        return True
+    return False
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -389,4 +424,4 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.1.0"

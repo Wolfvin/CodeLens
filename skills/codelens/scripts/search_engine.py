@@ -330,6 +330,12 @@ def search_symbols(
         "query": name,
         "domain": domain,
         "fuzzy": fuzzy,
-        "count": len(results),
+        "stats": {
+            "total_matches": len(results),
+            "shown": min(len(results), max_results),
+            "truncated": len(results) > max_results,
+            "frontend_matches": sum(1 for r in results if r["domain"] == "frontend"),
+            "backend_matches": sum(1 for r in results if r["domain"] == "backend"),
+        },
         "results": results[:max_results]
     }
