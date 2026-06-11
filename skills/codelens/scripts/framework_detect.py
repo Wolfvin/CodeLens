@@ -147,25 +147,26 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
-    # SolidJS ecosystem
-    "solidjs": {
-        "packages": ["solid-js"],
+    # Vue ecosystem state management
+    "pinia": {
+        "packages": ["pinia"],
+        "config_files": [],
+        "indicators": ["defineStore"]
+    },
+    "vuex": {
+        "packages": ["vuex"],
         "config_files": [],
         "indicators": []
     },
-    # Node.js web frameworks
+    # Vue ecosystem routing
+    "vue-router": {
+        "packages": ["vue-router"],
+        "config_files": [],
+        "indicators": ["createRouter", "useRouter"]
+    },
+    # Node.js backend frameworks
     "express": {
         "packages": ["express"],
-        "config_files": [],
-        "indicators": []
-    },
-    "fastify": {
-        "packages": ["fastify"],
-        "config_files": [],
-        "indicators": []
-    },
-    "hono": {
-        "packages": ["hono"],
         "config_files": [],
         "indicators": []
     },
@@ -174,51 +175,36 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
+        "indicators": []
+    },
     "nestjs": {
         "packages": ["@nestjs/core"],
         "config_files": ["nest-cli.json"],
         "indicators": []
     },
-    # Python web frameworks (additional)
-    "httpx": {
-        "packages": ["httpx"],
-        "pip_packages": ["httpx"],
+    # UI component libraries
+    "vuetify": {
+        "packages": ["vuetify"],
         "config_files": [],
         "indicators": []
     },
-    "starlite": {
-        "packages": ["starlite"],
-        "pip_packages": ["starlite", "litestar"],
+    "element-plus": {
+        "packages": ["element-plus"],
         "config_files": [],
         "indicators": []
     },
-    # Go frameworks
-    "gin": {
-        "packages": [],
+    "ant-design-vue": {
+        "packages": ["ant-design-vue"],
         "config_files": [],
-        "go_packages": ["gin-gonic/gin"],
-        "indicators": []
-    },
-    "echo": {
-        "packages": [],
-        "config_files": [],
-        "go_packages": ["labstack/echo"],
         "indicators": []
     },
     # Build tools
     "vite": {
         "packages": ["vite"],
         "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
-        "indicators": []
-    },
-    "webpack": {
-        "packages": ["webpack"],
-        "config_files": ["webpack.config.js", "webpack.config.ts"],
-        "indicators": []
-    },
-    "turbo": {
-        "packages": ["turbo"],
-        "config_files": ["turbo.json"],
         "indicators": []
     },
 }
@@ -330,13 +316,12 @@ def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any
 
     Returns dict with:
     - all_deps: merged dependency dict
-    - module_system: 'esm' if any package has type:module, 'cjs' otherwise.
-      If no package.json files found, returns None (indicating non-JS project).
+    - module_system: 'esm' if any package has type:module
     - css_preprocessor: detected from any package
     - is_monorepo: True if multiple package.json files found
     """
     all_deps = {}
-    module_system = None  # None = no package.json found (non-JS project)
+    module_system = "cjs"
     css_preprocessor = None
 
     for pkg_path in pkg_json_paths:
@@ -347,10 +332,7 @@ def _collect_deps_from_package_jsons(pkg_json_paths: List[str]) -> Dict[str, Any
             all_deps.update(pkg.get("devDependencies", {}))
             all_deps.update(pkg.get("peerDependencies", {}))
 
-            # Module system — start as None, set to cjs on first package.json,
-            # then upgrade to esm if any package has type:module
-            if module_system is None:
-                module_system = "cjs"
+            # Module system — any ESM package counts
             if pkg.get("type") == "module":
                 module_system = "esm"
 
@@ -398,7 +380,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_django": False,
         "has_tauri": False,
         "has_rust_backend": False,
-        "has_go_backend": False,
+        "has_pinia": False,
+        "has_vue_router": False,
+        "has_express": False,
         "css_preprocessor": None,
         "module_system": None,
         "is_monorepo": False,
@@ -444,6 +428,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tailwind"] = True
                 elif fw_name == "angular":
                     detected["has_angular"] = True
+                elif fw_name == "pinia":
+                    detected["has_pinia"] = True
+                elif fw_name == "vue-router":
+                    detected["has_vue_router"] = True
+                elif fw_name == "express":
+                    detected["has_express"] = True
                 break
 
     # 2. Check config files
@@ -617,47 +607,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # Detect any Rust project (even without Tauri)
     if not detected["has_rust_backend"] and cargo_deps:
         detected["has_rust_backend"] = True
-
-    # 4b. Check go.mod for Go dependencies
-    go_mod_path = os.path.join(workspace, "go.mod")
-    go_deps = set()
-    if os.path.exists(go_mod_path):
-        detected["has_go_backend"] = True
-        try:
-            with open(go_mod_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            # Parse require block: extract module paths
-            in_require = False
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith('require ('):
-                    in_require = True
-                    continue
-                if stripped == ')' and in_require:
-                    in_require = False
-                    continue
-                if in_require and stripped and not stripped.startswith('//'):
-                    # Format: module_path version
-                    parts = stripped.split()
-                    if parts:
-                        go_deps.add(parts[0].lower())
-                elif stripped.startswith('require '):
-                    # Single-line require: require module_path version
-                    parts = stripped.split()
-                    if len(parts) >= 2:
-                        go_deps.add(parts[1].lower())
-        except IOError:
-            pass
-
-        # Check go deps against framework signatures
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            go_pkgs = sig.get("go_packages", [])
-            for pkg_name in go_pkgs:
-                if pkg_name.lower() in go_deps:
-                    detected["frameworks"].append(fw_name)
-                    break
 
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):

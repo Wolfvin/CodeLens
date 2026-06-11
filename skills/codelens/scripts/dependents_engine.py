@@ -200,7 +200,7 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     # JS/TS imports
-    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'}
+    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue'}
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         if '.codelens' in root:
@@ -242,12 +242,21 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
 # ─── Import Parsers ──────────────────────────────────────
 
 def _parse_js_imports(file_path: str, rel_path: str, workspace: str) -> List[str]:
-    """Parse JS/TS import statements."""
+    """Parse JS/TS import statements. Also handles Vue SFC <script> sections."""
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
     except IOError:
         return []
+
+    # For .vue files, extract the script section first
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == '.vue':
+        script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+        if script_match:
+            content = script_match.group(1)
+        else:
+            return []  # No script section in Vue SFC
 
     imports = []
     file_dir = os.path.dirname(rel_path)
@@ -363,11 +372,15 @@ def _resolve_relative_import(
 ) -> Optional[str]:
     """Resolve a relative import to an actual file."""
     if not (raw_import.startswith('./') or raw_import.startswith('../') or raw_import.startswith('.')):
+        # Try resolving path aliases (@/ → src/)
+        resolved_alias = _resolve_path_alias(raw_import, workspace)
+        if resolved_alias:
+            return resolved_alias
         return None  # External module
 
     if extensions is None:
-        extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
-                      '/index.js', '/index.ts', '/index.tsx']
+        extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
+                      '/index.js', '/index.ts', '/index.tsx', '/index.vue']
 
     rel_path = os.path.normpath(os.path.join(from_dir, raw_import))
 
@@ -375,6 +388,37 @@ def _resolve_relative_import(
         full_path = os.path.join(workspace, rel_path + ext)
         if os.path.isfile(full_path):
             return os.path.relpath(full_path, workspace)
+
+    return None
+
+
+def _resolve_path_alias(raw_import: str, workspace: str) -> Optional[str]:
+    """Resolve common path aliases like @/ → src/, ~/ → src/, etc."""
+    if not raw_import.startswith('@') and not raw_import.startswith('~'):
+        return None
+
+    # Common alias patterns to try
+    alias_bases = []
+
+    # @/ → src/ (most common Vue/Vite alias)
+    if raw_import.startswith('@/'):
+        alias_bases.append(('src/', raw_import[2:]))
+        # Also try app/src/ for monorepos
+        alias_bases.append(('app/src/', raw_import[2:]))
+
+    # ~/ → src/
+    if raw_import.startswith('~/'):
+        alias_bases.append(('src/', raw_import[2:]))
+        alias_bases.append(('app/src/', raw_import[2:]))
+
+    extensions = ['', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue',
+                  '/index.js', '/index.ts', '/index.tsx', '/index.vue']
+
+    for base_dir, rel_path in alias_bases:
+        for ext in extensions:
+            full_path = os.path.join(workspace, base_dir, rel_path + ext)
+            if os.path.isfile(full_path):
+                return os.path.relpath(full_path, workspace)
 
     return None
 
