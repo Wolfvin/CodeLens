@@ -85,11 +85,14 @@ class TSBackendParser(BaseParser):
             # Find calls within this function's body
             fn_calls = self._find_calls_in_scope(decl["body_node"], source, file_path)
             for call_info in fn_calls:
-                edges.append({
+                edge = {
                     "from": decl["node"]["id"],
                     "to_fn": call_info["fn_name"],
                     "via_self": call_info.get("via_self", False)
-                })
+                }
+                if call_info.get("is_ipc_call"):
+                    edge["is_ipc_call"] = True
+                edges.append(edge)
 
         return {"nodes": nodes, "edges": edges}
 
@@ -240,7 +243,11 @@ class TSBackendParser(BaseParser):
         return calls
 
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:
-        """Parse a call_expression node to extract the called function name."""
+        """Parse a call_expression node to extract the called function name.
+
+        For Tauri invoke() calls, extracts the command name from the first
+        string argument and marks it as is_ipc_call for the edge resolver.
+        """
         func_node = node.child_by_field_name('function')
         if not func_node:
             return None
@@ -252,6 +259,14 @@ class TSBackendParser(BaseParser):
             name = func_text
             if name in SKIP_NAMES:
                 return None
+
+            # ─── Tauri invoke() detection ────────────────────────────
+            # Extract the command name from the first string argument.
+            if name == 'invoke':
+                ipc_cmd = self._extract_invoke_command(node, source)
+                if ipc_cmd:
+                    return {"fn_name": ipc_cmd, "is_ipc_call": True}
+
             return {"fn_name": name}
 
         # Member expression: obj.method(args)
@@ -270,6 +285,12 @@ class TSBackendParser(BaseParser):
                                    'appendChild', 'removeChild', 'insertBefore'):
                     return None
 
+                # ─── Tauri invoke via module import ────────────────────
+                if method_name == 'invoke':
+                    ipc_cmd = self._extract_invoke_command(node, source)
+                    if ipc_cmd:
+                        return {"fn_name": ipc_cmd, "is_ipc_call": True}
+
                 # Check if it's self.method()
                 if obj_node and self.get_text(obj_node, source) == 'self':
                     return {"fn_name": method_name, "via_self": True}
@@ -279,4 +300,28 @@ class TSBackendParser(BaseParser):
                 # But for edge resolution, use just the method name
                 return {"fn_name": method_name, "via_self": False}
 
+        return None
+
+    def _extract_invoke_command(self, node: Node, source: bytes) -> Optional[str]:
+        """Extract the Tauri command name from an invoke() call's first argument.
+
+        Handles patterns like:
+        - invoke('commandName')
+        - invoke<Type>('commandName')
+
+        Returns the command name string, or None if not found.
+        """
+        args_node = node.child_by_field_name('arguments')
+        if not args_node:
+            return None
+
+        for child in args_node.children:
+            if child.type == 'string':
+                text = self.get_text(child, source)
+                if (text.startswith("'") and text.endswith("'")) or \
+                   (text.startswith('"') and text.endswith('"')):
+                    value = text[1:-1]
+                    import re
+                    if value and re.match(r'^[a-zA-Z_][\\w]*$', value):
+                        return value
         return None

@@ -370,7 +370,13 @@ class TSXParser(BaseParser):
 
     def _parse_call(self, node: Node, source: bytes,
                      fn_declarations: List[Dict]) -> Optional[Dict]:
-        """Parse a call expression and return an edge if it's within a known function."""
+        """Parse a call expression and return an edge if it's within a known function.
+
+        For Tauri invoke() calls, extracts the command name from the first string
+        argument and creates an edge with is_ipc_call=True. This enables the edge
+        resolver to match invoke('getProfiles') to the Rust #[tauri::command]
+        handler get_profiles.
+        """
         func_node = node.child_by_field_name('function')
         if not func_node:
             return None
@@ -397,6 +403,17 @@ class TSXParser(BaseParser):
             name = func_text
             if name in self.SKIP_NAMES:
                 return None
+
+            # ─── Tauri invoke() detection ────────────────────────────
+            # When we see invoke('commandName'), extract the command name
+            # from the first argument instead of using 'invoke' as to_fn.
+            # This is critical for Tauri apps where the frontend calls
+            # Rust backend via invoke('getProfiles') etc.
+            if name == 'invoke':
+                ipc_cmd = self._extract_invoke_command(node, source)
+                if ipc_cmd:
+                    return {"from": caller_id, "to_fn": ipc_cmd, "is_ipc_call": True}
+
             return {"from": caller_id, "to_fn": name}
 
         elif func_node.type == 'member_expression':
@@ -405,8 +422,42 @@ class TSXParser(BaseParser):
                 method_name = self.get_text(prop_node, source)
                 if method_name in self.SKIP_NAMES:
                     return None
+
+                # ─── Tauri invoke via module import ────────────────────
+                # Handle cases like: tauri.invoke('cmd') or api.invoke('cmd')
+                obj_node = func_node.child_by_field_name('object')
+                if obj_node and method_name == 'invoke':
+                    ipc_cmd = self._extract_invoke_command(node, source)
+                    if ipc_cmd:
+                        return {"from": caller_id, "to_fn": ipc_cmd, "is_ipc_call": True}
+
                 return {"from": caller_id, "to_fn": method_name}
 
+        return None
+
+    def _extract_invoke_command(self, node: Node, source: bytes) -> Optional[str]:
+        """Extract the Tauri command name from an invoke() call's first argument.
+
+        Handles patterns like:
+        - invoke('commandName')
+        - invoke<Type>('commandName')
+        - invoke<void>('commandName')
+
+        The command name is always the first string literal argument.
+        Returns the command name string, or None if not found.
+        """
+        args_node = node.child_by_field_name('arguments')
+        if not args_node:
+            return None
+
+        # Find the first string argument
+        for child in args_node.children:
+            if child.type == 'string':
+                value = self._get_string_value(child, source)
+                if value and re.match(r'^[a-zA-Z_][\w]*$', value):
+                    return value
+            # Skip type arguments like <void> or <IProfilesConfig>
+            # and template strings
         return None
 
     def _get_string_value(self, node: Node, source: bytes) -> Optional[str]:

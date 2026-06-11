@@ -199,7 +199,8 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
             "directory_map": directory_map,
             "entrypoints": entrypoints,
             "api_routes": api_routes,
-            "state_management": state_stores
+            "state_management": state_stores,
+            "tauri_ipc": _build_tauri_ipc_section(workspace, config),
         },
         "health": health,
         "conventions": conventions,
@@ -480,6 +481,35 @@ def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
             lines.append(f"- {r.get('method', 'GET')} `{r.get('path', '/')}` — {r.get('handler', '')} ({r.get('file', '')})")
         lines.append("")
 
+    # Tauri IPC Bridge
+    tauri_ipc = structure.get("tauri_ipc", {})
+    if tauri_ipc and tauri_ipc.get("commands"):
+        lines.append("## Tauri IPC Bridge")
+        ipc_desc = tauri_ipc.get("description", "")
+        if ipc_desc:
+            lines.append(ipc_desc)
+            lines.append("")
+        commands = tauri_ipc.get("commands", [])
+        if commands:
+            lines.append(f"**Total IPC Commands:** {tauri_ipc.get('total', len(commands))}")
+            lines.append(f"**Active (called from frontend):** {tauri_ipc.get('active', 0)}")
+            lines.append(f"**Exposed (available but not called):** {tauri_ipc.get('ipc_exposed', 0)}")
+            lines.append("")
+            lines.append("| Command | IPC Name | Status | Rust File | TS Callers |")
+            lines.append("|---------|----------|--------|-----------|------------|")
+            for cmd in commands[:30]:
+                fn = cmd.get("fn", "")
+                ipc_name = cmd.get("ipc_name", fn)
+                status = cmd.get("status", "")
+                file = cmd.get("file", "")
+                callers = cmd.get("frontend_callers", [])
+                caller_str = ", ".join(callers[:3]) if callers else "-"
+                lines.append(f"| {fn} | {ipc_name} | {status} | {file} | {caller_str} |")
+            if len(commands) > 30:
+                lines.append(f"| ... | ... | ... | ... | ... |")
+                lines.append(f"*({len(commands) - 30} more commands not shown)*")
+            lines.append("")
+
     # State Management
     state = structure.get("state_management", [])
     if state:
@@ -539,6 +569,74 @@ def _generate_agent_md(workspace: str, handbook: Dict[str, Any]) -> None:
     agent_md_path = os.path.join(codelens_dir, 'AGENT.md')
     with open(agent_md_path, 'w', encoding='utf-8') as f:
         f.write(content)
+
+
+def _build_tauri_ipc_section(workspace: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the Tauri IPC section for the handbook.
+
+    Reads the backend registry to find all #[tauri::command] nodes,
+    cross-references with IPC bridge edges to find frontend callers,
+    and produces a structured summary.
+    """
+    if 'tauri' not in config.get("frameworks", []):
+        return {}
+
+    from registry import load_backend_registry
+
+    backend = load_backend_registry(workspace)
+    nodes = backend.get("nodes", [])
+    edges = backend.get("edges", [])
+
+    # Find Tauri command nodes
+    tauri_cmds = [n for n in nodes if n.get("is_tauri_command")]
+
+    if not tauri_cmds:
+        return {}
+
+    # Build caller index: node_id → list of caller file:fn
+    node_id_to_fn = {n["id"]: n.get("fn", "") for n in nodes}
+    caller_index: Dict[str, list] = {}
+    for edge in edges:
+        to_id = edge.get("to", "")
+        from_id = edge.get("from", "")
+        if edge.get("ipc_bridge") and to_id:
+            if to_id not in caller_index:
+                caller_index[to_id] = []
+            caller_fn = node_id_to_fn.get(from_id, from_id.split(":")[0])
+            caller_file = from_id.rsplit(":", 1)[0] if ":" in from_id else ""
+            caller_index[to_id].append(f"{caller_file}::{caller_fn}")
+
+    # Build command list
+    commands = []
+    active_count = 0
+    ipc_exposed_count = 0
+    for cmd in tauri_cmds:
+        status = cmd.get("status", "unknown")
+        if status == "active":
+            active_count += 1
+        elif status == "ipc_exposed":
+            ipc_exposed_count += 1
+
+        callers = caller_index.get(cmd["id"], [])
+        commands.append({
+            "fn": cmd["fn"],
+            "ipc_name": cmd.get("ipc_name", cmd["fn"]),
+            "status": status,
+            "file": cmd.get("file", ""),
+            "line": cmd.get("line", 0),
+            "frontend_callers": callers,
+        })
+
+    # Sort: active first, then ipc_exposed, then by name
+    commands.sort(key=lambda c: (0 if c["status"] == "active" else 1, c["fn"]))
+
+    return {
+        "description": "Tauri IPC bridge: TypeScript invoke() calls ↔ Rust #[tauri::command] handlers",
+        "total": len(commands),
+        "active": active_count,
+        "ipc_exposed": ipc_exposed_count,
+        "commands": commands,
+    }
 
 
 register_command("handbook", "Generate project handbook for AI agents", add_args, execute)

@@ -204,6 +204,20 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── Tauri IPC ─────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
+
+            # ─── Tauri IPC (Rust side) ─────────────────────────
+            if ext == ".rs":
+                tauri_rs_routes = _extract_tauri_rust_commands(content, rel_path)
+                if tauri_rs_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_rs_routes)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -2144,3 +2158,96 @@ def _generate_recommendations(
         })
 
     return recommendations
+
+
+# ─── Tauri IPC Route Extraction ────────────────────────────────
+
+def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC invoke() calls from TypeScript/JavaScript frontend code.
+
+    Detects patterns like:
+    - invoke('commandName')
+    - invoke<Type>('commandName')
+    - await invoke('commandName', { args })
+
+    These represent the frontend side of Tauri's IPC bridge, where the
+    TypeScript code calls a Rust #[tauri::command] handler.
+    """
+    routes = []
+
+    # Pattern: invoke('commandName') or invoke<Type>('commandName')
+    for m in re.finditer(
+        r"invoke(?:<[^>]*>)?\s*\(\s*['\"]([a-zA-Z_]\w*)['\"]",
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "IPC_CALL",
+            "path": f"ipc://{command_name}",
+            "handler_name": command_name,
+            "handler_name_ipc": command_name,  # camelCase as used in invoke()
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+            "framework": "tauri",
+        })
+
+    return routes
+
+
+def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Tauri #[tauri::command] declarations from Rust backend code.
+
+    Detects patterns like:
+    - #[tauri::command]\npub fn command_name(...)
+    - #[tauri::command]\nasync fn command_name(...)
+
+    These represent the Rust side of Tauri's IPC bridge — the handlers
+    that the frontend calls via invoke().
+    """
+    routes = []
+
+    # Pattern: #[tauri::command] followed by fn declaration within 5 lines
+    for m in re.finditer(r'#\[tauri::command', content):
+        # Find the fn declaration after this attribute
+        search_start = m.end()
+        search_text = content[search_start:search_start + 200]
+
+        fn_match = re.search(
+            r'(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_]\w*)',
+            search_text
+        )
+        if fn_match:
+            fn_name = fn_match.group(1)
+            # Compute actual line number
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Convert snake_case Rust name to camelCase IPC name
+            ipc_name = _snake_to_camel(fn_name)
+
+            routes.append({
+                "method": "IPC",
+                "path": f"ipc://{ipc_name}",
+                "handler_name": fn_name,
+                "handler_name_ipc": ipc_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "tauri",
+            })
+
+    return routes
+
+
+def _snake_to_camel(name: str) -> str:
+    """Convert snake_case Rust function name to camelCase for Tauri IPC naming."""
+    if '_' not in name:
+        return name
+    parts = name.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)

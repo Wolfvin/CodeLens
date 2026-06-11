@@ -5,7 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-06-12
+## [6.1.0] — 2026-06-12
+
+### Added
+- **Tauri IPC invoke() extraction in TSX/JS/TS parsers**: When `invoke('commandName')` is detected, the command name is extracted from the first string argument instead of treating it as a call to a function named "invoke". The edge is marked with `is_ipc_call: True` for the edge resolver.
+- **Tauri IPC direct edge resolution**: The edge resolver now handles `is_ipc_call` edges by matching the command name against the `ipc_name` index (camelCase) and via case conversion against Rust function names (snake_case). Creates `ipc_bridge` edges between TypeScript callers and Rust #[tauri::command] handlers.
+- **Tauri IPC routes in API map**: The `api-map` engine now detects both frontend `invoke('cmdName')` calls (as `IPC_CALL` routes) and Rust `#[tauri::command]` declarations (as `IPC` routes). Returns `ipc://commandName` paths.
+- **Tauri IPC Bridge section in AGENT.md/handbook**: The handbook now includes a "Tauri IPC Bridge" section showing all IPC commands, their status (active/ipc_exposed), their Rust files, and which TypeScript functions call them.
+- **_extract_invoke_command() method**: Added to TSXParser, JSBackendParser, and TSBackendParser for extracting the Tauri command name from invoke() call arguments.
+- **_extract_tauri_ipc_routes() function**: Added to apimap_engine for detecting invoke() patterns in JS/TS files.
+- **_extract_tauri_rust_commands() function**: Added to apimap_engine for detecting #[tauri::command] declarations in Rust files.
+- **_build_tauri_ipc_section() function**: Added to handbook command for building the Tauri IPC section.
+
+### Fixed
+- **Zero IPC bridge edges for Tauri apps**: Previously, invoke() calls were treated as calls to a function named "invoke", creating 0 IPC bridge edges. Now invoke('getProfiles') correctly creates an edge to the Rust `get_profiles` command. Verified on Clash Verge Rev (78 Tauri commands, 86 IPC bridge edges — was 0).
+- **Tauri commands incorrectly marked as "ipc_exposed"**: 77/78 commands were stuck in "ipc_exposed" status because no IPC edges connected them to callers. After the fix, 77/78 are now "active" with proper ref_count.
+- **API map empty for Tauri apps**: api-map returned 0 routes for Tauri desktop apps because no Tauri-specific patterns were detected. Now returns 162 IPC routes (84 IPC_CALL + 78 IPC) for Clash Verge Rev.
 
 ### Added
 - **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
