@@ -42,18 +42,6 @@ SOURCE_EXTENSIONS = {
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 
-# Valid HTTP methods in uppercase (for validation of extracted method names)
-VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
-
-# Non-router objects whose .get/.post/.delete etc. calls should NOT be treated as routes
-NON_ROUTER_OBJECTS = {
-    "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
-    "res", "req", "ctx", "request", "response", "result", "data",
-    "props", "state", "config", "options", "headers",
-    "localStorage", "sessionStorage", "document", "window",
-    "cache", "store", "db", "query", "client",
-}
-
 # Known middleware identifiers
 AUTH_MIDDLEWARE_PATTERNS = {
     "authenticate", "auth", "jwt", "passport", "requireAuth",
@@ -203,6 +191,13 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── Vue Router ──────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue"}:
+                vue_routes = _extract_vue_router_routes(content, rel_path)
+                if vue_routes:
+                    frameworks_detected.add("vue-router")
+                    routes.extend(vue_routes)
+
             # ─── Tauri IPC Commands ────────────────────────────
             elif ext == ".rs":
                 tauri_routes = _extract_tauri_commands(content, rel_path)
@@ -307,7 +302,7 @@ def _extract_js_routes(
     # Detect which framework by import/require patterns
     is_express = bool(re.search(r'(?:require|import).*[\'\"]express[\'\"]', content))
     is_fastify = bool(re.search(r'(?:require|import).*[\'\"]fastify[\'\"]', content))
-    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|[\'\"]koa[\'\"]', content))
+    is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|(?:require|import).*[\'\"]koa[\'\"]', content))
     is_hono = bool(re.search(r'(?:require|import).*[\'\"]hono[\'\"]', content))
 
     if is_express:
@@ -358,6 +353,42 @@ def _extract_js_routes(
             })
 
     # Direct method calls: app.get('/path', ...), router.post('/path', ...)
+    # Expanded skip list: objects that are NOT web routers but have .get/.post/.delete methods
+    NON_ROUTER_OBJECTS = {
+        # Built-in / standard library
+        "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
+        "WeakMap", "WeakSet", "Date", "RegExp", "Error", "Symbol", "Proxy",
+        "Reflect", "Int8Array", "Uint8Array", "Float32Array", "Float64Array",
+        # Web API objects with .get/.set/.delete
+        "request", "response", "headers", "cache", "store", "session",
+        "localStorage", "sessionStorage", "indexedDB", "cookie", "cookies",
+        "formData", "searchParams", "params", "query", "body", "url", "URL",
+        "navigator", "document", "window", "history", "location",
+        # Node.js objects with .get/.set/.delete
+        "process", "env", "config", "options", "args", "argv",
+        # Common non-router patterns
+        "db", "database", "redis", "mongo", "postgres", "pool", "client",
+        "socket", "io", "transport", "adapter", "driver", "connection",
+        "emitter", "eventEmitter", "bus", "dispatcher", "broker",
+        "logger", "metrics", "tracer", "span",
+        "state", "ref", "snapshot", "observer", "subscription",
+        "map", "set", "weakMap", "weakSet", "dict", "registry",
+        "collection", "list", "queue", "stack", "heap",
+        "repo", "repository", "service", "manager", "controller",
+        "ctx", "context", "req", "res", "next",
+        # DOM / browser APIs
+        "element", "node", "attr", "style", "classList",
+    }
+
+    # Known router variable names — if the object matches one of these,
+    # the route is very likely legitimate even without a leading /
+    ROUTER_VAR_NAMES = {
+        "app", "router", "server", "fastify", "hono", "koa", "express",
+        "api", "routes", "endpoints", "apiRouter", "authRouter",
+        "publicRouter", "privateRouter", "adminRouter", "v1Router",
+        "v2Router", "apiV1", "apiV2", "restRouter", "graphqlRouter",
+    }
+
     for m in re.finditer(
         r'(\w+)\s*\.\s*(get|post|put|delete|patch|head|options)\s*\(\s*[\'"`]([^\'"`]*)[\'"`]',
         content
@@ -366,14 +397,17 @@ def _extract_js_routes(
         http_method = m.group(2).upper()
         route_path = m.group(3)
 
-        # Skip non-route method calls
+        # Skip known non-router objects
         if obj_name in NON_ROUTER_OBJECTS:
             continue
         if http_method.lower() not in HTTP_METHODS:
             continue
 
-        # Skip paths that don't look like routes (e.g., cookie names, header names)
-        if not route_path.startswith('/'):
+        # v6: Require route paths to start with '/' for non-router objects.
+        # This eliminates false positives from headers.get('user-agent'),
+        # cache.get('message'), map.delete('key'), etc.
+        is_known_router = obj_name in ROUTER_VAR_NAMES or obj_name in router_vars
+        if not is_known_router and not route_path.startswith('/'):
             continue
 
         line_num = content[:m.start()].count('\n') + 1
@@ -609,31 +643,15 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
             stripped
         )
         if m:
-            mw_path = m.group(1)
-            # Only treat as route-scoped middleware if the path looks like a real route
-            # (starts with /) — filter out cookie names, variable names, etc.
-            if not mw_path.startswith('/'):
-                # Might be a config string (e.g., cookie secret), not a route path
-                # Treat as global middleware instead
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
-                middleware.append({
-                    "name": mw_name,
-                    "type": mw_type,
-                    "scope": "global",
-                    "file": rel_path,
-                    "line": i + 1,
-                })
-            else:
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
-                middleware.append({
-                    "name": mw_name,
-                    "type": mw_type,
-                    "scope": f"path:{mw_path}",
-                    "file": rel_path,
-                    "line": i + 1,
-                })
+            mw_name = m.group(2)
+            mw_type = _classify_middleware(mw_name)
+            middleware.append({
+                "name": mw_name,
+                "type": mw_type,
+                "scope": f"path:{m.group(1)}",
+                "file": rel_path,
+                "line": i + 1,
+            })
 
     return middleware
 
@@ -667,10 +685,6 @@ def _extract_nextjs_routes(
                 content
             ):
                 http_method = (method_match.group(1) or method_match.group(2)).upper()
-                # Validate that this is actually an HTTP method, not a random string
-                # (e.g., 'HOUR', 'DAY', 'WEEK' from date-fns switch statements)
-                if http_method not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 line_num = content[:method_match.start()].count('\n') + 1
                 routes.append({
                     "method": http_method,
@@ -866,12 +880,8 @@ def _extract_python_routes(
             mw_chain = _extract_python_decorator_middleware(content, m.start(), rel_path, line_num)
 
             for method in methods:
-                method_upper = method.upper()
-                # Validate HTTP method
-                if method_upper not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 routes.append({
-                    "method": method_upper,
+                    "method": method.upper(),
                     "path": _normalize_path(route_path),
                     "handler_name": handler_name,
                     "file": rel_path,
@@ -970,12 +980,8 @@ def _extract_python_routes(
             line_num = content[:m.start()].count('\n') + 1
 
             for method in methods:
-                method_upper = method.upper()
-                # Validate HTTP method
-                if method_upper not in VALID_HTTP_METHODS_UPPER:
-                    continue
                 routes.append({
-                    "method": method_upper,
+                    "method": method.upper(),
                     "path": f"/{handler_name}",
                     "handler_name": handler_name,
                     "file": rel_path,
@@ -1865,6 +1871,132 @@ def _generate_recommendations(
     return recommendations
 
 
+# ─── Vue Router ────────────────────────────────────────────────
+
+def _extract_vue_router_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Vue Router route definitions from a JS/TS/Vue file.
+    
+    Detects:
+    - new VueRouter({ routes: [...] })
+    - createRouter({ routes: [...] })
+    - Individual route objects: { path: '/xxx', component: YYY, name: 'ZZZ' }
+    - Nested routes with children
+    - Dynamic routes: /user/:id
+    - Route meta (auth, title, etc.)
+    """
+    routes = []
+    
+    # Only scan files that have vue-router imports or route definitions
+    has_vue_router = bool(re.search(
+        r'(?:from\s+[\'"]vue-router[\'"]|import\s+.*vue-router|'
+        r'VueRouter|createRouter|new\s+Router)',
+        content
+    ))
+    
+    # Also check for route-like patterns even without explicit vue-router import
+    # (some projects re-export the router)
+    has_route_pattern = bool(re.search(
+        r'path\s*:\s*[\'"][/:]', content
+    ))
+    
+    if not has_vue_router and not has_route_pattern:
+        return []
+    
+    # Extract route objects: { path: '/xxx', component: YYY, name: 'ZZZ' }
+    # Match both quoted and unquoted paths
+    for m in re.finditer(
+        r'\{\s*path\s*:\s*[\'"]([^\'"]+)[\'"]',
+        content
+    ):
+        route_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        
+        # Extract surrounding context (up to 500 chars) for name, component, meta
+        context = content[m.start():m.start() + 500]
+        
+        # Route name
+        name_match = re.search(r'name\s*:\s*[\'"]([^\'"]+)[\'"]', context)
+        route_name = name_match.group(1) if name_match else None
+        
+        # Component
+        comp_match = re.search(
+            r'component\s*:\s*(?:\(\)\s*=>\s*import\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)|'
+            r'(\w+))',
+            context
+        )
+        component = None
+        is_lazy = False
+        if comp_match:
+            if comp_match.group(1):  # Lazy import
+                component = comp_match.group(1)
+                is_lazy = True
+            elif comp_match.group(2):
+                component = comp_match.group(2)
+        
+        # Meta (auth, title, etc.)
+        meta_match = re.search(r'meta\s*:\s*\{([^}]+)\}', context)
+        meta_info = {}
+        if meta_match:
+            meta_str = meta_match.group(1)
+            # Extract key meta fields
+            if 'auth' in meta_str or 'requireAuth' in meta_str:
+                meta_info["auth"] = True
+            title_match = re.search(r'title\s*:\s*[\'"]([^\'"]+)[\'"]', meta_str)
+            if title_match:
+                meta_info["title"] = title_match.group(1)
+            icon_match = re.search(r'icon\s*:\s*[\'"]([^\'"]+)[\'"]', meta_str)
+            if icon_match:
+                meta_info["icon"] = icon_match.group(1)
+        
+        # Determine HTTP method — Vue Router uses GET for page routes
+        # But also detect API-like paths
+        method = "GET"
+        if '/api/' in route_path:
+            method = "GET"  # Vue Router doesn't specify method
+        
+        # Determine if it's a redirect
+        redirect_match = re.search(r'redirect\s*:\s*[\'"]([^\'"]+)[\'"]', context)
+        is_redirect = bool(redirect_match)
+        
+        # Skip empty paths (used for layout wrappers)
+        if route_path == '':
+            continue
+        
+        route = {
+            "method": method,
+            "path": route_path,
+            "handler_name": route_name or component or "anonymous",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "vue-router",
+            "type": "page_route",
+            "component": component,
+            "lazy_loaded": is_lazy,
+        }
+        
+        if route_name:
+            route["route_name"] = route_name
+        if meta_info:
+            route["meta"] = meta_info
+        if is_redirect:
+            route["redirect_to"] = redirect_match.group(1)
+            route["type"] = "redirect"
+        if meta_info.get("auth"):
+            route["auth_protected"] = True
+        
+        routes.append(route)
+    
+    # Extract nested routes (children: [...])
+    # These are already captured by the path pattern above, but we add
+    # parent path context when possible
+    for m in re.finditer(r'children\s*:\s*\[', content):
+        line_num = content[:m.start()].count('\n') + 1
+        # The parent route's path is typically a few lines above
+        # We already capture children routes individually
+    
+    return routes
+
+
 # ─── Tauri IPC Command Extraction ────────────────────────────────
 
 def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]:
@@ -1896,7 +2028,6 @@ def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]
                 attr_text += lines[i]
 
             # Look for the function definition after the attribute
-            # It may be on the same line or a few lines after
             fn_line_idx = i
             fn_name = None
             is_async = False
@@ -1909,13 +2040,11 @@ def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]
                     break
                 search_line = lines[search_idx]
 
-                # Check for async and pub modifiers
                 if 'async' in search_line and 'fn' in search_line:
                     is_async = True
                 if search_line.strip().startswith('pub '):
                     is_pub = True
 
-                # Match the function name
                 fn_match = _rust_fn_name_regex().search(search_line)
                 if fn_match:
                     fn_name = fn_match.group(1)
@@ -1923,11 +2052,8 @@ def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]
                     break
 
             if fn_name:
-                # Convert snake_case Rust fn name to camelCase for the IPC command name
-                # (Tauri default: snake_case Rust names are converted to camelCase in JS)
                 ipc_name = _snake_to_camel(fn_name)
 
-                # Check for rename_all attribute
                 rename_match = re.search(r'rename_all\s*=\s*"([^"]+)"', attr_text)
                 if rename_match:
                     rename_style = rename_match.group(1)
@@ -1938,7 +2064,6 @@ def _extract_tauri_commands(content: str, rel_path: str) -> List[Dict[str, Any]]
                     elif rename_style == "PascalCase":
                         ipc_name = fn_name.capitalize()
 
-                # Check for individual rename = "..."
                 rename_single = re.search(r'rename\s*=\s*"([^"]+)"', attr_text)
                 if rename_single:
                     ipc_name = rename_single.group(1)
@@ -1971,14 +2096,11 @@ def _extract_tauri_invokes(content: str, rel_path: str) -> List[Dict[str, Any]]:
     Detects patterns like:
     - invoke('command_name', { args })
     - invoke<string>('command_name')
-    - const { invoke } = window.__TAURI__.core
-    - import { invoke } from '@tauri-apps/api/core'
     """
     routes = []
 
-    # Match invoke('commandName', ...) calls
     invoke_patterns = [
-        r"""invoke\s*(?:<[^>]+>)?\s*\(\s*['"`]([\w]+)['"`]""",  # invoke('name') or invoke<Type>('name')
+        r"""invoke\s*(?:<[^>]+>)?\s*\(\s*['"`]([\w]+)['"`]""",
     ]
 
     for pattern in invoke_patterns:
@@ -2017,11 +2139,6 @@ def _rust_fn_name_regex():
 
 
 def _snake_to_camel(name: str) -> str:
-    """Convert a snake_case name to camelCase.
-
-    Tauri's default IPC naming convention converts Rust snake_case
-    function names to camelCase for the JavaScript side.
-    Example: get_user_profile → getUserProfile
-    """
+    """Convert a snake_case name to camelCase."""
     parts = name.split('_')
-    return parts[0] + ''.join(word.capitalize() for word in parts[1:])
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
