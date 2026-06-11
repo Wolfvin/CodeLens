@@ -1175,34 +1175,33 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
     """Parse a natural language question and determine which command to run."""
 
     # Patterns: (keyword_patterns, command, extra_args, confidence)
+    # IMPORTANT: More specific patterns MUST come before generic ones to avoid misrouting.
     patterns = [
-        # Context / definition queries
-        (["where is", "where's", "where does", "find definition", "find def", "show me", "what is", "what's"],
-         "context", {"name": _extract_symbol_name}, "high"),
+        # ─── Specific topic patterns (checked first) ───────────
 
-        # Symbol search
-        (["search for", "find symbol", "find all", "look for"],
-         "symbols", {"name": _extract_symbol_name}, "high"),
-
-        # Dead code
+        # Dead code (very specific — must come before "show me")
         (["dead code", "unused code", "unreachable", "zombie", "not used", "never called", "orphan"],
          "dead-code", {}, "high"),
 
-        # Security
-        (["security", "secret", "api key", "password", "token leak", "vulnerability", "cve", "vuln"],
-         "secrets", {}, "high"),
+        # API routes (specific — "api route" before generic "show me")
+        (["api route", "api routes", "endpoint", "endpoints", "api map", "rest route", "http route", "graphql"],
+         "api-map", {}, "high"),
 
         # Circular dependencies
         (["circular", "cycle", "circular dependency", "circular dep", "dependency cycle"],
          "circular", {}, "high"),
 
-        # API routes
-        (["api route", "endpoint", "api map", "rest route", "http route", "graphql"],
-         "api-map", {}, "high"),
-
         # Entrypoints
         (["entry point", "entrypoint", "main function", "where does it start", "how does it start", "boot"],
          "entrypoints", {}, "high"),
+
+        # Security
+        (["security", "secret", "api key", "password", "token leak", "cve", "vuln"],
+         "secrets", {}, "high"),
+
+        # Vulnerabilities (more specific than generic "security")
+        (["vulnerability", "vulnerable", "security hole"],
+         "vuln-scan", {}, "high"),
 
         # Smells / health
         (["code smell", "smell", "health", "code quality", "code health", "technical debt"],
@@ -1212,14 +1211,6 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["complexity", "complex", "complicated", "cyclomatic", "cognitive complexity"],
          "complexity", {}, "high"),
 
-        # Impact analysis
-        (["what happens if", "impact of", "what if i change", "what if i delete", "can i change", "can i delete", "safe to"],
-         "impact", {"name": _extract_symbol_name, "action": "modify"}, "medium"),
-
-        # Trace
-        (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
-         "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
-
         # Test coverage
         (["test coverage", "tested", "untested", "missing test", "test map"],
          "test-map", {}, "high"),
@@ -1228,9 +1219,9 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["performance", "slow", "perf", "n+1", "memory leak", "bottleneck"],
          "perf-hint", {}, "high"),
 
-        # Vulnerabilities
-        (["vulnerability", "vulnerable", "cve", "security hole"],
-         "vuln-scan", {}, "high"),
+        # Impact analysis
+        (["what happens if", "impact of", "what if i change", "what if i delete", "can i change", "can i delete", "safe to"],
+         "impact", {"name": _extract_symbol_name, "action": "modify"}, "medium"),
 
         # Outline
         (["outline", "structure", "file structure", "what's in", "contents of"],
@@ -1244,9 +1235,35 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         (["debug code", "console.log", "debugger", "todo", "fixme", "leftover"],
          "debug-leak", {}, "high"),
 
-        # State
-        (["state management", "store", "redux", "zustand", "pinia", "global state"],
+        # State management
+        (["state", "store", "zustand", "redux", "pinia", "global state"],
          "state-map", {}, "high"),
+
+        # Side effects
+        (["side effect", "pure function", "impure", "mutation", "side-effect"],
+         "side-effect", {"name": _extract_symbol_name}, "high"),
+
+        # Refactor safety
+        (["refactor", "rename", "move", "safe to rename", "safe to move"],
+         "refactor-safe", {"name": _extract_symbol_name}, "medium"),
+
+        # ─── Generic patterns (checked last) ────────────────────
+
+        # Context / definition queries (generic — "show me", "what is" catch-all)
+        (["where is", "where's", "where does", "find definition", "find def", "what is", "what's"],
+         "context", {"name": _extract_symbol_name}, "high"),
+
+        # Symbol search
+        (["search for", "find symbol", "find all", "look for"],
+         "symbols", {"name": _extract_symbol_name}, "high"),
+
+        # Trace (generic "how does" — after more specific patterns)
+        (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
+         "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
+
+        # Show me (most generic — last resort for "show me X")
+        (["show me"],
+         "context", {"name": _extract_symbol_name}, "low"),
 
         # Scan
         (["scan", "analyze", "index", "build registry", "full analysis"],
@@ -1297,6 +1314,15 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     # Remove trailing question marks and whitespace
     cleaned = cleaned.rstrip("?!. ").strip()
 
+    # Remove common English filler words and type keywords
+    for filler in ["the ", "a ", "an ", "this ", "that ", "these ", "those ",
+                   "function ", "class ", "method ", "variable ", "const ",
+                   "module ", "file ", "component ", "hook ", "type ",
+                   "interface ", "enum "]:
+        cleaned = re.sub(r'^' + re.escape(filler), '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(re.escape(filler.rstrip()) + r'$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+
     # Try to extract code-like identifiers (camelCase, snake_case, PascalCase)
     # Look for backticked names first
     match = re.search(r'`([^`]+)`', q)
@@ -1308,7 +1334,19 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Look for identifier-like patterns
+    # Look for identifier-like patterns — prefer snake_case/camelCase/PascalCase over simple words
+    # First try to find identifiers with underscores or mixed case (likely code names)
+    match = re.search(r'[a-z][a-zA-Z0-9]*_[a-zA-Z0-9_]+', cleaned)
+    if match:
+        return match.group(0)
+    match = re.search(r'[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*', cleaned)
+    if match:
+        return match.group(0)
+    match = re.search(r'[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+', cleaned)
+    if match:
+        return match.group(0)
+
+    # Fallback: any identifier
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
     if match:
         return match.group(0)
@@ -1484,9 +1522,10 @@ def _md_scan(data: Dict, lines: list) -> None:
 
 def _md_query(data: Dict, lines: list) -> None:
     """Markdown for query command."""
-    name = data.get("name", "")
+    # Name can be at top-level or nested in node
+    name = data.get("name", "") or data.get("node", {}).get("fn", "")
     found = data.get("found", False)
-    status = data.get("status", "")
+    status = data.get("status", "") or data.get("node", {}).get("status", "")
     action = data.get("action", "")
     action_reason = data.get("action_reason", "")
 
@@ -1500,8 +1539,40 @@ def _md_query(data: Dict, lines: list) -> None:
         lines.append(f"**Reason:** {action_reason}")
     lines.append("")
 
+    # Callers
+    callers = data.get("callers", [])
+    if callers:
+        lines.append("### Callers")
+        for c in callers[:20]:
+            cfrom = c.get("from", "")
+            cfn = c.get("fn", "")
+            label = f"`{cfn}`" if cfn else ""
+            loc = f"`{cfrom}`" if cfrom else ""
+            if label and loc:
+                lines.append(f"- {label} — {loc}")
+            elif loc:
+                lines.append(f"- {loc}")
+            elif label:
+                lines.append(f"- {label}")
+        lines.append("")
+
+    # Callees
+    callees = data.get("callees", [])
+    if callees:
+        lines.append("### Callees")
+        for c in callees[:20]:
+            cto = c.get("to", "") or c.get("to_fn", "")
+            cfn = c.get("fn", "")
+            resolved = c.get("resolved", True)
+            label = f"`{cfn}`" if cfn else f"`{cto}`"
+            status_str = "" if resolved else " (unresolved)"
+            loc = f" → `{cto}`" if cto and cfn else ""
+            lines.append(f"- {label}{loc}{status_str}")
+        lines.append("")
+
+    # Generic references fallback (for non-backend domains)
     refs = data.get("references", [])
-    if refs:
+    if refs and not callers and not callees:
         lines.append("### References")
         for ref in refs[:20]:
             rtype = ref.get("type", "")
@@ -1615,11 +1686,23 @@ def _md_impact(data: Dict, lines: list) -> None:
     affected = data.get("affected", data.get("affected_files", []))
     if affected:
         lines.append("### Affected")
-        for a in affected[:20]:
-            if isinstance(a, dict):
-                lines.append(f"- `{a.get('file', '')}:{a.get('line', '')}` — {a.get('type', a.get('fn', ''))}")
-            else:
-                lines.append(f"- {a}")
+        if isinstance(affected, dict):
+            # affected is a dict with keys like 'direct', 'indirect'
+            for group_name, items in affected.items():
+                if isinstance(items, list) and items:
+                    if group_name:
+                        lines.append(f"**{group_name.title()}:**")
+                    for a in items[:20]:
+                        if isinstance(a, dict):
+                            lines.append(f"- `{a.get('file', '')}:{a.get('line', '')}` — {a.get('type', a.get('fn', a.get('name', '')))}")
+                        else:
+                            lines.append(f"- {a}")
+        elif isinstance(affected, list):
+            for a in affected[:20]:
+                if isinstance(a, dict):
+                    lines.append(f"- `{a.get('file', '')}:{a.get('line', '')}` — {a.get('type', a.get('fn', ''))}")
+                else:
+                    lines.append(f"- {a}")
         lines.append("")
 
 
@@ -1939,22 +2022,68 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
         '_archive', 'coverage', '.pytest_cache', '.tox',
     }
+    # Common directory name descriptions
+    dir_hints = {
+        'src': 'Application source code',
+        'app': 'Application pages/routes',
+        'lib': 'Shared libraries and utilities',
+        'components': 'UI components',
+        'pages': 'Page components',
+        'api': 'API route handlers',
+        'routes': 'Route definitions',
+        'scripts': 'Build/utility scripts',
+        'skills': 'CodeLens skill modules',
+        'tests': 'Test files',
+        '__tests__': 'Test files',
+        'test': 'Test files',
+        'config': 'Configuration files',
+        'public': 'Static public assets',
+        'assets': 'Static assets',
+        'styles': 'CSS/styling files',
+        'hooks': 'Custom React hooks',
+        'utils': 'Utility functions',
+        'helpers': 'Helper functions',
+        'services': 'Service modules',
+        'models': 'Data models',
+        'types': 'TypeScript type definitions',
+        'interfaces': 'Interface definitions',
+        'store': 'State management',
+        'stores': 'State management stores',
+        'middleware': 'Middleware',
+        'db': 'Database files',
+        'docs': 'Documentation',
+        'examples': 'Example files',
+        'mini-services': 'Microservices',
+        'parsers': 'Parsers',
+        'engines': 'Analysis engines',
+    }
     dir_map = {}
     try:
         for entry in sorted(os.listdir(workspace)):
             full = os.path.join(workspace, entry)
             if os.path.isdir(full) and entry not in ignore_dirs and not entry.startswith('.'):
-                # Count source files in dir (one level)
+                # Count source files in dir (recursive, max depth 3)
                 src_count = 0
                 try:
-                    for f in os.listdir(full):
-                        if os.path.isfile(os.path.join(full, f)):
+                    for root, dirs, filenames in os.walk(full):
+                        depth = root.replace(full, '').count(os.sep)
+                        if depth > 3:
+                            dirs[:] = []
+                            continue
+                        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
+                        for f in filenames:
                             ext = os.path.splitext(f)[1].lower()
                             if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
                                 src_count += 1
                 except Exception:
                     pass
-                desc = f"{src_count} source file{'s' if src_count != 1 else ''}" if src_count else "directory"
+                # Use hint if available, otherwise describe by file count
+                if entry.lower() in dir_hints:
+                    desc = dir_hints[entry.lower()]
+                elif src_count:
+                    desc = f"{src_count} source file{'s' if src_count != 1 else ''}"
+                else:
+                    desc = "directory"
                 dir_map[entry + '/'] = desc
     except Exception:
         pass
@@ -3113,7 +3242,6 @@ def main():
             if result.get("found") and result.get("context"):
                 quality = {}
                 try:
-                    from complexity_engine import compute_complexity
                     comp = compute_complexity(workspace, function_name=args.name)
                     if comp.get("status") == "ok" and comp.get("result"):
                         fn_data = comp["result"]
@@ -3127,7 +3255,6 @@ def main():
                     pass
 
                 try:
-                    from sideeffect_engine import analyze_side_effects
                     se = analyze_side_effects(workspace, function_name=args.name)
                     if se.get("status") == "ok":
                         analyses = se.get("analyses", [])
@@ -3157,7 +3284,6 @@ def main():
 
                 # Check if in smell top_priority
                 try:
-                    from smell_engine import detect_smells
                     smells = detect_smells(workspace)
                     for s in smells.get("top_priority", []):
                         fn_name = s.get("fn", "")
@@ -3168,7 +3294,6 @@ def main():
 
                 # Test coverage hint
                 try:
-                    from testmap_engine import map_test_coverage
                     tc = map_test_coverage(workspace, function_name=args.name)
                     if tc.get("status") == "ok":
                         coverage = tc.get("coverage", {})

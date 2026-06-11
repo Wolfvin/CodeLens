@@ -813,22 +813,22 @@ def _extract_entrypoints(
             if extract_type == "http_route":
                 method_group = pattern_def.get("method_group")
                 path_group = pattern_def.get("path_group")
-                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex >= method_group else "GET"
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
+                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex is not None and match.lastindex >= method_group else "GET"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "http_route_reverse":
                 method_group = pattern_def.get("method_group")
                 path_group = pattern_def.get("path_group")
-                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex >= method_group else "GET"
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
+                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex is not None and match.lastindex >= method_group else "GET"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "flask_route":
                 path_group = pattern_def.get("path_group")
                 methods_group = pattern_def.get("methods_group")
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
-                if methods_group and match.lastindex >= methods_group and match.group(methods_group):
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
+                if methods_group and match.lastindex is not None and match.lastindex >= methods_group and match.group(methods_group):
                     methods_str = match.group(methods_group)
                     entrypoint["method"] = methods_str.strip().strip("'\"")
                 else:
@@ -838,13 +838,13 @@ def _extract_entrypoints(
             elif extract_type == "django_path":
                 path_group = pattern_def.get("path_group")
                 handler_group = pattern_def.get("handler_group")
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
                 entrypoint["method"] = "ANY"
-                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex >= handler_group else "unknown"
+                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex is not None and match.lastindex is not None and match.lastindex >= handler_group else "unknown"
 
             elif extract_type == "next_api_route":
                 method_group = pattern_def.get("method_group")
-                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex >= method_group else "GET"
+                entrypoint["method"] = match.group(method_group).upper() if method_group and match.lastindex is not None and match.lastindex >= method_group else "GET"
                 # Path is derived from file location
                 entrypoint["path"] = _path_from_file(rel_path)
                 entrypoint["handler"] = match.group(method_group).upper() if method_group else "handler"
@@ -852,50 +852,50 @@ def _extract_entrypoints(
             elif extract_type == "trpc_procedure":
                 path_group = pattern_def.get("path_group")
                 entrypoint["method"] = "MUTATION" if "mutation" in pattern_def.get("label", "") else "QUERY"
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "spring_route":
                 path_group = pattern_def.get("path_group")
                 entrypoint["method"] = _method_from_spring_label(pattern_def.get("label", ""))
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex >= path_group else "/"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
 
             elif extract_type == "event_name":
                 event_group = pattern_def.get("event_group")
-                entrypoint["event"] = match.group(event_group) if event_group and match.lastindex >= event_group else "unknown"
+                entrypoint["event"] = match.group(event_group) if event_group and match.lastindex is not None and match.lastindex >= event_group else "unknown"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "cli_command":
                 command_group = pattern_def.get("command_group")
-                entrypoint["command"] = match.group(command_group) if command_group and match.lastindex >= command_group else "unknown"
+                entrypoint["command"] = match.group(command_group) if command_group and match.lastindex is not None and match.lastindex >= command_group else "unknown"
 
             elif extract_type == "cron_schedule":
                 schedule_group = pattern_def.get("schedule_group")
-                entrypoint["schedule"] = match.group(schedule_group) if schedule_group and match.lastindex >= schedule_group else "* * * * *"
+                entrypoint["schedule"] = match.group(schedule_group) if schedule_group and match.lastindex is not None and match.lastindex >= schedule_group else "* * * * *"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "handler":
                 handler_group = pattern_def.get("handler_group")
-                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex >= handler_group else "unknown"
+                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex is not None and match.lastindex is not None and match.lastindex >= handler_group else "unknown"
 
             elif extract_type == "handler_only":
                 entrypoint["handler"] = "anonymous"
 
             elif extract_type == "worker_file":
                 path_group = pattern_def.get("path_group")
-                entrypoint["worker_file"] = match.group(path_group) if path_group and match.lastindex >= path_group else "unknown"
+                entrypoint["worker_file"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "unknown"
 
             elif extract_type == "queue_name" or extract_type == "consumer_group":
                 name_group = pattern_def.get("name_group")
-                entrypoint["name"] = match.group(name_group) if name_group and match.lastindex >= name_group else "unknown"
+                entrypoint["name"] = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
 
             elif extract_type == "test_name":
                 name_group = pattern_def.get("name_group")
-                entrypoint["test_name"] = match.group(name_group) if name_group and match.lastindex >= name_group else "unknown"
+                entrypoint["test_name"] = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
 
             elif extract_type == "click_command":
                 command_group = pattern_def.get("command_group")
-                entrypoint["command"] = match.group(command_group) if command_group and match.lastindex >= command_group else None
+                entrypoint["command"] = match.group(command_group) if command_group and match.lastindex is not None and match.lastindex >= command_group else None
                 if not entrypoint.get("command"):
                     # Get from next def line
                     entrypoint["command"] = _find_click_command_name(content, line_num)
