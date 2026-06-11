@@ -20,24 +20,15 @@ import re
 from typing import Dict, List, Any, Optional
 from tree_sitter import Node
 
-from base_parser import BaseParser
+from base_parser import BaseParser, JS_TS_SKIP_NAMES_BASE, JS_TSX_SKIP_NAMES_EXTRA
 from grammar_loader import get_grammar_loader
 
 
 class TSXParser(BaseParser):
     """Parse TSX/JSX files to extract class/id references and function declarations."""
 
-    # Same skip list as JS backend
-    SKIP_NAMES = {
-        'if', 'else', 'for', 'while', 'switch', 'catch', 'return', 'throw',
-        'const', 'let', 'var', 'function', 'class', 'new', 'typeof', 'instanceof',
-        'async', 'await', 'yield', 'import', 'export', 'from', 'default',
-        'try', 'finally', 'break', 'continue', 'do', 'in', 'of',
-        'true', 'false', 'null', 'undefined', 'void', 'delete',
-        'console', 'require', 'module', 'exports', 'React', 'useState', 'useEffect',
-        'useRef', 'useCallback', 'useMemo', 'useContext', 'useReducer',
-        'String', 'Number', 'Boolean', 'Array', 'Object', 'Promise', 'Error',
-    }
+    # Same skip list as JS backend + React hooks
+    SKIP_NAMES = JS_TS_SKIP_NAMES_BASE | JS_TSX_SKIP_NAMES_EXTRA
 
     def __init__(self):
         loader = get_grammar_loader()
@@ -410,11 +401,5 @@ class TSXParser(BaseParser):
         return None
 
     def _get_string_value(self, node: Node, source: bytes) -> Optional[str]:
-        """Extract string value, removing quotes."""
-        text = self.get_text(node, source)
-        if (text.startswith('"') and text.endswith('"')) or \
-           (text.startswith("'") and text.endswith("'")):
-            return text[1:-1]
-        if text.startswith('`'):
-            return None  # Template literal handled separately
-        return None
+        """Extract string value, removing quotes. Delegates to BaseParser.get_string_value."""
+        return self.get_string_value(node, source)

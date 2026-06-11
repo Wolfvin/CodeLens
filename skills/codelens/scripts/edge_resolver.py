@@ -311,3 +311,100 @@ def _to_alternate_case(name: str) -> str:
 
     # No conversion needed
     return leading + name
+
+
+# ─── Tauri IPC Cross-Language Edge Resolution ──────────────────
+
+def resolve_tauri_ipc_from_apimap(
+    nodes: List[Dict],
+    edges: List[Dict],
+    api_routes: List[Dict]
+) -> List[Dict]:
+    """Resolve cross-language Tauri IPC edges from API map data.
+
+    In Tauri apps, the frontend calls Rust backend functions via the invoke()
+    IPC bridge: invoke('commandName') → Rust #[tauri::command] handler.
+    This function creates edges connecting TypeScript invoke() calls to their
+    Rust command handlers, which would otherwise appear "dead" since no
+    Rust code calls them directly.
+
+    Args:
+        nodes: Resolved node list (already processed by resolve_edges).
+        edges: Resolved edge list (already processed by resolve_edges).
+        api_routes: API routes from apimap_engine, each with handler_name etc.
+
+    Returns:
+        Updated edges list with new IPC cross-language edges appended.
+    """
+    if not api_routes:
+        return edges
+
+    # Build lookup: fn_name → node (for Rust handlers and TS invoke sites)
+    fn_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+    for node in nodes:
+        fn_to_nodes[node["fn"]].append(node)
+
+    # Also build alternate-case index for snake_case ↔ camelCase
+    alt_index: Dict[str, List[Dict]] = defaultdict(list)
+    for node in nodes:
+        alt_key = _to_alternate_case(node["fn"])
+        if alt_key != node["fn"]:
+            alt_index[alt_key].append(node)
+
+    new_edges = []
+
+    for route in api_routes:
+        handler_name = route.get("handler_name", "")
+        route_file = route.get("file", "")
+        route_line = route.get("line", 0)
+
+        if not handler_name:
+            continue
+
+        # Find Rust handler node (snake_case: process_order)
+        rust_candidates = fn_to_nodes.get(handler_name, [])
+        if not rust_candidates:
+            # Try alternate case (camelCase → snake_case)
+            alt_key = _to_alternate_case(handler_name)
+            rust_candidates = fn_to_nodes.get(alt_key, []) + alt_index.get(handler_name, [])
+
+        # Find TS invoke site node (camelCase: processOrder)
+        ts_candidates = fn_to_nodes.get(handler_name, [])
+        if not ts_candidates:
+            alt_key = _to_alternate_case(handler_name)
+            ts_candidates = fn_to_nodes.get(alt_key, []) + alt_index.get(handler_name, [])
+
+        # If we found a route but no handler node, create a synthetic edge
+        # from the route file to the best-matching Rust handler
+        for rust_node in rust_candidates:
+            # Skip if same-language (both Rust) — not an IPC edge
+            rust_file = rust_node.get("file", "")
+            if route_file and route_file != rust_file:
+                # This is a cross-language edge
+                route_node_id = f"{route_file}:{route_line}" if route_file else ""
+                if route_node_id and route_node_id != rust_node["id"]:
+                    edge = {
+                        "from": route_node_id,
+                        "to": rust_node["id"],
+                        "ipc": "tauri"
+                    }
+                    new_edges.append(edge)
+                    # Mark the Rust node as IPC-exposed
+                    rust_node["is_tauri_command"] = True
+
+    # Deduplicate edges
+    seen = set()
+    for edge in edges:
+        key = (edge.get("from", ""), edge.get("to", ""), edge.get("ipc", ""))
+        seen.add(key)
+
+    for edge in new_edges:
+        key = (edge.get("from", ""), edge.get("to", ""), edge.get("ipc", ""))
+        if key not in seen:
+            edges.append(edge)
+            seen.add(key)
+
+    # Invalidate edge cache since we modified the edges list
+    _edge_cache["fingerprint"] = None
+
+    return edges

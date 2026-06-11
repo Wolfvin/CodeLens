@@ -32,6 +32,7 @@ v4 improvements:
 import os
 import re
 import math
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
@@ -46,6 +47,8 @@ SOURCE_EXTENSIONS = {
 
 # Performance limits for large codebases
 MAX_FILES_PER_RUN = 3000
+MAX_RESULTS_PER_RUN = 200     # Cap findings to avoid output explosion
+GLOBAL_TIMEOUT_SEC = 90       # Bail out after this many seconds
 
 # ─── Secret Pattern Definitions ────────────────────────────────
 
@@ -350,6 +353,7 @@ def detect_secrets(
     env_exposed: List[str] = []
     files_scanned = 0
     truncated = False
+    start_time = time.time()
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -365,6 +369,11 @@ def detect_secrets(
 
             # File-count limit to prevent timeout on huge repos
             if files_scanned >= max_files:
+                truncated = True
+                break
+
+            # Time budget check
+            if time.time() - start_time > GLOBAL_TIMEOUT_SEC:
                 truncated = True
                 break
 
@@ -429,7 +438,7 @@ def detect_secrets(
         "severity_filter": severity,
         "stats": {**stats, "truncated": truncated},
         "risk": risk,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "findings": findings[:MAX_RESULTS_PER_RUN],
         "env_exposed": env_exposed,
         "recommendations": recommendations,
     }

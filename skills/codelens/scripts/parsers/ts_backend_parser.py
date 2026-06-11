@@ -21,26 +21,12 @@ Handles:
 from typing import Dict, List, Any, Optional, Tuple
 from tree_sitter import Node
 
-from base_parser import BaseParser
+from base_parser import BaseParser, JS_TS_SKIP_NAMES_BASE, JS_TS_BACKEND_SKIP_NAMES_EXTRA
 from grammar_loader import get_grammar_loader
 
 
 # TS/JS keywords and builtins to skip when detecting function calls
-SKIP_NAMES = {
-    'if', 'else', 'for', 'while', 'switch', 'catch', 'return', 'throw',
-    'const', 'let', 'var', 'function', 'class', 'new', 'typeof', 'instanceof',
-    'async', 'await', 'yield', 'import', 'export', 'from', 'default',
-    'try', 'finally', 'break', 'continue', 'do', 'in', 'of',
-    'true', 'false', 'null', 'undefined', 'void', 'delete',
-    'console', 'require', 'module', 'exports', 'process', 'global',
-    'String', 'Number', 'Boolean', 'Array', 'Object', 'Map', 'Set',
-    'Promise', 'Error', 'TypeError', 'RangeError', 'SyntaxError',
-    'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
-    'decodeURIComponent', 'encodeURI', 'decodeURI',
-    'JSON', 'Date', 'RegExp', 'Math', 'Buffer', 'setTimeout', 'setInterval',
-    'clearTimeout', 'clearInterval', 'setImmediate', 'clearImmediate',
-    'addEventListener', 'removeEventListener',
-}
+SKIP_NAMES = JS_TS_SKIP_NAMES_BASE | JS_TS_BACKEND_SKIP_NAMES_EXTRA
 
 
 class TSBackendParser(BaseParser):

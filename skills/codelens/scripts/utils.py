@@ -48,6 +48,28 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+# ─── Performance Limits (shared across engines) ────────────────
+
+MAX_FILE_SIZE = 200 * 1024      # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000        # Max files to scan before truncation
+
+
+def time_budget_expired(start_time: float, budget_sec: float) -> bool:
+    """Check if the time budget has expired.
+
+    Used by engines (envcheck, secrets, etc.) to avoid timeout on very large
+    codebases by bailing out early when the scan exceeds the budget.
+
+    Args:
+        start_time: Monotonic start time from time.time().
+        budget_sec: Maximum seconds allowed for the operation.
+
+    Returns:
+        True if the budget has been exceeded, False otherwise.
+    """
+    import time as _time
+    return (_time.time() - start_time) > budget_sec
+
 
 def should_ignore_dir(rel_path: str, extra_ignore: Optional[frozenset] = None) -> bool:
     """Check if a relative directory path should be ignored.

@@ -7,6 +7,41 @@ from typing import Dict, List, Any, Optional, Tuple
 from tree_sitter import Language, Parser, Node
 
 
+# ─── Shared Skip Name Sets ─────────────────────────────────────
+# Common identifiers that are NOT user-defined functions and should be
+# skipped when building call-graph edges.  Each parser can extend these
+# with language-specific entries.
+
+# JavaScript/TypeScript keywords + builtins shared by all JS-family parsers
+JS_TS_SKIP_NAMES_BASE = frozenset({
+    'if', 'else', 'for', 'while', 'switch', 'catch', 'return', 'throw',
+    'const', 'let', 'var', 'function', 'class', 'new', 'typeof', 'instanceof',
+    'async', 'await', 'yield', 'import', 'export', 'from', 'default',
+    'try', 'finally', 'break', 'continue', 'do', 'in', 'of',
+    'true', 'false', 'null', 'undefined', 'void', 'delete',
+    'console', 'require', 'module', 'exports',
+    'String', 'Number', 'Boolean', 'Array', 'Object', 'Promise', 'Error',
+})
+
+# Node.js / backend-specific builtins (shared by js_backend & ts_backend)
+JS_TS_BACKEND_SKIP_NAMES_EXTRA = frozenset({
+    'process', 'global',
+    'Map', 'Set',
+    'TypeError', 'RangeError', 'SyntaxError',
+    'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent',
+    'decodeURIComponent', 'encodeURI', 'decodeURI',
+    'JSON', 'Date', 'RegExp', 'Math', 'Buffer', 'setTimeout', 'setInterval',
+    'clearTimeout', 'clearInterval', 'setImmediate', 'clearImmediate',
+    'addEventListener', 'removeEventListener',
+})
+
+# React / frontend-specific builtins (used by tsx_parser)
+JS_TSX_SKIP_NAMES_EXTRA = frozenset({
+    'React', 'useState', 'useEffect',
+    'useRef', 'useCallback', 'useMemo', 'useContext', 'useReducer',
+})
+
+
 class BaseParser:
     """Base class for all tree-sitter based parsers."""
 
@@ -106,4 +141,24 @@ class BaseParser:
                             fn_name = self.get_text(child, source)
                             return (fn_name, self.get_line(current))
             current = current.parent
+        return None
+
+    @staticmethod
+    def get_string_value(node: Node, source: bytes) -> Optional[str]:
+        """Extract the string value from a string node, removing quotes.
+
+        Returns None for template literals (backtick strings) or non-literal
+        strings, as they may contain dynamic expressions.
+
+        This is the shared version of _get_string_value used by multiple parsers
+        (tsx, js_frontend, etc.) to avoid duplication.
+        """
+        text = source[node.start_byte:node.end_byte].decode('utf-8', errors='replace')
+        # Remove quotes
+        if (text.startswith('"') and text.endswith('"')) or \
+           (text.startswith("'") and text.endswith("'")):
+            return text[1:-1]
+        # Template literal — skip (dynamic)
+        if text.startswith('`'):
+            return None
         return None
