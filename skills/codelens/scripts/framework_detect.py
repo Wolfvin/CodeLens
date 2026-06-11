@@ -150,10 +150,16 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["turbo.json"],
         "indicators": []
     },
+    # Alternative React-like frameworks
+    "preact": {
+        "packages": ["preact", "@preact/compat", "@preact/signals"],
+        "config_files": ["preact.config.js"],
+        "indicators": ["preact/"]
+    },
     # Desktop frameworks
     "tauri": {
-        "packages": ["@tauri-apps/api"],
-        "config_files": ["src-tauri/tauri.conf.json"],
+        "packages": ["@tauri-apps/api", "@tauri-apps/core"],
+        "config_files": ["src-tauri/tauri.conf.json", "tauri.conf.json"],
         "indicators": []
     },
     "electron": {
@@ -201,6 +207,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     detected = {
         "frameworks": [],
         "has_react": False,
+        "has_preact": False,
         "has_vue": False,
         "has_svelte": False,
         "has_tailwind": False,
@@ -249,6 +256,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append(fw_name)
                     if fw_name == "react":
                         detected["has_react"] = True
+                    elif fw_name == "preact":
+                        detected["has_preact"] = True
                     elif fw_name == "next.js":
                         detected["has_nextjs"] = True
                     elif fw_name == "vue":
@@ -308,7 +317,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
             # Check one level deep for monorepo (apps/*, packages/*, src-tauri/*)
             found_in_subdir = False
-            for subdir in ('apps', 'packages', 'projects', 'services', 'src-tauri'):
+            for subdir in ('apps', 'packages', 'projects', 'services', 'src-tauri', 'src'):
                 subdir_path = os.path.join(workspace, subdir)
                 if not os.path.isdir(subdir_path):
                     continue
@@ -382,26 +391,44 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 3d. Check Cargo.toml for Rust dependencies (Tauri, Axum, Actix, etc.)
     cargo_deps = set()
-    _find_cargo_toml = lambda ws: [
-        os.path.join(ws, "Cargo.toml"),
-        os.path.join(ws, "src-tauri", "Cargo.toml"),
+    # Also find Cargo.toml in workspace members (libs/*, crates/*)
+    cargo_paths = [
+        os.path.join(workspace, "Cargo.toml"),
+        os.path.join(workspace, "src-tauri", "Cargo.toml"),
+        os.path.join(workspace, "src", "Cargo.toml"),
     ]
+    # Auto-discover Cargo.toml in libs/, crates/, members/ subdirs
+    for subdir in ('libs', 'crates', 'members', 'packages'):
+        subdir_path = os.path.join(workspace, subdir)
+        if os.path.isdir(subdir_path):
+            for entry in os.listdir(subdir_path):
+                cargo_cand = os.path.join(subdir_path, entry, "Cargo.toml")
+                if os.path.isfile(cargo_cand) and cargo_cand not in cargo_paths:
+                    cargo_paths.append(cargo_cand)
 
-    for cargo_path in _find_cargo_toml(workspace):
+    for cargo_path in cargo_paths:
         if not os.path.exists(cargo_path):
             continue
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 cargo_content = f.read()
-            # Parse [dependencies] section — extract crate names
+            # Parse [dependencies] AND [workspace.dependencies] sections
             in_deps = False
             for line in cargo_content.split('\n'):
                 stripped = line.strip()
-                if stripped == '[dependencies]':
+                # Match both [dependencies] and [workspace.dependencies]
+                if stripped == '[dependencies]' or stripped == '[workspace.dependencies]':
+                    in_deps = True
+                    continue
+                # Also handle [dev-dependencies] for test frameworks
+                if stripped == '[dev-dependencies]':
                     in_deps = True
                     continue
                 if stripped.startswith('[') and in_deps:
-                    break  # End of [dependencies] section
+                    # Only break if it's NOT workspace.dependencies → dependencies transition
+                    if stripped != '[dependencies]':
+                        in_deps = False
+                        continue
                 if in_deps and '=' in stripped:
                     crate_name = stripped.split('=')[0].strip().lower()
                     if crate_name:

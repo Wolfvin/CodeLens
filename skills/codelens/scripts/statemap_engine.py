@@ -170,6 +170,30 @@ def map_state(
                     stores.extend(xstate_results["stores"])
                     state_flow.extend(xstate_results["flow"])
 
+            # ─── Svelte Stores ────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte"}:
+                svelte_store_results = _extract_svelte_stores(content, rel_path)
+                if svelte_store_results["stores"]:
+                    frameworks_detected.add("svelte_stores")
+                    stores.extend(svelte_store_results["stores"])
+                    state_flow.extend(svelte_store_results["flow"])
+
+            # ─── Svelte 5 Runes ──────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte"}:
+                runes_results = _extract_svelte_runes(content, rel_path)
+                if runes_results["stores"]:
+                    frameworks_detected.add("svelte_runes")
+                    stores.extend(runes_results["stores"])
+                    state_flow.extend(runes_results["flow"])
+
+            # ─── Preact Signals ──────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                preact_results = _extract_preact_signals(content, rel_path)
+                if preact_results["stores"]:
+                    frameworks_detected.add("preact_signals")
+                    stores.extend(preact_results["stores"])
+                    state_flow.extend(preact_results["flow"])
+
             # ─── Module-level State ────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 global_results = _extract_js_global_state(content, rel_path)
@@ -1061,6 +1085,186 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
             "to": machine_name,
             "file": rel_path,
             "type": "read_write",
+        })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── Svelte Stores ─────────────────────────────────────────────
+
+def _extract_svelte_stores(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Svelte stores: writable(), readable(), derived().
+
+    Detects:
+    - import { writable, readable, derived } from 'svelte/store'
+    - const count = writable(0)
+    - const name = readable('initial')
+    - const doubled = derived(count, $ => $ * 2)
+    """
+    stores = []
+    flow = []
+
+    has_svelte_store = bool(re.search(
+        r"(?:from\s+['\"]svelte/store['\"]|import\s+.*svelte/store)",
+        content
+    ))
+    if not has_svelte_store and not re.search(r'\bwritable\s*\(|\breadable\s*\(|\bderived\s*\(', content):
+        return {"stores": [], "flow": []}
+
+    # Extract store declarations
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(writable|readable|derived)\s*\(',
+        content
+    ):
+        name, store_type = m.group(1), m.group(2)
+        stores.append({
+            "name": name,
+            "type": "store",
+            "framework": "svelte_stores",
+            "store_type": store_type,
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── Svelte 5 Runes ────────────────────────────────────────────
+
+def _extract_svelte_runes(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Svelte 5 runes: $state, $derived, $effect, $props.
+
+    Detects:
+    - let count = $state(0)
+    - let doubled = $derived(count * 2)
+    - $effect(() => { ... })
+    - let { name } = $props()
+    - Also .svelte.ts files that use runes
+    """
+    stores = []
+    flow = []
+
+    # $state rune
+    for m in re.finditer(r'(?:let|const|var)\s+(\w+)\s*=\s*\$state\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "reactive_state",
+            "framework": "svelte_runes",
+            "rune_type": "$state",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # $derived rune
+    for m in re.finditer(r'(?:let|const|var)\s+(\w+)\s*=\s*\$derived\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "reactive_state",
+            "framework": "svelte_runes",
+            "rune_type": "$derived",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # $effect rune
+    for m in re.finditer(r'\$effect\s*\(', content):
+        stores.append({
+            "name": f"effect@{content[:m.start()].count(chr(10)) + 1}",
+            "type": "side_effect",
+            "framework": "svelte_runes",
+            "rune_type": "$effect",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # $props rune
+    for m in re.finditer(r'(?:let|const)\s*\{([^}]+)\}\s*=\s*\$props\s*\(', content):
+        props_str = m.group(1)
+        for prop in re.findall(r'(\w+)', props_str):
+            stores.append({
+                "name": prop,
+                "type": "prop",
+                "framework": "svelte_runes",
+                "rune_type": "$props",
+                "defined_in": rel_path,
+                "line": content[:m.start()].count('\n') + 1,
+                "consumers": [],
+                "actions": [],
+            })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── Preact Signals ────────────────────────────────────────────
+
+def _extract_preact_signals(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Preact signals: signal(), computed(), effect().
+
+    Detects:
+    - import { signal, computed, effect } from '@preact/signals'
+    - const count = signal(0)
+    - const doubled = computed(() => count.value * 2)
+    - effect(() => { console.log(count.value) })
+    """
+    stores = []
+    flow = []
+
+    has_preact_signals = bool(re.search(
+        r"(?:from\s+['\"]@preact/signals['\"]|import\s+.*@preact/signals)",
+        content
+    ))
+    if not has_preact_signals and not re.search(r'\bsignal\s*\(|\bcomputed\s*\(', content):
+        return {"stores": [], "flow": []}
+
+    # Extract signal declarations
+    for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=\s*signal\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "signal",
+            "framework": "preact_signals",
+            "signal_type": "signal",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # Extract computed signals
+    for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=\s*computed\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "signal",
+            "framework": "preact_signals",
+            "signal_type": "computed",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # Extract effect calls
+    for m in re.finditer(r'\beffect\s*\(', content):
+        stores.append({
+            "name": f"effect@{content[:m.start()].count(chr(10)) + 1}",
+            "type": "side_effect",
+            "framework": "preact_signals",
+            "signal_type": "effect",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
         })
 
     return {"stores": stores, "flow": flow}

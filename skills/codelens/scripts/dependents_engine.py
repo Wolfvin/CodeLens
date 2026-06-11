@@ -200,7 +200,7 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     # JS/TS imports
-    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue'}
+    js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte'}
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         if '.codelens' in root:
