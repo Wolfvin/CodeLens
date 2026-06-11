@@ -25,7 +25,14 @@ def get_all_commands():
 # Auto-import all command modules to trigger registration
 import os
 import importlib
+import logging
+
 _commands_dir = os.path.dirname(__file__)
 for fname in sorted(os.listdir(_commands_dir)):
     if fname.endswith('.py') and fname != '__init__.py':
-        importlib.import_module(f'.{fname[:-3]}', package='commands')
+        try:
+            importlib.import_module(f'.{fname[:-3]}', package='commands')
+        except Exception as e:
+            logging.getLogger('codelens').warning(
+                f"Failed to import command module '{fname}': {e}"
+            )

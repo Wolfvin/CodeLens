@@ -1,27 +1,35 @@
 """
 Grammar Loader for CodeLens
 Loads tree-sitter grammars for all supported languages.
-Handles lazy loading and caching.
+Handles lazy loading, caching, and API compatibility across tree-sitter versions.
 """
 
+import threading
 from typing import Dict, Optional
-from tree_sitter import Language, Parser
+
+try:
+    from tree_sitter import Language, Parser
+except ImportError:
+    Language = None
+    Parser = None
 
 
 class GrammarLoader:
-    """Lazy-loads and caches tree-sitter grammars."""
+    """Lazy-loads and caches tree-sitter grammars. Thread-safe singleton."""
 
     _instance = None
+    _lock = threading.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._languages = {}
-            cls._instance._parsers = {}
-            cls._instance._initialized = True
-        return cls._instance
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._languages = {}
+                cls._instance._parsers = {}
+                cls._instance._initialized = True
+            return cls._instance
 
-    def get_language(self, lang_name: str) -> Optional[Language]:
+    def get_language(self, lang_name: str) -> Optional['Language']:
         """Get a tree-sitter language by name. Returns None if not available."""
         if lang_name in self._languages:
             return self._languages[lang_name]
@@ -31,21 +39,38 @@ class GrammarLoader:
             self._languages[lang_name] = lang
         return lang
 
-    def get_parser(self, lang_name: str) -> Optional[Parser]:
-        """Get a tree-sitter parser for a language."""
+    def get_parser(self, lang_name: str) -> Optional['Parser']:
+        """Get a tree-sitter parser for a language.
+
+        Handles API differences between tree-sitter versions:
+        - v0.21.x: Parser(lang) constructor
+        - v0.22+: parser.language = lang setter
+        """
         if lang_name in self._parsers:
             return self._parsers[lang_name]
 
         lang = self.get_language(lang_name)
-        if not lang:
+        if not lang or Parser is None:
             return None
 
-        parser = Parser(lang)
+        try:
+            # Try modern API first (tree-sitter >= 0.22)
+            parser = Parser()
+            parser.language = lang
+        except (TypeError, AttributeError):
+            try:
+                # Fallback to legacy API (tree-sitter < 0.22)
+                parser = Parser(lang)
+            except (TypeError, Exception):
+                return None
+
         self._parsers[lang_name] = parser
         return parser
 
-    def _load_grammar(self, lang_name: str) -> Optional[Language]:
+    def _load_grammar(self, lang_name: str) -> Optional['Language']:
         """Load a specific grammar. Returns None if the package is not installed."""
+        if Language is None:
+            return None
         try:
             if lang_name == 'html':
                 import tree_sitter_html as ts

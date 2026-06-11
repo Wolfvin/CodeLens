@@ -31,7 +31,7 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
-  v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
+  v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity, performance safeguards (MAX_FILE_SIZE, MAX_FILES, global timeout), handbook --quick mode, engine status tracking, lazy imports, thread-safe grammar loader, modern tree-sitter API support, graceful command import, safe_read_file utility.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
@@ -50,6 +50,14 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **State map constant/component filtering**: Skips ALL_CAPS constants (MAX_FILES, etc.), React components (arrow functions, forwardRef, memo, styled), and immutable values. State stores dropped from 825 false positives to ~150 real ones. Removed module.exports scanning that classified every exported function as a store.
 - **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist. No longer defaults to `node-project` for Rust+TS monorepos.
 - **Entrypoints markdown fix**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation. Uses angle brackets instead.
+- **Performance safeguards**: New shared utilities `safe_read_file()` (size-limited reads), `should_ignore_dir()` (path-segment-aware ignore), `time_budget_expired()` (global timeout). Constants `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000), `GLOBAL_TIMEOUT_SEC` (120s). Prevents out-of-memory and timeout on massive codebases (29K+ files).
+- **env-check now works on large repos**: Added file size limits, file count limits (5000), and global timeout (90s). Previously returned empty output on large codebases due to unbounded file walking. Now reports `truncated: true` when limits are hit.
+- **Handbook `--quick` mode**: Skip expensive engines (secrets, vuln-scan, circular, dead-code) for faster results on large codebases. Use `handbook --quick` or `handbook -q`.
+- **Handbook engine status tracking**: Reports `engines_ok` and `engines_failed` in `meta`. Overall status is `ok`, `degraded`, or `error` instead of always `ok`.
+- **Lazy imports in `ask` command**: All 17 engine imports moved from module-level to inside `_execute_ask_command()`. Reduces CLI startup time significantly.
+- **Thread-safe grammar loader**: `GrammarLoader` singleton now uses `threading.Lock()` for thread safety in watch command. Also supports both legacy and modern tree-sitter API (`Parser(lang)` and `parser.language = lang`).
+- **Graceful command import**: `commands/__init__.py` now wraps each command module import in try/except, so one failing module doesn't prevent others from registering.
+- **Bug fixes**: Fixed `should_ignore_dir` ImportError in tailwind_detector.py, fixed `safe_read_file` import in a11y_engine.py, replaced silent `except Exception: pass` blocks with proper logging, unified version references to 6.0.0, CLI version now uses `CODELENS_VERSION` constant.
 
 ## What's New in v5
 
@@ -216,9 +224,18 @@ python3 "$CODELENS_DIR/scripts/codelens.py" handbook [/path/to/workspace]
 
 # Markdown output (direct LLM consumption)
 python3 "$CODELENS_DIR/scripts/codelens.py" handbook --format markdown
+
+# Quick mode — skip expensive engines for large codebases (NEW v6)
+python3 "$CODELENS_DIR/scripts/codelens.py" handbook --quick
+python3 "$CODELENS_DIR/scripts/codelens.py" handbook -q
 ```
 
-**Returns:** identity (name, version, type, frameworks), structure (directory map, entrypoints, API routes, state management), health (score, smells, risks), conventions (naming, patterns), risks (circular deps, dead code, secrets, vulnerabilities), quick reference (file/function/class counts).
+**Returns:** identity (name, version, type, frameworks), structure (directory map, entrypoints, API routes, state management), health (score, smells, risks), conventions (naming, patterns), risks (circular deps, dead code, secrets, vulnerabilities), quick reference (file/function/class counts), meta (engines_ok, engines_failed, quick_mode).
+
+**v6 Changes:**
+- `--quick` flag skips secrets, vuln-scan, circular, and dead-code engines for faster results
+- `meta.engines_ok` and `meta.engines_failed` track which engines succeeded
+- `status` is now `ok`, `degraded`, or `error` based on engine results
 
 ### 8. `codelens_ask` — Natural Language Query (NEW v5.2)
 

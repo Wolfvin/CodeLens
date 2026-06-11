@@ -28,9 +28,10 @@ Additional detection:
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, MAX_FILES_DEFAULT, time_budget_expired
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -62,6 +63,11 @@ NON_SECRET_PATTERNS = {
     "timeout", "retry", "count", "size", "limit",
 }
 
+# Performance limits
+_MAX_FILES = MAX_FILES_DEFAULT
+_MAX_FILE_SIZE = MAX_FILE_SIZE
+_GLOBAL_TIMEOUT_SEC = 90
+
 
 def check_env_vars(
     workspace: str,
@@ -87,25 +93,35 @@ def check_env_vars(
     env_vars: Dict[str, Dict[str, Any]] = {}  # var_name → info
     env_files: List[Dict[str, Any]] = []
     files_scanned = 0
+    truncated = False
+    start_time = time.time()
 
     # Step 1: Scan source files for env var references
     for root, dirs, filenames in os.walk(workspace):
+        # Check global timeout
+        if time_budget_expired(start_time, _GLOBAL_TIMEOUT_SEC):
+            truncated = True
+            break
+
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
             continue
 
         for filename in filenames:
+            # Check file count limit
+            if files_scanned >= _MAX_FILES:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
             # ─── Source file scanning ─────────────────────
             if ext in SOURCE_EXTENSIONS:
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                except IOError:
+                content = safe_read_file(file_path, _MAX_FILE_SIZE)
+                if content is None:
                     continue
 
                 files_scanned += 1
@@ -121,10 +137,8 @@ def check_env_vars(
 
             # ─── .env file scanning ───────────────────────
             elif filename in ENV_FILE_PATTERNS or filename.startswith('.env'):
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                except IOError:
+                content = safe_read_file(file_path, _MAX_FILE_SIZE)
+                if content is None:
                     continue
 
                 env_file_info = _parse_env_file(content, rel_path, filename)
@@ -214,6 +228,7 @@ def check_env_vars(
             "undocumented": len(undocumented),
             "in_env_file": len(in_env_file),
             "files_scanned": files_scanned,
+            "truncated": truncated,
         },
         "variables": list(env_vars.values()),
         "missing_from_example": missing_from_example,

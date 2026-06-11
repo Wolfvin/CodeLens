@@ -25,21 +25,32 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--quick", "-q", action="store_true",
+                        help="Quick mode — skip expensive engines (secrets, vuln-scan, circular, dead-code)")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace)
+    quick_mode = getattr(args, 'quick', False)
+    return cmd_handbook(workspace, quick_mode=quick_mode)
 
 
-def cmd_handbook(workspace: str) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, quick_mode: bool = False) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
+
+    Args:
+        workspace: Absolute path to workspace root.
+        quick_mode: If True, skip expensive engines for faster results.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
+
+    # Track engine success/failure for status propagation
+    engines_ok = []
+    engines_failed = []
 
     # 1. Identity — extract from package.json / pyproject.toml / README
     identity = _extract_project_identity(workspace)
@@ -81,9 +92,11 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     try:
         fw_result = detect_frameworks(workspace)
         frameworks = fw_result.get("frameworks", [])
+        engines_ok.append("frameworks")
     except Exception:
         logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
+        engines_failed.append("frameworks")
 
     # 5. Health (from smell engine)
     try:
@@ -94,9 +107,11 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             "critical": smell_result.get("stats", {}).get("critical", 0),
             "warning": smell_result.get("stats", {}).get("warning", 0),
         }
+        engines_ok.append("smell")
     except Exception:
         logger.warning("Health detection failed", exc_info=True)
         health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+        engines_failed.append("smell")
 
     # 6. Entrypoints
     try:
@@ -105,9 +120,11 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
             for e in ep_result.get("entrypoints", [])[:30]
         ]
+        engines_ok.append("entrypoints")
     except Exception:
         logger.warning("Entrypoint mapping failed", exc_info=True)
         entrypoints = []
+        engines_failed.append("entrypoints")
 
     # 7. API Routes
     try:
@@ -116,9 +133,11 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
             for r in api_result.get("routes", [])[:50]
         ]
+        engines_ok.append("api-map")
     except Exception:
         logger.warning("API route mapping failed", exc_info=True)
         api_routes = []
+        engines_failed.append("api-map")
 
     # 8. State management
     try:
@@ -127,39 +146,52 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
             {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
             for s in state_result.get("stores", [])[:20]
         ]
+        engines_ok.append("state-map")
     except Exception:
         logger.warning("State management mapping failed", exc_info=True)
         state_stores = []
+        engines_failed.append("state-map")
 
-    # 9. Risks (circular deps, dead code, secrets)
+    # 9. Risks (circular deps, dead code, secrets) — skipped in quick mode
     risks = []
-    try:
-        circ_result = detect_circular(workspace)
-        for chain in circ_result.get("chains", [])[:5]:
-            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
-    except Exception:
-        logger.warning("Circular dependency detection failed", exc_info=True)
-    try:
-        dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-        if dead_count > 0:
-            risks.append({"type": "dead_code", "count": dead_count})
-    except Exception:
-        logger.warning("Dead code detection failed", exc_info=True)
-    try:
-        secrets_result = detect_secrets(workspace)
-        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-        if secrets_count > 0:
-            risks.append({"type": "secrets", "count": secrets_count})
-    except Exception:
-        logger.warning("Secrets detection failed", exc_info=True)
-    try:
-        vuln_result = scan_vulnerabilities(workspace)
-        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-        if vuln_count > 0:
-            risks.append({"type": "vulnerabilities", "count": vuln_count})
-    except Exception:
-        logger.warning("Vulnerability scan failed", exc_info=True)
+    if not quick_mode:
+        try:
+            circ_result = detect_circular(workspace)
+            for chain in circ_result.get("chains", [])[:5]:
+                risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+            engines_ok.append("circular")
+        except Exception:
+            logger.warning("Circular dependency detection failed", exc_info=True)
+            engines_failed.append("circular")
+        try:
+            dead_result = detect_dead_code(workspace)
+            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+            if dead_count > 0:
+                risks.append({"type": "dead_code", "count": dead_count})
+            engines_ok.append("dead-code")
+        except Exception:
+            logger.warning("Dead code detection failed", exc_info=True)
+            engines_failed.append("dead-code")
+        try:
+            secrets_result = detect_secrets(workspace)
+            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+            if secrets_count > 0:
+                risks.append({"type": "secrets", "count": secrets_count})
+            engines_ok.append("secrets")
+        except Exception:
+            logger.warning("Secrets detection failed", exc_info=True)
+            engines_failed.append("secrets")
+        try:
+            vuln_result = scan_vulnerabilities(workspace)
+            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+            if vuln_count > 0:
+                risks.append({"type": "vulnerabilities", "count": vuln_count})
+            engines_ok.append("vuln-scan")
+        except Exception:
+            logger.warning("Vulnerability scan failed", exc_info=True)
+            engines_failed.append("vuln-scan")
+    else:
+        risks.append({"type": "quick_mode", "note": "Risk engines skipped. Use without --quick for full analysis."})
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
@@ -175,12 +207,16 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     conventions = _detect_conventions(workspace)
 
     # Build handbook
+    overall_status = "ok" if not engines_failed else ("degraded" if engines_ok else "error")
     handbook = {
-        "status": "ok",
+        "status": overall_status,
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "codelens_version": CODELENS_VERSION
+            "codelens_version": CODELENS_VERSION,
+            "quick_mode": quick_mode,
+            "engines_ok": engines_ok,
+            "engines_failed": engines_failed,
         },
         "identity": identity,
         "frameworks": frameworks,
@@ -319,7 +355,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                     if subdir_fws:
                         identity["subdir_frameworks"][rel_subdir] = subdir_fws
                 except Exception:
-                    pass
+                    logger.debug("Sub-directory package.json parsing failed", exc_info=True)
         except OSError:
             pass
 

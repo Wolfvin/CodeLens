@@ -19,7 +19,7 @@ import json
 import os
 import re
 from typing import Dict, List, Any, Optional, Set
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir
 
 
 # Common Tailwind utility prefixes (v3+)
@@ -207,7 +207,6 @@ def _find_custom_utilities(workspace: str) -> List[Dict]:
         # Use path-segment-aware check to avoid false positives
         # (e.g., workspace named "test-dist" shouldn't match "dist")
         rel_root = os.path.relpath(root, workspace)
-        from utils import should_ignore_dir
         if should_ignore_dir(rel_root):
             dirs.clear()
             continue

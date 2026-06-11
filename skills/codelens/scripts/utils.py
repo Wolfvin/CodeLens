@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -122,6 +123,66 @@ def compute_summary(workspace, outline_data, scan_result):
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
+# ─── Performance Safeguards ────────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024   # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000      # Max source files to scan per engine
+GLOBAL_TIMEOUT_SEC = 120      # Default global timeout per engine (seconds)
+
+
+def should_ignore_dir(rel_root: str) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching to avoid false positives
+    (e.g., workspace named 'test-dist' shouldn't match 'dist').
+
+    Args:
+        rel_root: Relative path from workspace root (e.g., 'src/node_modules/pkg')
+
+    Returns:
+        True if the directory should be skipped.
+    """
+    if rel_root == '.':
+        return False
+    parts = rel_root.replace('\\', '/').split('/')
+    return any(p in DEFAULT_IGNORE_DIRS for p in parts)
+
+
+def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
+    """Read a file safely with size limit and encoding handling.
+
+    Args:
+        file_path: Absolute path to the file.
+        max_size: Maximum file size in bytes. Files larger than this are skipped.
+
+    Returns:
+        File content as string, or None if the file cannot be read or is too large.
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
+def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SEC) -> bool:
+    """Check if a time budget has expired.
+
+    Useful for engines that walk many files and need a global timeout.
+
+    Args:
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
+
+    Returns:
+        True if the budget has expired.
+    """
+    return (time.time() - start_time) > budget_sec
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -158,4 +219,4 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.0.0"
