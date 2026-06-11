@@ -94,8 +94,13 @@ SECRET_PATTERNS = {
             r'(?i)password\s*=\s*["\']([^"\']{6,})["\']',
             # Java properties style
             r'(?i)(?:spring\.datasource\.password|jdbc\.password)\s*=\s*([^\s]{6,})',
-            # YAML-style passwords
-            r'(?i)password:\s*["\']?([^\s"\']{6,})["\']?',
+            # YAML-style passwords — ONLY match when value is a quoted string or a bare literal.
+            # Avoid false positives from JS/TS object property assignments like:
+            #   password: videoRef.meetingPassword,
+            #   password: user.password,
+            # Match: password: "literal" or password: 'literal' or password: literal_value
+            # Skip: password: something.property or password: something?.optional
+            r'(?i)password:\s*["\']([^"\']{6,})["\']',
             # PHP-style
             r"(?i)(?:DB_PASS|DB_PASSWORD|DATABASE_PASS)\s*(?:=|:)\s*[\"']([^\"']{6,})[\"']",
         ],
@@ -253,6 +258,10 @@ SAFE_VALUE_PATTERNS = [
     r'(?i)^(true|false|null|none|undefined|nil)$',
     r'^\*+$',   # All asterisks
     r'(?i)^(password|secret|token|key)$',  # Just the word itself
+    # Variable references (not hardcoded strings) — common in JS/TS object properties
+    # e.g., "password: videoRef.meetingPassword" or "password: config.secret"
+    # These contain dots (property access) or optional chaining (?.)
+    r'(?i)^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*|\?\.[a-zA-Z_$][\w$]*)+',
 ]
 
 # .env variable name patterns that indicate secrets

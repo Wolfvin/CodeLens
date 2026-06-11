@@ -40,7 +40,7 @@ logger = logging.getLogger("codelens.vulnscan")
 DEPENDENCY_FILE_PATTERNS = {
     "npm": {
         "manifest": ["package.json"],
-        "lockfile": ["package-lock.json", "npm-shrinkwrap.json", "bun.lock"],
+        "lockfile": ["package-lock.json", "npm-shrinkwrap.json", "bun.lock", "yarn.lock"],
     },
     "rust": {
         "manifest": ["Cargo.toml"],
@@ -826,6 +826,8 @@ def _parse_lock_file(
     if ecosystem == "npm":
         if rel_path.endswith("bun.lock"):
             packages = _parse_bun_lock(content)
+        elif rel_path.endswith("yarn.lock"):
+            packages = _parse_yarn_lock(content)
         else:
             packages = _parse_npm_lock(content)
     elif ecosystem == "rust":
@@ -958,6 +960,70 @@ def _parse_bun_lock(content: str) -> List[Tuple[str, str]]:
                     packages.append((name, version))
 
     return packages
+
+
+def _parse_yarn_lock(content: str) -> List[Tuple[str, str]]:
+    """Parse yarn.lock for package names and versions.
+
+    yarn.lock format (Yarn v1 / Classic):
+    - Each block starts with a quoted or unquoted package specifier
+    - Lines like:  version "1.2.3"
+    - Multiple specifiers can map to the same resolution
+
+    yarn.lock format (Yarn v2+ / Berry):
+    - Similar but may have __metadata block
+    """
+    packages = []
+    seen = set()  # Avoid duplicates
+
+    current_name = None
+    current_version = None
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # Skip empty lines and comments
+        if not stripped or stripped.startswith('#'):
+            continue
+
+        # Detect block start (package specifier line ending with :)
+        if stripped.endswith(':') and not stripped.startswith(' '):
+            # Save previous block
+            if current_name and current_version:
+                key = (current_name, current_version)
+                if key not in seen:
+                    seen.add(key)
+                    packages.append(key)
+
+            # Parse new block — extract package names from specifier
+            current_name = None
+            current_version = None
+
+            # Extract the first package name from the specifier
+            specifiers = stripped.rstrip(':')
+            for spec in specifiers.split(', '):
+                spec = spec.strip().strip('"')
+                # Remove version constraint: lodash@^4.0.0 -> lodash
+                at_idx = spec.rfind('@')
+                if at_idx > 0:
+                    name_part = spec[:at_idx]
+                    current_name = name_part
+                break  # Use first specifier for name
+
+        # Detect version line
+        elif stripped.startswith('version ') and current_name is not None:
+            m = re.match(r'version\s+"([^"]+)"', stripped)
+            if m:
+                current_version = m.group(1)
+
+    # Don't forget the last block
+    if current_name and current_version:
+        key = (current_name, current_version)
+        if key not in seen:
+            packages.append(key)
+
+    return packages
+
 
 def _parse_cargo_lock(content: str) -> List[Tuple[str, str]]:
     """Parse Cargo.lock for crate names and versions."""

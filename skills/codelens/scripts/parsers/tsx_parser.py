@@ -217,7 +217,7 @@ class TSXParser(BaseParser):
 
     def _find_declarations(self, root: Node, source: bytes,
                             file_path: str) -> List[Dict]:
-        """Find all function/component declarations."""
+        """Find all function/component/class declarations."""
         declarations = []
 
         def visit(node: Node, _, depth):
@@ -227,6 +227,8 @@ class TSXParser(BaseParser):
                 decl = self._parse_fn_decl(node, source, file_path)
             elif node.type == 'variable_declarator':
                 decl = self._parse_var_declarator(node, source, file_path)
+            elif node.type == 'class_declaration':
+                decl = self._parse_class_decl(node, source, file_path)
             elif node.type == 'export_statement':
                 # Check children for function/variable declarations
                 for child in node.children:
@@ -312,6 +314,52 @@ class TSXParser(BaseParser):
             "scope_end": node.end_point.row
         }
 
+    def _parse_class_decl(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
+        """Parse a class_declaration node for TSX files.
+
+        Extracts the class name and body scope, enabling class-based components
+        and service/repository classes to appear in the backend registry.
+        """
+        class_name = None
+        body_node = None
+        heritage = None
+
+        for child in node.children:
+            if child.type == 'identifier':
+                class_name = self.get_text(child, source)
+            elif child.type == 'class_heritage':
+                heritage = self.get_text(child, source)
+            elif child.type == 'class_body':
+                body_node = child
+
+        if not class_name:
+            return None
+
+        line = self.get_line(node)
+        is_component = class_name[0].isupper() and (
+            heritage and ('Component' in heritage or 'React' in heritage)
+        )
+
+        result = {
+            "node": {
+                "id": f"{file_path}:{line}",
+                "fn": class_name,
+                "file": file_path,
+                "line": line,
+                "async": False,
+                "component": is_component,
+                "node_type": "class",
+            },
+            "body_node": body_node,
+            "scope_start": node.start_point.row,
+            "scope_end": node.end_point.row
+        }
+
+        if heritage:
+            result["node"]["heritage"] = heritage
+
+        return result
+
     def _parse_call(self, node: Node, source: bytes,
                      fn_declarations: List[Dict]) -> Optional[Dict]:
         """Parse a call expression and return an edge if it's within a known function."""
@@ -322,13 +370,15 @@ class TSXParser(BaseParser):
         func_text = self.get_text(func_node, source)
 
         # Find which function this call is inside
+        # Use innermost (smallest scope) function that contains this line
         call_line = self.get_line(node)
         caller_id = None
+        best_scope_size = float('inf')
         for decl in fn_declarations:
             if decl["scope_start"] <= call_line - 1 <= decl["scope_end"]:
-                # Check if this is the innermost function
-                if caller_id is None or \
-                   (decl["scope_start"] >= fn_declarations[0]["scope_start"]):
+                scope_size = decl["scope_end"] - decl["scope_start"]
+                if scope_size < best_scope_size:
+                    best_scope_size = scope_size
                     caller_id = decl["node"]["id"]
 
         if not caller_id:

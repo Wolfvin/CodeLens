@@ -45,6 +45,7 @@ class JSBackendParser(BaseParser):
         'function_declaration',
         'generator_function_declaration',
         'variable_declarator',  # for arrow functions and function expressions
+        'class_declaration',   # for TypeScript/JS class declarations
     }
 
     def __init__(self):
@@ -101,6 +102,9 @@ class JSBackendParser(BaseParser):
 
             elif node.type == 'variable_declarator':
                 decl_info = self._parse_variable_declarator(node, source, file_path)
+
+            elif node.type == 'class_declaration':
+                decl_info = self._parse_class_decl(node, source, file_path)
 
             if decl_info:
                 declarations.append(decl_info)
@@ -190,6 +194,58 @@ class JSBackendParser(BaseParser):
             "scope_start": node.start_point.row,
             "scope_end": node.end_point.row
         }
+
+    def _parse_class_decl(self, node: Node, source: bytes,
+                           file_path: str) -> Optional[Dict]:
+        """Parse a class_declaration node.
+
+        Extracts the class name and its body as a scope.
+        This allows classes like `BookingRepository` to appear as nodes
+        in the backend registry, making them discoverable via query/context/trace.
+        """
+        class_name = None
+        body_node = None
+        heritage = None  # extends/implements info
+
+        for child in node.children:
+            if child.type == 'identifier':
+                class_name = self.get_text(child, source)
+            elif child.type == 'class_heritage':
+                # e.g., extends BaseRepo or implements IRepository
+                heritage = self.get_text(child, source)
+            elif child.type == 'class_body':
+                body_node = child
+
+        if not class_name:
+            return None
+
+        line = self.get_line(node)
+        node_id = f"{file_path}:{line}"
+
+        # Determine if it's a React component (PascalCase + extends Component)
+        is_component = class_name[0].isupper() and (
+            heritage and ('Component' in heritage or 'React' in heritage)
+        )
+
+        result = {
+            "node": {
+                "id": node_id,
+                "fn": class_name,
+                "file": file_path,
+                "line": line,
+                "async": False,
+                "component": is_component,
+                "node_type": "class",
+            },
+            "body_node": body_node,
+            "scope_start": node.start_point.row,
+            "scope_end": node.end_point.row
+        }
+
+        if heritage:
+            result["node"]["heritage"] = heritage
+
+        return result
 
     def _build_scope_map(self, declarations: List[Dict]) -> Dict:
         """Build a map of function scopes for call resolution."""

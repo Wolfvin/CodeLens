@@ -161,7 +161,8 @@ def detect_smells(
                 all_smells["complex_conditional"].extend(conds)
 
             # God object (classes/modules with too many methods)
-            if "god_object" in categories:
+            # Skip test/mock files — they inherently have many methods and are not production code
+            if "god_object" in categories and not _is_test_or_mock_file(rel_path):
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
 
@@ -1038,6 +1039,45 @@ def _is_docs_or_example(rel_path: str) -> bool:
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
+
+
+def _is_test_or_mock_file(rel_path: str) -> bool:
+    """Check if a file is a test, mock, or fixture file.
+
+    These files inherently have many methods (describe/it blocks, mock classes)
+    and should not be flagged as god objects.
+    """
+    basename = os.path.basename(rel_path).lower()
+    test_patterns = (
+        '.test.', '.spec.', '.e2e.', '.e2e-spec.',
+        '_test.', '_spec.', '.stories.',
+    )
+    mock_patterns = (
+        'mock', 'stub', 'fake', 'fixture', 'dummy',
+    )
+
+    # Check file name patterns
+    for pattern in test_patterns:
+        if pattern in basename:
+            return True
+
+    # Check for mock/stub in filename
+    for pattern in mock_patterns:
+        if pattern in basename.lower():
+            return True
+
+    # Check path patterns
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    test_dirs = [
+        '/tests/', '/test/', '/__tests__/', '/spec/',
+        '/fixtures/', '/fixture/', '/mocks/', '/mock/',
+        '/e2e/', '/integration/',
+    ]
+    for d in test_dirs:
+        if d in normalized:
+            return True
+
+    return False
 
 # _is_docs_or_example is defined above. Note: paths like "docs_src/foo.py"
 # start without a leading slash, so we also match on path-starts-with.

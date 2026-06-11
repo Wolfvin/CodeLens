@@ -8,6 +8,8 @@ import json
 import os
 import re
 from typing import Dict, List, Any, Optional
+import logging
+_logger = logging.getLogger("codelens.framework_detect")
 from utils import DEFAULT_IGNORE_DIRS
 
 
@@ -21,6 +23,16 @@ FRAMEWORK_SIGNATURES = {
     "next.js": {
         "packages": ["next"],
         "config_files": ["next.config.js", "next.config.mjs", "next.config.ts"],
+        "indicators": ["use client", "use server", "getServerSideProps", "getStaticProps"]
+    },
+    "remix": {
+        "packages": ["@remix-run/react"],
+        "config_files": ["remix.config.js"],
+        "indicators": []
+    },
+    "astro": {
+        "packages": ["astro"],
+        "config_files": ["astro.config.mjs", "astro.config.ts"],
         "indicators": []
     },
     "vue": {
@@ -99,6 +111,34 @@ FRAMEWORK_SIGNATURES = {
 }
 
 
+def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
+    """
+    Find all package.json files in the workspace, including monorepo sub-packages.
+    Limits depth to avoid scanning deeply nested node_modules.
+    """
+    pkg_files = []
+    root_pkg = os.path.join(workspace, "package.json")
+    if os.path.exists(root_pkg):
+        pkg_files.append(root_pkg)
+
+    # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
+    monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
+    for subdir in monorepo_dirs:
+        subdir_path = os.path.join(workspace, subdir)
+        if not os.path.isdir(subdir_path):
+            continue
+        try:
+            for entry in os.listdir(subdir_path):
+                entry_path = os.path.join(subdir_path, entry)
+                pkg_path = os.path.join(entry_path, "package.json")
+                if os.path.isfile(pkg_path):
+                    pkg_files.append(pkg_path)
+        except OSError:
+            pass
+
+    return pkg_files
+
+
 def detect_frameworks(workspace: str) -> Dict[str, Any]:
     """
     Detect frameworks used in a workspace.
@@ -120,57 +160,60 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "module_system": None
     }
 
-    # 1. Check package.json
-    pkg_path = os.path.join(workspace, "package.json")
-    if os.path.exists(pkg_path):
+    # 1. Check package.json (root + monorepo sub-packages)
+    all_deps = {}
+    pkg_files = _find_package_jsons(workspace)
+
+    for pkg_path in pkg_files:
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
-            all_deps = {}
             all_deps.update(pkg.get("dependencies", {}))
             all_deps.update(pkg.get("devDependencies", {}))
             all_deps.update(pkg.get("peerDependencies", {}))
 
-            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-                for pkg_name in sig["packages"]:
-                    if pkg_name in all_deps:
-                        detected["frameworks"].append(fw_name)
-                        if fw_name == "react":
-                            detected["has_react"] = True
-                        elif fw_name == "next.js":
-                            detected["has_nextjs"] = True
-                        elif fw_name == "vue":
-                            detected["has_vue"] = True
-                        elif fw_name == "svelte":
-                            detected["has_svelte"] = True
-                        elif fw_name == "tailwind":
-                            detected["has_tailwind"] = True
-                        elif fw_name == "angular":
-                            detected["has_angular"] = True
-                        break
-
-            # Detect CSS preprocessor
-            if "sass" in all_deps or "node-sass" in all_deps:
-                detected["css_preprocessor"] = "scss"
-            elif "less" in all_deps:
-                detected["css_preprocessor"] = "less"
-            elif "stylus" in all_deps or "styl" in all_deps:
-                detected["css_preprocessor"] = "stylus"
-
-            # Detect module system
-            if "type" in pkg and pkg["type"] == "module":
-                detected["module_system"] = "esm"
-            else:
-                detected["module_system"] = "cjs"
-
+            # Detect module system from root package.json only
+            if pkg_path == os.path.join(workspace, "package.json"):
+                if "type" in pkg and pkg["type"] == "module":
+                    detected["module_system"] = "esm"
+                else:
+                    detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
 
-    # 2. Check config files
+    if all_deps:
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            for pkg_name in sig["packages"]:
+                if pkg_name in all_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "react":
+                        detected["has_react"] = True
+                    elif fw_name == "next.js":
+                        detected["has_nextjs"] = True
+                    elif fw_name == "vue":
+                        detected["has_vue"] = True
+                    elif fw_name == "svelte":
+                        detected["has_svelte"] = True
+                    elif fw_name == "tailwind":
+                        detected["has_tailwind"] = True
+                    elif fw_name == "angular":
+                        detected["has_angular"] = True
+                    break
+
+        # Detect CSS preprocessor
+        if "sass" in all_deps or "node-sass" in all_deps:
+            detected["css_preprocessor"] = "scss"
+        elif "less" in all_deps:
+            detected["css_preprocessor"] = "less"
+        elif "stylus" in all_deps or "styl" in all_deps:
+            detected["css_preprocessor"] = "stylus"
+
+    # 2. Check config files (root + subdirectories for monorepos)
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
         if fw_name in detected["frameworks"]:
             continue
         for cfg_file in sig.get("config_files", []):
+            # Check root first
             if os.path.exists(os.path.join(workspace, cfg_file)):
                 detected["frameworks"].append(fw_name)
                 if fw_name == "tailwind":
@@ -183,6 +226,31 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
+                break
+            # Check one level deep for monorepo (apps/*, packages/*)
+            found_in_subdir = False
+            for subdir in ('apps', 'packages', 'projects', 'services'):
+                subdir_path = os.path.join(workspace, subdir)
+                if not os.path.isdir(subdir_path):
+                    continue
+                try:
+                    for entry in os.listdir(subdir_path):
+                        entry_path = os.path.join(subdir_path, entry)
+                        if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, cfg_file)):
+                            detected["frameworks"].append(fw_name)
+                            if fw_name == "tailwind":
+                                detected["has_tailwind"] = True
+                            elif fw_name == "next.js":
+                                detected["has_nextjs"] = True
+                            elif fw_name == "react":
+                                detected["has_react"] = True
+                            found_in_subdir = True
+                            break
+                except OSError:
+                    pass
+                if found_in_subdir:
+                    break
+            if found_in_subdir:
                 break
 
     # 3. Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)
