@@ -1,5 +1,24 @@
 # CodeLens Changelog
 
+## v5.8.0 — 2026-06-12
+
+### New Features (1)
+
+- **Tauri IPC API-map detection** — `api-map` now detects `#[tauri::command]` annotated Rust functions as IPC routes with `invoke('commandName')` paths. Also detects `generate_handler![]` macro registrations. Routes include command name (auto-converted snake_case → camelCase), parameters, handler name, and framework metadata.
+
+### Bug Fixes (4)
+
+- **ASK "is this secure?" misroutes to context** — Added "secure", "is this secure", "hardcoded", "leaked credential" keywords to the security pattern in `ask.py`, ensuring security queries route to `secrets` command instead of `context` lookup. Also added "outdated dep", "dependency vulnerability" to vuln-scan patterns.
+- **Handbook circular deps always empty** — `handbook.py` used non-existent `chains` key from circular_engine output. Fixed to iterate `cycles.function_calls`, `cycles.import_chains`, `cycles.css_imports` with severity metadata.
+- **zombie_css shows `file="unknown"` and `line=0`** — Dead CSS class detection now properly extracts file path and line number from registry CSS references, and falls back to searching CSS files directly via `_find_css_class_in_files()`.
+- **Module system misdetected as "cjs"** — Enhanced module system detection in `framework_detect.py` to check sub-package.json files for `"type": "module"`, count `.mjs` vs `.cjs` files, and consider pnpm-workspace.yaml as ESM indicator.
+
+### Improvements (3)
+
+- **Rust-idiomatic smell exclusions** — `_detect_duplicate_patterns()` now excludes language-idiomatic signatures that naturally appear in many files: `fn main()`, `fn fmt()`, `fn clone()`, `fn drop()`, `fn new()`, Python `__init__`, `__str__`, `__repr__`, etc. Reduces false positives from 47+ duplicate Rust standard signatures.
+- **Tauri/hybrid project identity detection** — `handbook.py` now correctly identifies Tauri desktop apps as `"tauri-desktop-app"` and Rust+Node hybrid projects as `"rust-node-hybrid"` instead of generic `"node-project"`.
+- **ASK keyword weight tuning** — Added filler words "from", "with", "by", "at", "be" with weight 0 to prevent them from skewing routing scores.
+
 ## v5.8.1 — 2026-06-12
 
 ### Bug Fixes (3)

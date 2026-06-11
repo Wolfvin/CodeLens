@@ -53,6 +53,7 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "the": 0, "a": 0, "an": 0, "me": 0, "my": 0,
     "this": 0, "that": 0, "it": 0, "is": 0, "are": 0,
     "of": 0, "for": 0, "in": 0, "on": 0, "to": 0,
+    "from": 0, "with": 0, "by": 0, "at": 0, "be": 0,
 }
 
 # Default weight for keywords not in the table
@@ -164,11 +165,12 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "entrypoints", {}, "high"),
 
         # Security
-        (["security", "secret", "api key", "password", "token leak", "cve", "vuln"],
+        (["security", "secure", "is this secure", "safe from attack", "secret", "api key", "password",
+          "token leak", "cve", "vuln", "hardcoded", "leaked credential"],
          "secrets", {}, "high"),
 
         # Vulnerabilities
-        (["vulnerability", "vulnerable", "security hole"],
+        (["vulnerability", "vulnerable", "security hole", "known cve", "outdated dep", "dependency vulnerability"],
          "vuln-scan", {}, "high"),
 
         # Smells / health

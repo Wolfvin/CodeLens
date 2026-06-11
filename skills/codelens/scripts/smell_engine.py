@@ -934,6 +934,23 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     # Collect function signatures across files
     fn_signatures: Dict[str, List[Dict]] = defaultdict(list)
 
+    # Language-idiomatic signatures to exclude from duplicate detection
+    # These are standard patterns that naturally appear in many files
+    _EXCLUDED_SIGNATURES = {
+        # Rust standard entry points and trait impls
+        'fn main()', 'fn fmt(&self, f: &mut fmt::Formatter', 'fn fmt(&self, f: &mut std::fmt::Formatter',
+        'fn clone(&self)', 'fn drop(&mut self)', 'fn new(', 'fn default()', 'fn from(',
+        'fn into(', 'fn as_ref(', 'fn deref(&self)', 'fn deref_mut(&mut self)',
+        'fn as_str(&self)', 'fn to_string(&self)', 'fn hash(', 'fn eq(&self,',
+        'fn partial_cmp(&self,', 'fn cmp(&self,', 'fn poll(', 'fn expecting(&self,',
+        'fn from_str(s:', 'fn from_str(', 'fn schema_name()', 'pub fn new(',
+        # Python standard methods
+        'def __init__(self', 'def __str__(self', 'def __repr__(self',
+        'def __len__(self', 'def __eq__(self', 'def __hash__(self',
+        # JS/TS standard patterns
+        'function constructor(', 'function render()', 'function componentDidMount(',
+    }
+
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
@@ -962,6 +979,16 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
                 sig = m.group(0).strip()
                 # Normalize signature for comparison
                 normalized = re.sub(r'\s+', ' ', sig)
+
+                # Skip language-idiomatic signatures
+                skip = False
+                for excluded in _EXCLUDED_SIGNATURES:
+                    if normalized.startswith(excluded):
+                        skip = True
+                        break
+                if skip:
+                    continue
+
                 line_num = content[:m.start()].count('\n') + 1
                 fn_signatures[normalized].append({
                     "file": rel_path,

@@ -204,6 +204,13 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── Tauri IPC Commands ────────────────────────────
+            if ext == ".rs":
+                tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -818,6 +825,112 @@ def _extract_nuxt_routes(
 
 
 # ─── SvelteKit Routes ─────────────────────────────────────────
+
+def _extract_tauri_ipc_routes(
+    content: str, rel_path: str
+) -> List[Dict[str, Any]]:
+    """Extract Tauri IPC command routes from Rust source files.
+
+    Detects functions annotated with #[tauri::command] which are exposed
+    as IPC commands callable from the frontend via invoke().
+
+    Also detects:
+    - #[specta::specta] annotated commands (Tauri Specta)
+    - Commands registered in .generate_handler![] macro
+    - invoke_handler registration patterns
+    """
+    routes = []
+
+    # Pattern 1: #[tauri::command] annotated functions
+    # Match both single and multi-line attribute + fn declarations
+    tauri_cmd_pattern = re.compile(
+        r'#\[tauri::command\s*(?:\([^)]*\))?\s*\]'  # #[tauri::command] or #[tauri::command(rename_all = "camelCase")]
+        r'(?:\s*#\[[^\]]*\])*'  # Other attributes like #[specta::specta]
+        r'\s*(?:pub\s+)?async\s+fn\s+(\w+)'  # async fn name or pub async fn name
+        r'|'
+        r'#\[tauri::command\s*(?:\([^)]*\))?\s*\]'
+        r'(?:\s*#\[[^\]]*\])*'
+        r'\s*(?:pub\s+)?fn\s+(\w+)',  # fn name or pub fn name
+        re.MULTILINE
+    )
+
+    for m in tauri_cmd_pattern.finditer(content):
+        fn_name = m.group(1) or m.group(2)
+        if not fn_name:
+            continue
+
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Extract parameter info from the function signature
+        fn_sig_match = re.search(
+            r'(?:pub\s+)?(?:async\s+)?fn\s+' + re.escape(fn_name) + r'\s*\(([^)]*)\)',
+            content[m.start():]
+        )
+        params = []
+        if fn_sig_match:
+            param_str = fn_sig_match.group(1)
+            for param in param_str.split(','):
+                param = param.strip()
+                if param and ':' in param:
+                    param_name = param.split(':')[0].strip().replace('mut ', '')
+                    params.append(param_name)
+
+        # Convert snake_case Rust fn name to camelCase (Tauri convention)
+        cmd_name = fn_name
+        # Tauri by default converts snake_case to camelCase for the command name
+        parts = fn_name.split('_')
+        if len(parts) > 1:
+            cmd_name = parts[0] + ''.join(p.capitalize() for p in parts[1:])
+
+        routes.append({
+            "method": "IPC",
+            "path": f"invoke('{cmd_name}')",
+            "handler_name": fn_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": [],
+            "request_type": "TauriIPC",
+            "response_type": "TauriResult",
+            "params": params,
+            "framework": "tauri",
+            "command_name": cmd_name,
+        })
+
+    # Pattern 2: invoke_handler registration (shows which commands are registered)
+    invoke_handler_pattern = re.compile(
+        r'\.invoke_handler\s*\(\s*tauri::generate_handler\s*!\s*\[([^\]]+)\]',
+        re.DOTALL
+    )
+    for m in invoke_handler_pattern.finditer(content):
+        registered = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        # Extract command names from the registration
+        for cmd_match in re.finditer(r'(\w+::)*(\w+)', registered):
+            cmd_name = cmd_match.group(2)
+            if cmd_name in ('tauri', 'generate_handler', 'Box', 'Fn'):
+                continue
+            # Check if this command is already detected via #[tauri::command]
+            already_found = any(r["handler_name"] == cmd_name for r in routes)
+            if not already_found:
+                # Convert to camelCase
+                parts = cmd_name.split('_')
+                ipc_name = parts[0] + ''.join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else cmd_name
+                routes.append({
+                    "method": "IPC",
+                    "path": f"invoke('{ipc_name}')",
+                    "handler_name": cmd_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": "TauriIPC",
+                    "response_type": "TauriResult",
+                    "framework": "tauri",
+                    "command_name": ipc_name,
+                    "registered_in": "generate_handler!",
+                })
+
+    return routes
+
 
 def _detect_sveltekit_routes(
     workspace: str, config: Optional[Dict] = None

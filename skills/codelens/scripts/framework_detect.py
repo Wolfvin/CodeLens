@@ -194,6 +194,50 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except (json.JSONDecodeError, IOError):
             pass
 
+    # 1b. Better module system detection — check multiple signals
+    if detected["module_system"] is None or detected["module_system"] == "cjs":
+        # Check if any sub-package.json has "type": "module"
+        for pkg_path in pkg_files:
+            try:
+                with open(pkg_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                if pkg.get("type") == "module":
+                    detected["module_system"] = "esm"
+                    break
+            except (json.JSONDecodeError, IOError):
+                pass
+        # Check for .mjs files as ESM indicator
+        if detected["module_system"] != "esm":
+            mjs_count = 0
+            cjs_count = 0
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for fn in filenames:
+                    if fn.endswith('.mjs'):
+                        mjs_count += 1
+                    elif fn.endswith('.cjs'):
+                        cjs_count += 1
+                if mjs_count + cjs_count > 20:
+                    break
+            if mjs_count > cjs_count:
+                detected["module_system"] = "esm"
+            elif mjs_count > 0 and cjs_count == 0:
+                detected["module_system"] = "esm"
+        # Check for pnpm-workspace.yaml (monorepos often use ESM)
+        if detected["module_system"] == "cjs" and os.path.isfile(os.path.join(workspace, "pnpm-workspace.yaml")):
+            # Check if .mjs files exist
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                if any(fn.endswith('.mjs') for fn in filenames):
+                    detected["module_system"] = "esm"
+                    break
+
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
             for pkg_name in sig["packages"]:

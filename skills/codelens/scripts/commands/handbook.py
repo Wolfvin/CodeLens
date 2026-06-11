@@ -144,8 +144,14 @@ def cmd_handbook(workspace: str, quick: bool = False) -> Dict[str, Any]:
     # 9. Risks (circular deps, dead code, secrets) — risks list already initialized above
     try:
         circ_result = detect_circular(workspace, max_cycles=20)
-        for chain in circ_result.get("chains", [])[:5]:
-            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+        # Aggregate cycles from all cycle types (function_calls, import_chains, css_imports)
+        all_cycles = []
+        for cycle_type in ("function_calls", "import_chains", "css_imports"):
+            for cycle in circ_result.get("cycles", {}).get(cycle_type, [])[:5]:
+                cycle_str = cycle.get("cycle", "")
+                severity = cycle.get("severity", "warning")
+                all_cycles.append({"type": "circular_dep", "description": cycle_str, "severity": severity})
+        risks.extend(all_cycles[:10])
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
     try:
@@ -249,12 +255,20 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-            if "next" in deps:
+            # Check for Tauri first (hybrid desktop app)
+            has_tauri_dep = any(k.startswith("@tauri-apps") for k in deps)
+            has_cargo = os.path.isfile(os.path.join(workspace, 'Cargo.toml'))
+            has_src_tauri = os.path.isdir(os.path.join(workspace, 'src-tauri'))
+            if has_tauri_dep or has_src_tauri:
+                identity["type"] = "tauri-desktop-app"
+            elif "next" in deps:
                 identity["type"] = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
                 identity["type"] = "backend-api"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
                 identity["type"] = "frontend-app"
+            elif has_cargo:
+                identity["type"] = "rust-node-hybrid"
             else:
                 identity["type"] = "node-project"
         except Exception:

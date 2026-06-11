@@ -558,9 +558,26 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
         if cls["status"] == "dead" and not cls.get("js"):
+            # Try to get file and line from CSS references
+            css_refs = cls.get("css", [])
+            file_path = "unknown"
+            line_num = 0
+            if css_refs and isinstance(css_refs, list):
+                first_ref = css_refs[0]
+                if isinstance(first_ref, dict):
+                    p = first_ref.get("path", "")
+                    if p:
+                        file_path = p
+                    line_num = first_ref.get("line", 0)
+
+            # If no CSS ref found, try to infer from the class name
+            # by searching CSS files directly
+            if file_path == "unknown":
+                file_path, line_num = _find_css_class_in_files(workspace, cls["name"])
+
             zombie.append({
-                "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
-                "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
+                "file": file_path,
+                "line": line_num,
                 "class": cls["name"],
                 "severity": "info",
                 "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
@@ -568,6 +585,33 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
             })
 
     return zombie[:50]
+
+
+def _find_css_class_in_files(workspace: str, class_name: str) -> tuple:
+    """Find the CSS file and line where a class is defined."""
+    # Sanitize class name for regex (handle special characters)
+    safe_name = re.escape(class_name)
+    pattern = re.compile(r'\.' + safe_name + r'\s*[{,:]')
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in {'.css', '.scss', '.less', '.sass'}:
+                continue
+            file_path = os.path.join(root, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                for m in pattern.finditer(content):
+                    line_num = content[:m.start()].count('\n') + 1
+                    rel_path = os.path.relpath(file_path, workspace)
+                    return rel_path, line_num
+            except IOError:
+                continue
+    return "unknown", 0
 
 def _detect_dead_listeners(workspace: str) -> List[Dict]:
     """Detect event listeners that listen for events on selectors that don't exist in HTML."""
