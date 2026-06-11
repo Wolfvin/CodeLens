@@ -77,9 +77,13 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
         if has_js and not has_css:
             js_locs = [f"{r['path']}:{r['line']}" for r in cls.get("js", [])]
             sources = set(r.get("source", "") for r in cls.get("js", []))
-            # Only flag if it looks like a CSS class (not Tailwind utility)
+            # Only flag if it looks like a CSS class (not Tailwind utility or JS keyword)
             is_tailwind = _is_likely_tailwind(name)
-            if not is_tailwind:
+            is_js_keyword = name in _JS_KEYWORDS
+            # Skip Vue dot-ref sources (e.g., layoutClass from .layoutClass) — these are
+            # JS properties, not CSS class names
+            is_vue_dot_ref = 'vue_dot_ref' in sources
+            if not is_tailwind and not is_js_keyword and not is_vue_dot_ref:
                 issues["html_no_css"].append({
                     "name": name,
                     "status": cls["status"],
@@ -165,6 +169,26 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
             "possible_typos": len(issues["possible_typos"])
         }
     }
+
+
+# Common JS keywords/properties that should NOT be reported as CSS class names
+_JS_KEYWORDS = {
+    # JavaScript reserved words
+    'class', 'extends', 'implements', 'import', 'export', 'default',
+    'return', 'const', 'let', 'var', 'function', 'if', 'else',
+    'true', 'false', 'null', 'undefined', 'this', 'new', 'typeof',
+    'switch', 'case', 'break', 'continue', 'for', 'while', 'do',
+    'try', 'catch', 'finally', 'throw', 'async', 'await', 'yield',
+    # Common JS built-in properties/methods that appear in Vue :class bindings
+    'includes', 'value', 'length', 'push', 'pop', 'map', 'filter',
+    'forEach', 'reduce', 'find', 'some', 'every', 'keys', 'values',
+    'entries', 'toString', 'constructor', 'prototype', 'hasOwnProperty',
+    'indexOf', 'splice', 'slice', 'join', 'split', 'replace', 'trim',
+    'name', 'type', 'key', 'id', 'style', 'href', 'src', 'data',
+    'active', 'selected', 'disabled', 'hidden', 'open', 'closed',
+    # Vue-specific
+    'setup', 'props', 'emit', 'slot', 'ref', 'reactive', 'computed',
+}
 
 
 def _is_likely_tailwind(class_name: str) -> bool:

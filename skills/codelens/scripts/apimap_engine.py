@@ -1973,8 +1973,26 @@ def _extract_tauri_invokes(content: str, rel_path: str) -> List[Dict[str, Any]]:
     - invoke<string>('command_name')
     - const { invoke } = window.__TAURI__.core
     - import { invoke } from '@tauri-apps/api/core'
+
+    IMPORTANT: Only detects Tauri invoke() if there's evidence of Tauri in the file
+    (import from @tauri-apps or __TAURI__ global). This prevents false positives
+    from Cypress cy.invoke() or other libraries that use invoke().
     """
     routes = []
+
+    # Skip test files — Cypress cy.invoke() and other test utilities are NOT Tauri
+    test_indicators = ['.test.', '.spec.', '.e2e.', '/cypress/', '/__tests__/', '/tests/']
+    if any(indicator in rel_path for indicator in test_indicators):
+        return routes
+
+    # Only detect Tauri invoke() if there's evidence of Tauri in the file
+    tauri_evidence = (
+        '@tauri-apps' in content or
+        '__TAURI__' in content or
+        'tauri' in content.lower().split()  # word-level match to avoid "separator" etc.
+    )
+    if not tauri_evidence:
+        return routes
 
     # Match invoke('commandName', ...) calls
     invoke_patterns = [

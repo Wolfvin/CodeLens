@@ -527,18 +527,32 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
         logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
+    # Load Tailwind detector to skip Tailwind utility classes
+    try:
+        from parsers.tailwind_detector import is_tailwind_class
+        has_tailwind_check = True
+    except ImportError:
+        has_tailwind_check = False
+
     zombie = []
 
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
+        name = cls["name"]
         if cls["status"] == "dead" and not cls.get("js"):
+            # Skip Tailwind utility classes — they're framework-defined, not user-defined
+            if has_tailwind_check and is_tailwind_class(name):
+                continue
+            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
+            if not re.match(r'^[a-zA-Z_]', name):
+                continue
             zombie.append({
                 "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
                 "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": cls["name"],
+                "class": name,
                 "severity": "info",
-                "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{cls['name']}' or add to HTML/JSX."
+                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
+                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
             })
 
     return zombie[:50]

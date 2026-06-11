@@ -263,9 +263,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
-            identity["name"] = pkg.get("name", identity["name"])
-            identity["version"] = pkg.get("version", identity["version"])
-            identity["description"] = pkg.get("description", "")
+            if pkg.get("name"):
+                identity["name"] = pkg["name"]
+            if pkg.get("description"):
+                identity["description"] = pkg["description"]
+            if pkg.get("version"):
+                identity["version"] = pkg["version"]
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             if "next" in deps:
                 js_type = "fullstack-web-app"
@@ -277,6 +280,39 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 js_type = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
+
+    # For monorepos, if name is still the directory name (no name in root package.json),
+    # scan sub-directories for a more descriptive name
+    if identity["name"] == os.path.basename(workspace):
+        for subdir in ['packages', 'apps']:
+            subdir_path = os.path.join(workspace, subdir)
+            if not os.path.isdir(subdir_path):
+                continue
+            try:
+                for entry in sorted(os.listdir(subdir_path)):
+                    entry_pkg = os.path.join(subdir_path, entry, 'package.json')
+                    if not os.path.isfile(entry_pkg):
+                        continue
+                    try:
+                        with open(entry_pkg, 'r', encoding='utf-8') as f:
+                            pkg = json.load(f)
+                        pkg_name = pkg.get("name", "")
+                        # Prefer scoped packages like @slidev/cli — extract the scope name
+                        if pkg_name and pkg_name.startswith("@"):
+                            scope = pkg_name.split("/")[0]
+                            identity["name"] = scope
+                            if pkg.get("description"):
+                                identity["description"] = pkg["description"]
+                            break
+                        elif pkg_name and not pkg_name.startswith("@"):
+                            identity["name"] = pkg_name
+                            if pkg.get("description"):
+                                identity["description"] = pkg["description"]
+                            break
+                    except (json.JSONDecodeError, IOError):
+                        pass
+            except OSError:
+                pass
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]

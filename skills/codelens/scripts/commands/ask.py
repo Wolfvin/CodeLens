@@ -180,7 +180,7 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
 
         # Entrypoints
         (["entry point", "entrypoint", "main function", "where does it start", "how does it start", "boot"],
-         "entrypoints", {}, "high"),
+         "entrypoints", {"entry_type_filter": _extract_entry_type}, "high"),
 
         # Security
         (["security", "secret", "api key", "password", "token leak", "cve", "vuln"],
@@ -406,6 +406,27 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     return cleaned if cleaned else ""
 
 
+def _extract_entry_type(q: str, keyword: str) -> str:
+    """Extract an entry type filter from the question.
+    For questions like 'where is the CLI entry point' or 'what is the main function',
+    return a type like 'cli_command' or 'main'.
+    """
+    q_lower = q.lower()
+    if 'cli' in q_lower or 'command' in q_lower:
+        return 'cli_command'
+    if 'main' in q_lower or 'start' in q_lower or 'boot' in q_lower:
+        return 'main'
+    if 'test' in q_lower:
+        return 'test_entry'
+    if 'api' in q_lower or 'route' in q_lower or 'endpoint' in q_lower:
+        return 'api_route'
+    if 'worker' in q_lower:
+        return 'worker'
+    if 'event' in q_lower or 'handler' in q_lower:
+        return 'event_handler'
+    return ''
+
+
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
     """Execute the determined command with the given args."""
     if command == "context":
@@ -421,7 +442,8 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "api-map":
         return map_api_routes(workspace)
     elif command == "entrypoints":
-        return map_entrypoints(workspace)
+        entry_type = args.get("entry_type_filter", None)
+        return map_entrypoints(workspace, entry_type=entry_type)
     elif command == "smell":
         return detect_smells(workspace)
     elif command == "complexity":
