@@ -203,6 +203,9 @@ def _bfs_trace(
 
             if neighbor_id in visited:
                 # Already visited — record as cyclic reference
+                # Skip trivial self-loops (function calls itself at depth 0→1)
+                if neighbor_id == start_id and depth <= 1:
+                    continue
                 if neighbor_id in node_by_id:
                     n = node_by_id[neighbor_id]
                     chain.append({

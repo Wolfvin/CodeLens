@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelens"
@@ -63,15 +63,13 @@ all = [
     "codelens[grammars,watch,dev]",
 ]
 
-[project.scripts]
-codelens = "codelens:main"
+# Entry point removed — codelens is run directly via python3 codelens.py
+# The scripts/ directory uses sys.path-based imports, not a proper Python package.
+# To install as a package, add __init__.py and convert to absolute imports.
 
 [tool.setuptools.packages.find]
 where = ["scripts"]
 include = ["*"]
-
-[tool.setuptools.package-data]
-"*" = ["*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -30,19 +30,37 @@ except ImportError:
     HAS_TREE_SITTER = False
 
 
-class PythonParser:
-    """Tree-sitter powered Python parser for function/class extraction."""
+# Shared Python skip names — common builtins that are not user-defined functions
+PYTHON_SKIP_NAMES = {
+    'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
+    'return', 'yield', 'raise', 'break', 'continue', 'pass', 'import', 'from',
+    'class', 'def', 'async', 'await', 'lambda', 'global', 'nonlocal',
+    'True', 'False', 'None',
+    'print', 'len', 'range', 'int', 'str', 'float', 'bool', 'list', 'dict',
+    'set', 'tuple', 'type', 'isinstance', 'super', 'property',
+    'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
+    'iter', 'next', 'abs', 'min', 'max', 'sum', 'any', 'all',
+    'self', 'cls', 'open', 'hasattr', 'getattr', 'setattr',
+    'staticmethod', 'classmethod', 'abstractmethod',
+}
+
+
+class PythonParser(BaseParser if HAS_TREE_SITTER else object):
+    """Tree-sitter powered Python parser for function/class extraction.
+
+    Extends BaseParser to use shared utilities like get_text() and get_line()
+    for consistent AST traversal across all parsers.
+    """
 
     def __init__(self):
         if not HAS_TREE_SITTER:
             raise ImportError("tree-sitter or base_parser not available")
-        self._parser = None
         from grammar_loader import get_grammar_loader
         loader = get_grammar_loader()
-        ts_parser = loader.get_parser('python')
-        if ts_parser is None:
+        language = loader.get_language('python')
+        if language is None:
             raise ImportError("tree-sitter Python grammar not available")
-        self._parser = ts_parser
+        super().__init__(language)
 
     def extract_references(self, content: str, file_path: str) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -54,7 +72,7 @@ class PythonParser:
                 "edges": [{"from": str, "to_fn": str}]
             }
         """
-        tree = self._parser.parse(content.encode('utf-8'))
+        root = self.parse(content.encode('utf-8'))
         nodes = []
         edges = []
 
@@ -63,19 +81,7 @@ class PythonParser:
         current_class: Optional[str] = None
         current_fn_id: Optional[str] = None
 
-        # Skip names that aren't user-defined functions
-        skip_names = {
-            'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
-            'return', 'yield', 'raise', 'break', 'continue', 'pass', 'import', 'from',
-            'class', 'def', 'async', 'await', 'lambda', 'global', 'nonlocal',
-            'True', 'False', 'None',
-            'print', 'len', 'range', 'int', 'str', 'float', 'bool', 'list', 'dict',
-            'set', 'tuple', 'type', 'isinstance', 'super', 'property',
-            'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
-            'iter', 'next', 'abs', 'min', 'max', 'sum', 'any', 'all',
-            'self', 'cls', 'open', 'hasattr', 'getattr', 'setattr',
-            'staticmethod', 'classmethod', 'abstractmethod',
-        }
+        source = content.encode('utf-8')
 
         def _walk(node, class_name=None, fn_id=None):
             """Recursively walk the tree to find functions and calls."""
@@ -85,7 +91,7 @@ class PythonParser:
                 # Track class context
                 name_node = node.child_by_field_name('name')
                 if name_node:
-                    cls_name = content[name_node.start_byte:name_node.end_byte]
+                    cls_name = self.get_text(name_node, source)
                     # Walk the body with class context
                     body = node.child_by_field_name('body')
                     if body:
@@ -96,9 +102,8 @@ class PythonParser:
             elif node.type == 'function_definition':
                 name_node = node.child_by_field_name('name')
                 if name_node:
-                    fn_name = content[name_node.start_byte:name_node.end_byte]
-                    line = node.start_point[0] + 1  # 1-indexed
-                    node_id = f"{file_path}:{line}"
+                    fn_name = self.get_text(name_node, source)
+                    line = self.get_line(node)
 
                     # Check async
                     is_async = any(
@@ -106,6 +111,7 @@ class PythonParser:
                         for child in node.children
                     )
 
+                    node_id = f"{file_path}:{line}"
                     node_data = {
                         "id": node_id,
                         "fn": fn_name,
@@ -137,25 +143,24 @@ class PythonParser:
                 # Function call: name(args) or obj.method(args)
                 func_node = node.child_by_field_name('function')
                 if func_node:
-                    call_name = content[func_node.start_byte:func_node.end_byte]
+                    call_name = self.get_text(func_node, source)
 
                     # Handle attribute access: obj.method
                     if func_node.type == 'attribute':
                         attr_node = func_node.child_by_field_name('attribute')
                         obj_node = func_node.child_by_field_name('object')
                         if attr_node and obj_node:
-                            method_name = content[attr_node.start_byte:attr_node.end_byte]
-                            obj_name = content[obj_node.start_byte:obj_node.end_byte]
-                            if method_name not in skip_names:
+                            method_name = self.get_text(attr_node, source)
+                            obj_name = self.get_text(obj_node, source)
+                            if method_name not in PYTHON_SKIP_NAMES:
                                 is_self = obj_name == 'self'
-                                full_name = f"{obj_name}.{method_name}"
                                 edges.append({
                                     "from": fn_id,
                                     "to_fn": method_name,
                                     "via_self": is_self
                                 })
                     elif func_node.type == 'identifier':
-                        if call_name not in skip_names:
+                        if call_name not in PYTHON_SKIP_NAMES:
                             edges.append({
                                 "from": fn_id,
                                 "to_fn": call_name
@@ -165,7 +170,6 @@ class PythonParser:
             for child in node.children:
                 _walk(child, class_name=class_name, fn_id=fn_id)
 
-        root = tree.root_node
         for child in root.children:
             _walk(child)
 

@@ -26,7 +26,7 @@ logger = get_logger()
 
 DEFAULT_IGNORE_DIRS = frozenset({
     'node_modules', '.git', 'dist', 'build', 'target',
-    '__pycache__', '.codelens', '.next', '.cache',
+    '__pycache__', '.codelens', '.next', '.nuxt', '.cache',
     'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
