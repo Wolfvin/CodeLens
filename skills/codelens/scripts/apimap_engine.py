@@ -42,6 +42,18 @@ SOURCE_EXTENSIONS = {
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
 
+# Valid HTTP methods in uppercase (for validation of extracted method names)
+VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
+
+# Non-router objects whose .get/.post/.delete etc. calls should NOT be treated as routes
+NON_ROUTER_OBJECTS = {
+    "console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math",
+    "res", "req", "ctx", "request", "response", "result", "data",
+    "props", "state", "config", "options", "headers",
+    "localStorage", "sessionStorage", "document", "window",
+    "cache", "store", "db", "query", "client",
+}
+
 # Known middleware identifiers
 AUTH_MIDDLEWARE_PATTERNS = {
     "authenticate", "auth", "jwt", "passport", "requireAuth",
@@ -341,9 +353,13 @@ def _extract_js_routes(
         route_path = m.group(3)
 
         # Skip non-route method calls
-        if obj_name in {"console", "Promise", "Array", "Object", "Map", "Set", "JSON", "Math"}:
+        if obj_name in NON_ROUTER_OBJECTS:
             continue
         if http_method.lower() not in HTTP_METHODS:
+            continue
+
+        # Skip paths that don't look like routes (e.g., cookie names, header names)
+        if not route_path.startswith('/'):
             continue
 
         line_num = content[:m.start()].count('\n') + 1
@@ -579,15 +595,31 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
             stripped
         )
         if m:
-            mw_name = m.group(2)
-            mw_type = _classify_middleware(mw_name)
-            middleware.append({
-                "name": mw_name,
-                "type": mw_type,
-                "scope": f"path:{m.group(1)}",
-                "file": rel_path,
-                "line": i + 1,
-            })
+            mw_path = m.group(1)
+            # Only treat as route-scoped middleware if the path looks like a real route
+            # (starts with /) — filter out cookie names, variable names, etc.
+            if not mw_path.startswith('/'):
+                # Might be a config string (e.g., cookie secret), not a route path
+                # Treat as global middleware instead
+                mw_name = m.group(2)
+                mw_type = _classify_middleware(mw_name)
+                middleware.append({
+                    "name": mw_name,
+                    "type": mw_type,
+                    "scope": "global",
+                    "file": rel_path,
+                    "line": i + 1,
+                })
+            else:
+                mw_name = m.group(2)
+                mw_type = _classify_middleware(mw_name)
+                middleware.append({
+                    "name": mw_name,
+                    "type": mw_type,
+                    "scope": f"path:{mw_path}",
+                    "file": rel_path,
+                    "line": i + 1,
+                })
 
     return middleware
 
@@ -621,6 +653,10 @@ def _extract_nextjs_routes(
                 content
             ):
                 http_method = (method_match.group(1) or method_match.group(2)).upper()
+                # Validate that this is actually an HTTP method, not a random string
+                # (e.g., 'HOUR', 'DAY', 'WEEK' from date-fns switch statements)
+                if http_method not in VALID_HTTP_METHODS_UPPER:
+                    continue
                 line_num = content[:method_match.start()].count('\n') + 1
                 routes.append({
                     "method": http_method,
@@ -816,8 +852,12 @@ def _extract_python_routes(
             mw_chain = _extract_python_decorator_middleware(content, m.start(), rel_path, line_num)
 
             for method in methods:
+                method_upper = method.upper()
+                # Validate HTTP method
+                if method_upper not in VALID_HTTP_METHODS_UPPER:
+                    continue
                 routes.append({
-                    "method": method.upper(),
+                    "method": method_upper,
                     "path": _normalize_path(route_path),
                     "handler_name": handler_name,
                     "file": rel_path,
@@ -916,8 +956,12 @@ def _extract_python_routes(
             line_num = content[:m.start()].count('\n') + 1
 
             for method in methods:
+                method_upper = method.upper()
+                # Validate HTTP method
+                if method_upper not in VALID_HTTP_METHODS_UPPER:
+                    continue
                 routes.append({
-                    "method": method.upper(),
+                    "method": method_upper,
                     "path": f"/{handler_name}",
                     "handler_name": handler_name,
                     "file": rel_path,

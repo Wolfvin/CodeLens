@@ -361,18 +361,29 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         except Exception:
             logger.debug("JS backend tree-sitter parser not available, using fallback")
 
+        ts_be_parser = None
+        try:
+            from parsers.ts_backend_parser import TSBackendParser
+            ts_be_parser = TSBackendParser()
+        except (ImportError, RuntimeError) as e:
+            logger.warning(f"TSBackendParser init failed, using JS fallback: {e}")
+
         for path in files["js_backend"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                if js_be_parser:
-                    refs = js_be_parser.extract_references(content, os.path.relpath(path, workspace))
+                rel_path = os.path.relpath(path, workspace)
+                ext = os.path.splitext(path)[1].lower()
+                if ext == '.ts' and ts_be_parser:
+                    refs = ts_be_parser.extract_references(content, rel_path)
+                elif js_be_parser:
+                    refs = js_be_parser.extract_references(content, rel_path)
                 else:
-                    refs = parse_js_backend_fallback(content, os.path.relpath(path, workspace))
+                    refs = parse_js_backend_fallback(content, rel_path)
                 js_backend_data.append({
-                    "path": os.path.relpath(path, workspace),
+                    "path": rel_path,
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
