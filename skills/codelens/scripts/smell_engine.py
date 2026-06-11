@@ -21,14 +21,11 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, DEFAULT_SOURCE_EXTENSIONS
 
 # ─── Configuration ─────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
-}
+SOURCE_EXTENSIONS = DEFAULT_SOURCE_EXTENSIONS | {".mjs", ".cjs"}
 
 # Thresholds
 LONG_FUNCTION_LINES = 50

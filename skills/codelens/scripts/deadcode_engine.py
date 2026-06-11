@@ -13,12 +13,9 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, DEFAULT_SOURCE_EXTENSIONS, logger
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
-}
+SOURCE_EXTENSIONS = DEFAULT_SOURCE_EXTENSIONS | {".mjs", ".cjs", ".less"}
 
 def detect_dead_code(
     workspace: str,

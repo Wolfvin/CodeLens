@@ -18,6 +18,11 @@ import {
   AnimationIntensity,
 } from '@/types/neural'
 
+/** O(1) lookup index for GraphNode arrays — replaces O(n) nodes.find() calls */
+function createNodeIndex(nodes: GraphNode[]): Map<string, GraphNode> {
+  return new Map(nodes.map(n => [n.id, n]))
+}
+
 class Normalizer {
   // ─── Main Entry ─────────────────────────────────────────────
 
@@ -318,6 +323,7 @@ class Normalizer {
   /** trace: Returns the call chain with flow animation */
   private normalizeTrace(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const direction: 'up' | 'down' | 'both' = output?.direction ?? 'up'
@@ -330,7 +336,8 @@ class Normalizer {
       const nodeId = entry.node_id ?? this.makeNodeId('function', entry.fn ?? '', entry.file, entry.line)
       const status = this.statusToNodeStatus(entry.status ?? 'active')
 
-      if (!nodes.find(n => n.id === nodeId)) {
+      if (!seenIds.has(nodeId)) {
+        seenIds.add(nodeId)
         nodes.push({
           id: nodeId,
           label: entry.fn ?? 'unknown',
@@ -368,7 +375,8 @@ class Normalizer {
       const nodeId = entry.node_id ?? this.makeNodeId('function', entry.fn ?? '', entry.file, entry.line)
       const status = this.statusToNodeStatus(entry.status ?? 'active')
 
-      if (!nodes.find(n => n.id === nodeId)) {
+      if (!seenIds.has(nodeId)) {
+        seenIds.add(nodeId)
         nodes.push({
           id: nodeId,
           label: entry.fn ?? 'unknown',
@@ -414,6 +422,7 @@ class Normalizer {
   /** impact: Returns affected nodes with alarm animation */
   private normalizeImpact(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
 
@@ -431,6 +440,7 @@ class Normalizer {
       )
       const nodeStatus: NodeStatus = item.risk === 'critical' ? 'critical' : item.risk === 'high' ? 'warning' : 'active'
 
+      seenIds.add(nodeId)
       nodes.push({
         id: nodeId,
         label: item.name ?? 'unknown',
@@ -456,7 +466,8 @@ class Normalizer {
       )
       const nodeStatus: NodeStatus = item.risk === 'critical' ? 'critical' : item.risk === 'high' ? 'warning' : 'active'
 
-      if (!nodes.find(n => n.id === nodeId)) {
+      if (!seenIds.has(nodeId)) {
+        seenIds.add(nodeId)
         nodes.push({
           id: nodeId,
           label: item.name ?? 'unknown',
@@ -597,6 +608,7 @@ class Normalizer {
   /** circular: Returns circular dependency chains with alarm animation */
   private normalizeCircular(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const cycles: any[] = output?.cycles ?? []
@@ -605,7 +617,8 @@ class Normalizer {
       const chain: string[] = cycle.chain ?? cycle.nodes ?? []
       for (let i = 0; i < chain.length; i++) {
         const nodeId = chain[i]
-        if (!nodes.find(n => n.id === nodeId)) {
+        if (!seenIds.has(nodeId)) {
+          seenIds.add(nodeId)
           nodes.push({
             id: nodeId,
             label: nodeId.split(':').pop() ?? nodeId,
@@ -644,6 +657,7 @@ class Normalizer {
   /** dataflow: Returns data flow source→sink with flow animation */
   private normalizeDataflow(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const flows: any[] = output?.flows ?? []
@@ -652,7 +666,8 @@ class Normalizer {
       const sourceId = this.makeNodeId('function', flow.source?.fn ?? flow.source?.name ?? 'source', flow.source?.file, flow.source?.line)
       const sinkId = this.makeNodeId('function', flow.sink?.fn ?? flow.sink?.name ?? 'sink', flow.sink?.file, flow.sink?.line)
 
-      if (!nodes.find(n => n.id === sourceId)) {
+      if (!seenIds.has(sourceId)) {
+        seenIds.add(sourceId)
         nodes.push({
           id: sourceId,
           label: flow.source?.fn ?? flow.source?.name ?? 'source',
@@ -668,7 +683,8 @@ class Normalizer {
       }
       targetIds.push(sourceId)
 
-      if (!nodes.find(n => n.id === sinkId)) {
+      if (!seenIds.has(sinkId)) {
+        seenIds.add(sinkId)
         nodes.push({
           id: sinkId,
           label: flow.sink?.fn ?? flow.sink?.name ?? 'sink',
@@ -930,6 +946,7 @@ class Normalizer {
   /** test-map: Returns test coverage data with test nodes and tests edges */
   private normalizeTestMap(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const coverage: any[] = output?.coverage ?? output?.mappings ?? []
@@ -940,6 +957,7 @@ class Normalizer {
       const covered: boolean = entry.covered ?? entry.has_test ?? entry.tested ?? false
 
       // Create the function/symbol node
+      seenIds.add(symbolId)
       nodes.push({
         id: symbolId,
         label: fn,
@@ -958,7 +976,8 @@ class Normalizer {
       const testFiles: string[] = entry.test_files ?? (entry.test_file ? [entry.test_file] : [])
       for (const testFile of testFiles) {
         const testId = this.makeNodeId('test', testFile)
-        if (!nodes.find(n => n.id === testId)) {
+        if (!seenIds.has(testId)) {
+          seenIds.add(testId)
           nodes.push({
             id: testId,
             label: testFile.split('/').pop() ?? testFile,
@@ -1731,6 +1750,7 @@ class Normalizer {
   /** dependents: Module-level import tracking */
   private normalizeDependents(output: any): GraphEvent {
     const nodes: GraphNode[] = []
+    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const dependents: any[] = output?.dependents ?? []
@@ -1739,6 +1759,7 @@ class Normalizer {
 
     // Source file node
     const sourceId = this.makeNodeId('file', file)
+    seenIds.add(sourceId)
     nodes.push({
       id: sourceId,
       label: file.split('/').pop() ?? file,
@@ -1755,7 +1776,8 @@ class Normalizer {
     // Files that depend on this file
     for (const dep of dependents) {
       const depId = this.makeNodeId('file', dep.file ?? dep.path ?? 'dependent')
-      if (!nodes.find(n => n.id === depId)) {
+      if (!seenIds.has(depId)) {
+        seenIds.add(depId)
         nodes.push({
           id: depId,
           label: (dep.file ?? dep.path ?? 'dependent').split('/').pop() ?? 'dep',
@@ -1782,7 +1804,8 @@ class Normalizer {
     // Files this file depends on
     for (const dep of dependencies) {
       const depId = this.makeNodeId('file', dep.file ?? dep.path ?? 'dependency')
-      if (!nodes.find(n => n.id === depId)) {
+      if (!seenIds.has(depId)) {
+        seenIds.add(depId)
         nodes.push({
           id: depId,
           label: (dep.file ?? dep.path ?? 'dependency').split('/').pop() ?? 'dep',

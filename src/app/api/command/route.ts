@@ -69,10 +69,11 @@ export async function POST(request: NextRequest) {
     const graphEvent = normalizer.normalize(command, rawOutput)
 
     return NextResponse.json(graphEvent)
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[/api/command] Error:', err)
+    const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json(
-      { error: err.message ?? 'Internal server error' },
+      { error: message },
       { status: 500 }
     )
   }

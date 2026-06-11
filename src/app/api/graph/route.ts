@@ -6,10 +6,10 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
+import { validateWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap } from '@/lib/healthScore'
-import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,18 +23,17 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Validate workspace path to prevent path traversal
-    const wsValidation = validateWorkspace(workspace)
-    if (!wsValidation.valid) {
-      return NextResponse.json(
-        { error: `Invalid workspace: ${wsValidation.error}` },
-        { status: 400 }
-      )
+    // Validate workspace path to prevent command injection
+    let validatedWorkspace: string
+    try {
+      validatedWorkspace = validateWorkspace(workspace)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Invalid workspace'
+      return NextResponse.json({ error: message }, { status: 400 })
     }
-    const safeWorkspace = wsValidation.resolved
 
     // Run the scan command to build the registry and get all data
-    const scanOutput = await commandRunner.scan(safeWorkspace)
+    const scanOutput = await commandRunner.scan(validatedWorkspace)
 
     // Check for CLI errors
     if (scanOutput.status === 'error') {
@@ -75,10 +74,9 @@ export async function GET(request: NextRequest) {
 
     // Assign clusterId to each node (using cloned nodes to avoid mutation)
     const finalNodes = selectedNodes.map(n => ({ ...n }))
-    const nodeMap = new Map(finalNodes.map(n => [n.id, n]))
     for (const cluster of clusters) {
       for (const nodeId of cluster.nodeIds) {
-        const node = nodeMap.get(nodeId)
+        const node = finalNodes.find((n) => n.id === nodeId)
         if (node) {
           node.clusterId = cluster.id
         }
@@ -102,10 +100,11 @@ export async function GET(request: NextRequest) {
       coupling: coupling.slice(0, 50),  // Top 50 most coupled nodes
       heatmap: heatmap.slice(0, 100),    // Top 100 hottest nodes
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[/api/graph] Error:', err)
+    const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json(
-      { error: err.message ?? 'Internal server error' },
+      { error: message },
       { status: 500 }
     )
   }

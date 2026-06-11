@@ -50,7 +50,7 @@ def load_config(workspace: str) -> Dict[str, Any]:
                 saved = json.load(f)
                 defaults.update(saved)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt config file {config_path}, using defaults", exc_info=True)
     return defaults
 
 
@@ -70,7 +70,7 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -99,7 +99,7 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning("Corrupt config/registry file, using defaults", exc_info=True)
+            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -129,20 +129,17 @@ def compute_frontend_status(
     Compute status for a frontend entry.
 
     Priority:
-    1. collision (IDs only: same id in >1 HTML element — invalid HTML)
-    2. duplicate_ref (classes: same class in >1 HTML element — normal; or referenced from 2+ different CSS/JS files)
-    3. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
+    1. collision (IDs: same id in >1 HTML element; classes: same class in >1 HTML element)
+    2. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
+    3. duplicate_ref (referenced from 2+ different files)
     4. active (default, has CSS or JS references)
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Collision: ID appears in >1 HTML element (invalid HTML, same ID used twice)
+    # Only IDs can collide (same id on multiple HTML elements is a bug)
+    # Classes are designed to be used on multiple elements
     if entry_type == "id" and len(html_refs) > 1:
         return "collision"
-
-    # Classes with multiple HTML refs is normal behavior, mark as duplicate_ref
-    if entry_type == "class" and len(html_refs) > 1:
-        return "duplicate_ref"
 
     # Dead: no CSS or JS references (defined in HTML but not styled or used)
     if ref_count == 0:
@@ -291,11 +288,6 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             if p not in css_paths:
                 css_paths[p] = []
             css_paths[p].append(css_ref)
-
-        # Clear stale flags before re-computing
-        for path, path_refs in css_paths.items():
-            for ref in path_refs:
-                ref.pop("flag", None)
 
         # Flag duplicate_define: same selector defined in same file 2+ times
         for path, path_refs in css_paths.items():

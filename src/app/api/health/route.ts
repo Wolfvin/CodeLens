@@ -6,10 +6,10 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { commandRunner } from '@/lib/commandRunner'
+import { validateWorkspace } from '@/lib/commandRunner'
 import { normalizer } from '@/lib/normalizer'
 import { clusterEngine } from '@/lib/clusterEngine'
 import { computeHealthScore, computeCoupling, computeHeatmap, computeImpactRadius } from '@/lib/healthScore'
-import { validateWorkspace } from '@/lib/workspaceValidator'
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,18 +24,17 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Validate workspace path to prevent path traversal
-    const wsValidation = validateWorkspace(workspace)
-    if (!wsValidation.valid) {
-      return NextResponse.json(
-        { error: `Invalid workspace: ${wsValidation.error}` },
-        { status: 400 }
-      )
+    // Validate workspace path to prevent command injection
+    let validatedWorkspace: string
+    try {
+      validatedWorkspace = validateWorkspace(workspace)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Invalid workspace'
+      return NextResponse.json({ error: message }, { status: 400 })
     }
-    const safeWorkspace = wsValidation.resolved
 
     // Run the scan to get current graph state
-    const scanOutput = await commandRunner.scan(safeWorkspace)
+    const scanOutput = await commandRunner.scan(validatedWorkspace)
 
     if (scanOutput.status === 'error') {
       return NextResponse.json(
@@ -71,10 +70,11 @@ export async function GET(request: NextRequest) {
       impactRadius,
       timestamp: Date.now(),
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[/api/health] Error:', err)
+    const message = err instanceof Error ? err.message : 'Internal server error'
     return NextResponse.json(
-      { error: err.message ?? 'Internal server error' },
+      { error: message },
       { status: 500 }
     )
   }

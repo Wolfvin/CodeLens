@@ -285,7 +285,7 @@ def search_symbols(
                     "status": cls["status"],
                     "ref_count": cls["ref_count"],
                     "locations": [
-                        f"{r['path']}:{r['line']}"
+                        f"{r.get('path', '')}:{r.get('line', 0)}"
                         for r in cls.get("css", []) + cls.get("js", [])
                     ]
                 })
@@ -299,7 +299,7 @@ def search_symbols(
                     "status": id_entry["status"],
                     "ref_count": id_entry["ref_count"],
                     "locations": [
-                        f"{r['path']}:{r['line']}"
+                        f"{r.get('path', '')}:{r.get('line', 0)}"
                         for r in id_entry.get("defined_in_html", []) +
                                   id_entry.get("css", []) +
                                   id_entry.get("js", [])

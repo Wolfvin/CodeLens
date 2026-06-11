@@ -38,6 +38,8 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+DEFAULT_SOURCE_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result) -> dict:

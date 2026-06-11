@@ -146,8 +146,10 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
             if 0 < distance <= 2 and len(dead_name) > 3 and len(active_name) > 3:
                 # Also check prefix similarity
                 if dead_name[:3] == active_name[:3] or dead_name[-3:] == active_name[-3:]:
-                    dead_cls = next(c for c in frontend.get("classes", []) if c["name"] == dead_name)
-                    active_cls = next(c for c in frontend.get("classes", []) if c["name"] == active_name)
+                    dead_cls = next((c for c in frontend.get("classes", []) if c["name"] == dead_name), None)
+                    active_cls = next((c for c in frontend.get("classes", []) if c["name"] == active_name), None)
+                    if dead_cls is None or active_cls is None:
+                        continue
                     issues["possible_typos"].append({
                         "dead_name": dead_name,
                         "active_name": active_name,

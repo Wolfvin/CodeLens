@@ -135,7 +135,11 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     risks = []
     try:
         circ_result = detect_circular(workspace)
-        for chain in circ_result.get("chains", [])[:5]:
+        circ_chains = []
+        for cycle_type, cycle_list in circ_result.get("cycles", {}).items():
+            if isinstance(cycle_list, list):
+                circ_chains.extend(cycle_list)
+        for chain in circ_chains[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)

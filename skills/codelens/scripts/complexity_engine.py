@@ -26,14 +26,11 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, DEFAULT_SOURCE_EXTENSIONS
 
 # ─── Configuration ─────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs",
-}
+SOURCE_EXTENSIONS = DEFAULT_SOURCE_EXTENSIONS | {".mjs", ".cjs"}
 
 # Cyclomatic complexity thresholds
 CC_SIMPLE = 5

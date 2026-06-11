@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CodeLens v2 Setup Script — Tree-sitter Edition
+# CodeLens v5 Setup Script — Tree-sitter Edition
 # Installs required Python dependencies including tree-sitter grammars
 
 set -e
@@ -46,14 +46,14 @@ python3 "$SCRIPT_DIR/scripts/codelens.py" --help
 
 # Test tree-sitter grammars
 echo "[CodeLens] Testing tree-sitter grammars..."
-python3 -c "
+(cd "$(dirname "$0")/scripts" && python3 -c "
 from grammar_loader import GrammarLoader
 loader = GrammarLoader()
 available = loader.available_languages()
 print(f'  Available grammars: {available}')
 if len(available) < 3:
     print('  WARNING: Some grammars failed to load.')
-"
+")
 
 echo ""
 echo "[CodeLens] Setup complete!"

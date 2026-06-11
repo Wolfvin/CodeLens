@@ -4,39 +4,46 @@ All notable changes to CodeLens are documented here.
 
 ## [5.8.0] — 2026-06-11
 
-### Fixed — Critical
-- **`--format` flag unreachable in CLI** (codelens.py): Added `--format` to parent parser so it works on all subcommands (e.g., `codelens scan . --format markdown` now works correctly)
-- **`handbook` and `ask` commands blocked by API whitelist** (commandRunner.ts): Added both commands to `ALLOWED_COMMANDS` so they work via REST API and WebSocket
-- **KeyError crashes on malformed backend nodes** (edge_resolver.py): Changed `node["fn"]`/`node["id"]` to `.get()` with safe defaults — prevents crashes on malformed parser output
-- **Version mismatch**: Aligned `package.json` (was 5.1.0) to 5.7.0 matching `utils.py` CODELENS_VERSION
+### Security
 
-### Fixed — High
-- **`/api/graph` and `/api/health` re-scan on every GET**: Added in-memory cache with 5-minute TTL — prevents O(workspace_size) DOS per request
-- **`_infer_literal_type_py` set detection unreachable** (typeinfer_engine.py): Reordered set/dict checks so `{1, 2, 3}` correctly infers as `set` instead of always `dict`
-- **`configdrift_engine.py` pyproject.toml parsing non-functional**: Empty loop body meant zero dependencies were ever extracted from pyproject.toml — now correctly parses `[project.dependencies]` sections
-- **In-place mutation of shared ref dicts** (registry.py, incremental.py): `_build_class_entries` and `_recompute_duplicate_define` now create copies before mutating flags — prevents cross-entry data corruption
-- **`compute_summary` inconsistent dict access** (utils.py): Handles `nodes`/`edges`/`classes`/`ids` being either lists or integers — uses `len()` for lists with int fallback
+- **Workspace path validation**: REST API and WebSocket now validate workspace paths — reject `..` traversal, optional `CODELENS_WORKSPACE_ROOT` allowlist, symlink resolution.
+- **WebSocket command injection prevention**: Command whitelist, arg sanitization, and shell metacharacter rejection for Socket.IO `command` event.
+- **Error info disclosure fixed**: All API catch blocks now use `err: unknown` with safe message extraction instead of exposing internal error details.
 
-### Fixed — Medium
-- **`circular_engine.py` phantom import edges**: `_resolve_import_path` now returns `None` instead of unresolved path when no file matches
-- **`refactor_safe_engine.py` overly broad string ref matching**: Added `\b` word boundaries to regex — eliminates false positives like `"OrderProcessor"` matching symbol `"Order"`
-- **`deadcode_engine.py` unused export skip list too aggressive**: Removed `handler` and `router` from entry_points skip set (common Next.js API exports), added HTTP method names (`GET`, `POST`, etc.)
-- **`search_engine.py` ReDoS protection**: Added `_is_redos_risky()` heuristic to reject nested quantifier patterns before compilation
-- **Hardcoded workspace path** (analysisStore.ts): Changed `workspace: '/home/z/my-project'` to `workspace: ''`
-- **Duplicate `missing_refs.py`**: Removed leftover `scripts/missing_refs.py` (canonical version is `scripts/commands/missing_refs.py`)
-- **O(n) cluster assignment** (graph route.ts): Replaced `Array.find()` with `Map.get()` for O(1) lookups
+### Fixed
 
-### Fixed — Test Suite
-- **Integration test workspace pollution**: Added autouse cleanup fixture that removes test-generated files after each test
-- **Weak assertion `test_no_secrets_in_clean_code`**: Now asserts `total_secrets == 0` instead of just checking type
-- **Weak async detection assertions** (test_js_backend_parser, test_rust_parser): Explicitly checks `node.get("async") is True or == "async"`
-- **Weak scan assertions** (test_cli.py): Strengthened from `> 0` to specific minimum counts with structure validation
-- **Hardcoded `/home/z/my-project` in analysisStore.test.ts**: Replaced with empty string
-- **Missing `jest` devDependency**: Added `jest@^29.7.0` to package.json
-- **Missing `test` script**: Added `"test": "jest"` and `"test:py"` to package.json
+- **CRITICAL: Class collision false-positive**: CSS classes used on multiple HTML elements were incorrectly flagged as "collision". Only IDs should trigger collision detection (registry.py `compute_frontend_status`).
+- **CRITICAL: Handbook circular dependency reporting**: `handbook` read non-existent `chains` key from `detect_circular()`. Now correctly reads from `cycles` dict.
+- **CRITICAL: Scan edge filtering on file deletion**: Deleted-file cleanup preserved stale edges referencing removed nodes. Both `from` and `to` must now reference surviving node IDs.
+- **CRITICAL: Double normalization in WebSocket**: `normalizeGeneric()` was called twice for security/quality/performance/CSS/refactoring commands. Now computed once and reused.
+- **CRITICAL: CLI output JSON parse failure**: WebSocket `JSON.parse` failed when CLI emitted `[CodeLens]` prefix lines. New `parseCliOutput()` helper strips non-JSON prefix.
+- **HIGH: Module-level throw on missing env vars**: Server crashed on startup if `CODELENS_PYTHON`/`CODELENS_SCRIPT` were unset. Now uses lazy getters; errors surface at first command execution.
+- **HIGH: Hardcoded workspace path**: `analysisStore.ts` default workspace `/home/z/my-project` replaced with env var `NEXT_PUBLIC_CODELENS_WORKSPACE` or `process.cwd()`.
+- **HIGH: `--format` argument placement**: `--format` now works after the subcommand name (e.g., `scan /path --format markdown`). Moved from main parser to subparsers.
+- **HIGH: Trace deduplication**: Multi-start-node traces no longer produce duplicate nodes. Shared `visited` set across BFS calls.
+- **HIGH: Context engine int() crash**: `int()` on node ID suffix crashed on non-numeric values. Added `_safe_parse_line()` with try/except.
+- **HIGH: Missing refs StopIteration**: `next()` without default crashed on corrupted registry. Now uses `next(..., None)` with None guard.
+- **HIGH: Search engine KeyError**: Direct dict key access `r['path']`/`r['line']` crashed on missing fields. Changed to `.get()`.
+- **HIGH: ask.py args mutation**: `args.pop("_confidence")` mutated the args dict. Changed to `args.get()`.
+- **HIGH: Orphaned logger in vulnscan_engine**: Used `logging.getLogger()` instead of shared `from utils import logger`. All log calls were silently discarded.
+- **MEDIUM: O(n²) normalizer performance**: `nodes.find()` replaced with `Set<string>` for dedup in 6 normalizer methods.
+- **MEDIUM: O(n²) coupling computation**: `computeCoupling()` in healthScore.ts still O(N×E) but documented for future optimization.
+- **MEDIUM: Tailwind content paths**: Added `./src/**/*` to content paths — production CSS was missing utility classes from src/.
+- **MEDIUM: React StrictMode**: Changed from `false` to `true` for better dev warnings.
+- **MEDIUM: WebSocket graph updates O(N)**: `findIndex` replaced with `Map<string, number>` index.
+- **MEDIUM: WebSocket memory leak**: `commandTimestamps` Map now cleaned up on socket disconnect.
+- **MEDIUM: Circular engine recursion limit**: Raised to 5000 for deeply nested codebases.
+- **MEDIUM: Incremental mtime float comparison**: Uses tolerance `abs(a-b) > 0.001` instead of exact equality.
+- **MEDIUM: Shared DEFAULT_SOURCE_EXTENSIONS**: Centralized in utils.py, eliminating duplication across 6+ engine files.
+- **LOW: Root API route**: Returns proper health/version check instead of "Hello, world!".
+- **LOW: Demo data bundle size**: Changed to dynamic import in analysisStore.ts.
+- **LOW: Client-side fetch timeout**: 90s AbortController added to `/api/command` requests.
+- **LOW: setup.sh version**: Updated from "v2" to "v5".
 
-### Changed
-- SKILL.md: Added "What's New in v5.7" section documenting safety and bugfix improvements
+### Added
+
+- **`scan --force` flag**: Force full re-scan even when existing registry triggers auto-incremental mode.
+- **Workspace path validation utility**: Exported `validateWorkspace()` from commandRunner.ts for reuse.
 
 ## [5.3.0] — 2026-06-11
 

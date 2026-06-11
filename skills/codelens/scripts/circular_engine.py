@@ -9,9 +9,12 @@ Uses DFS with coloring (white/gray/black) for efficient cycle detection.
 
 import os
 import re
+import sys
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import logger, DEFAULT_IGNORE_DIRS
+
+sys.setrecursionlimit(5000)
 
 
 def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
