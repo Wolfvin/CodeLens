@@ -639,4 +639,30 @@ def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "6.0.0"
+
+
+# ─── File Reading Utility ───────────────────────────────────
+
+def safe_read_file(filepath: str, max_size: int = 500 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file with size limit and error handling.
+
+    Args:
+        filepath: Path to the file to read.
+        max_size: Maximum file size in bytes to read (default 500KB).
+        encoding: File encoding (default utf-8).
+
+    Returns:
+        File contents as string, or None if the file cannot be read.
+    """
+    try:
+        if not os.path.isfile(filepath):
+            return None
+        if os.path.getsize(filepath) > max_size:
+            logger.debug(f"Skipping large file: {filepath} ({os.path.getsize(filepath)} bytes)")
+            return None
+        with open(filepath, 'r', encoding=encoding, errors='replace') as f:
+            return f.read()
+    except (OSError, PermissionError, UnicodeDecodeError):
+        logger.debug(f"Could not read file: {filepath}")
+        return None

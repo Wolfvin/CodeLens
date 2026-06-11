@@ -34,9 +34,11 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 # ─── Safety Limits ────────────────────────────────────────────
 
 MAX_FILE_SIZE = 200 * 1024  # 200KB — skip files larger than this to avoid slow regex
+MAX_FILES_TO_SCAN = 5000      # Max files to scan (prevents timeout on huge repos)
 PER_REGEX_TIMEOUT_SEC = 2    # Max seconds per single regex.finditer call
-PER_FILE_TIMEOUT_SEC = 10   # Max seconds per file across all patterns
+PER_FILE_TIMEOUT_SEC = 5     # Max seconds per file across all patterns
 MAX_MATCHES_PER_PATTERN = 50  # Cap matches per pattern per file to prevent runaway results
+MAX_TOTAL_FINDINGS = 500      # Cap total findings to prevent explosion
 WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with wide quantifiers
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -456,6 +458,7 @@ def detect_perf_hints(
 
     findings: List[Dict[str, Any]] = []
     files_scanned = 0
+    truncated = False
 
     # Categories to scan (apply filter early)
     categories_to_scan = PERF_HINT_CATEGORIES
@@ -517,9 +520,25 @@ def detect_perf_hints(
             )
             findings.extend(file_findings)
 
+            # Check if we've hit file or finding limits
+            if files_scanned >= MAX_FILES_TO_SCAN:
+                truncated = True
+                break
+            if len(findings) >= MAX_TOTAL_FINDINGS:
+                truncated = True
+                break
+
+        if truncated:
+            break
+
     # ─── Phase 2: Cross-file analyses ─────────────────────────
     # (duplicate API URLs, etc. — done per-file already, but we
     #  could extend here for workspace-wide duplicate detection)
+
+    # ─── Truncate findings if over cap ──────────────────────────
+    if len(findings) > MAX_TOTAL_FINDINGS:
+        findings = findings[:MAX_TOTAL_FINDINGS]
+        truncated = True
 
     # ─── Deduplicate findings ─────────────────────────────────
     findings = _deduplicate_findings(findings)
@@ -530,6 +549,7 @@ def detect_perf_hints(
 
     # ─── Compute stats ────────────────────────────────────────
     stats = _compute_stats(findings, files_scanned)
+    stats["truncated"] = truncated
 
     # ─── Compute risk ─────────────────────────────────────────
     risk = _compute_risk(findings)

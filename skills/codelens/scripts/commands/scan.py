@@ -652,6 +652,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "edges": len(resolved_edges)
         },
         "frameworks": config.get("frameworks", []),
+        "build_tools": config.get("build_tools", []),
+        "monorepo_tools": config.get("monorepo_tools", []),
+        "is_monorepo": config.get("is_monorepo", False),
         "incremental": incremental,
         "changed_files_count": len(changed_files) if changed_files else 0
     }
