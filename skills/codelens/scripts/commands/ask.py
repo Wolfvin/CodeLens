@@ -60,6 +60,12 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "how to configure": 3, "configuration": 3,
     "not used": 3,
 
+    # Summary/overview terms (v6.2)
+    "summary": 3, "overview": 3, "quick summary": 3, "brief": 3,
+    "tldr": 3, "tl;dr": 3, "give me a summary": 3,
+    "what matters": 3, "what's important": 3, "priority": 3,
+    "auto summary": 3, "auto detect": 3,
+
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
     "trace": 1, "scan": 1, "analyze": 1, "index": 1,
@@ -299,6 +305,11 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
         # Handbook
         (["overview", "handbook", "project brief", "tell me about", "summarize", "summary of"],
          "handbook", {}, "high"),
+
+        # Summary (v6.2 — anti-overload condensed view)
+        (["quick summary", "tldr", "tl;dr", "give me a summary", "what matters",
+          "what's important", "auto summary", "auto detect", "priority issues"],
+         "summary", {}, "high"),
     ]
 
     # ─── Score each pattern ────────────────────────────────
@@ -499,6 +510,9 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
         return cmd_scan(workspace)
     elif command == "handbook":
         return cmd_handbook(workspace)
+    elif command == "summary":
+        from commands.summary import generate_summary
+        return generate_summary(workspace)
     elif command == "dependents":
         return get_dependency_graph(workspace)
     elif command == "css-deep":

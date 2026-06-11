@@ -311,3 +311,89 @@ def _to_alternate_case(name: str) -> str:
 
     # No conversion needed
     return leading + name
+
+
+def resolve_tauri_ipc_from_apimap(
+    nodes: List[Dict],
+    edges: List[Dict],
+    api_routes: List[Dict]
+) -> List[Dict]:
+    """Resolve Tauri IPC cross-language edges from API map data.
+
+    In Tauri apps, the TypeScript frontend calls Rust backend handlers via
+    the IPC bridge: `invoke('commandName')` → Rust `#[tauri::command]` handler.
+    These cross-language calls are invisible to same-language edge resolution
+    because the TS and Rust code don't directly reference each other.
+
+    This function creates synthetic edges by matching:
+      - API route `invoke('commandName')` calls → Rust function nodes
+      - Route method/path → frontend handler nodes (if applicable)
+
+    Args:
+        nodes: All backend nodes (both TS and Rust).
+        edges: Existing resolved edges (same-language only).
+        api_routes: Routes from apimap_engine, each with 'method', 'path',
+                    'handler', 'file', 'line' fields.
+
+    Returns:
+        Updated edges list with new IPC cross-language edges appended.
+    """
+    if not api_routes:
+        return edges
+
+    # Build node lookup: fn_name → list of nodes
+    fn_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+    for node in nodes:
+        fn_to_nodes[node.get("fn", "")].append(node)
+
+    # Also build alternate-case lookup for snake_case ↔ camelCase
+    alt_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+    for node in nodes:
+        alt_key = _to_alternate_case(node.get("fn", ""))
+        if alt_key != node.get("fn", ""):
+            alt_to_nodes[alt_key].append(node)
+
+    new_edges = list(edges)
+    edge_set = set()
+    for e in edges:
+        edge_set.add((e.get("from"), e.get("to")))
+
+    for route in api_routes:
+        handler = route.get("handler", "")
+        if not handler:
+            continue
+
+        # Look for matching Rust/TS node by handler name
+        # Try exact match first, then alternate case
+        target_nodes = fn_to_nodes.get(handler, []) or alt_to_nodes.get(handler, [])
+
+        if not target_nodes:
+            continue
+
+        # Find the frontend caller — look for invoke() call nodes in the route's file
+        route_file = route.get("file", "")
+        invoke_nodes = []
+        for node in nodes:
+            if (node.get("fn", "").startswith("invoke") and
+                    route_file and node.get("file", "") == route_file):
+                invoke_nodes.append(node)
+
+        # If no invoke() node found, create a synthetic edge from route file
+        for target_node in target_nodes:
+            for src_node in invoke_nodes or [None]:
+                from_id = src_node["id"] if src_node else f"ipc:{route_file}:{handler}"
+                to_id = target_node["id"]
+                edge_key = (from_id, to_id)
+                if edge_key in edge_set:
+                    continue
+                edge_set.add(edge_key)
+                new_edges.append({
+                    "from": from_id,
+                    "to": to_id,
+                    "type": "tauri_ipc",
+                    "label": f"invoke('{handler}')",
+                    "file": route_file,
+                    "line": route.get("line", 0),
+                })
+
+    return new_edges

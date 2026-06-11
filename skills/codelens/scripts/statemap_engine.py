@@ -1157,6 +1157,26 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 value_is_stateful = bool(re.match(r'^(\{|\[|new\s|Map\b|Set\b|WeakMap|WeakSet)', value_part))
                 if not value_is_stateful:
                     continue
+                # v6.2: Even if value looks stateful ([], {}), check if it's
+                # actually an immutable data constant (math tables, lookup maps).
+                # Heuristic: PascalCase names with numeric or data-like suffixes
+                # (Values, Data, Entries, Items, Table, Grid) containing only
+                # primitive arrays are constants, not state.
+                _DATA_CONSTANT_SUFFIXES = (
+                    'Values', 'Data', 'Entries', 'Items', 'Table', 'Grid',
+                    'Coefficients', 'Weights', 'Matrix', 'Vector',
+                )
+                if any(var_name.endswith(s) for s in _DATA_CONSTANT_SUFFIXES):
+                    continue
+                # v6.2: Names containing scientific/math terms are constants
+                # e.g., LegendreGaussN24TValues, FibonacciNumbers, PiDigits
+                _MATH_PATTERNS = (
+                    'Gauss', 'Legendre', 'Fibonacci', 'Fourier', 'Taylor',
+                    'Newton', 'Euler', 'Bernoulli', 'Chebyshev', 'Hermite',
+                    'Laguerre', 'Jacobi', 'Bessel', 'Riemann',
+                )
+                if any(p in var_name for p in _MATH_PATTERNS):
+                    continue
 
             # Skip names ending with config/enum suffixes
             if any(var_name.endswith(s) for s in config_suffixes):

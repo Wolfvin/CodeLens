@@ -799,6 +799,17 @@ def map_entrypoints(
                 'tailwind.config', 'next.config', 'vite.config',
                 'webpack.config', 'rollup.config', 'babel.config',
                 'i18n.config', 'i18n.json', 'i18n-unused.config',
+                # Additional config/rc file patterns (v6.2)
+                '.lintstagedrc', '.babelrc', '.stylelintrc',
+                '.commitlintrc', '.huskyrc', '.lintstagedrc.json',
+                '.lintstagedrc.js', '.lintstagedrc.cjs',
+                'commitlint.', 'husky.', 'stylelint.',
+                'jest.config.', 'karma.conf', 'protractor.conf',
+                'angular.json', '.browserslistrc', '.editorconfig',
+                '.nvmrc', '.npmrc', '.yarnrc', 'lerna.json',
+                'nx.json', 'workspace.json', 'tsup.config',
+                'esbuild.', 'rollup.', 'terser.config',
+                'docker-compose', 'Dockerfile', '.env.',
             )
             is_config_file = any(p in filename for p in config_file_patterns)
 
@@ -815,9 +826,9 @@ def map_entrypoints(
                 if ep_type not in ENTRYPOINT_PATTERNS:
                     continue
 
-                # v6: Skip module_export for config files — they contain
-                # "export default" but are NOT application entry points.
-                if ep_type == "module_export" and is_config_file:
+                # v6: Skip config files — they contain "export default" and
+                # other patterns but are NOT application entry points.
+                if is_config_file:
                     continue
 
                 type_def = ENTRYPOINT_PATTERNS[ep_type]

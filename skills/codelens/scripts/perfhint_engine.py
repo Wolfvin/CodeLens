@@ -530,7 +530,7 @@ def detect_perf_hints(
         "stats": {**stats, "truncated_categories": category_overflow if category_overflow else None},
         "risk": risk,
         "frameworks_detected": detected_frameworks,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "hints": findings[:200],  # Cap to avoid explosion (key matches stats.total_hints)
         "recommendations": recommendations,
     }
 

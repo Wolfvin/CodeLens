@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v6.0 — Quick Reference
+# CodeLens v6.2 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -23,6 +23,8 @@ description: >
 |-------------|------|---------|
 | Create new class/id/function | `query` | `codelens query "name" ws` |
 | Edit existing code | `query` + `context` | Query first, then context |
+| **Anti-overload summary** | `summary` | `codelens summary ws` |
+| Quick overview | `summary --detail minimal` | `codelens summary --detail minimal ws` |
 | Delete code | `impact` + `dead-code` | Impact check, then delete |
 | "does this exist?" | `query` | `codelens query "name" ws` |
 | "who calls this?" | `trace --direction up` | `codelens trace "name" ws` |
@@ -117,7 +119,7 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 41 Commands Quick Reference
+## All 42 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|
@@ -162,6 +164,7 @@ $CLI smell             # Auto-detect → works!
 | 39 | `vuln-scan` | P0 | CVE vulnerability scan |
 | 40 | `perf-hint` | P1 | Performance hints |
 | 41 | `css-deep` | P2 | Deep CSS analysis |
+| 42 | `summary` | P0 | **Anti-overload condensed view** (v6.2) |
 
 ## CLI Usage Pattern
 

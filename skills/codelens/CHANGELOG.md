@@ -5,6 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.0] — 2026-06-12
+
+### Added
+
+- **NEW: `summary` command (42nd command)** — Anti-overload condensed view for AI agents. Instead of running 10+ commands and getting flooded with data, this single command auto-detects what matters most and returns prioritized, actionable findings only. Supports `--focus` (security/quality/architecture/all), `--detail` (minimal/standard/full), and `--max-items` per category. Routes from `ask` via keywords like "tldr", "quick summary", "what matters", "auto detect".
+- **`resolve_tauri_ipc_from_apimap()` in edge_resolver.py** — Implements Tauri IPC cross-language edge resolution that was referenced in scan.py but never defined. Creates synthetic edges between TypeScript `invoke('commandName')` calls and Rust `#[tauri::command]` handlers using snake_case ↔ camelCase matching.
+- **Shared constants in utils.py** — `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (3000), and `time_budget_expired()` function. Centralized from individual engine copies to prevent drift and fix broken imports.
+- **Handbook markdown comprehensive output** — Expanded from ~20 lines to full sections: Key Entry Points (test-filtered), API Surface, State Management, expanded Quick Reference (each stat on own line), Languages, and severity markers on risks.
+- **Summary markdown formatter** — `_md_summary()` for the new summary command.
+
+### Fixed
+
+- **CRITICAL: 5 commands broken by missing imports** — `scan`, `ask`, `handbook`, `watch`, `env-check` all failed to load at startup. `envcheck_engine.py` imported `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` from `utils` but none existed. `scan.py` imported `resolve_tauri_ipc_from_apimap` from `edge_resolver` but it was never defined. This meant 12% of all commands (5/41) were silently broken.
+- **CRITICAL: Trace engine returns 0 callers for case-mismatched names** — `trace "renderElement"` returned 0 callers while `query` showed ref_count=9. Root cause: trace used exact+case-sensitive lookup while query supports fuzzy/case-insensitive matching. Fixed by adding case-insensitive exact match and case-insensitive substring fallback to trace_engine.py.
+- **HIGH: Entrypoints still showing config files** — Despite v6.0 claiming config file filtering, `.lintstagedrc.js`, `babel.config.js`, etc. still appeared. Two issues: (1) incomplete pattern list missing `.lintstagedrc`, `.babelrc`, `.stylelintrc`, `commitlint.`, `husky.`, `jest.config.`, etc.; (2) filter only applied to `module_export` type, not all entrypoint types. Added 25+ patterns and applied filter to ALL types.
+- **HIGH: State-map classifying math constants as "global" state** — `LegendreGaussN24TValues` (immutable math lookup table) was classified as "global" state because its PascalCase name passed the `value_is_stateful` check (array literal `= [...]`). Added data-constant suffix detection (`Values`, `Data`, `Entries`, `Table`, etc.) and math-pattern detection (Gauss, Legendre, Fibonacci, etc.). Reduced from 33 to 31 stores on excalidraw.
+- **MEDIUM: Perf-hint output key mismatch** — `stats.total_hints` was 360 but `hints` array was `[]`. Data was stored under `findings` key while stat said `hints`. Renamed `findings` → `hints` for consistency. Updated markdown formatter to check both keys for backward compat.
+- **MEDIUM: Handbook state management `defined_in` empty** — Markdown formatter read `store.get("defined_in")` but handbook data used `store.get("file")`. Fixed formatter to check both keys.
+- **LOW: Version mismatch** — `utils.py` had 5.7.1, `pyproject.toml` had duplicate version lines. Unified to 6.2.0.
+
+### Test Target Documentation
+
+- **excalidraw/excalidraw** (GitHub): Used as a test target for v6.2 — a canvas-based virtual whiteboard monorepo with 725 source files (312 TS, 290 TSX, 85 CSS, 25 JS). Frameworks: React, Next.js, Vite. Monorepo with yarn workspaces. Unique architecture: canvas rendering engine, gesture handling, element system, custom state management (Jotai atoms). Key findings that drove fixes: 5 broken commands from missing imports, trace returning 0 callers, 159 CSS missing-refs false positives, math constants as state, config files as entrypoints.
+
 ## [5.9.0] — 2026-06-12
 
 ### Fixed
