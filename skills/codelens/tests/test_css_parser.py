@@ -19,7 +19,7 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser
+# Import fallback regex parser from parsers module
 from parsers.fallback_css import parse_css_fallback as _fallback_css_parse
 
 

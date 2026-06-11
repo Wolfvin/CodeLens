@@ -7,15 +7,12 @@ Cross-validates the registry against actual files to find inconsistencies:
 - Orphan registry entries
 """
 
-import logging
 import os
 import json
 import re
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timezone
 from utils import DEFAULT_IGNORE_DIRS
-
-logger = logging.getLogger(__name__)
 
 
 def validate_registry(workspace: str) -> Dict[str, Any]:
@@ -40,23 +37,9 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
 
     from registry import load_config, load_frontend_registry, load_backend_registry
 
-    try:
-        config = load_config(workspace)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        config = {}
-        logger.warning(f"Could not load config: {e}")
-
-    try:
-        frontend = load_frontend_registry(workspace)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        frontend = {"classes": [], "ids": []}
-        logger.warning(f"Could not load frontend registry: {e}")
-
-    try:
-        backend = load_backend_registry(workspace)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        backend = {"nodes": [], "edges": []}
-        logger.warning(f"Could not load backend registry: {e}")
+    config = load_config(workspace)
+    frontend = load_frontend_registry(workspace)
+    backend = load_backend_registry(workspace)
 
     # ─── Collect all files referenced in registry ───────
     registry_files: Set[str] = set()

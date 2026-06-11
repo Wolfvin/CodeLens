@@ -4,13 +4,9 @@ Predicts what will be affected if a symbol is modified or deleted.
 Combines frontend + backend tracing with risk assessment.
 """
 
-import json
-import logging
 import os
 from typing import Dict, List, Any, Optional, Set
-from collections import defaultdict, deque
-
-logger = logging.getLogger(__name__)
+from collections import defaultdict
 
 
 def analyze_impact(
@@ -46,11 +42,7 @@ def analyze_impact(
     # ─── Backend Impact ─────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
-        try:
-            backend = load_backend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            backend = {"nodes": [], "edges": []}
-            logger.warning(f"Could not load backend registry: {e}")
+        backend = load_backend_registry(workspace)
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
@@ -121,10 +113,10 @@ def analyze_impact(
 
             # Indirect callers (2+ hops) via BFS
             visited = {target_id}
-            queue = deque([(target_id, 1)])
+            queue = [(target_id, 1)]
 
             while queue:
-                current_id, current_depth = queue.popleft()
+                current_id, current_depth = queue.pop(0)
                 if current_depth >= depth:
                     continue
 
@@ -133,17 +125,16 @@ def analyze_impact(
                     if from_id and from_id not in visited:
                         visited.add(from_id)
                         caller_node = node_by_id.get(from_id)
-                        if caller_node:
-                            if current_depth > 1:
-                                affected["indirect"].append({
-                                    "type": "function",
-                                    "name": caller_node["fn"],
-                                    "file": caller_node.get("file", ""),
-                                    "line": caller_node.get("line", 0),
-                                    "relation": f"{current_depth + 1} hops from {name}",
-                                    "depth": current_depth + 1,
-                                    "domain": "backend"
-                                })
+                        if caller_node and current_depth >= 1:
+                            affected["indirect"].append({
+                                "type": "function",
+                                "name": caller_node["fn"],
+                                "file": caller_node.get("file", ""),
+                                "line": caller_node.get("line", 0),
+                                "relation": f"{current_depth + 1} hops from {name}",
+                                "depth": current_depth + 1,
+                                "domain": "backend"
+                            })
                             queue.append((from_id, current_depth + 1))
 
             # If deleting, all callees that are only called by this function become at-risk
@@ -189,11 +180,7 @@ def analyze_impact(
     # ─── Frontend Impact ────────────────────────────────
     if domain in ("frontend", "auto"):
         from registry import load_frontend_registry
-        try:
-            frontend = load_frontend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            frontend = {"classes": [], "ids": []}
-            logger.warning(f"Could not load frontend registry: {e}")
+        frontend = load_frontend_registry(workspace)
 
         for cls in frontend.get("classes", []):
             if cls["name"] == name:
@@ -367,7 +354,6 @@ def analyze_impact(
         "workspace": workspace,
         "action": action,
         "risk": risk,
-        "risk_level": risk,
         "affected": affected,
         "stats": {
             "direct_dependents": direct_count,

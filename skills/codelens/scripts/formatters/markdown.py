@@ -1482,8 +1482,7 @@ def _md_state_map(data: Dict, lines: list) -> None:
             actions = store.get("actions", [])
             if actions:
                 for a in actions[:3]:
-                    action_name = a.get("name", a) if isinstance(a, dict) else str(a)
-                    lines.append(f"  - action: `{action_name}`")
+                    lines.append(f"  - action: `{a.get('name', '')}`")
         if len(stores) > 15:
             lines.append(f"- ... and {len(stores) - 15} more")
         lines.append("")

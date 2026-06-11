@@ -28,9 +28,12 @@ import os
 import re
 import json
 import subprocess
+import logging
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS
+
+logger = logging.getLogger("codelens.vulnscan")
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -411,6 +414,7 @@ for _entry in VULN_DB:
     _key = (_entry["ecosystem"], _entry["package"].lower())
     _VULN_INDEX[_key].append(_entry)
 
+
 # ─── Main Entry Point ─────────────────────────────────────────
 
 def scan_vulnerabilities(
@@ -547,6 +551,7 @@ def scan_vulnerabilities(
         "recommendations": recommendations,
     }
 
+
 # ─── Dependency File Discovery ─────────────────────────────────
 
 def _discover_dependency_files(workspace: str) -> Dict[str, Dict[str, List[str]]]:
@@ -583,6 +588,7 @@ def _discover_dependency_files(workspace: str) -> Dict[str, Dict[str, List[str]]
                 result[ecosystem]["all"].append(rel_path)
 
     return result
+
 
 # ─── Phase 1: Native Audit Tools ──────────────────────────────
 
@@ -640,6 +646,7 @@ def _run_audit_tool(
         logger.debug("Failed to parse %s output: %s", ecosystem, exc)
         return None
 
+
 def _parse_npm_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
     """Parse npm audit --json output."""
     findings = []
@@ -692,6 +699,7 @@ def _parse_npm_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
 
     return findings
 
+
 def _parse_cargo_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
     """Parse cargo audit --json output."""
     findings = []
@@ -722,6 +730,7 @@ def _parse_cargo_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
         })
 
     return findings
+
 
 def _parse_pip_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
     """Parse pip-audit --format json output."""
@@ -754,6 +763,7 @@ def _parse_pip_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
             })
 
     return findings
+
 
 def _parse_go_vulncheck(stdout: str, workspace: str) -> List[Dict[str, Any]]:
     """Parse govulncheck -json output."""
@@ -799,6 +809,7 @@ def _parse_go_vulncheck(stdout: str, workspace: str) -> List[Dict[str, Any]]:
             })
 
     return findings
+
 
 # ─── Phase 2: Lock-file Parsing ───────────────────────────────
 
@@ -856,6 +867,7 @@ def _parse_lock_file(
 
     return findings
 
+
 def _parse_npm_lock(content: str) -> List[Tuple[str, str]]:
     """Parse package-lock.json for package names and versions."""
     packages = []
@@ -888,6 +900,7 @@ def _parse_npm_lock(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _flatten_npm_deps(
     deps: Dict[str, Any],
     prefix: str = ""
@@ -903,6 +916,7 @@ def _flatten_npm_deps(
         if nested:
             result.extend(_flatten_npm_deps(nested))
     return result
+
 
 def _parse_bun_lock(content: str) -> List[Tuple[str, str]]:
     """Parse bun.lock (text-based JSON with trailing commas) for package names and versions.
@@ -952,6 +966,7 @@ def _parse_bun_lock(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _parse_cargo_lock(content: str) -> List[Tuple[str, str]]:
     """Parse Cargo.lock for crate names and versions."""
     packages = []
@@ -971,6 +986,7 @@ def _parse_cargo_lock(content: str) -> List[Tuple[str, str]]:
             packages.append((name, version))
 
     return packages
+
 
 def _parse_cargo_lock_toml(content: str) -> List[Tuple[str, str]]:
     """Parse TOML-format Cargo.lock (fallback)."""
@@ -1010,6 +1026,7 @@ def _parse_cargo_lock_toml(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _parse_poetry_lock(content: str) -> List[Tuple[str, str]]:
     """Parse poetry.lock for package names and versions."""
     packages = []
@@ -1028,6 +1045,7 @@ def _parse_poetry_lock(content: str) -> List[Tuple[str, str]]:
             packages.append((name, version))
 
     return packages
+
 
 def _parse_poetry_lock_toml(content: str) -> List[Tuple[str, str]]:
     """Parse TOML-format poetry.lock."""
@@ -1064,6 +1082,7 @@ def _parse_poetry_lock_toml(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _parse_pipfile_lock(content: str) -> List[Tuple[str, str]]:
     """Parse Pipfile.lock for package names and versions."""
     packages = []
@@ -1089,6 +1108,7 @@ def _parse_pipfile_lock(content: str) -> List[Tuple[str, str]]:
                 packages.append((name, version))
 
     return packages
+
 
 def _parse_go_sum(content: str) -> List[Tuple[str, str]]:
     """Parse go.sum for module names and versions.
@@ -1117,6 +1137,7 @@ def _parse_go_sum(content: str) -> List[Tuple[str, str]]:
             packages.append(key)
 
     return packages
+
 
 # ─── Phase 3: Manifest Matching ───────────────────────────────
 
@@ -1176,6 +1197,7 @@ def _parse_manifest_file(
 
     return findings
 
+
 def _parse_package_json(content: str) -> List[Tuple[str, str]]:
     """Parse package.json for dependency names and version ranges."""
     packages = []
@@ -1194,6 +1216,7 @@ def _parse_package_json(content: str) -> List[Tuple[str, str]]:
                 packages.append((name, version))
 
     return packages
+
 
 def _parse_cargo_toml(content: str) -> List[Tuple[str, str]]:
     """Parse Cargo.toml for dependency names and version requirements."""
@@ -1234,6 +1257,7 @@ def _parse_cargo_toml(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _parse_requirements_txt(content: str) -> List[Tuple[str, str]]:
     """Parse requirements.txt for package names and versions."""
     packages = []
@@ -1266,6 +1290,7 @@ def _parse_requirements_txt(content: str) -> List[Tuple[str, str]]:
             packages.append((name, version))
 
     return packages
+
 
 def _parse_pipfile(content: str) -> List[Tuple[str, str]]:
     """Parse Pipfile for package names and versions."""
@@ -1314,6 +1339,7 @@ def _parse_pipfile(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 def _parse_go_mod(content: str) -> List[Tuple[str, str]]:
     """Parse go.mod for module names and versions."""
     packages = []
@@ -1343,6 +1369,7 @@ def _parse_go_mod(content: str) -> List[Tuple[str, str]]:
 
     return packages
 
+
 # ─── Version Comparison Helpers ────────────────────────────────
 
 def _extract_version_from_npm_spec(spec: str) -> str:
@@ -1364,6 +1391,7 @@ def _extract_version_from_npm_spec(spec: str) -> str:
         return cleaned
     return "0.0.0"
 
+
 def _extract_version_from_cargo_spec(spec: str) -> str:
     """Extract a version number from a Cargo version requirement.
 
@@ -1375,6 +1403,7 @@ def _extract_version_from_cargo_spec(spec: str) -> str:
     if re.match(r'^\d+', cleaned):
         return cleaned
     return "0.0.0"
+
 
 def _extract_version_from_pip_spec(spec: str) -> str:
     """Extract a version number from a pip version specifier.
@@ -1397,6 +1426,7 @@ def _extract_version_from_pip_spec(spec: str) -> str:
 
     return "0.0.0"
 
+
 def _extract_toml_value(line: str) -> str:
     """Extract the value from a TOML key = "value" line."""
     m = re.match(r'^\w+\s*=\s*"([^"]*)"', line.strip())
@@ -1407,6 +1437,7 @@ def _extract_toml_value(line: str) -> str:
     if m:
         return m.group(1).strip("'")
     return ""
+
 
 def _is_version_vulnerable(installed: str, vulnerable_range: str) -> bool:
     """Check if an installed version falls within a vulnerable range.
@@ -1445,6 +1476,7 @@ def _is_version_vulnerable(installed: str, vulnerable_range: str) -> bool:
     # If we can't parse the range, be conservative
     return False
 
+
 def _compare_versions(v1: str, v2: str) -> int:
     """Compare two version strings.
 
@@ -1478,6 +1510,7 @@ def _compare_versions(v1: str, v2: str) -> int:
 
     return 0
 
+
 # ─── Severity Helpers ─────────────────────────────────────────
 
 def _map_cargo_severity(severity: str) -> str:
@@ -1490,6 +1523,7 @@ def _map_cargo_severity(severity: str) -> str:
     }
     return mapping.get(severity.lower(), "medium")
 
+
 def _map_pip_audit_severity(vuln_id: str) -> str:
     """Estimate severity from a pip-audit vulnerability ID.
 
@@ -1501,6 +1535,7 @@ def _map_pip_audit_severity(vuln_id: str) -> str:
     if any(kw in vuln_id_lower for kw in ("rce", "remote code", "arbitrary code")):
         return "critical"
     return "high"
+
 
 # ─── Deduplication ─────────────────────────────────────────────
 
@@ -1531,6 +1566,7 @@ def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     return unique
 
+
 # ─── Stats & Risk Computation ──────────────────────────────────
 
 def _compute_stats(
@@ -1551,6 +1587,7 @@ def _compute_stats(
         "by_ecosystem": dict(by_ecosystem),
         "files_scanned": files_scanned,
     }
+
 
 def _compute_risk(findings: List[Dict[str, Any]]) -> str:
     """Compute overall risk level based on findings."""
@@ -1574,6 +1611,7 @@ def _compute_risk(findings: List[Dict[str, Any]]) -> str:
         return "medium"
 
     return "low"
+
 
 # ─── Recommendations ───────────────────────────────────────────
 

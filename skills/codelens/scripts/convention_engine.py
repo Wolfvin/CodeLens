@@ -13,7 +13,7 @@ Detects and reports coding conventions from the codebase including:
 import os
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from utils import logger
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -42,12 +42,7 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     svelte_files = []  # .svelte
     all_source_files = []
     
-    ignore_dirs = {
-        'node_modules', '.git', 'dist', 'build', 'target',
-        '__pycache__', '.codelens', '.next', '.cache',
-        'vendor', '.venv', 'venv', 'env', '_archive',
-        'coverage', '.pytest_cache', '.tox', '.idea', '.vscode',
-    }
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -554,7 +549,7 @@ def _detect_module_system(files: List[str], workspace: str) -> str:
             elif mtype == "commonjs":
                 return "CommonJS"
         except Exception:
-            logger.debug("Failed to read package.json for module system detection", exc_info=True)
+            logger.debug("Failed to read package.json for module style detection", exc_info=True)
     
     # Fallback: analyze imports
     esm = 0
@@ -594,7 +589,7 @@ def _detect_orm_patterns(all_source_files: List[str], workspace: str) -> Dict[st
 
     # Check for schema.prisma file existence
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build', '__pycache__', '.codelens', '.next', '.cache', 'venv', '.venv'} and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for fn in filenames:
             if fn == 'schema.prisma':
                 scores["prisma"] += 5
@@ -1067,7 +1062,7 @@ def _detect_css_framework(all_source_files: List[str], workspace: str) -> Dict[s
     }
 
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build', '__pycache__', '.codelens', '.next', '.cache', 'venv', '.venv'} and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for fn in filenames:
             if fn in config_files:
                 framework, points = config_files[fn]
@@ -1112,7 +1107,7 @@ def _detect_css_framework(all_source_files: List[str], workspace: str) -> Dict[s
             if "bulma" in deps:
                 scores["bulma"] += 5
         except Exception:
-            logger.debug("Failed to read package.json for CSS framework detection", exc_info=True)
+            logger.debug("Failed to detect CSS framework from dependencies", exc_info=True)
 
     # Check source files for class name patterns and imports
     sample = all_source_files[:30]
@@ -1226,7 +1221,7 @@ def _detect_auth_pattern(all_source_files: List[str], workspace: str) -> Dict[st
             if "@clerk/nextjs" in deps or "@clerk/clerk-js" in deps:
                 scores["clerk"] += 5
         except Exception:
-            logger.debug("Failed to read package.json for auth pattern detection", exc_info=True)
+            logger.debug("Failed to detect auth patterns from JS dependencies", exc_info=True)
 
     # Check Python dependencies
     req_path = os.path.join(workspace, 'requirements.txt')
@@ -1245,7 +1240,7 @@ def _detect_auth_pattern(all_source_files: List[str], workspace: str) -> Dict[st
             if 'flask-login' in req_content or 'django' in req_content:
                 scores["jwt"] += 1  # Generic session-based auth
         except Exception:
-            logger.debug("Failed to read requirements.txt for auth pattern detection", exc_info=True)
+            logger.debug("Failed to detect auth patterns from Python dependencies", exc_info=True)
 
     # Check source files for import patterns and middleware
     sample = all_source_files[:30]
@@ -1429,7 +1424,7 @@ def _detect_deployment_pattern(workspace: str) -> Dict[str, Any]:
                     found_platforms["netlify"] = []
                 found_platforms["netlify"].append("package.json (netlify dependency)")
         except Exception:
-            logger.debug("Failed to read package.json for deployment pattern detection", exc_info=True)
+            logger.debug("Failed to detect deployment platform from package.json", exc_info=True)
 
     # Check for .github/workflows (CI/CD but hints at deployment)
     github_workflows = os.path.join(workspace, '.github', 'workflows')

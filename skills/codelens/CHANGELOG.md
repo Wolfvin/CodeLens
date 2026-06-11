@@ -5,56 +5,13 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.8.0] — 2026-06-11
-
-### Added
-
-- **`--full` flag for scan command**: Force full rescan even when a registry exists (which would normally auto-enable incremental mode). Usage: `codelens scan --full`.
-- **Indonesian colloquial triggers in `ask`**: Documented Indonesian phrases ("kok lama ya", "aneh nih", "bantu cek", "aman ga", etc.) now actually work in the `ask` command's keyword matching.
-
-### Fixed
-
-- **CRITICAL: Class collision semantics wrong**: Classes with multiple HTML references were incorrectly marked as `collision`. In HTML, multiple elements using the same CSS class is valid and normal. Now classes use `duplicate_ref` instead, and `collision` is reserved for IDs (where duplicate IDs are a spec violation).
-- **CRITICAL: Edge cleanup after file deletion kept dangling edges**: The `or e.get("from_fn", "") or e.get("to_fn", "")` conditions were always truthy, keeping edges that should have been removed. Simplified to only check if endpoints are in `remaining_ids`.
-- **CRITICAL: Frontend class deletion dropped HTML-only entries**: Classes defined only in HTML (no CSS/JS refs) were silently removed during incremental scan. Now matches the ID cleanup pattern with `len(defined_in_html) > 0` check.
-- **CRITICAL: Rust parser impl_for tracking never resets**: `current_impl_for` was set when entering an `impl_item` but never reset, causing ALL subsequent functions to be incorrectly tagged. Now uses a scope stack with `end_byte` tracking for proper scope exit detection.
-- **CRITICAL: TSX parser scope resolution bug**: Scope resolution always compared against `fn_declarations[0]` instead of finding the tightest enclosing scope, causing call edges to be attributed to the wrong function in nested function scenarios.
-- **HIGH: configdrift pyproject.toml parsing broken**: The `in_deps` flag was set but dependency names were never extracted. Now handles both PEP 621 array format and Poetry key-value format.
-- **HIGH: sideeffect engine brace counting ignored strings/comments**: Braces inside string literals and comments were counted, causing incorrect function body boundaries and wrong purity classification. Now strips strings/comments before brace counting.
-- **HIGH: stacktrace engine stopped at try/catch even if re-throw**: If a catch block re-throws the error, the engine incorrectly stopped tracing. Now detects re-throw patterns and continues tracing. Also fixed Rust `?` operator handling — it propagates errors, not handles them.
-- **HIGH: typeinfer Python regex matched keywords**: `class`, `def`, `return`, `if` etc. were matched as variable names, producing nonsense type inferences. Now filters against Python's keyword list.
-- **MEDIUM: should_ignore used substring matching**: Pattern `"src/"` would match `src/server/api/auth.ts` incorrectly. Now uses `pathlib.Path.parts` for exact path-segment matching.
-- **MEDIUM: Indonesian colloquial triggers not implemented**: Documented in SKILL.md but absent from `ask.py`. Now added with proper keyword weights.
-- **MEDIUM: ask.py module-level engine imports**: 20+ engines imported at module level — if any failed, the entire `ask` command broke. Now all engines are lazy-imported inside `_execute_ask_command()`.
-- **MEDIUM: Version mismatch**: `utils.py` and `pyproject.toml` said 5.7.0 but CHANGELOG already had 5.8.0 entry. Aligned to 5.8.0.
-- **MEDIUM: Duplicate _recompute_class_status/_recompute_id_status**: Identical functions in `incremental.py` merged into single `_recompute_entry_status(entry, entry_type)`.
-- **MEDIUM: HTML parser over-aggressive template filtering**: `'{' in attr_value` filtered out any attribute containing `{`. Now only skips JSX expressions (`{...}`) and Jinja/Vue templates (`{{...}}`).
-- **MEDIUM: Vue/Svelte parser line number miscalculation**: Line numbers were calculated against processed substrings (with style/script sections removed), resulting in incorrect offsets. Now properly accounts for template offsets.
-- **MEDIUM: Tailwind detector false positives**: Common CSS class names like `hidden`, `block`, `relative` were flagged as Tailwind even in non-Tailwind projects. Now only runs detection if Tailwind is configured in the project.
-- **MEDIUM: Registry loading error handling missing**: 5 engine files (impact, trace, context, missing_refs, validate) would crash if registry was unavailable. Now all have try/except with graceful fallbacks.
-- **MEDIUM: impact_engine BFS duplicated indirect callers**: `current_depth >= 1` was always True since depth starts at 1, duplicating direct callers in the indirect list. Changed to `current_depth > 1`.
-- **MEDIUM: deadcode unreachable code state machine**: Only tracked one global terminal state, missing unreachable code after second terminal statement. Now resets `found_terminal` after reporting, allowing detection of multiple unreachable blocks.
-
-## [5.7.0] — 2026-06-11
-
-### Added
-
-- **Shared DEFAULT_IGNORE_DIRS across 22 engines**: All engine files now import `DEFAULT_IGNORE_DIRS` from `utils.py` instead of defining local copies with inconsistent entries. Added `.nuxt` to the shared set. Eliminated ~132 lines of duplicated configuration.
-
-### Changed
-
-- **Query command status consistency**: All 4 found-code-paths in `query.py` now return `status: "ok"` (was missing on 3 paths: frontend class, frontend id, backend function).
-- **Comprehensive logging across 15 files**: Replaced 26 bare `except ... pass` blocks with `logger.debug()`/`logger.warning()` calls in: refactor_safe_engine, context_engine, ownership_engine, registry, testmap_engine, sideeffect_engine, deadcode_engine, circular_engine, entrypoints_engine, configdrift_engine, diff_engine, incremental, framework_detect, handbook, and watch.
-- **Outline engine logging**: 5 `except Exception: pass` blocks in tree-sitter fallback functions now log at debug level.
-- **Convention engine logging**: 5 `except Exception: pass` blocks in semantic detectors now log at debug level.
-
 ## [5.6.0] — 2026-06-11
 
 ### Added
 
 - **TSX backend extraction**: When tree-sitter-typescript is not installed, TSX files are now parsed with BOTH frontend AND backend fallback parsers. Backend nodes jumped from 124 → 764 (6.2x) on typical Next.js projects.
 - **Shared utils module** (`scripts/utils.py`): Centralized `write_output_files`, `compute_summary`, `is_file_path`, `deduplicate_callers`, `DEFAULT_IGNORE_DIRS`, `DEFAULT_IGNORE_EXTENSIONS`, `CODELENS_VERSION`, and `logger`. Eliminates 290+ lines of duplicated code across 5 files.
-- **Proper logging**: Replaced 56 `except Exception: pass` blocks with `logger.warning()`/`logger.debug()` calls. Errors are now visible when they occur instead of being silently swallowed.
+- **Proper logging**: Replaced silent `except Exception: pass` blocks with `logger.warning()`/`logger.debug()` calls across all engine and utility files. Errors are now visible when they occur instead of being silently swallowed.
 - **Fuzzy file path lookup**: `context layout.tsx` and `query layout.tsx` now match partial paths (end-of-path matching). Previously required exact path like `apps/web/app/[locale]/layout.tsx`. Returns grouped results when multiple files match.
 - **Auto-incremental scan with registry counts**: When no changes detected, the response now includes actual backend/frontend counts instead of zeros.
 - **Handbook registry freshness check**: Handbook skips re-scan if `backend.json` is less than 5 minutes old. Reduces handbook execution time from 2.8s → 0.3s for consecutive runs.
@@ -68,12 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Consistent status field**: `context` and `query` file-path responses now include `status: "ok"` (was missing).
 - **Context multi-file response**: New `type: "files"` response format when multiple files match a partial path query, with markdown formatting support.
 - **Handbook version**: Now uses `CODELENS_VERSION` constant from `utils.py` (was hardcoded as `"5.2.0"`).
+- **Centralized `DEFAULT_IGNORE_DIRS`**: All 30 engine/command files now import `DEFAULT_IGNORE_DIRS` from `utils.py` instead of defining local copies. Single source of truth ensures consistency across all scanners.
+- **pyproject.toml version**: Aligned with skill.json and CODELENS_VERSION (was 5.1.0, now 5.6.0). Description updated from "39 commands" to "41 commands".
 
 ### Fixed
 
 - **TSX files produced zero backend nodes**: When TSXParser failed to import, only CSS class/ID data was extracted. Now uses `parse_js_backend_fallback` on TSX files too.
 - **Auto-incremental returned zero counts**: "No changes detected" response had `backend.nodes: 0, backend.edges: 0` even when registry had thousands of entries.
 - **Handbook version stale**: Was hardcoded as 5.2.0 in output, now dynamically reads from `CODELENS_VERSION`.
+- **Test import errors**: 6 test files (test_cli, test_css_parser, test_html_parser, test_js_backend_parser, test_js_frontend_parser, test_rust_parser) were importing from old monolithic `codelens.py`. Updated to import from the new modular structure (`commands.scan`, `parsers.fallback_*`).
+- **Scan edge filter for deleted files**: Edge cleanup was overly permissive — kept ALL unresolved edges regardless of whether they referenced deleted nodes. Now only keeps edges where `from` is in remaining nodes.
+- **setup.sh version reference**: Updated from "v2" to "v5" to match current version.
+- **CLI test suite**: `__tests__/cli/test_scan.py` now uses hermetic temporary workspaces instead of scanning the host project, and added 3 new test cases (init, scan+query integration, registry creation).
 
 ## [5.5.0] — 2026-06-11
 

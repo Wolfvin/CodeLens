@@ -31,6 +31,7 @@ ALL_EXTENSIONS = {
     ".config.js", ".config.ts"
 }
 
+
 def check_refactor_safety(
     name: str,
     workspace: str,
@@ -194,6 +195,7 @@ def check_refactor_safety(
         "checklist": checklist
     }
 
+
 def _get_registry_refs(name: str, workspace: str) -> List[Dict]:
     """Get known references from CodeLens registry."""
     refs = []
@@ -243,9 +245,10 @@ def _get_registry_refs(name: str, workspace: str) -> List[Dict]:
                 })
 
     except Exception:
-        logger.debug("Safety check failed", exc_info=True)
+        logger.debug("Failed to load registry refs for refactor safety check", exc_info=True)
 
     return refs
+
 
 def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find the symbol name inside string literals."""
@@ -260,7 +263,7 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
             continue
 
         # Look for name inside quotes
-        for m in re.finditer(r'["\']([^"\']*\b' + re.escape(name) + r'\b[^"\']*)["\']', stripped):
+        for m in re.finditer(r'["\']([^"\']*' + re.escape(name) + r'[^"\']*)["\']', stripped):
             string_content = m.group(1)
 
             # Skip if it's a normal import path
@@ -285,6 +288,7 @@ def _find_string_refs(content: str, name: str, ext: str, rel_path: str) -> List[
             })
 
     return refs
+
 
 def _find_dynamic_access(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find dynamic property access patterns that might reference the symbol."""
@@ -318,6 +322,7 @@ def _find_dynamic_access(content: str, name: str, ext: str, rel_path: str) -> Li
 
     return refs
 
+
 def _find_eval_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find eval/Function calls that could reference the symbol."""
     refs = []
@@ -345,6 +350,7 @@ def _find_eval_refs(content: str, name: str, ext: str, rel_path: str) -> List[Di
                 break
 
     return refs
+
 
 def _find_meta_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find meta-programming references (decorators, annotations)."""
@@ -383,6 +389,7 @@ def _find_meta_refs(content: str, name: str, ext: str, rel_path: str) -> List[Di
 
     return refs
 
+
 def _find_test_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find test descriptions and assertions mentioning the symbol."""
     refs = []
@@ -409,6 +416,7 @@ def _find_test_refs(content: str, name: str, ext: str, rel_path: str) -> List[Di
 
     return refs
 
+
 def _find_config_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find references in config files."""
     refs = []
@@ -431,6 +439,7 @@ def _find_config_refs(content: str, name: str, ext: str, rel_path: str) -> List[
 
     return refs
 
+
 def _find_doc_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dict]:
     """Find references in documentation."""
     refs = []
@@ -451,6 +460,7 @@ def _find_doc_refs(content: str, name: str, ext: str, rel_path: str) -> List[Dic
                 })
 
     return refs[:5]  # Cap doc refs
+
 
 def _find_import_breaks(file_path: str, workspace: str, new_path: Optional[str] = None) -> List[Dict]:
     """Find import statements that would break if a file is moved."""
@@ -498,6 +508,7 @@ def _find_import_breaks(file_path: str, workspace: str, new_path: Optional[str] 
 
     return refs
 
+
 def _find_css_refs(name: str, workspace: str) -> List[Dict]:
     """Find CSS class/ID references that would break on rename."""
     refs = []
@@ -527,9 +538,10 @@ def _find_css_refs(name: str, workspace: str) -> List[Dict]:
                     })
 
     except Exception:
-        logger.debug("Safety check failed", exc_info=True)
+        logger.debug("Failed to load frontend registry for CSS refs", exc_info=True)
 
     return refs
+
 
 def _generate_checklist(
     risks: Dict[str, List[Dict]],

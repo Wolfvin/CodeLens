@@ -10,12 +10,6 @@ from typing import Dict, List, Any, Optional, Set
 from utils import DEFAULT_IGNORE_DIRS
 
 
-def _is_redos_risky(pattern: str) -> bool:
-    """Heuristic check for potentially catastrophic backtracking patterns."""
-    # Nested quantifiers like (a+)+ or (a*)* are classic ReDoS patterns
-    nested_quantifier = re.search(r'(\([^)]*[+*][^)]*\))[+*{]', pattern)
-    return nested_quantifier is not None
-
 # File type to extension mapping
 TYPE_EXTENSIONS = {
     "html": {".html", ".htm"},
@@ -40,6 +34,7 @@ DEFAULT_IGNORE_FILES = {
     ".DS_Store", "package-lock.json", "yarn.lock",
     "pnpm-lock.yaml", ".env", ".env.local",
 }
+
 
 def search_workspace(
     workspace: str,
@@ -75,15 +70,6 @@ def search_workspace(
     """
     workspace = os.path.abspath(workspace)
 
-    # Guard against ReDoS - reject patterns with nested quantifiers
-    if _is_redos_risky(pattern):
-        return {
-            "status": "error",
-            "message": "Pattern appears to contain nested quantifiers that could cause catastrophic backtracking (ReDoS). Please simplify the pattern.",
-            "matches": [],
-            "stats": {"files_searched": 0, "files_matched": 0, "total_matches": 0}
-        }
-
     # Compile the regex
     try:
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -111,17 +97,13 @@ def search_workspace(
         target_extensions = {file_type if file_type.startswith('.') else f'.{file_type}'}
 
     # Build ignore set from config
-    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
+    ignore_dirs = DEFAULT_IGNORE_DIRS.copy()
     ignore_files = DEFAULT_IGNORE_FILES.copy()
     if config:
         for pattern_str in config.get("ignore", []):
             clean = pattern_str.rstrip("/")
             ignore_dirs.add(clean)
             ignore_files.add(clean)
-
-    # Compile include/exclude regexes once before the walk loop
-    inc_regex = re.compile(include_pattern) if include_pattern else None
-    exc_regex = re.compile(exclude_pattern) if exclude_pattern else None
 
     # Search
     matches = []
@@ -164,11 +146,15 @@ def search_workspace(
             if file_filter and file_filter not in rel_path:
                 continue
 
-            # Include/exclude patterns (pre-compiled)
-            if inc_regex and not inc_regex.search(rel_path):
-                continue
-            if exc_regex and exc_regex.search(rel_path):
-                continue
+            # Include/exclude patterns
+            if include_pattern:
+                inc_regex = re.compile(include_pattern)
+                if not inc_regex.search(rel_path):
+                    continue
+            if exclude_pattern:
+                exc_regex = re.compile(exclude_pattern)
+                if exc_regex.search(rel_path):
+                    continue
 
             # Read and search file
             files_searched += 1
@@ -243,6 +229,7 @@ def search_workspace(
         "errors": errors if errors else None
     }
 
+
 def search_symbols(
     workspace: str,
     name: str,
@@ -285,7 +272,7 @@ def search_symbols(
                     "status": cls["status"],
                     "ref_count": cls["ref_count"],
                     "locations": [
-                        f"{r.get('path', '')}:{r.get('line', 0)}"
+                        f"{r['path']}:{r['line']}"
                         for r in cls.get("css", []) + cls.get("js", [])
                     ]
                 })
@@ -299,7 +286,7 @@ def search_symbols(
                     "status": id_entry["status"],
                     "ref_count": id_entry["ref_count"],
                     "locations": [
-                        f"{r.get('path', '')}:{r.get('line', 0)}"
+                        f"{r['path']}:{r['line']}"
                         for r in id_entry.get("defined_in_html", []) +
                                   id_entry.get("css", []) +
                                   id_entry.get("js", [])

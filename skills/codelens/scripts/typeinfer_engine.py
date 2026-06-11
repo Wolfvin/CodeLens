@@ -17,14 +17,11 @@ Output: Best-effort type annotations for untyped code.
 
 import os
 import re
-import keyword
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py"}
-
-PYTHON_KEYWORDS = set(keyword.kwlist)
 
 # Known API return types
 KNOWN_RETURN_TYPES = {
@@ -104,6 +101,7 @@ KNOWN_RETURN_TYPES = {
     "map": "map",
     "filter": "filter",
 }
+
 
 def infer_types(
     workspace: str,
@@ -219,10 +217,12 @@ def infer_types(
         "count": len(type_map)
     }
 
+
 def _has_typescript_annotations(content: str) -> bool:
     """Check if a TypeScript file has type annotations."""
     # Look for explicit type annotations
     return bool(re.search(r':\s*(?:string|number|boolean|any|void|never|object|undefined|null|Array|Record|Map|Set|Promise)\b', content))
+
 
 def _infer_js_types(content: str, rel_path: str) -> Dict[str, Any]:
     """Infer types for a JS/TS file."""
@@ -308,6 +308,7 @@ def _infer_js_types(content: str, rel_path: str) -> Dict[str, Any]:
 
     return types
 
+
 def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
     """Infer types for a Python file."""
     types = {}
@@ -319,9 +320,6 @@ def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
     for m in re.finditer(r'(\w+)\s*=\s*(.+?)(?:\n|$)', clean):
         name = m.group(1)
         value = m.group(2).strip()
-        # Skip Python keywords (class, def, return, if, etc.)
-        if name in PYTHON_KEYWORDS:
-            continue
         inferred = _infer_literal_type_py(value)
         if inferred and name not in types:
             types[name] = {
@@ -372,6 +370,7 @@ def _infer_py_types(content: str, rel_path: str) -> Dict[str, Any]:
 
     return types
 
+
 def _infer_literal_type(value: str) -> Optional[str]:
     """Infer type from a JS literal value."""
     value = value.strip()
@@ -416,6 +415,7 @@ def _infer_literal_type(value: str) -> Optional[str]:
 
     return None
 
+
 def _infer_literal_type_py(value: str) -> Optional[str]:
     """Infer type from a Python literal value."""
     value = value.strip()
@@ -432,13 +432,12 @@ def _infer_literal_type_py(value: str) -> Optional[str]:
         return "float"
     if value.startswith('['):
         return "list"
-    if value.startswith('('):
-        return "tuple"
-    # Check for set before dict: sets use {} without colons, dicts have colons
-    if value.startswith('{') and ':' not in value:
-        return "set"
     if value.startswith('{'):
         return "dict"
+    if value.startswith('('):
+        return "tuple"
+    if value.startswith('{') and ':' not in value:
+        return "set"
     if value.startswith('b"') or value.startswith("b'"):
         return "bytes"
     if value.startswith('f"') or value.startswith("f'"):
@@ -450,6 +449,7 @@ def _infer_literal_type_py(value: str) -> Optional[str]:
             return api_type
 
     return None
+
 
 def _extract_fn_body(content: str, start: int) -> Optional[str]:
     """Extract function body from starting position."""
@@ -470,6 +470,7 @@ def _extract_fn_body(content: str, start: int) -> Optional[str]:
                 return ''.join(body_chars)
 
     return None
+
 
 def _infer_return_type(fn_body: str) -> str:
     """Infer return type from function body."""
@@ -495,6 +496,7 @@ def _infer_return_type(fn_body: str) -> str:
         return list(return_types)[0]
 
     return " | ".join(sorted(return_types))
+
 
 def _extract_params(fn_sig: str) -> List[Dict]:
     """Extract parameter names and inferred types from function signature."""

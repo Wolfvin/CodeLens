@@ -23,6 +23,7 @@ from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -36,6 +37,7 @@ TEST_FILE_PATTERNS = {
     "__tests__", "/tests/", "/test/",
     "test_", "spec_", "_test.py", "_test.rs",
 }
+
 
 # ─── Category-specific Patterns ────────────────────────────────
 
@@ -132,6 +134,7 @@ DEV_ONLY_PATTERNS = [
     (r'\bdebug_mode\b', "debug_mode"),
     (r'\bDEV_MODE\b', "DEV_MODE"),
 ]
+
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
@@ -260,6 +263,7 @@ def detect_debug_leaks(
         "recommendations": recommendations,
     }
 
+
 # ─── Category Detectors ────────────────────────────────────────
 
 def _detect_console_logs(
@@ -313,6 +317,7 @@ def _detect_console_logs(
             })
             break  # One match per line
 
+
 def _detect_print_statements(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
@@ -360,6 +365,7 @@ def _detect_print_statements(
             })
             break
 
+
 def _detect_debugger_statements(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
@@ -394,6 +400,7 @@ def _detect_debugger_statements(
                 "should_remove": should_remove,
             })
             break
+
 
 def _detect_todo_fixme(
     lines: List[str], rel_path: str, is_test_file: bool, leaks: List[Dict]
@@ -451,6 +458,7 @@ def _detect_todo_fixme(
             })
             break
 
+
 def _detect_commented_code(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
@@ -502,6 +510,7 @@ def _detect_commented_code(
                 "should_remove": should_remove,
             })
 
+
 def _detect_test_skips(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
@@ -540,6 +549,7 @@ def _detect_test_skips(
                 "should_remove": should_remove,
             })
             break
+
 
 def _detect_mock_data(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
@@ -589,6 +599,7 @@ def _detect_mock_data(
             })
             break
 
+
 def _detect_dev_only(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
@@ -624,6 +635,7 @@ def _detect_dev_only(
             })
             break
 
+
 # ─── Helpers ───────────────────────────────────────────────────
 
 def _get_comment_prefix(ext: str) -> str:
@@ -636,6 +648,7 @@ def _get_comment_prefix(ext: str) -> str:
     }
     return prefixes.get(ext, "")
 
+
 def _is_in_string(line: str, marker: str) -> bool:
     """Heuristic: check if a marker appears inside a string literal."""
     idx = line.upper().find(marker)
@@ -646,6 +659,7 @@ def _is_in_string(line: str, marker: str) -> bool:
     single_count = before.count("'") - before.count("\\'")
     double_count = before.count('"') - before.count('\\"')
     return (single_count % 2 == 1) or (double_count % 2 == 1)
+
 
 def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
     """
@@ -704,6 +718,7 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         score += 1
 
     return score
+
 
 def _generate_recommendations(
     leaks: List[Dict],

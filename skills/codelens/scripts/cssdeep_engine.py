@@ -32,6 +32,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 CSS_EXTENSIONS = {".css", ".scss", ".less", ".sass"}
@@ -69,6 +70,7 @@ DEFAULT_BREAKPOINTS = {
 }
 
 BREAKPOINT_TOLERANCE = 5  # Allow ±5px variance from known breakpoints
+
 
 # ─── Main Analysis Function ────────────────────────────────────
 
@@ -352,6 +354,7 @@ def analyze_css_deep(
         "recommendations": recommendations,
     }
 
+
 # ─── CSS Custom Property Extraction ───────────────────────────
 
 def _extract_css_vars(
@@ -389,6 +392,7 @@ def _extract_css_vars(
             references.add(var_name)
 
     return declarations, references
+
 
 # ─── @keyframes Extraction ────────────────────────────────────
 
@@ -457,6 +461,7 @@ def _extract_keyframes(
                 break  # Only one name per animation shorthand
 
     return declarations, references
+
 
 # ─── Specificity Wars Detection ────────────────────────────────
 
@@ -562,6 +567,7 @@ def _detect_specificity_wars(content: str, rel_path: str) -> List[Dict[str, Any]
 
     return findings
 
+
 # ─── Duplicate Properties Detection ───────────────────────────
 
 def _detect_duplicate_props(content: str, rel_path: str) -> List[Dict[str, Any]]:
@@ -664,6 +670,7 @@ def _detect_duplicate_props(content: str, rel_path: str) -> List[Dict[str, Any]]
 
     return findings
 
+
 def _collect_props_from_fragment(
     fragment: str,
     line_num: int,
@@ -690,6 +697,7 @@ def _collect_props_from_fragment(
             if prop_name not in block_props:
                 block_props[prop_name] = []
             block_props[prop_name].append(line_num)
+
 
 # ─── Unused @media Detection ──────────────────────────────────
 
@@ -757,6 +765,7 @@ def _detect_unused_media(
 
     return findings
 
+
 # ─── z-index and !important Extraction ────────────────────────
 
 def _extract_z_index_and_important(
@@ -795,6 +804,7 @@ def _extract_z_index_and_important(
 
     return z_values, important_count
 
+
 # ─── HTML/JS Cross-reference Scanners ─────────────────────────
 
 def _find_var_references_in_html_js(content: str) -> Set[str]:
@@ -822,6 +832,7 @@ def _find_var_references_in_html_js(content: str) -> Set[str]:
         references.add(m.group(1))
 
     return references
+
 
 def _find_keyframe_references_in_html_js(content: str) -> Set[str]:
     """
@@ -871,6 +882,7 @@ def _find_keyframe_references_in_html_js(content: str) -> Set[str]:
 
     return references
 
+
 # ─── Helper Functions ──────────────────────────────────────────
 
 def _extract_style_block(content: str, ext: str) -> Optional[str]:
@@ -896,11 +908,13 @@ def _extract_style_block(content: str, ext: str) -> Optional[str]:
 
     return None  # Not a component file
 
+
 def _truncate_selector(selector: str, max_len: int = 50) -> str:
     """Truncate a selector string for display, adding ellipsis if needed."""
     if len(selector) <= max_len:
         return selector
     return selector[:max_len - 3] + "..."
+
 
 def _resolve_breakpoints(config_breakpoints: Any) -> Set[int]:
     """
@@ -930,6 +944,7 @@ def _resolve_breakpoints(config_breakpoints: Any) -> Set[int]:
 
     return DEFAULT_BREAKPOINTS
 
+
 def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove duplicate findings (same file, line, category, name)."""
     seen: Set[Tuple[str, int, str, str]] = set()
@@ -947,6 +962,7 @@ def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]
             unique.append(finding)
 
     return unique
+
 
 # ─── Stats Computation ─────────────────────────────────────────
 
@@ -970,6 +986,7 @@ def _compute_stats(
         "css_files_scanned": css_files_scanned,
         "html_js_files_scanned": html_js_files_scanned,
     }
+
 
 # ─── Recommendations ───────────────────────────────────────────
 

@@ -26,6 +26,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less", ".html"
 }
 
+
 def analyze_ownership(
     workspace: str,
     file_path: Optional[str] = None,
@@ -66,6 +67,7 @@ def analyze_ownership(
     # ─── Full workspace analysis ────────────────────────
     return _analyze_workspace_ownership(workspace)
 
+
 def _is_git_repo(workspace: str) -> bool:
     """Check if workspace is a git repository."""
     try:
@@ -76,6 +78,7 @@ def _is_git_repo(workspace: str) -> bool:
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
+
 
 def _run_git_blame(workspace: str, file_path: str) -> Optional[List[Dict]]:
     """Run git blame on a file and return per-line data."""
@@ -109,13 +112,14 @@ def _run_git_blame(workspace: str, file_path: str) -> Optional[List[Dict]]:
                 current["author_time"] = ts
                 current["author_date"] = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
             except (ValueError, OSError):
-                logger.debug("Date parsing failed", exc_info=True)
+                pass
         elif line.startswith('summary '):
             current["summary"] = line[8:].strip()
         elif line.startswith('commit '):
             current["commit"] = line[7:].strip()
 
     return lines_data
+
 
 def _analyze_file_ownership(workspace: str, file_path: str) -> Dict[str, Any]:
     """Analyze ownership for a specific file."""
@@ -175,6 +179,7 @@ def _analyze_file_ownership(workspace: str, file_path: str) -> Dict[str, Any]:
         "hotspots": hotspots[:5],
         "stale_details": stale_lines[:20]
     }
+
 
 def _analyze_function_ownership(
     workspace: str,
@@ -262,6 +267,7 @@ def _analyze_function_ownership(
         )
     }
 
+
 def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
     """Analyze ownership across the entire workspace."""
     # Get overall git log stats
@@ -281,7 +287,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
                     author = parts[1]
                     author_stats[author]["commits"] = commits
     except (subprocess.SubprocessError, FileNotFoundError):
-        logger.debug("Git log failed", exc_info=True)
+        pass
 
     # Sample some key files for blame analysis
     sample_files = _find_key_files(workspace)
@@ -330,7 +336,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
                         "severity": "stale" if days_since > 730 else "aging"
                     })
         except (subprocess.SubprocessError, ValueError):
-            logger.debug("Git blame failed", exc_info=True)
+            pass
 
     return {
         "status": "ok",
@@ -344,6 +350,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
             "stale_files": len(orphan_files)
         }
     }
+
 
 def _analyze_without_git(
     workspace: str,
@@ -379,7 +386,7 @@ def _analyze_without_git(
                     "freshness": "stale" if age_days > 180 else "aging" if age_days > 30 else "fresh"
                 })
             except OSError:
-                logger.debug("File mtime access failed", exc_info=True)
+                pass
 
     return {
         "method": "mtime_fallback",
@@ -387,6 +394,7 @@ def _analyze_without_git(
         "files": sorted(file_info, key=lambda x: x["last_modified_days_ago"], reverse=True)[:30],
         "stale_count": sum(1 for f in file_info if f["freshness"] == "stale")
     }
+
 
 def _find_function(workspace: str, function_name: str, file_path: Optional[str] = None) -> Optional[Dict]:
     """Find a function in the workspace."""
@@ -400,7 +408,7 @@ def _find_function(workspace: str, function_name: str, file_path: Optional[str] 
                     continue
                 return {"file": node.get("file", ""), "line": node.get("line", 0)}
     except Exception:
-        logger.debug("Git ownership failed", exc_info=True)
+        logger.debug("Failed to load backend registry for function lookup", exc_info=True)
 
     # Scan files
     for root, dirs, filenames in os.walk(workspace):
@@ -438,6 +446,7 @@ def _find_function(workspace: str, function_name: str, file_path: Optional[str] 
 
     return None
 
+
 def _find_function_end(blame_data: List[Dict], start_line: int) -> int:
     """Estimate function end line from blame data."""
     # Simple heuristic: look for decrease in indentation or empty line
@@ -447,6 +456,7 @@ def _find_function_end(blame_data: List[Dict], start_line: int) -> int:
         if content.strip() == '}' or (content.strip() and not content.startswith(' ') and not content.startswith('\t')):
             return i + 1
     return min(start_line + 50, len(blame_data))
+
 
 def _find_stale_lines(blame_data: List[Dict], months: int = 6) -> List[Dict]:
     """Find lines not changed in more than N months."""
@@ -465,6 +475,7 @@ def _find_stale_lines(blame_data: List[Dict], months: int = 6) -> List[Dict]:
             })
 
     return stale
+
 
 def _find_hotspots(blame_data: List[Dict]) -> List[Dict]:
     """Find areas with many different authors (hotspots / conflict zones)."""
@@ -485,6 +496,7 @@ def _find_hotspots(blame_data: List[Dict]) -> List[Dict]:
             })
 
     return sorted(chunks, key=lambda x: -x["authors"])
+
 
 def _compute_age_analysis(blame_data: List[Dict]) -> Dict[str, Any]:
     """Compute age distribution of lines in a file."""
@@ -514,6 +526,7 @@ def _compute_age_analysis(blame_data: List[Dict]) -> Dict[str, Any]:
         "freshness": "stale" if median > 180 else "aging" if median > 60 else "fresh"
     }
 
+
 def _find_key_files(workspace: str) -> List[str]:
     """Find key source files in the workspace for sampling."""
     key_files = []
@@ -535,6 +548,7 @@ def _find_key_files(workspace: str) -> List[str]:
 
     key_files.sort(key=lambda x: x[0])
     return [f[1] for f in key_files]
+
 
 def _generate_ownership_recommendations(
     function_name: str,

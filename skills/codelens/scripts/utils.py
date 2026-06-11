@@ -26,7 +26,7 @@ logger = get_logger()
 
 DEFAULT_IGNORE_DIRS = frozenset({
     'node_modules', '.git', 'dist', 'build', 'target',
-    '__pycache__', '.codelens', '.next', '.nuxt', '.cache',
+    '__pycache__', '.codelens', '.next', '.cache',
     'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
@@ -37,8 +37,6 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
 })
-
-DEFAULT_SOURCE_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}
 
 # ─── Output File Generation ─────────────────────────────────
 
@@ -157,4 +155,4 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.7.1"
+CODELENS_VERSION = "5.6.0"

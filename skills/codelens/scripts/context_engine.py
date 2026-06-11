@@ -5,21 +5,9 @@ callers, callees, imports, and file-level context.
 Gives AI everything needed to understand a symbol without reading the whole file.
 """
 
-import json
-import logging
 import os
 from typing import Dict, List, Any, Optional
 from utils import logger
-
-
-def _safe_parse_line(node_id: str) -> int:
-    """Safely extract line number from node ID like 'file:fn:42'."""
-    try:
-        if ":" in node_id:
-            return int(node_id.rsplit(":", 1)[-1])
-    except (ValueError, IndexError):
-        pass
-    return 0
 
 
 def get_symbol_context(
@@ -58,11 +46,7 @@ def get_symbol_context(
     # ─── Frontend Context ───────────────────────────────
     if domain in ("frontend", "auto"):
         from registry import load_frontend_registry
-        try:
-            frontend = load_frontend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            frontend = {"classes": [], "ids": []}
-            logger.warning(f"Could not load frontend registry: {e}")
+        frontend = load_frontend_registry(workspace)
 
         for cls in frontend.get("classes", []):
             if cls["name"] == name:
@@ -151,11 +135,7 @@ def get_symbol_context(
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
         from edge_resolver import get_callers, get_callees
-        try:
-            backend = load_backend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            backend = {"nodes": [], "edges": []}
-            logger.warning(f"Could not load backend registry: {e}")
+        backend = load_backend_registry(workspace)
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
@@ -187,7 +167,7 @@ def get_symbol_context(
                         {
                             "id": c["from"],
                             "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
-                            "line": _safe_parse_line(c["from"])
+                            "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
                         }
                         for c in callers
                     ]
@@ -293,7 +273,7 @@ def _get_minimal_outline(workspace: str, rel_path: str) -> Optional[Dict]:
         if result["status"] == "ok":
             return result["outline"]
     except Exception:
-        logger.debug("Code snippet extraction failed", exc_info=True)
+        logger.debug("Failed to get file outline for context", exc_info=True)
 
     return None
 

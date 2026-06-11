@@ -8,7 +8,7 @@ def parse_python_fallback(content, file_path):
 
     nodes = []
     edges = []
-    fn_map = {}  # fn_name -> list of node_ids (handles multiple definitions)
+    fn_map = {}
     current_class = None
 
     skip_names = {
@@ -46,10 +46,7 @@ def parse_python_fallback(content, file_path):
                 if current_class:
                     node_data["impl_for"] = current_class
                 nodes.append(node_data)
-                # Use list to track all definitions of the same fn name (e.g. methods in different classes)
-                if name not in fn_map:
-                    fn_map[name] = []
-                fn_map[name].append(node_id)
+                fn_map[name] = node_id
 
     # Detect function calls (simplified scope scanning)
     lines = content.split('\n')

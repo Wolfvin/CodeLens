@@ -83,13 +83,6 @@ class RustParser(BaseParser):
 
             if node.type == 'impl_item':
                 current_impl_for, current_trait_name = self._parse_impl(node, source)
-                # Walk children within this impl context
-                for child in node.children:
-                    visit(child, source, depth + 1)
-                # Reset after leaving impl_item
-                current_impl_for = None
-                current_trait_name = None
-                return
 
             elif node.type == 'function_item':
                 decl = self._parse_function_item(node, source, file_path,
@@ -97,6 +90,9 @@ class RustParser(BaseParser):
                 if decl:
                     fn_declarations.append(decl)
                     nodes.append(decl["node"])
+
+                # Reset impl for after processing the function inside it
+                # (impl contains functions, so we keep context while inside)
 
         self.walk_tree(tree, source, visit)
 

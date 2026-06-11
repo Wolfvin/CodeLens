@@ -9,12 +9,9 @@ Uses DFS with coloring (white/gray/black) for efficient cycle detection.
 
 import os
 import re
-import sys
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import logger, DEFAULT_IGNORE_DIRS
-
-sys.setrecursionlimit(5000)
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 def detect_circular(workspace: str, domain: str = "all") -> Dict[str, Any]:
@@ -71,7 +68,7 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
         from registry import load_backend_registry
         backend = load_backend_registry(workspace)
     except Exception:
-        logger.debug("Circular dependency detection failed", exc_info=True)
+        logger.warning("Failed to load backend registry for cycle detection", exc_info=True)
         return []
 
     nodes = backend.get("nodes", [])
@@ -98,18 +95,14 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
     cycles_found = []
     seen_cycles = set()
 
-    # Track path index for O(1) cycle extraction (instead of path.index())
-    path_index: Dict[str, int] = {}
-
     def dfs_cycle(node_id: str, path: List[str]) -> bool:
         color[node_id] = GRAY
-        path_index[node_id] = len(path)
         path.append(node_id)
 
         for neighbor in adj[node_id]:
             if color[neighbor] == GRAY:
-                # Found a cycle — extract it using pre-computed index
-                cycle_start = path_index[neighbor]
+                # Found a cycle — extract it
+                cycle_start = path.index(neighbor)
                 cycle_path = path[cycle_start:] + [neighbor]
 
                 # Normalize cycle (start from smallest ID to deduplicate)
@@ -124,7 +117,6 @@ def _detect_function_cycles(workspace: str) -> List[Dict]:
                 dfs_cycle(neighbor, path)
 
         path.pop()
-        path_index.pop(node_id, None)
         color[node_id] = BLACK
         return False
 
@@ -170,7 +162,7 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
 
     # Scan for import statements
     extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'}
-    ignore_dirs = DEFAULT_IGNORE_DIRS
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -206,11 +198,9 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
-    path_index: Dict[str, int] = {}
 
     def dfs_import(node: str, path: List[str]):
         color[node] = GRAY
-        path_index[node] = len(path)
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
@@ -218,7 +208,7 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
                 continue  # External module
 
             if color[neighbor] == GRAY:
-                cycle_start = path_index[neighbor]
+                cycle_start = path.index(neighbor)
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -235,7 +225,6 @@ def _detect_import_cycles(workspace: str) -> List[Dict]:
                 dfs_import(neighbor, path)
 
         path.pop()
-        path_index.pop(node, None)
         color[node] = BLACK
 
     for f in import_graph:
@@ -284,7 +273,7 @@ def _resolve_import_path(raw_import: str, from_dir: str, workspace: str) -> Opti
         if os.path.isfile(full_path):
             return os.path.relpath(full_path, workspace)
 
-    return None
+    return rel_path  # Return unresolved path
 
 
 # ─── CSS @import Cycle Detection ────────────────────────
@@ -293,7 +282,7 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
     """Detect circular CSS @import chains."""
     import_graph: Dict[str, Set[str]] = defaultdict(set)
 
-    ignore_dirs = DEFAULT_IGNORE_DIRS
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     css_extensions = {'.css', '.scss', '.less', '.sass'}
 
@@ -331,11 +320,9 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
 
     WHITE, GRAY, BLACK = 0, 1, 2
     color = {f: WHITE for f in import_graph}
-    path_index: Dict[str, int] = {}
 
     def dfs_css(node: str, path: List[str]):
         color[node] = GRAY
-        path_index[node] = len(path)
         path.append(node)
 
         for neighbor in import_graph.get(node, set()):
@@ -343,7 +330,7 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
                 continue
 
             if color[neighbor] == GRAY:
-                cycle_start = path_index[neighbor]
+                cycle_start = path.index(neighbor)
                 cycle_path = path[cycle_start:] + [neighbor]
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
@@ -360,7 +347,6 @@ def _detect_css_import_cycles(workspace: str) -> List[Dict]:
                 dfs_css(neighbor, path)
 
         path.pop()
-        path_index.pop(node, None)
         color[node] = BLACK
 
     for f in import_graph:

@@ -6,12 +6,10 @@ Auto-detects frameworks from package.json, config files, and file patterns.
 import json
 import os
 from typing import Dict, List, Any, Optional
-from utils import logger
+from utils import DEFAULT_IGNORE_DIRS
 
 
 # Known framework signatures
-IGNORE_DIR_BASENAMES = {'node_modules', '.git', 'dist', 'build', 'target', '__pycache__'}
-
 FRAMEWORK_SIGNATURES = {
     "react": {
         "packages": ["react", "react-dom"],
@@ -118,7 +116,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 detected["module_system"] = "cjs"
 
         except (json.JSONDecodeError, IOError):
-            logger.debug("Failed to parse package file", exc_info=True)
+            pass
 
     # 2. Check config files
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -136,8 +134,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 3. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        root_basename = os.path.basename(root)
-        if root_basename in IGNORE_DIR_BASENAMES:
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip:
             continue
 
         for f in files:
@@ -151,14 +153,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 detected["has_svelte"] = True
 
     # 4. Detect Tailwind from CSS content
-    # TODO: This is a second full os.walk traversal — could be merged with step 3
-    # to avoid walking the directory tree twice. Left as-is for now since the
-    # logic is complex and the performance cost is acceptable for typical repos.
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply', 'tw-', 'tailwind']
         for root, dirs, files in os.walk(workspace):
-            root_basename = os.path.basename(root)
-            if root_basename in IGNORE_DIR_BASENAMES:
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip:
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
@@ -175,7 +178,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                             if detected["has_tailwind"]:
                                 break
                     except IOError:
-                        logger.debug("Failed to parse package file", exc_info=True)
+                        pass
             if detected["has_tailwind"]:
                 break
 

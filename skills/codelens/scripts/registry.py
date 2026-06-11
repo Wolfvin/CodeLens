@@ -50,7 +50,7 @@ def load_config(workspace: str) -> Dict[str, Any]:
                 saved = json.load(f)
                 defaults.update(saved)
         except (json.JSONDecodeError, IOError):
-            logger.warning(f"Corrupt config file {config_path}, using defaults", exc_info=True)
+            logger.debug("Failed to parse codelens config, using defaults", exc_info=True)
     return defaults
 
 
@@ -70,7 +70,7 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
+            logger.debug("Failed to parse frontend registry, returning empty", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -99,7 +99,7 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.warning(f"Corrupt registry file {path}, using defaults", exc_info=True)
+            logger.debug("Failed to parse backend registry, returning empty", exc_info=True)
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -129,19 +129,18 @@ def compute_frontend_status(
     Compute status for a frontend entry.
 
     Priority:
-    1. collision (IDs: same id in >1 HTML element; classes: same class in >1 HTML element)
-    2. dead (no CSS or JS references — class/id defined in HTML but never styled/used)
+    1. collision (IDs only, same id in >1 HTML element)
+    2. dead (ref_count == 0 in CSS and JS)
     3. duplicate_ref (referenced from 2+ different files)
-    4. active (default, has CSS or JS references)
+    4. active (default, ref_count > 0)
     """
     ref_count = len(css_refs) + len(js_refs)
 
-    # Only IDs can collide (same id on multiple HTML elements is a bug)
-    # Classes are designed to be used on multiple elements
+    # Collision: ID appears in >1 HTML element
     if entry_type == "id" and len(html_refs) > 1:
         return "collision"
 
-    # Dead: no CSS or JS references (defined in HTML but not styled or used)
+    # Dead: no CSS or JS references
     if ref_count == 0:
         return "dead"
 
@@ -196,7 +195,7 @@ def build_frontend_registry(
 
     # Process HTML data
     for item in html_data:
-        add_refs(item.get("classes", []), "class", "html")   # HTML class= is definition, map to html category
+        add_refs(item.get("classes", []), "class", "css")   # HTML class= is definition, map to css category
         add_refs(item.get("ids", []), "id", "html")
 
     # Process CSS data
@@ -300,7 +299,6 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             "name": name,
             "ref_count": ref_count,
             "status": status,
-            "defined_in_html": refs["html"],
             "css": refs["css"],
             "js": refs["js"]
         }

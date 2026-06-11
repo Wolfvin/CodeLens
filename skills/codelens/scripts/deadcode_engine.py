@@ -13,9 +13,13 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, DEFAULT_SOURCE_EXTENSIONS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = DEFAULT_SOURCE_EXTENSIONS | {".mjs", ".cjs", ".less"}
+SOURCE_EXTENSIONS = {
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less"
+}
+
 
 def detect_dead_code(
     workspace: str,
@@ -124,6 +128,7 @@ def detect_dead_code(
         "categories_checked": list(categories)
     }
 
+
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect code that comes after return/throw/break/continue and is therefore unreachable."""
     items = []
@@ -158,28 +163,8 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
 
+        # Detect terminal statements
         if in_function:
-            # Check for unreachable code BEFORE terminal detection, so that
-            # consecutive terminal statements are handled correctly.
-            # Use i + 1 > terminal_line (compare 1-based line numbers) so the
-            # line immediately after a terminal is caught.
-            if found_terminal and (i + 1) > terminal_line and not stripped.startswith(('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#')):
-                items.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "after": terminal_type,
-                    "after_line": terminal_line,
-                    "severity": "warning",
-                    "message": f"Unreachable code after {terminal_type} on line {terminal_line}",
-                    "suggestion": f"Remove code after {terminal_type} or fix the control flow."
-                })
-                # Reset so that if this line is itself a terminal, the next
-                # unreachable block is also detected
-                found_terminal = False
-
-            # Detect terminal statements (after unreachable check so that a
-            # second return/break is first flagged as unreachable, then sets
-            # found_terminal for any code that follows it)
             if re.match(r'(?:return|throw|break|continue)\s', stripped):
                 found_terminal = True
                 terminal_line = i + 1
@@ -200,15 +185,28 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     found_terminal = False
                     continue
 
+            # If we found a terminal statement and this is the next real code
+            if found_terminal and i > terminal_line and not stripped.startswith(('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#')):
+                items.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "after": terminal_type,
+                    "after_line": terminal_line,
+                    "severity": "warning",
+                    "message": f"Unreachable code after {terminal_type} on line {terminal_line}",
+                    "suggestion": f"Remove code after {terminal_type} or fix the control flow."
+                })
+                found_terminal = False  # Only report first unreachable
+
     return items
+
 
 def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect variables that are declared but never read."""
     items = []
 
     # Remove comments and strings for more accurate detection
-    # Use negative lookbehind to avoid stripping URLs (https://...)
-    clean_content = re.sub(r'(?<!:)//.*$', '', content, flags=re.MULTILINE)
+    clean_content = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
     clean_content = re.sub(r'/\*.*?\*/', '', clean_content, flags=re.DOTALL)
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -266,6 +264,7 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
 
     return items[:100]  # Cap to avoid noise
 
+
 def _collect_js_exports_imports(
     content: str, ext: str, rel_path: str,
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
@@ -310,6 +309,7 @@ def _collect_js_exports_imports(
         elif m.group(3):  # Default import
             imports[rel_path].add(m.group(3))
 
+
 def _collect_py_exports_imports(
     content: str, rel_path: str,
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
@@ -341,6 +341,7 @@ def _collect_py_exports_imports(
             "line": line_num
         })
 
+
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
     all_imports: Dict[str, Set[str]],
@@ -364,7 +365,7 @@ def _detect_unused_exports(
             name = export["name"]
 
             # Skip common entry-point exports
-            if name in {'default', 'app', 'server', 'main', 'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'configure', 'setup'}:
+            if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
             if name not in all_imported_names:
@@ -380,16 +381,15 @@ def _detect_unused_exports(
 
     return unused[:50]
 
+
 def _detect_zombie_css(workspace: str) -> List[Dict]:
     """Detect CSS classes defined but never used in HTML/JS/TSX."""
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
     except Exception:
-        logger.debug("Dead code analysis failed", exc_info=True)
+        logger.warning("Failed to load frontend registry for zombie CSS detection", exc_info=True)
         return []
-
-    zombie = []
 
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
@@ -405,13 +405,14 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
 
     return zombie[:50]
 
+
 def _detect_dead_listeners(workspace: str) -> List[Dict]:
     """Detect event listeners that listen for events on selectors that don't exist in HTML."""
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
     except Exception:
-        logger.debug("Dead code analysis failed", exc_info=True)
+        logger.warning("Failed to load frontend registry for dead listener detection", exc_info=True)
         return []
 
     # Get all known IDs and classes

@@ -4,13 +4,9 @@ Deep call chain tracing — follows the graph up (callers) and down (callees)
 to produce full impact chains for root cause analysis and change planning.
 """
 
-import json
-import logging
 import os
 from collections import deque
 from typing import Dict, List, Any, Optional, Set, Tuple
-
-logger = logging.getLogger(__name__)
 
 
 def trace_symbol(
@@ -36,15 +32,12 @@ def trace_symbol(
     workspace = os.path.abspath(workspace)
     chains = {"up": [], "down": []}
     tree = {"root": name, "children": []}
+    visited = set()
 
     # ─── Backend Tracing ────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
-        try:
-            backend = load_backend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            backend = {"nodes": [], "edges": []}
-            logger.warning(f"Could not load backend registry: {e}")
+        backend = load_backend_registry(workspace)
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
@@ -91,9 +84,6 @@ def trace_symbol(
                 if name in node.get("fn", "") or name in node.get("id", ""):
                     start_nodes.append(node)
 
-        # Shared visited set across all start_nodes to prevent duplicate results
-        shared_visited = set()
-
         for start_node in start_nodes:
             start_id = start_node["id"]
 
@@ -101,7 +91,7 @@ def trace_symbol(
             if direction in ("up", "both"):
                 up_chain = _bfs_trace(
                     start_id, callers_of, node_by_id,
-                    max_depth, "caller", shared_visited
+                    max_depth, "caller"
                 )
                 chains["up"].extend(up_chain)
 
@@ -109,7 +99,7 @@ def trace_symbol(
             if direction in ("down", "both"):
                 down_chain = _bfs_trace(
                     start_id, callees_of, node_by_id,
-                    max_depth, "callee", shared_visited
+                    max_depth, "callee"
                 )
                 chains["down"].extend(down_chain)
 
@@ -120,11 +110,7 @@ def trace_symbol(
     # ─── Frontend Tracing ───────────────────────────────
     if domain in ("frontend", "auto"):
         from registry import load_frontend_registry
-        try:
-            frontend = load_frontend_registry(workspace)
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            frontend = {"classes": [], "ids": []}
-            logger.warning(f"Could not load frontend registry: {e}")
+        frontend = load_frontend_registry(workspace)
 
         # For frontend, "tracing" means following class/id references
         for cls in frontend.get("classes", []):
@@ -177,18 +163,15 @@ def _bfs_trace(
     adjacency: Dict[str, List[Dict]],
     node_by_id: Dict[str, Dict],
     max_depth: int,
-    direction_label: str,
-    shared_visited: Optional[Set[str]] = None
+    direction_label: str
 ) -> List[Dict]:
     """
     BFS traversal of the call graph from start_id.
 
     Returns a list of chain entries, each with depth, node info, and path.
-    If shared_visited is provided, it is used across multiple calls to prevent
-    revisiting nodes already seen in a prior BFS traversal.
     """
     chain = []
-    visited = shared_visited if shared_visited is not None else set()
+    visited: Set[str] = set()
     queue = deque()
 
     # Start node

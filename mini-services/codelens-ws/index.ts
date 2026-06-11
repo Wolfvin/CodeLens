@@ -145,54 +145,6 @@ const NEURAL_COLORS = {
   unused: '#718096',
 } as const
 
-// ─── Command Whitelist & Input Validation ───────────────────
-
-const ALLOWED_COMMANDS = new Set([
-  'init', 'scan', 'query', 'list', 'detect', 'watch',
-  'search', 'symbols', 'trace', 'impact', 'dependents', 'stack-trace',
-  'outline', 'missing-refs', 'diff', 'circular',
-  'context', 'validate', 'test-map', 'config-drift', 'type-infer', 'ownership',
-  'entrypoints', 'api-map', 'state-map', 'env-check',
-  'secrets', 'vuln-scan', 'dataflow', 'regex-audit',
-  'smell', 'complexity', 'debug-leak', 'dead-code', 'a11y',
-  'perf-hint', 'css-deep', 'refactor-safe', 'side-effect',
-  'handbook', 'ask'
-])
-
-function validateCommandInput(data: any): { command: string; args: string[]; workspace?: string } {
-  if (!data || typeof data.command !== 'string') {
-    throw new Error('Invalid command: must be a string')
-  }
-
-  if (!ALLOWED_COMMANDS.has(data.command)) {
-    throw new Error(`Unknown command: ${data.command}`)
-  }
-
-  const args = Array.isArray(data.args)
-    ? data.args.map((a: any) => String(a))
-    : []
-
-  // Reject args with shell metacharacters
-  const dangerousPattern = /[;&|`$(){}[\]<>]/
-  for (const arg of args) {
-    if (dangerousPattern.test(arg)) {
-      throw new Error(`Invalid argument: contains disallowed characters`)
-    }
-  }
-
-  const workspace = data.workspace
-  if (workspace !== undefined && typeof workspace !== 'string') {
-    throw new Error('Invalid workspace: must be a string')
-  }
-
-  // Reject workspace traversal
-  if (workspace && workspace.includes('..')) {
-    throw new Error('Workspace path must not contain ".."')
-  }
-
-  return { command: data.command, args, workspace }
-}
-
 // ─── Region Auto-Detect ─────────────────────────────────────
 
 const REGION_PATTERNS: Array<{
@@ -230,34 +182,6 @@ let graphNodes: GraphNode[] = []
 let graphEdges: GraphEdge[] = []
 let graphClusters: Cluster[] = []
 let lastWorkspace: string | null = null
-
-// ─── Adjacency Indexes for O(1) lookups ─────────────────────
-
-let edgeIndexBySource: Map<string, number[]> = new Map()
-let edgeIndexByTarget: Map<string, number[]> = new Map()
-
-function rebuildEdgeIndex() {
-  edgeIndexBySource = new Map()
-  edgeIndexByTarget = new Map()
-  for (let i = 0; i < graphEdges.length; i++) {
-    const e = graphEdges[i]
-    const srcId = typeof e.source === 'string' ? e.source : (e.source as GraphNode).id
-    const tgtId = typeof e.target === 'string' ? e.target : (e.target as GraphNode).id
-    if (!edgeIndexBySource.has(srcId)) edgeIndexBySource.set(srcId, [])
-    edgeIndexBySource.get(srcId)!.push(i)
-    if (!edgeIndexByTarget.has(tgtId)) edgeIndexByTarget.set(tgtId, [])
-    edgeIndexByTarget.get(tgtId)!.push(i)
-  }
-}
-
-let nodeIndexById: Map<string, number> = new Map()
-
-function rebuildNodeIndex() {
-  nodeIndexById = new Map()
-  for (let i = 0; i < graphNodes.length; i++) {
-    nodeIndexById.set(graphNodes[i].id, i)
-  }
-}
 
 // ─── Node / Edge Helpers ────────────────────────────────────
 
@@ -302,21 +226,6 @@ function nodeColor(type: NodeType, status: NodeStatus): string {
 }
 
 // ─── CodeLens CLI Execution ─────────────────────────────────
-
-function parseCliOutput(output: string): any {
-  // Strip [CodeLens] prefix lines and any non-JSON lines before the actual JSON
-  const lines = output.split('\n')
-  // Find the first line that starts with { or [
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim()
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      // Rejoin from this line onwards
-      const jsonStr = lines.slice(i).join('\n').trim()
-      return JSON.parse(jsonStr)
-    }
-  }
-  throw new Error('No JSON found in CLI output')
-}
 
 const CODELENS_CLI = process.env.CODELENS_PYTHON
 const CODELENS_SCRIPT = process.env.CODELENS_SCRIPT
@@ -365,7 +274,7 @@ async function executeCodelens(command: string, args: string[]): Promise<{ succe
     }
 
     try {
-      const data = parseCliOutput(stdout)
+      const data = JSON.parse(stdout)
       return { success: true, data }
     } catch (parseErr) {
       // Some commands may output non-JSON (e.g., watch)
@@ -874,74 +783,64 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
     case 'vuln-scan':
     case 'dataflow':
     case 'env-check':
-    case 'regex-audit': {
+    case 'regex-audit':
       // Security commands - use alarm animation
-      const normalized = normalizeGeneric(command, cliResult)
       return {
-        ...normalized,
+        ...normalizeGeneric(command, cliResult),
         animation: {
           type: 'alarm',
-          targetNodeIds: normalized.animation.targetNodeIds,
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
           intensity: cliResult.risk === 'critical' ? 'critical' : 'high',
         },
       }
-    }
     case 'smell':
     case 'complexity':
     case 'debug-leak':
     case 'dead-code':
-    case 'a11y': {
+    case 'a11y':
       // Quality commands - use pulse animation
-      const normalized = normalizeGeneric(command, cliResult)
       return {
-        ...normalized,
+        ...normalizeGeneric(command, cliResult),
         animation: {
           type: 'pulse',
-          targetNodeIds: normalized.animation.targetNodeIds,
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
           intensity: 'medium',
         },
       }
-    }
     case 'perf-hint':
-    case 'circular': {
+    case 'circular':
       // Performance - use ripple animation
-      const normalized = normalizeGeneric(command, cliResult)
       return {
-        ...normalized,
+        ...normalizeGeneric(command, cliResult),
         animation: {
           type: 'ripple',
-          targetNodeIds: normalized.animation.targetNodeIds,
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
           intensity: 'medium',
         },
       }
-    }
     case 'css-deep':
-    case 'missing-refs': {
+    case 'missing-refs':
       // CSS - use flash animation
-      const normalized = normalizeGeneric(command, cliResult)
       return {
-        ...normalized,
+        ...normalizeGeneric(command, cliResult),
         animation: {
           type: 'flash',
-          targetNodeIds: normalized.animation.targetNodeIds,
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
           intensity: 'low',
         },
       }
-    }
     case 'side-effect':
-    case 'refactor-safe': {
+    case 'refactor-safe':
       // Refactoring - use flow animation
-      const normalized = normalizeGeneric(command, cliResult)
       return {
-        ...normalized,
+        ...normalizeGeneric(command, cliResult),
         animation: {
           type: 'flow',
-          targetNodeIds: normalized.animation.targetNodeIds,
+          targetNodeIds: normalizeGeneric(command, cliResult).animation.targetNodeIds,
           intensity: 'medium',
           direction: 'both',
         },
       }
-    }
     default:
       return normalizeGeneric(command, cliResult)
   }
@@ -950,9 +849,8 @@ function normalizeCommand(command: string, cliResult: any): GraphEvent {
 // ─── NodeDetail Computation ─────────────────────────────────
 
 function computeNodeDetail(nodeId: string): NodeDetail | null {
-  const nodeIdx = nodeIndexById.get(nodeId)
-  if (nodeIdx === undefined) return null
-  const node = graphNodes[nodeIdx]
+  const node = graphNodes.find(n => n.id === nodeId)
+  if (!node) return null
 
   const detail: NodeDetail = { node }
 
@@ -962,16 +860,13 @@ function computeNodeDetail(nodeId: string): NodeDetail | null {
   const references: Array<{ file: string; line: number; source: string }> = []
   const definedIn: Array<{ file: string; line: number }> = []
 
-  // Use edge index: edges where this node is the target
-  const incomingIdxs = edgeIndexByTarget.get(nodeId) || []
-  for (const i of incomingIdxs) {
-    const edge = graphEdges[i]
+  for (const edge of graphEdges) {
     const srcId = typeof edge.source === 'string' ? edge.source : (edge.source as GraphNode).id
+    const tgtId = typeof edge.target === 'string' ? edge.target : (edge.target as GraphNode).id
 
-    if (edge.type === 'calls') {
-      const srcIdx = nodeIndexById.get(srcId)
-      if (srcIdx !== undefined) {
-        const srcNode = graphNodes[srcIdx]
+    if (tgtId === nodeId && edge.type === 'calls') {
+      const srcNode = graphNodes.find(n => n.id === srcId)
+      if (srcNode) {
         callers.push({
           fn: srcNode.label,
           file: srcNode.file || '',
@@ -980,10 +875,20 @@ function computeNodeDetail(nodeId: string): NodeDetail | null {
       }
     }
 
-    if (edge.type === 'references') {
-      const srcIdx = nodeIndexById.get(srcId)
-      if (srcIdx !== undefined) {
-        const srcNode = graphNodes[srcIdx]
+    if (srcId === nodeId && edge.type === 'calls') {
+      const tgtNode = graphNodes.find(n => n.id === tgtId)
+      if (tgtNode) {
+        callees.push({
+          fn: tgtNode.label,
+          file: tgtNode.file || '',
+          line: tgtNode.line || 0,
+        })
+      }
+    }
+
+    if (tgtId === nodeId && edge.type === 'references') {
+      const srcNode = graphNodes.find(n => n.id === srcId)
+      if (srcNode) {
         references.push({
           file: srcNode.file || '',
           line: srcNode.line || 0,
@@ -992,32 +897,12 @@ function computeNodeDetail(nodeId: string): NodeDetail | null {
       }
     }
 
-    if (edge.type === 'defines') {
-      const srcIdx = nodeIndexById.get(srcId)
-      if (srcIdx !== undefined) {
-        const srcNode = graphNodes[srcIdx]
+    if (tgtId === nodeId && edge.type === 'defines') {
+      const srcNode = graphNodes.find(n => n.id === srcId)
+      if (srcNode) {
         definedIn.push({
           file: srcNode.file || '',
           line: srcNode.line || 0,
-        })
-      }
-    }
-  }
-
-  // Use edge index: edges where this node is the source
-  const outgoingIdxs = edgeIndexBySource.get(nodeId) || []
-  for (const i of outgoingIdxs) {
-    const edge = graphEdges[i]
-    const tgtId = typeof edge.target === 'string' ? edge.target : (edge.target as GraphNode).id
-
-    if (edge.type === 'calls') {
-      const tgtIdx = nodeIndexById.get(tgtId)
-      if (tgtIdx !== undefined) {
-        const tgtNode = graphNodes[tgtIdx]
-        callees.push({
-          fn: tgtNode.label,
-          file: tgtNode.file || '',
-          line: tgtNode.line || 0,
         })
       }
     }
@@ -1074,8 +959,8 @@ function computeNodeDetail(nodeId: string): NodeDetail | null {
 function updateGraphFromEvent(event: GraphEvent) {
   // Add/update nodes
   for (const node of event.nodes) {
-    const idx = nodeIndexById.get(node.id)
-    if (idx !== undefined) {
+    const idx = graphNodes.findIndex(n => n.id === node.id)
+    if (idx >= 0) {
       // Merge: update status, keep position
       graphNodes[idx] = {
         ...graphNodes[idx],
@@ -1103,17 +988,12 @@ function updateGraphFromEvent(event: GraphEvent) {
       graphEdges.push({ ...edge, source: srcId, target: tgtId })
     }
   }
-
-  rebuildNodeIndex()
-  rebuildEdgeIndex()
 }
 
 function replaceGraphFromScan(nodes: GraphNode[], edges: GraphEdge[], clusters: Cluster[]) {
   graphNodes = nodes
   graphEdges = edges
   graphClusters = clusters
-  rebuildNodeIndex()
-  rebuildEdgeIndex()
 }
 
 // ─── WebSocket Server ───────────────────────────────────────
@@ -1146,16 +1026,7 @@ io.on('connection', (socket) => {
 
   // ─── Handle 'command' ──────────────────────────────────
   socket.on('command', async (data: { command: string; args: string[] }) => {
-    let command: string
-    let args: string[]
-    try {
-      const validated = validateCommandInput(data)
-      command = validated.command
-      args = validated.args
-    } catch (validationErr: any) {
-      socket.emit('command_result', { command: data?.command, result: { success: false, error: validationErr.message } })
-      return
-    }
+    const { command, args } = data
     console.log(`[WS] command: ${command} ${args.join(' ')}`)
 
     // Rate limiting
@@ -1185,13 +1056,7 @@ io.on('connection', (socket) => {
 
       // Handle scan specially: replace entire graph
       if (command === 'scan') {
-        let normalized: { nodes: GraphNode[]; edges: GraphEdge[]; clusters: Cluster[] }
-        try {
-          normalized = normalizeScan(result.data, args[0] || '')
-        } catch (normErr) {
-          console.error('Normalization error:', normErr)
-          normalized = { nodes: [], edges: [], clusters: [] }
-        }
+        const normalized = normalizeScan(result.data, args[0] || '')
         replaceGraphFromScan(normalized.nodes, normalized.edges, normalized.clusters)
 
         // Store workspace for future commands
@@ -1224,20 +1089,7 @@ io.on('connection', (socket) => {
         console.log(`[WS] Scan complete: ${graphNodes.length} nodes, ${graphEdges.length} edges, ${graphClusters.length} clusters`)
       } else {
         // Normalize other commands into GraphEvent
-        let event: GraphEvent
-        try {
-          event = normalizeCommand(command, result.data)
-        } catch (normErr) {
-          console.error('Normalization error:', normErr)
-          event = {
-            sourceCommand: command,
-            timestamp: Date.now(),
-            nodes: [],
-            edges: [],
-            animation: { type: 'pulse', targetNodeIds: [], intensity: 'low' },
-            metadata: { category: command, summary: `Command "${command}" executed (normalization failed)` },
-          }
-        }
+        const event = normalizeCommand(command, result.data)
         updateGraphFromEvent(event)
         io.emit('graph_event', { event })
         console.log(`[WS] Event emitted for "${command}": ${event.nodes.length} nodes, ${event.edges.length} edges`)
@@ -1311,11 +1163,10 @@ io.on('connection', (socket) => {
             }
 
             // Update graph
-            const idx = nodeIndexById.get(node_id)
-            if (idx !== undefined) {
+            const idx = graphNodes.findIndex(n => n.id === node_id)
+            if (idx >= 0) {
               graphNodes[idx] = { ...graphNodes[idx], ...node }
             }
-            rebuildNodeIndex()
 
             socket.emit('node_detail', { node_id, detail })
           }
@@ -1335,7 +1186,6 @@ io.on('connection', (socket) => {
   // ─── Disconnect ────────────────────────────────────────
   socket.on('disconnect', () => {
     console.log(`[WS] Client disconnected: ${socket.id}`)
-    commandTimestamps.delete(socket.id)
   })
 
   socket.on('error', (error) => {

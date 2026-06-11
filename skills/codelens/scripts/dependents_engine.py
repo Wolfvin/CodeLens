@@ -8,6 +8,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
+from utils import DEFAULT_IGNORE_DIRS
 
 
 def get_dependents(
@@ -196,8 +197,7 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
     import_graph: Dict[str, Set[str]] = defaultdict(set)
     reverse_graph: Dict[str, Set[str]] = defaultdict(set)
 
-    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
-                   "__pycache__", ".codelens", ".next", ".cache", "vendor"}
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     # JS/TS imports
     js_extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'}

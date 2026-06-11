@@ -1,6 +1,7 @@
 """Query command — Query a specific class/id/function from the registry."""
 
 import os
+import json
 from typing import Dict, Any, List
 
 from registry import load_frontend_registry, load_backend_registry
@@ -88,19 +89,16 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
         for cls in frontend.get("classes", []):
             if cls["name"] == query_name:
-                if file_filter and file_filter not in cls.get("file", "") and not any(
-                    file_filter in ref.get("path", "") for ref in cls.get("css", []) + cls.get("js", [])
-                ):
+                if file_filter and file_filter not in json.dumps(cls):
                     continue
                 action, action_reason = _get_query_action(cls["status"])
                 return {
-                    "status": "ok",
                     "found": True,
                     "type": "class",
                     "domain": "frontend",
                     "name": cls["name"],
                     "ref_count": cls["ref_count"],
-                    "item_status": cls["status"],
+                    "status": cls["status"],
                     "action": action,
                     "action_reason": action_reason,
                     "css": cls.get("css", []),
@@ -109,19 +107,16 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
 
         for id_entry in frontend.get("ids", []):
             if id_entry["name"] == query_name:
-                if file_filter and file_filter not in id_entry.get("file", "") and not any(
-                    file_filter in ref.get("path", "") for ref in id_entry.get("css", []) + id_entry.get("js", []) + id_entry.get("defined_in_html", [])
-                ):
+                if file_filter and file_filter not in json.dumps(id_entry):
                     continue
                 action, action_reason = _get_query_action(id_entry["status"])
                 return {
-                    "status": "ok",
                     "found": True,
                     "type": "id",
                     "domain": "frontend",
                     "name": id_entry["name"],
                     "ref_count": id_entry["ref_count"],
-                    "item_status": id_entry["status"],
+                    "status": id_entry["status"],
                     "action": action,
                     "action_reason": action_reason,
                     "defined_in_html": id_entry.get("defined_in_html", []),
@@ -146,7 +141,6 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 node_status = node.get("status", "active")
                 action, action_reason = _get_query_action(node_status)
                 result = {
-                    "status": "ok",
                     "found": True,
                     "type": "function",
                     "domain": "backend",

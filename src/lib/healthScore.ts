@@ -578,16 +578,17 @@ function detectCircularDeps(nodes: GraphNode[], edges: GraphEdge[]): number {
 // ---- Gini coefficient (measures inequality) ----
 
 function computeGini(values: number[]): number {
+  if (values.length === 0) return 0
   const n = values.length
-  if (n === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
-  const total = sorted.reduce((s, v) => s + v, 0)
-  if (total === 0) return 0
-  let cumSum = 0
-  let weightedSum = 0
+  const mean = values.reduce((s, v) => s + v, 0) / n
+  if (mean === 0) return 0
+
+  let sumAbsDiff = 0
   for (let i = 0; i < n; i++) {
-    cumSum += sorted[i]
-    weightedSum += (i + 1) * sorted[i]
+    for (let j = 0; j < n; j++) {
+      sumAbsDiff += Math.abs(values[i] - values[j])
+    }
   }
-  return (2 * weightedSum) / (n * total) - (n + 1) / n
+
+  return sumAbsDiff / (2 * n * n * mean)
 }

@@ -65,7 +65,7 @@ def list_snapshots(workspace: str) -> List[Dict[str, str]]:
                     "file": filename
                 })
             except (json.JSONDecodeError, IOError):
-                logger.debug("Snapshot comparison failed", exc_info=True)
+                logger.debug("Failed to parse snapshot file", exc_info=True)
 
     return snapshots
 
@@ -193,6 +193,7 @@ def _load_snapshot(snap_dir: str, snapshot_id: str) -> Dict:
         with open(filepath, 'r', encoding='utf-8') as f:
             return json.load(f)
     except (json.JSONDecodeError, IOError):
+        logger.debug("Failed to load snapshot, returning empty registry", exc_info=True)
         return {"frontend": _empty_frontend(), "backend": _empty_backend()}
 
 
@@ -366,4 +367,4 @@ def _cleanup_old_snapshots(snap_dir: str, keep: int = 20):
         try:
             os.remove(os.path.join(snap_dir, old_file))
         except OSError:
-            logger.debug("Failed to remove old snapshot", exc_info=True)
+            pass

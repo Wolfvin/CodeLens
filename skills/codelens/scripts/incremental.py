@@ -23,7 +23,7 @@ def _to_rel_paths(changed_files: Set[str], workspace: str) -> Set[str]:
         try:
             rel_paths.add(os.path.relpath(f, workspace))
         except ValueError:
-            logger.debug("Path relativity conversion failed", exc_info=True)
+            pass
     return rel_paths
 
 
@@ -35,7 +35,7 @@ def load_mtimes(workspace: str) -> Dict[str, float]:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            logger.debug("Failed to load mtimes cache", exc_info=True)
+            logger.debug("Failed to load mtimes cache, starting fresh", exc_info=True)
     return {}
 
 
@@ -58,7 +58,7 @@ def get_current_mtimes(workspace: str, files: List[str]) -> Dict[str, float]:
             rel_path = os.path.relpath(f, workspace)
             mtimes[rel_path] = mtime
         except OSError:
-            logger.debug("File mtime access failed", exc_info=True)
+            pass
     return mtimes
 
 
@@ -87,7 +87,7 @@ def find_changed_files(
 
     # Find changed files
     for rel_path in current_rel_paths & cached_rel_paths:
-        if abs(current[rel_path] - cached[rel_path]) > 0.001:
+        if current[rel_path] != cached[rel_path]:
             abs_path = os.path.join(workspace, rel_path)
             changed.append(abs_path)
 
@@ -119,50 +119,47 @@ def _strip_refs_from_changed(refs: List[Dict], changed_rel_paths: Set[str]) -> L
     return [r for r in refs if r.get("path", "") not in changed_rel_paths]
 
 
-def _recompute_entry_status(entry: Dict, entry_type: str) -> None:
-    """Recompute ref_count and status for a frontend entry in-place.
+def _recompute_class_status(entry: Dict) -> None:
+    """Recompute ref_count and status for a class entry in-place."""
+    from registry import compute_frontend_status
+    css_refs = entry.get("css", [])
+    js_refs = entry.get("js", [])
+    entry["ref_count"] = len(css_refs) + len(js_refs)
+    entry["status"] = compute_frontend_status(
+        entry["name"], "class", [], css_refs, js_refs
+    )
 
-    Args:
-        entry: The class or id entry dict.
-        entry_type: "class" or "id" — determines whether multiple HTML refs
-                    produce "duplicate_ref" (class) or "collision" (id),
-                    matching registry.py's compute_frontend_status logic.
-    """
+
+def _recompute_id_status(entry: Dict) -> None:
+    """Recompute ref_count and status for an id entry in-place."""
     from registry import compute_frontend_status
     html_refs = entry.get("defined_in_html", [])
     css_refs = entry.get("css", [])
     js_refs = entry.get("js", [])
     entry["ref_count"] = len(css_refs) + len(js_refs)
     entry["status"] = compute_frontend_status(
-        entry["name"], entry_type, html_refs, css_refs, js_refs
+        entry["name"], "id", html_refs, css_refs, js_refs
     )
 
 
 def _recompute_duplicate_define(entry: Dict) -> None:
     """Recompute duplicate_define flags on css refs for a class entry."""
-    # Clear existing flags first - work on copies to avoid mutation
-    new_css = []
+    # Clear existing flags first
     for ref in entry.get("css", []):
-        ref_copy = dict(ref)
-        ref_copy.pop("flag", None)
-        new_css.append(ref_copy)
-    
+        ref.pop("flag", None)
     # Group by path
     css_paths: Dict[str, List[Dict]] = {}
-    for ref in new_css:
+    for ref in entry.get("css", []):
         p = ref.get("path", "")
         if p not in css_paths:
             css_paths[p] = []
         css_paths[p].append(ref)
-    
     # Mark duplicates
     for path, path_refs in css_paths.items():
         if len(path_refs) > 1:
             for i, ref in enumerate(path_refs):
                 if i > 0:
                     ref["flag"] = "duplicate_define"
-    
-    entry["css"] = new_css
 
 
 def merge_frontend_data(
@@ -199,12 +196,11 @@ def merge_frontend_data(
 
     stripped_classes: List[Dict] = []
     for entry in existing_registry.get("classes", []):
-        entry["defined_in_html"] = _strip_refs_from_changed(entry.get("defined_in_html", []), changed_rel_paths)
         entry["css"] = _strip_refs_from_changed(entry.get("css", []), changed_rel_paths)
         entry["js"] = _strip_refs_from_changed(entry.get("js", []), changed_rel_paths)
-        _recompute_entry_status(entry, "class")
+        _recompute_class_status(entry)
         # Keep entry if it still has any refs (including from HTML side)
-        if entry["ref_count"] > 0 or len(entry.get("defined_in_html", [])) > 0:
+        if entry["ref_count"] > 0:
             stripped_classes.append(entry)
 
     stripped_ids: List[Dict] = []
@@ -214,7 +210,7 @@ def merge_frontend_data(
         )
         entry["css"] = _strip_refs_from_changed(entry.get("css", []), changed_rel_paths)
         entry["js"] = _strip_refs_from_changed(entry.get("js", []), changed_rel_paths)
-        _recompute_entry_status(entry, "id")
+        _recompute_id_status(entry)
         # Keep entry if it still has any refs at all
         if entry["ref_count"] > 0 or len(entry.get("defined_in_html", [])) > 0:
             stripped_ids.append(entry)
@@ -236,10 +232,9 @@ def merge_frontend_data(
         name = new_entry["name"]
         if name in existing_class_map:
             existing = existing_class_map[name]
-            existing["defined_in_html"].extend(new_entry.get("defined_in_html", []))
             existing["css"].extend(new_entry.get("css", []))
             existing["js"].extend(new_entry.get("js", []))
-            _recompute_entry_status(existing, "class")
+            _recompute_class_status(existing)
             _recompute_duplicate_define(existing)
         else:
             existing_class_map[name] = new_entry
@@ -252,7 +247,7 @@ def merge_frontend_data(
             existing["defined_in_html"].extend(new_entry.get("defined_in_html", []))
             existing["css"].extend(new_entry.get("css", []))
             existing["js"].extend(new_entry.get("js", []))
-            _recompute_entry_status(existing, "id")
+            _recompute_id_status(existing)
         else:
             existing_id_map[name] = new_entry
             stripped_ids.append(new_entry)
@@ -343,6 +338,10 @@ def merge_backend_data(
         if to_id in removed_node_ids:
             # Edge points to a removed node — try to re-resolve later
             re_resolvable_edges.append(edge)
+            continue
+
+        if not is_resolved and from_is_changed:
+            # Unresolved edge from changed file — discard
             continue
 
         # Edge is between unchanged-file nodes — keep it

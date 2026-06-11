@@ -193,13 +193,12 @@ def _trace_error_chain(
                     "line": n.get("line", 0),
                     "async": n.get("async", False),
                     "has_error_handling": has_handling["has_handling"],
-                    "handling_type": has_handling["type"],
-                    "rethrows": has_handling.get("rethrows", False)
+                    "handling_type": has_handling["type"]
                 }
                 chain.append(chain_entry)
 
-                # Continue tracing if no error handling, or if the handler re-throws
-                if not has_handling["has_handling"] or has_handling.get("rethrows", False):
+                # Only continue tracing if no error handling (error propagates further)
+                if not has_handling["has_handling"]:
                     queue.append((caller_id, depth + 1))
 
     return {
@@ -235,54 +234,34 @@ def _check_error_handling(node: Dict, workspace: str) -> Dict[str, Any]:
 
     # Check for various error handling patterns
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        has_try_catch = False
-        rethrows = False
-
         if re.search(r'\btry\s*\{', fn_body):
             if re.search(r'\bcatch\b', fn_body):
-                has_try_catch = True
-                # Check if catch block re-throws
-                if re.search(r'\bcatch\b[^}]*\bthrow\b', fn_body, re.DOTALL):
-                    rethrows = True
+                return {"has_handling": True, "type": "try_catch", "confidence": "high"}
             if re.search(r'\.catch\s*\(', fn_body):
-                has_try_catch = True
+                return {"has_handling": True, "type": "promise_catch", "confidence": "high"}
 
         if re.search(r'\.catch\s*\(', fn_body):
-            has_try_catch = True
+            return {"has_handling": True, "type": "promise_catch", "confidence": "high"}
 
         if re.search(r'\.then\s*\(', fn_body) and re.search(r'\.catch\s*\(', fn_body):
-            has_try_catch = True
-
-        if has_try_catch:
-            result = {"has_handling": True, "type": "try_catch", "confidence": "high", "rethrows": rethrows}
-            return result
+            return {"has_handling": True, "type": "then_catch", "confidence": "high"}
 
         if re.search(r'await\s+', fn_body) and not re.search(r'\btry\b', fn_body):
             return {"has_handling": False, "type": "unhandled_await", "confidence": "high"}
 
     elif ext == ".py":
-        has_try_except = False
-        rethrows = False
-
         if re.search(r'\btry\s*:', fn_body):
             if re.search(r'\bexcept\b', fn_body):
-                has_try_except = True
-                # Check if except block re-raises
-                if re.search(r'\bexcept\b[^\n]*(?:\n[ \t]+.*)*\braise\b', fn_body, re.MULTILINE):
-                    rethrows = True
+                return {"has_handling": True, "type": "try_except", "confidence": "high"}
 
         if re.search(r'\.catch\s*\(', fn_body):
             return {"has_handling": True, "type": "promise_catch", "confidence": "medium"}
-
-        if has_try_except:
-            return {"has_handling": True, "type": "try_except", "confidence": "high", "rethrows": rethrows}
 
     elif ext == ".rs":
         if 'match' in fn_body and 'Err' in fn_body:
             return {"has_handling": True, "type": "result_match", "confidence": "high"}
         if '?' in fn_body:
-            # The ? operator PROPAGATES errors, it does NOT handle them
-            return {"has_handling": False, "type": "try_operator_propagates", "confidence": "high"}
+            return {"has_handling": True, "type": "try_operator", "confidence": "high"}
         if 'unwrap()' in fn_body or 'expect(' in fn_body:
             return {"has_handling": False, "type": "unwrap_panics", "confidence": "high"}
 

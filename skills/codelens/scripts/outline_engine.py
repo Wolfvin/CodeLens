@@ -6,7 +6,7 @@ using tree-sitter for accurate AST-based extraction.
 
 import os
 from typing import Dict, List, Any, Optional
-from utils import logger
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 def get_file_outline(
@@ -97,8 +97,7 @@ def get_workspace_outline(
     Returns a summary-level outline (not per-function detail).
     """
     workspace = os.path.abspath(workspace)
-    ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
-                   "__pycache__", ".codelens", ".next", ".cache", "vendor"}
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     if config:
         for p in config.get("ignore", []):
             ignore_dirs.add(p.rstrip("/"))
@@ -161,7 +160,7 @@ def _outline_javascript(content: str, detail: str) -> Dict:
             _extract_js_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".js", exc_info=True)
+        logger.debug("JS tree-sitter outline failed, falling back to regex", exc_info=True)
 
     # Regex fallback
     _extract_js_outline_regex(content, outline, detail)
@@ -184,7 +183,7 @@ def _outline_typescript(content: str, detail: str) -> Dict:
             _extract_ts_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".ts", exc_info=True)
+        logger.debug("TypeScript tree-sitter outline failed, falling back to regex", exc_info=True)
 
     _extract_ts_outline_regex(content, outline, detail)
     return outline
@@ -206,7 +205,7 @@ def _outline_tsx(content: str, detail: str) -> Dict:
             _extract_tsx_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".tsx", exc_info=True)
+        logger.debug("TSX tree-sitter outline failed, falling back to regex", exc_info=True)
 
     _extract_tsx_outline_regex(content, outline, detail)
     return outline
@@ -228,7 +227,7 @@ def _outline_rust(content: str, detail: str) -> Dict:
             _extract_rust_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".rs", exc_info=True)
+        logger.debug("Rust tree-sitter outline failed, falling back to regex", exc_info=True)
 
     _extract_rust_outline_regex(content, outline, detail)
     return outline
@@ -250,7 +249,7 @@ def _outline_python(content: str, detail: str) -> Dict:
             _extract_python_outline(parser, tree, source, outline, detail)
             return outline
     except Exception:
-        logger.debug("Tree-sitter parsing failed for %s, using regex fallback", ".py", exc_info=True)
+        logger.debug("Python tree-sitter outline failed, falling back to regex", exc_info=True)
 
     _extract_python_outline_regex(content, outline, detail)
     return outline

@@ -20,7 +20,7 @@ try:
 except Exception:
     pass
 
-# Import fallback regex parser
+# Import fallback regex parser from parsers module
 from parsers.fallback_html import parse_html_fallback as _fallback_html_parse
 
 

@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Optional
 from registry import load_config, load_frontend_registry, load_backend_registry
 from diff_engine import save_snapshot
 from outline_engine import get_workspace_outline
-from utils import write_output_files, compute_summary, logger, DEFAULT_IGNORE_DIRS
+from utils import write_output_files, compute_summary, DEFAULT_IGNORE_DIRS, logger
 from commands import register_command
 from commands.scan import cmd_scan
 
@@ -83,14 +83,6 @@ def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
 
         # Run incremental scan
         scan_result = cmd_scan(workspace, incremental=True)
-
-        # Check for file changes that arrived during the scan
-        # If any did, schedule another rescan to avoid losing them
-        with _lock:
-            if _changed_files:
-                new_timer = _threading.Timer(debounce, _do_rescan)
-                new_timer.daemon = True
-                new_timer.start()
 
         # Auto-save snapshot
         try:
@@ -208,9 +200,10 @@ def _watch_polling(
 
     # Track file mtimes
     last_mtimes: Dict[str, float] = {}
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext in _WATCH_EXTENSIONS:
@@ -238,7 +231,7 @@ def _watch_polling(
 
             # Check for new files
             for root, dirs, filenames in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                 for filename in filenames:
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in _WATCH_EXTENSIONS:

@@ -1,12 +1,6 @@
 """Command registry for CodeLens CLI."""
 
-import os
-import importlib
-import logging
-
 COMMAND_REGISTRY = {}
-
-logger = logging.getLogger('codelens.commands')
 
 
 def register_command(name, help_text, add_args_fn, execute_fn):
@@ -29,10 +23,9 @@ def get_all_commands():
 
 
 # Auto-import all command modules to trigger registration
+import os
+import importlib
 _commands_dir = os.path.dirname(__file__)
 for fname in sorted(os.listdir(_commands_dir)):
     if fname.endswith('.py') and fname != '__init__.py':
-        try:
-            importlib.import_module(f'.{fname[:-3]}', package='commands')
-        except Exception as e:
-            logger.warning(f"Failed to import command module '{fname}': {e}")
+        importlib.import_module(f'.{fname[:-3]}', package='commands')

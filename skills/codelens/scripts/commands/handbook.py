@@ -19,7 +19,7 @@ from vulnscan_engine import scan_vulnerabilities
 from outline_engine import get_workspace_outline
 from commands import register_command
 from commands.scan import cmd_scan
-from utils import write_output_files, compute_summary, CODELENS_VERSION, logger
+from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT_IGNORE_DIRS, logger
 
 
 def add_args(parser):
@@ -135,11 +135,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     risks = []
     try:
         circ_result = detect_circular(workspace)
-        circ_chains = []
-        for cycle_type, cycle_list in circ_result.get("cycles", {}).items():
-            if isinstance(cycle_list, list):
-                circ_chains.extend(cycle_list)
-        for chain in circ_chains[:5]:
+        for chain in circ_result.get("chains", [])[:5]:
             risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
     except Exception:
         logger.warning("Circular dependency detection failed", exc_info=True)
@@ -295,12 +291,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
     """Build a one-level-deep directory map with descriptions."""
-    ignore_dirs = {
-        'node_modules', '.git', 'dist', 'build', 'target',
-        '__pycache__', '.codelens', '.next', '.cache',
-        'vendor', '.venv', 'venv', 'env', '.idea', '.vscode',
-        '_archive', 'coverage', '.pytest_cache', '.tox',
-    }
+    ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     dir_hints = {
         'src': 'Application source code',
         'app': 'Application pages/routes',
@@ -380,18 +371,14 @@ def _detect_conventions(workspace: str) -> Dict[str, Any]:
         if result.get("status") == "ok":
             return result.get("conventions", conventions)
     except ImportError:
-        logger.debug("Convention engine import failed, using fallback", exc_info=True)
+        pass
     except Exception:
         logger.warning("Convention engine failed", exc_info=True)
 
     # Fallback: basic convention detection from filenames
     files = []
     for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in {
-            'node_modules', '.git', 'dist', 'build', 'target',
-            '__pycache__', '.codelens', '.next', '.cache', 'vendor',
-            '.venv', 'venv', 'env', '_archive'
-        } and not d.startswith('.')]
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         for fn in filenames:
             ext = os.path.splitext(fn)[1].lower()
             if ext in {'.py', '.js', '.ts', '.tsx', '.rs'}:

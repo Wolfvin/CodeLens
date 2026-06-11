@@ -28,6 +28,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -271,6 +272,7 @@ ENTROPY_THRESHOLD = 4.0
 MIN_SECRET_LENGTH = 12
 MAX_SECRET_LENGTH = 256
 
+
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
@@ -368,6 +370,7 @@ def detect_secrets(
         "recommendations": recommendations,
     }
 
+
 # ─── Pattern-based Scanner ─────────────────────────────────────
 
 def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str, Any]]:
@@ -405,6 +408,7 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str) -> List[Dict[str,
                 continue
 
     return findings
+
 
 # ─── Entropy-based Scanner ─────────────────────────────────────
 
@@ -458,6 +462,7 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str) -> List[Dict[str, 
             })
 
     return findings
+
 
 # ─── .env File Scanner ─────────────────────────────────────────
 
@@ -538,6 +543,7 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
 
     return env_files
 
+
 # ─── .gitignore Check ──────────────────────────────────────────
 
 def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
@@ -585,6 +591,7 @@ def _check_env_gitignore(workspace: str, env_files: List[Dict]) -> List[str]:
 
     return exposed
 
+
 # ─── Entropy Calculation ───────────────────────────────────────
 
 def _shannon_entropy(data: str) -> float:
@@ -617,20 +624,18 @@ def _shannon_entropy(data: str) -> float:
 
     return entropy
 
+
 # ─── Helper Functions ──────────────────────────────────────────
 
 def _mask_value(value: str) -> str:
-    """Mask a secret value, showing only a safe prefix.
+    """Mask a secret value, showing only the first 4 characters.
 
     This prevents the engine from leaking secrets in its output.
-    For values under 8 chars, only the first 2 chars are shown to avoid
-    revealing the entire value (e.g., short tokens like "abc1").
     """
     if len(value) <= 4:
         return value[:2] + "***"
-    if len(value) < 8:
-        return value[:2] + "***"
     return value[:4] + "***"
+
 
 def _is_safe_value(value: str) -> bool:
     """Check if a value is a known safe / false-positive pattern."""
@@ -646,6 +651,7 @@ def _is_safe_value(value: str) -> bool:
 
     return False
 
+
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory."""
     test_indicators = [
@@ -655,12 +661,14 @@ def _is_test_file(rel_path: str) -> bool:
     ]
     return any(indicator in rel_path for indicator in test_indicators)
 
+
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""
     idx = content.find(value)
     if idx == -1:
         return 0
     return content[:idx].count('\n') + 1
+
 
 def _infer_category_from_value(value: str) -> str:
     """Infer the likely secret category from the value's format."""
@@ -700,6 +708,7 @@ def _infer_category_from_value(value: str) -> str:
     # Default to token for high-entropy strings
     return "token"
 
+
 def _category_from_env_key(key_name: str) -> str:
     """Determine secret category from an environment variable name."""
     key_upper = key_name.upper()
@@ -723,6 +732,7 @@ def _category_from_env_key(key_name: str) -> str:
 
     return "token"  # Default for unknown high-entropy env vars
 
+
 def _severity_for_category(category: str) -> str:
     """Return the default severity for a secret category."""
     severity_map = {
@@ -737,6 +747,7 @@ def _severity_for_category(category: str) -> str:
     }
     return severity_map.get(category, "high")
 
+
 def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Remove duplicate findings (same file, line, category)."""
     seen: Set[Tuple[str, int, str]] = set()
@@ -749,6 +760,7 @@ def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]
             unique.append(finding)
 
     return unique
+
 
 # ─── Stats & Risk Computation ──────────────────────────────────
 
@@ -770,6 +782,7 @@ def _compute_stats(
         "by_severity": dict(by_severity),
         "env_files_checked": len(env_files),
     }
+
 
 def _compute_risk(findings: List[Dict[str, Any]], env_exposed: List[str]) -> str:
     """Compute overall risk level based on findings."""
@@ -800,9 +813,11 @@ def _compute_risk(findings: List[Dict[str, Any]], env_exposed: List[str]) -> str
 
     return "low"
 
+
 def _get_env_findings_for_path(findings: List[Dict], path: str) -> List[Dict]:
     """Get findings that belong to a specific .env file path."""
     return [f for f in findings if f.get("file") == path]
+
 
 # ─── Recommendations ───────────────────────────────────────────
 

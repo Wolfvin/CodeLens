@@ -1,10 +1,10 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "codelens"
-version = "5.7.1"
+version = "5.6.0"
 description = "Live Codebase Reference Intelligence — 41 commands for AI-powered code analysis, security auditing, and quality scoring"
 readme = "README.md"
 license = {text = "MIT"}
@@ -63,13 +63,15 @@ all = [
     "codelens[grammars,watch,dev]",
 ]
 
-# Entry point removed — codelens is run directly via python3 codelens.py
-# The scripts/ directory uses sys.path-based imports, not a proper Python package.
-# To install as a package, add __init__.py and convert to absolute imports.
+[project.scripts]
+codelens = "codelens:main"
 
 [tool.setuptools.packages.find]
 where = ["scripts"]
 include = ["*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

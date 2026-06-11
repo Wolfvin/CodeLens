@@ -133,7 +133,7 @@ class GraphStore {
 
     // Cap eventLog at 1000 entries to prevent unbounded memory growth
     if (this.eventLog.length > 1000) {
-      this.eventLog = this.eventLog.slice(-800)
+      this.eventLog = this.eventLog.slice(-500)
     }
 
     // Upsert nodes from event
@@ -158,9 +158,6 @@ class GraphStore {
       if (!edge.id) continue
       this.edges.set(edge.id, edge)
     }
-
-    // Invalidate TF-IDF cache since nodes/edges changed
-    this.invalidateTfidfCache()
   }
 
   // ============================================================
@@ -655,8 +652,7 @@ class GraphStore {
       }
       this.selectedNodeId = data.selectedNodeId ?? null
       return true
-    } catch (err: any) {
-      console.warn('[GraphStore] loadFromJSON failed:', err?.message ?? err)
+    } catch {
       return false
     }
   }

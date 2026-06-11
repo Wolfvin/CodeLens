@@ -25,6 +25,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 TEMPLATE_EXTENSIONS = {
@@ -154,6 +155,7 @@ SEMANTIC_REPLACEMENTS = {
     "i": {"em": "for text with emphasis, or cite for titles"},
     "u": {"ins": "for inserted text, or style differently"},
 }
+
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
@@ -309,6 +311,7 @@ def audit_accessibility(
         "recommendations": recommendations,
     }
 
+
 # ─── Template Type Detection ───────────────────────────────────
 
 def _detect_template_type(content: str, ext: str) -> str:
@@ -326,6 +329,7 @@ def _detect_template_type(content: str, ext: str) -> str:
         return "js"
     else:
         return "html"
+
 
 # ─── 1. Missing Alt Text ───────────────────────────────────────
 
@@ -415,6 +419,7 @@ def _check_missing_alt(
                 "suggestion": "Add aria-label or aria-labelledby to provide accessible name.",
             })
 
+
 # ─── 2. Missing Labels ────────────────────────────────────────
 
 def _check_missing_label(
@@ -495,6 +500,7 @@ def _check_missing_label(
                 "suggestion": "Add a <label> element or aria-label attribute.",
             })
 
+
 def _has_label_association(attrs: str, content: str, m: re.Match) -> bool:
     """Check if an input element has an associated label."""
     # Check for aria-label
@@ -533,6 +539,7 @@ def _has_label_association(attrs: str, content: str, m: re.Match) -> bool:
         return True
 
     return False
+
 
 # ─── 3. ARIA Issues ────────────────────────────────────────────
 
@@ -616,6 +623,7 @@ def _check_aria_issues(
                         "suggestion": f"Add {req_attr} to support the '{role_value}' role.",
                     })
 
+
 def _get_required_aria_for_role(role: str) -> List[str]:
     """Get required ARIA attributes for a given role."""
     requirements = {
@@ -634,6 +642,7 @@ def _get_required_aria_for_role(role: str) -> List[str]:
         "textbox": ["aria-label", "aria-labelledby"],
     }
     return requirements.get(role, [])
+
 
 # ─── 4. Keyboard Navigation ───────────────────────────────────
 
@@ -723,6 +732,7 @@ def _check_keyboard_nav(
                 "suggestion": f"Use <button> instead, or add role='button' and tabIndex=0.",
             })
 
+
 # ─── 5. Semantic HTML ─────────────────────────────────────────
 
 def _check_semantic_html(
@@ -791,6 +801,7 @@ def _check_semantic_html(
                 })
                 break
 
+
 # ─── 6. Color Contrast ────────────────────────────────────────
 
 def _check_color_contrast(
@@ -844,6 +855,7 @@ def _check_color_contrast(
                 "suggestion": "Verify contrast ratio meets WCAG AA (4.5:1 for normal text, 3:1 for large text).",
             })
 
+
 def _is_likely_light_color(color: str) -> bool:
     """Heuristic check if a color is likely too light for text."""
     # Parse hex colors
@@ -869,6 +881,7 @@ def _is_likely_light_color(color: str) -> bool:
         return luminance > 0.7
 
     return False
+
 
 # ─── 7. Heading Order ─────────────────────────────────────────
 
@@ -899,6 +912,7 @@ def _collect_headings(
         })
 
     return headings
+
 
 def _analyze_heading_order(all_headings: List[Dict], issues: List[Dict]) -> None:
     """Analyze heading order across files for skipped levels."""
@@ -948,6 +962,7 @@ def _analyze_heading_order(all_headings: List[Dict], issues: List[Dict]) -> None
                 "message": f"Multiple h1 headings found ({h1_count}) — should have only one per page",
                 "suggestion": "Use a single h1 per page. Use h2-h6 for subsections.",
             })
+
 
 # ─── 8. Link Text ─────────────────────────────────────────────
 
@@ -1016,6 +1031,7 @@ def _check_link_text(
                 "message": "Link text is a raw URL — not descriptive for screen readers",
                 "suggestion": "Use descriptive text instead of the URL. If the URL is needed, use it as a visible note after descriptive text.",
             })
+
 
 # ─── 9. Focus Management ──────────────────────────────────────
 
@@ -1095,6 +1111,7 @@ def _check_focus_management(
                     "message": "Focus outline removed without alternative — keyboard users can't see focus",
                     "suggestion": "Don't remove outlines. If needed, provide a custom :focus-visible style instead.",
                 })
+
 
 # ─── Recommendations ───────────────────────────────────────────
 

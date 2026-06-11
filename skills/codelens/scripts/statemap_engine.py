@@ -25,6 +25,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -33,6 +34,7 @@ SOURCE_EXTENSIONS = {
 }
 
 STATE_TYPES = {"store", "context", "atom", "global", "machine"}
+
 
 def map_state(
     workspace: str,
@@ -242,6 +244,7 @@ def map_state(
         "recommendations": recommendations,
     }
 
+
 # ─── Redux ─────────────────────────────────────────────────────
 
 def _extract_redux_state(content: str, rel_path: str) -> Dict[str, Any]:
@@ -359,6 +362,7 @@ def _extract_redux_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 def _extract_initial_state(content: str, offset: int) -> Optional[str]:
     """Try to extract the initialState shape from a createSlice call."""
     snippet = content[offset:offset + 1500]
@@ -366,6 +370,7 @@ def _extract_initial_state(content: str, offset: int) -> Optional[str]:
     if m:
         return m.group(1).strip()[:200]
     return None
+
 
 # ─── React Context ─────────────────────────────────────────────
 
@@ -425,6 +430,7 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
 
 # ─── Zustand ───────────────────────────────────────────────────
 
@@ -486,6 +492,7 @@ def _extract_zustand_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 def _extract_zustand_slices(content: str, offset: int) -> tuple:
     """Extract state slices and actions from a Zustand store body."""
     slices = []
@@ -527,6 +534,7 @@ def _extract_zustand_slices(content: str, offset: int) -> tuple:
             })
 
     return slices, actions
+
 
 # ─── MobX ──────────────────────────────────────────────────────
 
@@ -604,6 +612,7 @@ def _extract_mobx_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 def _find_matching_brace(text: str) -> int:
     """Find the position of the matching closing brace."""
     depth = 1
@@ -615,6 +624,7 @@ def _find_matching_brace(text: str) -> int:
             depth -= 1
         pos += 1
     return pos - 1
+
 
 # ─── Pinia ─────────────────────────────────────────────────────
 
@@ -699,6 +709,7 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
 
 # ─── Vuex ──────────────────────────────────────────────────────
 
@@ -795,6 +806,7 @@ def _extract_vuex_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 # ─── Recoil ────────────────────────────────────────────────────
 
 def _extract_recoil_state(content: str, rel_path: str) -> Dict[str, Any]:
@@ -879,6 +891,7 @@ def _extract_recoil_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 # ─── Jotai ─────────────────────────────────────────────────────
 
 def _extract_jotai_state(content: str, rel_path: str) -> Dict[str, Any]:
@@ -930,6 +943,7 @@ def _extract_jotai_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
 
 # ─── XState ────────────────────────────────────────────────────
 
@@ -988,6 +1002,7 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     return {"stores": stores, "flow": flow}
+
 
 # ─── Module-level State (JS) ───────────────────────────────────
 
@@ -1064,6 +1079,7 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 # ─── Module-level State (Python) ───────────────────────────────
 
 def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
@@ -1122,6 +1138,7 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     return {"stores": stores, "flow": flow}
 
+
 # ─── Import/Export Collection ──────────────────────────────────
 
 def _collect_js_imports(
@@ -1155,6 +1172,7 @@ def _collect_js_imports(
         elif m.group(2):
             imports[rel_path].add(m.group(2))
 
+
 def _collect_js_exports(
     content: str, rel_path: str, exports: Dict[str, List[Dict]]
 ):
@@ -1167,6 +1185,7 @@ def _collect_js_exports(
             "name": m.group(1),
             "line": content[:m.start()].count('\n') + 1,
         })
+
 
 def _collect_py_imports(
     content: str, rel_path: str, imports: Dict[str, Set[str]]
@@ -1186,6 +1205,7 @@ def _collect_py_imports(
             for name in names:
                 if name:
                     imports[rel_path].add(name)
+
 
 # ─── Recommendations ──────────────────────────────────────────
 

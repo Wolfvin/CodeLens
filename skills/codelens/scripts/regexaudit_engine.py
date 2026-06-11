@@ -19,6 +19,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -109,6 +110,7 @@ REGEX_DEFINITION_PATTERNS = {
         (r'regexp\.MustCompile\s*\(\s*"([^"]+)"\s*\)', "regexp_must_compile_str"),
     ],
 }
+
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
@@ -220,6 +222,7 @@ def audit_regex_patterns(
         "recommendations": recommendations,
     }
 
+
 # ─── Pattern Extraction ────────────────────────────────────────
 
 def _extract_regex_patterns(
@@ -257,6 +260,7 @@ def _extract_regex_patterns(
 
     return patterns
 
+
 # ─── ReDoS Detection ───────────────────────────────────────────
 
 def _check_redos(pattern_str: str, pat_info: Dict, findings: List[Dict]) -> None:
@@ -291,6 +295,7 @@ def _check_redos(pattern_str: str, pat_info: Dict, findings: List[Dict]) -> None
             ),
         })
 
+
 def _has_nested_quantifier_heuristic(pattern: str) -> bool:
     """
     Heuristic check for nested quantifiers that might cause ReDoS.
@@ -316,6 +321,7 @@ def _has_nested_quantifier_heuristic(pattern: str) -> bool:
                 return True
 
     return False
+
 
 def _suggest_redos_fix(vuln_type: str, pattern: str) -> str:
     """Suggest a fix for a ReDoS vulnerability."""
@@ -379,6 +385,7 @@ def _suggest_redos_fix(vuln_type: str, pattern: str) -> str:
         ),
     }
     return fix_map.get(vuln_type, "Review and simplify this regex pattern to avoid ReDoS.")
+
 
 # ─── Overly Broad Detection ────────────────────────────────────
 
@@ -446,6 +453,7 @@ def _check_overly_broad(
             "severity": "medium",
             "fix_suggestion": issue["description"],
         })
+
 
 # ─── Incorrect Escaping Detection ──────────────────────────────
 
@@ -554,6 +562,7 @@ def _check_incorrect_escaping(
             "fix_suggestion": issue["description"],
         })
 
+
 # ─── Unsafe Constructor Detection ──────────────────────────────
 
 def _check_unsafe_constructors(
@@ -618,6 +627,7 @@ def _check_unsafe_constructors(
                 "severity": severity,
                 "fix_suggestion": fix_suggestion,
             })
+
 
 # ─── Performance Detection ─────────────────────────────────────
 
@@ -698,6 +708,7 @@ def _check_performance(pattern_str: str, pat_info: Dict, findings: List[Dict]) -
             "severity": "low",
             "fix_suggestion": issue["description"],
         })
+
 
 # ─── Recommendations ───────────────────────────────────────────
 

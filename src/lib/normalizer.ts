@@ -18,11 +18,6 @@ import {
   AnimationIntensity,
 } from '@/types/neural'
 
-/** O(1) lookup index for GraphNode arrays — replaces O(n) nodes.find() calls */
-function createNodeIndex(nodes: GraphNode[]): Map<string, GraphNode> {
-  return new Map(nodes.map(n => [n.id, n]))
-}
-
 class Normalizer {
   // ─── Main Entry ─────────────────────────────────────────────
 
@@ -77,8 +72,6 @@ class Normalizer {
       init: this.normalizeInit,
       detect: this.normalizeDetect,
       watch: this.normalizeWatch,
-      handbook: this.normalizeHandbook,
-      ask: this.normalizeAsk,
     }
     return map[name] ?? null
   }
@@ -323,7 +316,6 @@ class Normalizer {
   /** trace: Returns the call chain with flow animation */
   private normalizeTrace(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const direction: 'up' | 'down' | 'both' = output?.direction ?? 'up'
@@ -336,8 +328,7 @@ class Normalizer {
       const nodeId = entry.node_id ?? this.makeNodeId('function', entry.fn ?? '', entry.file, entry.line)
       const status = this.statusToNodeStatus(entry.status ?? 'active')
 
-      if (!seenIds.has(nodeId)) {
-        seenIds.add(nodeId)
+      if (!nodes.find(n => n.id === nodeId)) {
         nodes.push({
           id: nodeId,
           label: entry.fn ?? 'unknown',
@@ -375,8 +366,7 @@ class Normalizer {
       const nodeId = entry.node_id ?? this.makeNodeId('function', entry.fn ?? '', entry.file, entry.line)
       const status = this.statusToNodeStatus(entry.status ?? 'active')
 
-      if (!seenIds.has(nodeId)) {
-        seenIds.add(nodeId)
+      if (!nodes.find(n => n.id === nodeId)) {
         nodes.push({
           id: nodeId,
           label: entry.fn ?? 'unknown',
@@ -422,7 +412,6 @@ class Normalizer {
   /** impact: Returns affected nodes with alarm animation */
   private normalizeImpact(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
 
@@ -440,7 +429,6 @@ class Normalizer {
       )
       const nodeStatus: NodeStatus = item.risk === 'critical' ? 'critical' : item.risk === 'high' ? 'warning' : 'active'
 
-      seenIds.add(nodeId)
       nodes.push({
         id: nodeId,
         label: item.name ?? 'unknown',
@@ -466,8 +454,7 @@ class Normalizer {
       )
       const nodeStatus: NodeStatus = item.risk === 'critical' ? 'critical' : item.risk === 'high' ? 'warning' : 'active'
 
-      if (!seenIds.has(nodeId)) {
-        seenIds.add(nodeId)
+      if (!nodes.find(n => n.id === nodeId)) {
         nodes.push({
           id: nodeId,
           label: item.name ?? 'unknown',
@@ -608,7 +595,6 @@ class Normalizer {
   /** circular: Returns circular dependency chains with alarm animation */
   private normalizeCircular(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const cycles: any[] = output?.cycles ?? []
@@ -617,8 +603,7 @@ class Normalizer {
       const chain: string[] = cycle.chain ?? cycle.nodes ?? []
       for (let i = 0; i < chain.length; i++) {
         const nodeId = chain[i]
-        if (!seenIds.has(nodeId)) {
-          seenIds.add(nodeId)
+        if (!nodes.find(n => n.id === nodeId)) {
           nodes.push({
             id: nodeId,
             label: nodeId.split(':').pop() ?? nodeId,
@@ -657,7 +642,6 @@ class Normalizer {
   /** dataflow: Returns data flow source→sink with flow animation */
   private normalizeDataflow(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const flows: any[] = output?.flows ?? []
@@ -666,8 +650,7 @@ class Normalizer {
       const sourceId = this.makeNodeId('function', flow.source?.fn ?? flow.source?.name ?? 'source', flow.source?.file, flow.source?.line)
       const sinkId = this.makeNodeId('function', flow.sink?.fn ?? flow.sink?.name ?? 'sink', flow.sink?.file, flow.sink?.line)
 
-      if (!seenIds.has(sourceId)) {
-        seenIds.add(sourceId)
+      if (!nodes.find(n => n.id === sourceId)) {
         nodes.push({
           id: sourceId,
           label: flow.source?.fn ?? flow.source?.name ?? 'source',
@@ -683,8 +666,7 @@ class Normalizer {
       }
       targetIds.push(sourceId)
 
-      if (!seenIds.has(sinkId)) {
-        seenIds.add(sinkId)
+      if (!nodes.find(n => n.id === sinkId)) {
         nodes.push({
           id: sinkId,
           label: flow.sink?.fn ?? flow.sink?.name ?? 'sink',
@@ -946,7 +928,6 @@ class Normalizer {
   /** test-map: Returns test coverage data with test nodes and tests edges */
   private normalizeTestMap(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const coverage: any[] = output?.coverage ?? output?.mappings ?? []
@@ -957,7 +938,6 @@ class Normalizer {
       const covered: boolean = entry.covered ?? entry.has_test ?? entry.tested ?? false
 
       // Create the function/symbol node
-      seenIds.add(symbolId)
       nodes.push({
         id: symbolId,
         label: fn,
@@ -976,8 +956,7 @@ class Normalizer {
       const testFiles: string[] = entry.test_files ?? (entry.test_file ? [entry.test_file] : [])
       for (const testFile of testFiles) {
         const testId = this.makeNodeId('test', testFile)
-        if (!seenIds.has(testId)) {
-          seenIds.add(testId)
+        if (!nodes.find(n => n.id === testId)) {
           nodes.push({
             id: testId,
             label: testFile.split('/').pop() ?? testFile,
@@ -1750,7 +1729,6 @@ class Normalizer {
   /** dependents: Module-level import tracking */
   private normalizeDependents(output: any): GraphEvent {
     const nodes: GraphNode[] = []
-    const seenIds = new Set<string>()
     const edges: GraphEdge[] = []
     const targetIds: string[] = []
     const dependents: any[] = output?.dependents ?? []
@@ -1759,7 +1737,6 @@ class Normalizer {
 
     // Source file node
     const sourceId = this.makeNodeId('file', file)
-    seenIds.add(sourceId)
     nodes.push({
       id: sourceId,
       label: file.split('/').pop() ?? file,
@@ -1776,8 +1753,7 @@ class Normalizer {
     // Files that depend on this file
     for (const dep of dependents) {
       const depId = this.makeNodeId('file', dep.file ?? dep.path ?? 'dependent')
-      if (!seenIds.has(depId)) {
-        seenIds.add(depId)
+      if (!nodes.find(n => n.id === depId)) {
         nodes.push({
           id: depId,
           label: (dep.file ?? dep.path ?? 'dependent').split('/').pop() ?? 'dep',
@@ -1804,8 +1780,7 @@ class Normalizer {
     // Files this file depends on
     for (const dep of dependencies) {
       const depId = this.makeNodeId('file', dep.file ?? dep.path ?? 'dependency')
-      if (!seenIds.has(depId)) {
-        seenIds.add(depId)
+      if (!nodes.find(n => n.id === depId)) {
         nodes.push({
           id: depId,
           label: (dep.file ?? dep.path ?? 'dependency').split('/').pop() ?? 'dep',
@@ -2089,116 +2064,6 @@ class Normalizer {
     return this.makeEvent(
       'watch', [], [], 'pulse', [], 'low',
       'watch', 'Watch mode: Use the WebSocket interface for real-time updates, not the REST API.'
-    )
-  }
-
-  /** handbook: Project orientation for AI agents */
-  private normalizeHandbook(output: any): GraphEvent {
-    const nodes: GraphNode[] = []
-    const edges: GraphEdge[] = []
-    const targetIds: string[] = []
-
-    // Handbook returns structured project orientation data
-    const identity = output?.identity ?? output?.project ?? {}
-    const structure = output?.structure ?? {}
-    const health = output?.health ?? {}
-    const conventions = output?.conventions ?? {}
-    const risks = output?.risks ?? []
-
-    // Create a node for the project itself
-    const projectNodeId = this.makeNodeId('file', identity.name ?? 'project')
-    const projectNode: GraphNode = {
-      id: projectNodeId,
-      label: identity.name ?? 'project',
-      type: 'file',
-      domain: 'backend',
-      status: 'active',
-      file: identity.root ?? '',
-      radius: 12,
-      color: NEURAL_COLORS.file,
-      data: { type: 'project', ...identity, structure, health, conventions },
-    }
-    nodes.push(projectNode)
-    targetIds.push(projectNodeId)
-
-    // Create risk nodes if present
-    if (Array.isArray(risks)) {
-      for (const risk of risks.slice(0, 10)) {
-        const riskLabel = typeof risk === 'string' ? risk : risk.message ?? risk.category ?? 'risk'
-        const riskNodeId = this.makeNodeId('vulnerability', riskLabel)
-        const riskNode: GraphNode = {
-          id: riskNodeId,
-          label: riskLabel,
-          type: 'vulnerability',
-          domain: 'backend',
-          status: 'warning',
-          radius: 6,
-          color: NEURAL_COLORS.vulnerability,
-          data: { severity: risk.severity ?? 'medium', category: risk.category ?? '' },
-        }
-        nodes.push(riskNode)
-        targetIds.push(riskNodeId)
-        edges.push({
-          id: this.makeEdgeId(projectNodeId, riskNodeId, 'contains'),
-          source: projectNodeId,
-          target: riskNodeId,
-          type: 'contains',
-          weight: 1,
-          status: 'warning',
-        })
-      }
-    }
-
-    const riskLevel = risks.length > 3 ? 'high' : risks.length > 0 ? 'medium' : 'safe'
-    return this.makeEvent(
-      'handbook', nodes, edges, 'pulse', targetIds, riskLevel,
-      'orientation', `Project handbook: ${identity.name ?? 'unknown'} — ${risks.length} risks identified`
-    )
-  }
-
-  /** ask: Natural language query router */
-  private normalizeAsk(output: any): GraphEvent {
-    const nodes: GraphNode[] = []
-    const targetIds: string[] = []
-
-    // Ask returns a routed command result with the original query
-    const routedCommand = output?.command ?? output?.routed_command ?? 'unknown'
-    const query = output?.query ?? output?.question ?? ''
-    const result = output?.result ?? output
-
-    // If the result contains nodes/edges from the routed command, normalize them
-    if (result?.frontend || result?.backend) {
-      // Delegate to scan normalizer for structured results
-      const scanEvent = this.normalizeScan(result)
-      return {
-        ...scanEvent,
-        sourceCommand: 'ask',
-        metadata: {
-          ...scanEvent.metadata,
-          category: 'ask',
-          summary: `Ask "${query}" → routed to ${routedCommand}: ${scanEvent.metadata.summary ?? ''}`,
-        },
-      }
-    }
-
-    // Fallback: create a single info node
-    const askNodeId = this.makeNodeId('function', `ask:${query.substring(0, 40)}`)
-    const askNode: GraphNode = {
-      id: askNodeId,
-      label: `ask: ${query.substring(0, 50)}`,
-      type: 'function',
-      domain: 'backend',
-      status: 'active',
-      radius: 8,
-      color: NEURAL_COLORS.function,
-      data: { routedCommand, query, result },
-    }
-    nodes.push(askNode)
-    targetIds.push(askNodeId)
-
-    return this.makeEvent(
-      'ask', nodes, [], 'pulse', targetIds, 'low',
-      'ask', `Ask routed to: ${routedCommand}`
     )
   }
 

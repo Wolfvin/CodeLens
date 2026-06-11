@@ -22,6 +22,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
 
+
 def detect_config_drift(
     workspace: str,
     config: Optional[Dict] = None
@@ -70,6 +71,7 @@ def detect_config_drift(
         "recommendations": _generate_drift_recommendations(drift)
     }
 
+
 def _detect_project_type(workspace: str) -> str:
     """Detect the project type from config files."""
     if os.path.exists(os.path.join(workspace, "package.json")):
@@ -81,6 +83,7 @@ def _detect_project_type(workspace: str) -> str:
         return "python"
     else:
         return "unknown"
+
 
 def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
     """Load declared dependencies from config files."""
@@ -100,7 +103,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                 declared["dev_dependencies"] = pkg.get("devDependencies", {})
                 declared["peer_dependencies"] = pkg.get("peerDependencies", {})
             except (json.JSONDecodeError, IOError):
-                logger.debug("Config drift: failed to parse file", exc_info=True)
+                logger.debug("Failed to parse package.json for dependencies", exc_info=True)
 
     elif project_type == "rust":
         cargo_path = os.path.join(workspace, "Cargo.toml")
@@ -133,7 +136,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                         name = stripped.split('=')[0].strip()
                         declared["dev_dependencies"][name] = stripped
             except IOError:
-                logger.debug("Config drift: failed to parse file", exc_info=True)
+                logger.debug("Failed to read Cargo.toml for dependencies", exc_info=True)
 
     elif project_type == "python":
         # requirements.txt
@@ -149,7 +152,7 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                             if name:
                                 declared["dependencies"][name] = stripped
             except IOError:
-                logger.debug("Config drift: failed to parse file", exc_info=True)
+                logger.debug("Failed to read requirements.txt for dependencies", exc_info=True)
 
         # pyproject.toml
         pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -159,63 +162,19 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                     content = f.read()
                 # Simple TOML parsing for dependencies
                 in_deps = False
-                in_deps_array = False  # Tracking multi-line array for [project] dependencies = [...]
                 for line in content.split('\n'):
                     stripped = line.strip()
-                    # Detect section headers
-                    if stripped.startswith('['):
-                        in_deps = False
-                        in_deps_array = False
-                        # Poetry format: [tool.poetry.dependencies]
-                        if stripped.lower() == '[tool.poetry.dependencies]':
-                            in_deps = True
-                        continue
-
-                    if in_deps_array:
-                        # Inside a multi-line array like dependencies = [
-                        if ']' in stripped:
-                            in_deps_array = False
-                            stripped = stripped[:stripped.index(']')]
-                        # Extract package name from array entry like "requests>=2.0" or "flask"
-                        dep_match = re.match(r'["\']?([a-zA-Z0-9_.-]+)', stripped)
-                        if dep_match:
-                            name = dep_match.group(1)
-                            declared["dependencies"][name] = stripped
-                        continue
-
-                    if in_deps:
-                        # Poetry format: package = "^2.0" or package = {version = "^2.0", ...}
-                        dep_match = re.match(r'([a-zA-Z0-9_.-]+)\s*=\s*(.+)', stripped)
-                        if dep_match:
-                            name = dep_match.group(1)
-                            # Skip python version constraint
-                            if name.lower() != 'python':
-                                declared["dependencies"][name] = stripped
-                    elif 'dependencies' in stripped.lower() and '=' in stripped:
-                        # PEP 621 format: dependencies = [...]  or  dependencies = ["pkg"]
+                    if 'dependencies' in stripped.lower() and '=' in stripped:
                         in_deps = True
-                        # Check if there are deps on the same line
-                        after_eq = stripped.split('=', 1)[1].strip()
-                        if after_eq.startswith('['):
-                            in_deps = True
-                            in_deps_array = True
-                            # Parse same-line entries
-                            inner = after_eq[1:]
-                            if ']' in inner:
-                                in_deps_array = False
-                                inner = inner[:inner.index(']')]
-                            for entry in inner.split(','):
-                                entry = entry.strip()
-                                if not entry:
-                                    continue
-                                dep_match = re.match(r'["\']?([a-zA-Z0-9_.-]+)', entry)
-                                if dep_match:
-                                    name = dep_match.group(1)
-                                    declared["dependencies"][name] = entry
+                        continue
+                    elif stripped.startswith('['):
+                        in_deps = False
+                        continue
             except IOError:
-                logger.debug("Config drift: failed to parse file", exc_info=True)
+                logger.debug("Failed to read pyproject.toml for dependencies", exc_info=True)
 
     return declared
+
 
 def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
     """Scan all source files for actual import statements."""
@@ -301,6 +260,7 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
         "phantom": phantom
     }
 
+
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
     """Check if a relative JS import resolves to an actual file."""
     if import_path.startswith('@/'):
@@ -316,6 +276,7 @@ def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
             return True
 
     return False
+
 
 def _compute_drift(
     declared: Dict, actual: Dict,
@@ -414,12 +375,14 @@ def _compute_drift(
 
     return drift
 
+
 def _normalize_pkg_name(name: str, project_type: str) -> str:
     """Normalize package name for comparison."""
     # Remove @scope prefix for comparison
     if project_type == "node" and name.startswith('@'):
         return name.lower()
     return name.lower().replace('-', '_').replace('.', '_')
+
 
 def _generate_drift_recommendations(drift: Dict) -> List[str]:
     """Generate recommendations based on drift findings."""

@@ -7,14 +7,10 @@ Cross-validates frontend registry entries to find mismatches:
 - Possible typos (similar names that differ by 1-2 chars)
 """
 
-import json
-import logging
 import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-
-logger = logging.getLogger(__name__)
 
 
 def detect_missing_refs(workspace: str) -> Dict[str, Any]:
@@ -31,11 +27,7 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
     workspace = os.path.abspath(workspace)
 
     from registry import load_frontend_registry
-    try:
-        frontend = load_frontend_registry(workspace)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        frontend = {"classes": [], "ids": []}
-        logger.warning(f"Could not load frontend registry: {e}")
+    frontend = load_frontend_registry(workspace)
 
     issues = {
         "css_no_html": [],      # CSS class defined, no HTML usage
@@ -146,10 +138,8 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
             if 0 < distance <= 2 and len(dead_name) > 3 and len(active_name) > 3:
                 # Also check prefix similarity
                 if dead_name[:3] == active_name[:3] or dead_name[-3:] == active_name[-3:]:
-                    dead_cls = next((c for c in frontend.get("classes", []) if c["name"] == dead_name), None)
-                    active_cls = next((c for c in frontend.get("classes", []) if c["name"] == active_name), None)
-                    if dead_cls is None or active_cls is None:
-                        continue
+                    dead_cls = next(c for c in frontend.get("classes", []) if c["name"] == dead_name)
+                    active_cls = next(c for c in frontend.get("classes", []) if c["name"] == active_name)
                     issues["possible_typos"].append({
                         "dead_name": dead_name,
                         "active_name": active_name,

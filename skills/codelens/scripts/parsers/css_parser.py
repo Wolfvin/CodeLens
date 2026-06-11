@@ -82,9 +82,8 @@ class CSSParser(BaseParser):
 
         # Also handle SCSS/Less that tree-sitter-css might not parse well
         # Fallback regex for preprocessor syntax
-        # Note: '::' is NOT included as it matches standard CSS pseudo-elements
         if content.strip().startswith(('<style', '@use', '@import', '//', '/*')) or \
-           any(x in content for x in ['$', '@mixin', '@include', '@extend']):
+           any(x in content for x in ['$', '@mixin', '@include', '@extend', '::']):
             self._scss_fallback(content, file_path, classes, ids, selector_defs)
             self._flag_duplicates(classes, selector_defs, "class")
             self._flag_duplicates(ids, selector_defs, "id")

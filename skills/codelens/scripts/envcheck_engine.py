@@ -32,6 +32,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS
 
+
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
@@ -60,6 +61,7 @@ NON_SECRET_PATTERNS = {
     "public", "frontend", "backend", "app", "max", "min",
     "timeout", "retry", "count", "size", "limit",
 }
+
 
 def check_env_vars(
     workspace: str,
@@ -221,6 +223,7 @@ def check_env_vars(
         "recommendations": recommendations,
     }
 
+
 # ─── JS/TS Env Var Extraction ─────────────────────────────────
 
 def _extract_js_env_refs(
@@ -266,6 +269,7 @@ def _extract_js_env_refs(
                         env_vars, name, rel_path, i + 1, line.strip(), False
                     )
 
+
 def _detect_js_fallback(line: str, var_name: str) -> bool:
     """Detect if a JS env var reference has a fallback value."""
     # ?? 'default' or || 'default'
@@ -288,6 +292,7 @@ def _detect_js_fallback(line: str, var_name: str) -> bool:
     if re.search(rf'process\.env\.{pattern}\s*\?\s*', line):
         return True
     return False
+
 
 # ─── Python Env Var Extraction ─────────────────────────────────
 
@@ -338,6 +343,7 @@ def _extract_python_env_refs(
             # Just note that dotenv is used in this file
             pass
 
+
 def _detect_python_fallback(line: str, var_name: str) -> bool:
     """Detect if a Python env var reference has a fallback value."""
     # os.environ.get('X', 'default') — second argument
@@ -352,6 +358,7 @@ def _detect_python_fallback(line: str, var_name: str) -> bool:
     if re.search(rf"os\.getenv\s*\(\s*['\"]({pattern})['\"]\s*\)\s*or\s+", line):
         return True
     return False
+
 
 # ─── Rust Env Var Extraction ───────────────────────────────────
 
@@ -386,6 +393,7 @@ def _extract_rust_env_refs(
             _register_env_ref(
                 env_vars, m.group(1), rel_path, i + 1, line.strip(), True
             )
+
 
 # ─── Env File Parsing ─────────────────────────────────────────
 
@@ -451,6 +459,7 @@ def _parse_env_file(content: str, rel_path: str, filename: str) -> Dict[str, Any
         "is_gitignored": False,  # Updated later
     }
 
+
 def _is_secret_var(var_name: str, value: str) -> bool:
     """Determine if a variable is likely a secret based on name and value."""
     lower_name = var_name.lower()
@@ -477,11 +486,13 @@ def _is_secret_var(var_name: str, value: str) -> bool:
 
     return False
 
+
 def _mask_secret_value(var_name: str, value: str) -> str:
     """Mask a secret value, showing only the first and last chars."""
     if not value or len(value) < 8:
         return "***"
     return f"{value[:3]}...{value[-3:]}"
+
 
 # ─── .gitignore Handling ───────────────────────────────────────
 
@@ -502,6 +513,7 @@ def _load_gitignore(workspace: str) -> List[str]:
 
     return patterns
 
+
 def _check_env_gitignore(workspace: str, patterns: List[str]) -> Set[str]:
     """Check which .env-related paths are covered by .gitignore."""
     gitignored = set()
@@ -521,6 +533,7 @@ def _check_env_gitignore(workspace: str, patterns: List[str]) -> Set[str]:
             gitignored.add(pattern)
 
     return gitignored
+
 
 # ─── Helper: Register Env Var Reference ────────────────────────
 
@@ -560,6 +573,7 @@ def _register_env_ref(
     if _is_secret_var(name, ""):
         env_vars[name]["is_secret"] = True
 
+
 # ─── Undocumented Vars ─────────────────────────────────────────
 
 def _find_undocumented(
@@ -586,6 +600,7 @@ def _find_undocumented(
                 })
 
     return undocumented
+
 
 # ─── Missing from .env.example ─────────────────────────────────
 
@@ -616,6 +631,7 @@ def _find_missing_from_example(
             })
 
     return sorted(missing, key=lambda x: (not x["is_required"], -x["referenced_in_count"]))
+
 
 # ─── Naming Inconsistencies ────────────────────────────────────
 
@@ -679,6 +695,7 @@ def _detect_naming_inconsistencies(
 
     return inconsistencies
 
+
 # ─── Secret Detection in .env Files ────────────────────────────
 
 def _detect_secrets_in_env_files(
@@ -705,6 +722,7 @@ def _detect_secrets_in_env_files(
                 })
 
     return secrets
+
 
 # ─── Recommendations ──────────────────────────────────────────
 
