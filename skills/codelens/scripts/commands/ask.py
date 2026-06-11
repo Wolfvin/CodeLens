@@ -4,6 +4,25 @@ import os
 import re
 from typing import Dict, Any, List, Tuple
 
+from context_engine import get_symbol_context
+from search_engine import search_symbols
+from deadcode_engine import detect_dead_code
+from secrets_engine import detect_secrets
+from circular_engine import detect_circular
+from apimap_engine import map_api_routes
+from entrypoints_engine import map_entrypoints
+from smell_engine import detect_smells
+from complexity_engine import compute_complexity
+from impact_engine import analyze_impact
+from trace_engine import trace_symbol
+from testmap_engine import map_test_coverage
+from perfhint_engine import detect_perf_hints
+from vulnscan_engine import scan_vulnerabilities
+from outline_engine import get_workspace_outline
+from envcheck_engine import check_env_vars
+from debugleak_engine import detect_debug_leaks
+from statemap_engine import map_state
+from dependents_engine import get_dependency_graph
 from commands import register_command
 from commands.scan import cmd_scan
 from commands.handbook import cmd_handbook
@@ -40,10 +59,8 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "tech stack": 3, "frameworks": 3, "detect framework": 3,
     "how to configure": 3, "configuration": 3,
     "not used": 3,
-    # Tauri IPC terms (weight 3) — high specificity for Tauri apps
-    "tauri command": 3, "tauri ipc": 3, "ipc bridge": 3, "invoke": 3,
-    "frontend backend": 3, "frontend-backend": 3, "cross-language": 3,
-    "rust command": 3, "ipc command": 3, "ipc call": 3, "ipc route": 3,
+    "compiled": 3, "binary": 3, "artifact": 3, "built": 3, "minified": 3,
+    "wasm": 3, "reverse engineer": 3, "reverse engineering": 3,
 
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
@@ -53,15 +70,10 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "who imports": 1, "who uses": 1, "who depends": 1,
     "find definition": 1, "find def": 1, "find all": 1, "find symbol": 1,
 
-    # Indonesian colloquial (weight 2)
-    "lama": 2, "aneh": 2, "cek": 2, "bersihkan": 2, "aman": 2,
-    "lambat": 2, "rapikan": 2, "cari": 2,
-
     # Generic words (weight 0) — ignored for scoring
     "the": 0, "a": 0, "an": 0, "me": 0, "my": 0,
     "this": 0, "that": 0, "it": 0, "is": 0, "are": 0,
     "of": 0, "for": 0, "in": 0, "on": 0, "to": 0,
-    "from": 0, "with": 0, "by": 0, "at": 0, "be": 0,
 }
 
 # Default weight for keywords not in the table
@@ -127,7 +139,6 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
             and result.get("status") == "not_found"):
         symbol = args.get("name", "")
         if symbol:
-            from search_engine import search_symbols
             search_result = search_symbols(workspace, symbol, domain="all", fuzzy=True)
             if search_result.get("results"):
                 search_result["query_interpretation"] = {
@@ -174,12 +185,11 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "entrypoints", {}, "high"),
 
         # Security
-        (["security", "secure", "is this secure", "safe from attack", "secret", "api key", "password",
-          "token leak", "cve", "vuln", "hardcoded", "leaked credential"],
+        (["security", "secret", "api key", "password", "token leak", "cve", "vuln"],
          "secrets", {}, "high"),
 
         # Vulnerabilities
-        (["vulnerability", "vulnerable", "security hole", "known cve", "outdated dep", "dependency vulnerability"],
+        (["vulnerability", "vulnerable", "security hole"],
          "vuln-scan", {}, "high"),
 
         # Smells / health
@@ -253,35 +263,24 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
           "regex issue", "regex problem"],
          "regex-audit", {}, "high"),
 
+        # Reverse engineering / artifact detection
+        (["compiled", "binary", "artifact", "built", "minified", "wasm",
+          "reverse engineer", "reverse engineering", "dist folder", "build output",
+          "compiled artifacts", "built files", "minified files"],
+         "artifact-scan", {}, "high"),
+
         # Diff / changes
         (["what changed", "diff", "changes since", "what's different", "compare"],
          "diff", {}, "high"),
 
         # Detect / tech stack
         (["tech stack", "frameworks", "detect framework", "what framework", "what libraries",
-          "what technologies", "stack", "electron", "what kind of app",
-          "what type of project", "is this a", "is this an"],
+          "what technologies", "stack"],
          "detect", {}, "high"),
-
-        # Tauri IPC commands / frontend-backend communication
-        (["tauri command", "tauri ipc", "ipc bridge", "invoke", "ipc command",
-          "ipc call", "ipc route", "frontend backend", "frontend-backend",
-          "cross-language", "rust command", "rust backend", "backend communication",
-          "how does the frontend", "how does frontend", "communicate with rust",
-          "communicate with backend", "ipc"],
-         "api-map", {}, "high"),
 
         # Env configuration
         (["how to configure", "configuration", "config check", "env setup"],
          "env-check", {}, "high"),
-
-        # Indonesian colloquial triggers
-        (["kok lama", "lambat", "lama ya"], "perf-hint", {}, "high"),
-        (["aneh nih", "aneh"], "search", {"name": _extract_symbol_name}, "medium"),
-        (["bantu cek", "cek"], "smell", {}, "high"),
-        (["bersihkan", "rapikan"], "debug-leak", {}, "high"),
-        (["aman ga", "aman tidak", "aman ga nih"], "secrets", {}, "high"),
-        (["cari"], "symbols", {"name": _extract_symbol_name}, "medium"),
 
         # ─── Generic patterns (scored lower by keyword weight) ────
 
@@ -294,12 +293,8 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "symbols", {"name": _extract_symbol_name}, "high"),
 
         # Trace
-        (["trace", "call chain", "call path", "connected to", "flows to", "flow from"],
+        (["how does", "trace", "call chain", "call path", "how is", "connected to", "flows to", "flow from"],
          "trace", {"name": _extract_symbol_name, "direction": "both"}, "medium"),
-
-        # How does (generic, lower priority than specific patterns above)
-        (["how does", "how is"],
-         "trace", {"name": _extract_symbol_name, "direction": "both"}, "low"),
 
         # Show me (generic — low weight keywords)
         (["show me"],
@@ -401,111 +396,67 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
         return match.group(1).strip()
 
     # Look for identifier-like patterns
-    # Stop words that should NOT be treated as symbol names
-    _stop_words = {
-        'is', 'are', 'was', 'were', 'am', 'be', 'been', 'being',
-        'this', 'that', 'these', 'those', 'it', 'its',
-        'a', 'an', 'the', 'my', 'your', 'our', 'their',
-        'do', 'does', 'did', 'done', 'have', 'has', 'had',
-        'will', 'would', 'could', 'should', 'can', 'may', 'might',
-        'if', 'or', 'and', 'but', 'not', 'no', 'yes',
-        'how', 'what', 'when', 'where', 'who', 'why', 'which',
-        'about', 'with', 'from', 'into', 'for', 'to', 'of', 'in', 'on', 'at',
-        'app', 'project', 'code', 'file', 'codebase', 'program',
-        'good', 'bad', 'clean', 'dirty', 'safe', 'ready',
-    }
-    if cleaned.lower() in _stop_words:
-        return ""
-
     match = re.search(r'[a-z][a-zA-Z0-9]*_[a-zA-Z0-9_]+', cleaned)
     if match:
         return match.group(0)
     match = re.search(r'[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*', cleaned)
     if match:
-        result = match.group(0)
-        if result.lower() not in _stop_words:
-            return result
+        return match.group(0)
     match = re.search(r'[A-Z][a-zA-Z0-9]*(?:[A-Z][a-zA-Z0-9]*)+', cleaned)
     if match:
         return match.group(0)
 
-    # Fallback: any identifier — but skip stop words
+    # Fallback: any identifier
     match = re.search(r'[a-zA-Z_][a-zA-Z0-9_.]*', cleaned)
     if match:
-        result = match.group(0)
-        if result.lower() not in _stop_words:
-            return result
         return match.group(0)
 
     return cleaned if cleaned else ""
 
 
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
-    """Execute the determined command with the given args.
-
-    All engine imports are lazy to reduce CLI startup time.
-    Only the engine needed for the specific command is imported.
-    """
+    """Execute the determined command with the given args."""
     if command == "context":
-        from context_engine import get_symbol_context
         return get_symbol_context(args.get("name", ""), workspace)
     elif command == "symbols":
-        from search_engine import search_symbols
         return search_symbols(workspace, args.get("name", ""), domain="all", fuzzy=True)
     elif command == "dead-code":
-        from deadcode_engine import detect_dead_code
         return detect_dead_code(workspace)
     elif command == "secrets":
-        from secrets_engine import detect_secrets
         return detect_secrets(workspace)
     elif command == "circular":
-        from circular_engine import detect_circular
         return detect_circular(workspace)
     elif command == "api-map":
-        from apimap_engine import map_api_routes
         return map_api_routes(workspace)
     elif command == "entrypoints":
-        from entrypoints_engine import map_entrypoints
         return map_entrypoints(workspace)
     elif command == "smell":
-        from smell_engine import detect_smells
         return detect_smells(workspace)
     elif command == "complexity":
-        from complexity_engine import compute_complexity
         return compute_complexity(workspace, sort_by="complexity", limit=30)
     elif command == "impact":
-        from impact_engine import analyze_impact
         return analyze_impact(args.get("name", ""), workspace, action=args.get("action", "modify"))
     elif command == "trace":
-        from trace_engine import trace_symbol
         return trace_symbol(args.get("name", ""), workspace, direction=args.get("direction", "both"))
     elif command == "test-map":
-        from testmap_engine import map_test_coverage
         return map_test_coverage(workspace)
     elif command == "perf-hint":
-        from perfhint_engine import detect_perf_hints
         return detect_perf_hints(workspace)
     elif command == "vuln-scan":
-        from vulnscan_engine import scan_vulnerabilities
         return scan_vulnerabilities(workspace)
     elif command == "outline":
-        from outline_engine import get_workspace_outline
         return get_workspace_outline(workspace)
     elif command == "env-check":
-        from envcheck_engine import check_env_vars
         return check_env_vars(workspace)
     elif command == "debug-leak":
-        from debugleak_engine import detect_debug_leaks
         return detect_debug_leaks(workspace)
     elif command == "state-map":
-        from statemap_engine import map_state
         return map_state(workspace)
     elif command == "scan":
         return cmd_scan(workspace)
     elif command == "handbook":
         return cmd_handbook(workspace)
     elif command == "dependents":
-        from dependents_engine import get_dependency_graph
         return get_dependency_graph(workspace)
     elif command == "css-deep":
         from cssdeep_engine import analyze_css_deep
@@ -525,27 +476,9 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
     elif command == "refactor-safe":
         from refactor_safe_engine import check_refactor_safety
         return check_refactor_safety(args.get("name", ""), workspace)
-    elif command == "side-effect":
-        from sideeffect_engine import analyze_side_effects
-        return analyze_side_effects(workspace, function_name=args.get("name", ""))
-    elif command == "dataflow":
-        from dataflow_engine import analyze_dataflow
-        return analyze_dataflow(workspace)
-    elif command == "missing-refs":
-        from missing_refs import detect_missing_refs
-        return detect_missing_refs(workspace)
-    elif command == "ownership":
-        from ownership_engine import analyze_ownership
-        return analyze_ownership(workspace)
-    elif command == "config-drift":
-        from configdrift_engine import detect_config_drift
-        return detect_config_drift(workspace)
-    elif command == "stack-trace":
-        from stacktrace_engine import simulate_error_propagation
-        return simulate_error_propagation(args.get("name", ""), workspace)
-    elif command == "type-infer":
-        from typeinfer_engine import infer_types
-        return infer_types(workspace)
+    elif command == "artifact-scan":
+        from commands.artifact_scan import cmd_artifact_scan
+        return cmd_artifact_scan(workspace, deep=False)
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 

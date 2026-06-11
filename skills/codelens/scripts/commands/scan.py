@@ -7,25 +7,23 @@ from typing import Dict, List, Any
 
 from utils import logger
 from registry import (
-    load_config, save_config, ensure_codelens_dir,
+    load_config, save_config, ensure_codelens_dir, get_codelens_dir,
     load_frontend_registry, save_frontend_registry,
     load_backend_registry, save_backend_registry,
-    build_frontend_registry
+    build_frontend_registry, compute_frontend_status
 )
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import (
     find_changed_files, update_mtimes_cache, remove_from_mtimes_cache,
     merge_frontend_data, merge_backend_data
 )
-from edge_resolver import resolve_edges, resolve_tauri_ipc_from_apimap
+from edge_resolver import resolve_edges
 from parsers.fallback_html import parse_html_fallback
 from parsers.fallback_css import parse_css_fallback
 from parsers.fallback_js_frontend import parse_js_frontend_fallback
 from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
-from parsers.fallback_php import parse_php_fallback
-from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
 
@@ -36,35 +34,36 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
-    parser.add_argument("--full", action="store_true",
-                        help="Force full rescan (ignore existing registry)")
+    parser.add_argument("--reverse-engineering", "--re", action="store_true",
+                        help="Reverse engineering mode: scan built/compiled artifacts (dist/, .min.js, .wasm metadata)")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
-    full = getattr(args, 'full', False)
     incremental = getattr(args, 'incremental', False)
-    # --full forces a complete rescan, ignoring any existing registry.
-    # This overrides --incremental if both are somehow specified.
-    if full:
-        incremental = False
+    reverse_engineering = getattr(args, 'reverse_engineering', False)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, force_full=full)
+    return cmd_scan(workspace, incremental, reverse_engineering=reverse_engineering)
 
 
-def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, reverse_engineering: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
-    If force_full=True, force a full rescan even if a registry exists.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
+
+    # In reverse engineering mode, remove dist/build from ignore list to scan built artifacts
+    if reverse_engineering:
+        original_ignore = config.get("ignore", []).copy()
+        config["ignore"] = [p for p in config.get("ignore", []) 
+                        if p.rstrip('/') not in ('dist', 'build', '.next', '.nuxt')]
 
     # Auto-detect frameworks if not configured
     if not config.get("frameworks"):
@@ -72,17 +71,6 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
         recommended = get_recommended_config(workspace)
         config.update(recommended)
         save_config(workspace, config)
-
-    # If force_full, clear existing registry and mtimes cache to ensure a clean scan
-    if force_full:
-        codelens_dir = os.path.join(workspace, '.codelens')
-        for fname in ['backend.json', 'frontend.json', 'mtimes_cache.json']:
-            fpath = os.path.join(codelens_dir, fname)
-            if os.path.exists(fpath):
-                try:
-                    os.remove(fpath)
-                except OSError:
-                    pass
 
     # Discover files
     files = discover_files(workspace, config)
@@ -131,12 +119,7 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
             # Filter out nodes/edges from deleted files
             del_set = set()
             for df in deleted:
-                # df may already be a relative path (from incremental.py);
-                # only re-compute if it's absolute
-                if os.path.isabs(df):
-                    rel = os.path.relpath(df, workspace)
-                else:
-                    rel = df
+                rel = os.path.relpath(df, workspace)
                 del_set.add(rel)
 
             # Clean backend nodes
@@ -150,40 +133,12 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
                                                   and (e.get("to", "") in remaining_ids or not e.get("to", "")))]
                 save_backend_registry(workspace, existing_backend)
 
-            # Clean frontend data — remove entries whose only references are in deleted files.
-            # Class schema: {name, ref_count, status, css: [{path, ...}], js: [{path, ...}]}
-            # ID schema: {name, ref_count, status, defined_in_html: [{path, ...}], css: [{path, ...}], js: [{path, ...}]}
+            # Clean frontend data
             fe_classes = existing_frontend.get("classes", [])
             if isinstance(fe_classes, list):
-                cleaned_classes = []
-                for c in fe_classes:
-                    # Strip refs from deleted files, keep refs from surviving files
-                    surviving_css = [r for r in c.get("css", []) if r.get("path", "") not in del_set]
-                    surviving_js = [r for r in c.get("js", []) if r.get("path", "") not in del_set]
-                    if surviving_css or surviving_js:
-                        c["css"] = surviving_css
-                        c["js"] = surviving_js
-                        c["ref_count"] = len(surviving_css) + len(surviving_js)
-                        c["status"] = "active" if c["ref_count"] > 0 else "dead"
-                        cleaned_classes.append(c)
-                    # else: all refs were in deleted files → drop the entry
-                existing_frontend["classes"] = cleaned_classes
-
+                existing_frontend["classes"] = [c for c in fe_classes if c.get("defined_in", "") not in del_set]
                 fe_ids = existing_frontend.get("ids", [])
-                cleaned_ids = []
-                for i in fe_ids:
-                    surviving_html = [r for r in i.get("defined_in_html", []) if r.get("path", "") not in del_set]
-                    surviving_css = [r for r in i.get("css", []) if r.get("path", "") not in del_set]
-                    surviving_js = [r for r in i.get("js", []) if r.get("path", "") not in del_set]
-                    if surviving_html or surviving_css or surviving_js:
-                        i["defined_in_html"] = surviving_html
-                        i["css"] = surviving_css
-                        i["js"] = surviving_js
-                        i["ref_count"] = len(surviving_css) + len(surviving_js)
-                        i["status"] = "active" if i["ref_count"] > 0 else ("dead" if not surviving_html else "active")
-                        cleaned_ids.append(i)
-                    # else: all refs were in deleted files → drop the entry
-                existing_frontend["ids"] = cleaned_ids
+                existing_frontend["ids"] = [i for i in fe_ids if i.get("defined_in", "") not in del_set]
                 save_frontend_registry(workspace, existing_frontend)
 
             # Continue with incremental scan for changed/new files
@@ -342,6 +297,10 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
                 if parse_vue_sfc:
                     refs = parse_vue_sfc(content, os.path.relpath(path, workspace))
                     vue_data.append(refs)
+                else:
+                    # Fallback: extract template classes/ids using HTML fallback
+                    fb_refs = parse_html_fallback(content, os.path.relpath(path, workspace))
+                    vue_data.append({"path": os.path.relpath(path, workspace), "frontend": fb_refs})
             except IOError:
                 logger.debug(f"Failed to read Vue file: {path}")
 
@@ -362,6 +321,10 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
                 if parse_svelte_component:
                     refs = parse_svelte_component(content, os.path.relpath(path, workspace))
                     svelte_data.append(refs)
+                else:
+                    # Fallback: extract template classes/ids using HTML fallback
+                    fb_refs = parse_html_fallback(content, os.path.relpath(path, workspace))
+                    svelte_data.append({"path": os.path.relpath(path, workspace), "frontend": fb_refs})
             except IOError:
                 logger.debug(f"Failed to read Svelte file: {path}")
 
@@ -500,66 +463,48 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
-    # Parse PHP files
-    php_data = []
-    if files["php"]:
-        for path in files["php"]:
-            if incremental and changed_files and path not in changed_files:
-                continue
+    # ─── Binary Artifact Detection ─────────────────────────────
+    artifact_data = []
+    if files.get("artifacts") or reverse_engineering:
+        # In RE mode, also scan for minified files that were previously skipped
+        artifact_dirs_to_scan = set()
+        for af in files.get("artifacts", []):
+            artifact_dirs_to_scan.add(os.path.dirname(af))
+        
+        # Scan artifacts for metadata
+        for af in files.get("artifacts", []):
             try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                refs = parse_php_fallback(content, os.path.relpath(path, workspace))
-                php_data.append({
-                    "path": os.path.relpath(path, workspace),
-                    "nodes": refs.get("nodes", []),
-                    "edges": refs.get("edges", [])
-                })
-            except IOError:
-                logger.debug(f"Failed to read PHP file: {path}")
-
-    # Parse Blade templates
-    blade_data = []
-    blade_frontend_data = []
-    if files["blade"]:
-        for path in files["blade"]:
-            if incremental and changed_files and path not in changed_files:
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                refs = parse_blade_template(content, os.path.relpath(path, workspace))
-                blade_data.append(refs)
-                # Extract frontend data from blade templates
-                fe = refs.get("frontend", {})
-                if fe.get("classes") or fe.get("ids"):
-                    blade_frontend_data.append({
-                        "path": os.path.relpath(path, workspace),
-                        "classes": fe.get("classes", []),
-                        "ids": fe.get("ids", []),
-                    })
-            except IOError:
-                logger.debug(f"Failed to read Blade file: {path}")
-
-    # Merge blade frontend data into existing frontend data for registry building
-    # Blade classes/ids are treated like HTML definitions
-    html_data.extend(blade_frontend_data)
-
-    # Re-build frontend registry if blade data was added
-    if blade_frontend_data and not (incremental and changed_files):
-        # Rebuild frontend registry including blade data
-        frontend_registry = build_frontend_registry(
-            workspace, html_data, css_data, js_frontend_data,
-            tsx_data, vue_data, svelte_data,
-            tailwind_info, config.get("frameworks", [])
-        )
-        save_frontend_registry(workspace, frontend_registry)
+                rel_path = os.path.relpath(af, workspace)
+                file_size = os.path.getsize(af)
+                ext = os.path.splitext(af)[1].lower()
+                
+                artifact_entry = {
+                    "path": rel_path,
+                    "size_bytes": file_size,
+                    "type": _classify_binary(ext),
+                    "extension": ext,
+                }
+                
+                # For .wasm files, try to read the header
+                if ext == '.wasm' and file_size > 8:
+                    try:
+                        with open(af, 'rb') as f:
+                            header = f.read(8)
+                            if header[:4] == b'\x00asm':
+                                artifact_entry["wasm_version"] = int.from_bytes(header[4:8], 'little')
+                                artifact_entry["type"] = "wasm_binary"
+                    except (IOError, OSError):
+                        pass
+                
+                artifact_data.append(artifact_entry)
+            except (IOError, OSError):
+                logger.debug(f"Failed to read artifact: {af}")
 
     # Build backend registry with edge resolution
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data + php_data
+        new_parsed_data = rust_data + js_backend_data + python_data
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -570,42 +515,11 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
         # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data + php_data:
+        for item in rust_data + js_backend_data + python_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
 
         resolved_nodes, resolved_edges = resolve_edges(all_nodes, all_raw_edges)
-
-        # ─── Tauri IPC cross-language edge resolution ─────────────
-        # After resolving same-language edges, add cross-language edges
-        # for Tauri IPC: TypeScript invoke('commandName') → Rust handler.
-        # This is critical for Tauri apps where frontend calls Rust backend
-        # via the IPC bridge. Without this, Rust #[tauri::command] handlers
-        # appear "dead" because no Rust code calls them directly.
-        if 'tauri' in config.get("frameworks", []):
-            try:
-                from apimap_engine import map_api_routes
-                api_result = map_api_routes(workspace)
-                api_routes = api_result.get("routes", [])
-                resolved_edges = resolve_tauri_ipc_from_apimap(
-                    resolved_nodes, resolved_edges, api_routes
-                )
-                # Recompute ref_counts with the new IPC edges
-                incoming_count = {}
-                for node in resolved_nodes:
-                    incoming_count[node["id"]] = 0
-                for edge in resolved_edges:
-                    to_id = edge.get("to")
-                    if to_id and to_id in incoming_count:
-                        incoming_count[to_id] += 1
-                for node in resolved_nodes:
-                    node["ref_count"] = incoming_count.get(node["id"], 0)
-                    if node.get("is_tauri_command") and node["ref_count"] == 0:
-                        node["status"] = "ipc_exposed"
-                    else:
-                        node["status"] = "dead" if node["ref_count"] == 0 else "active"
-            except Exception:
-                logger.warning("Failed to resolve Tauri IPC edges", exc_info=True)
 
         backend_registry = {
             "last_updated": datetime.now(timezone.utc).isoformat(),
@@ -614,6 +528,16 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
             "edges": resolved_edges
         }
     save_backend_registry(workspace, backend_registry)
+
+    # Save artifact data if any found
+    if artifact_data:
+        artifact_path = os.path.join(get_codelens_dir(workspace), 'artifacts.json')
+        with open(artifact_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "workspace": workspace,
+                "artifacts": artifact_data
+            }, f, indent=2, ensure_ascii=False)
 
     # Update mtimes cache
     all_files = []
@@ -632,16 +556,11 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
             "tsx": len(files["tsx"]),
             "rust": len(files["rust"]),
             "python": len(files["python"]),
-            "php": len(files["php"]),
-            "blade": len(files["blade"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
-            "cpp": len(files["cpp"]),
-            "go": len(files["go"])
+            "artifacts": len(files.get("artifacts", []))
         },
         "python_parsed": len(python_data),
-        "php_parsed": len(php_data),
-        "blade_parsed": len(blade_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -652,8 +571,28 @@ def cmd_scan(workspace: str, incremental: bool = False, force_full: bool = False
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "artifacts": {
+            "count": len(artifact_data),
+            "items": artifact_data[:50]  # Cap at 50
+        },
+        "reverse_engineering": reverse_engineering
     }
+
+
+def _classify_binary(ext: str) -> str:
+    """Classify a binary file extension."""
+    BINARY_TYPES = {
+        '.wasm': 'wasm_binary',
+        '.so': 'shared_library',
+        '.dll': 'windows_dll',
+        '.dylib': 'macos_dylib',
+        '.exe': 'windows_executable',
+        '.pyc': 'python_bytecode',
+        '.o': 'object_file',
+        '.a': 'static_library',
+    }
+    return BINARY_TYPES.get(ext, 'unknown_binary')
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -669,12 +608,9 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "tsx": [],
         "rust": [],
         "python": [],
-        "php": [],
-        "blade": [],
         "vue": [],
         "svelte": [],
-        "cpp": [],
-        "go": []
+        "artifacts": []
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -709,7 +645,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["tsx"].append(file_path)
             elif ext == '.tsx':
                 files["tsx"].append(file_path)
-            elif ext in ('.js', '.ts'):
+            elif ext in ('.js', '.ts', '.mjs', '.cjs'):
                 if ext == '.ts' and is_frontend_file(rel_path, config):
                     files["tsx"].append(file_path)
                 elif is_frontend_file(rel_path, config):
@@ -722,22 +658,14 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["rust"].append(file_path)
             elif ext == '.py':
                 files["python"].append(file_path)
-            elif ext == '.php':
-                # Blade templates have .blade.php extension
-                if filename.endswith('.blade.php'):
-                    files["blade"].append(file_path)
-                else:
-                    files["php"].append(file_path)
             elif ext == '.vue':
                 files["vue"].append(file_path)
             elif ext == '.svelte':
                 files["svelte"].append(file_path)
+            elif ext in ('.wasm', '.so', '.dll', '.dylib', '.exe', '.pyc', '.o', '.a'):
+                files["artifacts"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
-            elif ext in ('.cc', '.cpp', '.cxx', '.c', '.h', '.hpp', '.hxx'):
-                files["cpp"].append(file_path)
-            elif ext == '.go':
-                files["go"].append(file_path)
 
     return files
 

@@ -3,7 +3,6 @@
 import os
 import json
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -41,14 +40,14 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
 
 # ─── Output File Generation ─────────────────────────────────
 
-def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> dict:
+def write_output_files(workspace: str, scan_result) -> dict:
     """After a scan, generate outline.json and summary.json into .codelens/."""
     try:
         from outline_engine import get_workspace_outline
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace, max_files=max_files)
+        outline_data = get_workspace_outline(workspace)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -123,66 +122,6 @@ def compute_summary(workspace, outline_data, scan_result):
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
-# ─── Performance Safeguards ────────────────────────────────
-
-MAX_FILE_SIZE = 200 * 1024   # 200KB — skip files larger than this
-MAX_FILES_DEFAULT = 5000      # Max source files to scan per engine
-GLOBAL_TIMEOUT_SEC = 120      # Default global timeout per engine (seconds)
-
-
-def should_ignore_dir(rel_root: str) -> bool:
-    """Check if a relative directory path should be ignored.
-
-    Uses path-segment-aware matching to avoid false positives
-    (e.g., workspace named 'test-dist' shouldn't match 'dist').
-
-    Args:
-        rel_root: Relative path from workspace root (e.g., 'src/node_modules/pkg')
-
-    Returns:
-        True if the directory should be skipped.
-    """
-    if rel_root == '.':
-        return False
-    parts = rel_root.replace('\\', '/').split('/')
-    return any(p in DEFAULT_IGNORE_DIRS for p in parts)
-
-
-def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
-    """Read a file safely with size limit and encoding handling.
-
-    Args:
-        file_path: Absolute path to the file.
-        max_size: Maximum file size in bytes. Files larger than this are skipped.
-
-    Returns:
-        File content as string, or None if the file cannot be read or is too large.
-    """
-    try:
-        file_size = os.path.getsize(file_path)
-        if file_size > max_size:
-            return None
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except (IOError, OSError):
-        return None
-
-
-def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SEC) -> bool:
-    """Check if a time budget has expired.
-
-    Useful for engines that walk many files and need a global timeout.
-
-    Args:
-        start_time: Start time from time.time().
-        budget_sec: Budget in seconds.
-
-    Returns:
-        True if the budget has expired.
-    """
-    return (time.time() - start_time) > budget_sec
-
-
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:
@@ -217,66 +156,50 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
-# ─── Binary Artifact Scanning ────────────────────────────────
+# ─── File Reading Utilities ───────────────────────────────────
 
-def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
-    """Scan workspace for binary/compiled artifacts."""
-    workspace = os.path.abspath(workspace)
-    artifacts = []
-    total_size = 0
-    binary_extensions = {
-        '.so', '.dll', '.dylib', '.o', '.obj', '.a', '.lib',
-        '.exe', '.app', '.dmg', '.deb', '.rpm',
-        '.wasm', '.pyc', '.pyo', '.class', '.jar',
-        '.node', '.swiftmodule',
-    }
-
-    for root, dirs, files in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in binary_extensions:
-                fpath = os.path.join(root, f)
-                try:
-                    size = os.path.getsize(fpath)
-                    total_size += size
-                    rel = os.path.relpath(fpath, workspace)
-                    artifacts.append({
-                        "file": rel,
-                        "type": ext[1:],  # Remove the dot
-                        "size_bytes": size,
-                        "size_human": _human_size(size),
-                    })
-                except OSError:
-                    pass
-
-    by_type = {}
-    for a in artifacts:
-        t = a["type"]
-        by_type[t] = by_type.get(t, 0) + 1
-
-    return {
-        "status": "ok",
-        "workspace": workspace,
-        "total_artifacts": len(artifacts),
-        "total_size_bytes": total_size,
-        "total_size_human": _human_size(total_size),
-        "by_type": by_type,
-        "artifacts": artifacts[:200],  # Cap at 200
-        "truncated": len(artifacts) > 200,
-        "recommendations": [
-            "Add binary file patterns to .gitignore to prevent committing build artifacts." if artifacts else "No binary artifacts found in the workspace.",
-        ],
-    }
+def safe_read_file(path: str, max_size: int = 1024 * 1024, encoding: str = 'utf-8') -> Optional[str]:
+    """Safely read a file with size limit and encoding handling.
+    
+    Returns None if the file is binary, too large, or unreadable.
+    """
+    try:
+        file_size = os.path.getsize(path)
+        if file_size > max_size:
+            return None
+        
+        with open(path, 'rb') as f:
+            raw = f.read(min(file_size, 8192))
+            # Binary file detection: check for null bytes in the first 8KB
+            if b'\x00' in raw:
+                return None
+        
+        with open(path, 'r', encoding=encoding, errors='replace') as f:
+            return f.read()
+    except (IOError, OSError, UnicodeDecodeError):
+        return None
 
 
-def _human_size(size: int) -> str:
-    """Convert bytes to human-readable size."""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
+def is_binary_file(path: str) -> bool:
+    """Check if a file appears to be binary by examining its first 8KB."""
+    try:
+        with open(path, 'rb') as f:
+            chunk = f.read(8192)
+            return b'\x00' in chunk
+    except (IOError, OSError):
+        return True
+
+
+BINARY_EXTENSIONS = frozenset({
+    '.wasm', '.so', '.dll', '.dylib', '.exe', '.pyc', '.pyd',
+    '.o', '.a', '.lib', '.gch', '.pch', '.class', '.jar',
+    '.nexe', '.obj', '.pdb', '.dSYM', '.ko',
+})
+
+ARTIFACT_EXTENSIONS = frozenset({
+    '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+    '.map', '.js.map', '.css.map',
+})
 
 
 # ─── Version ────────────────────────────────────────────────

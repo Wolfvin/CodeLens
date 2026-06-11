@@ -690,6 +690,10 @@ def _detect_duplicate_props(content: str, rel_path: str) -> List[Dict[str, Any]]
                     # Exiting a rule block — check for duplicates
                     for prop_name, line_nums in current_block_props.items():
                         if len(line_nums) > 1:
+                            # Skip same-line duplicates — likely a false positive
+                            # from single-line shorthand or double-counting
+                            if line_nums[0] == line_nums[1]:
+                                continue
                             findings.append({
                                 "type": "css_issue",
                                 "category": "duplicate_props",

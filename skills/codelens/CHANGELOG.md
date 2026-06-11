@@ -8,36 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [6.1.0] — 2026-06-12
 
 ### Added
-- **Tauri IPC invoke() extraction in TSX/JS/TS parsers**: When `invoke('commandName')` is detected, the command name is extracted from the first string argument instead of treating it as a call to a function named "invoke". The edge is marked with `is_ipc_call: True` for the edge resolver.
-- **Tauri IPC direct edge resolution**: The edge resolver now handles `is_ipc_call` edges by matching the command name against the `ipc_name` index (camelCase) and via case conversion against Rust function names (snake_case). Creates `ipc_bridge` edges between TypeScript callers and Rust #[tauri::command] handlers.
-- **Tauri IPC routes in API map**: The `api-map` engine now detects both frontend `invoke('cmdName')` calls (as `IPC_CALL` routes) and Rust `#[tauri::command]` declarations (as `IPC` routes). Returns `ipc://commandName` paths.
-- **Tauri IPC Bridge section in AGENT.md/handbook**: The handbook now includes a "Tauri IPC Bridge" section showing all IPC commands, their status (active/ipc_exposed), their Rust files, and which TypeScript functions call them.
-- **_extract_invoke_command() method**: Added to TSXParser, JSBackendParser, and TSBackendParser for extracting the Tauri command name from invoke() call arguments.
-- **_extract_tauri_ipc_routes() function**: Added to apimap_engine for detecting invoke() patterns in JS/TS files.
-- **_extract_tauri_rust_commands() function**: Added to apimap_engine for detecting #[tauri::command] declarations in Rust files.
-- **_build_tauri_ipc_section() function**: Added to handbook command for building the Tauri IPC section.
+
+- **`artifact-scan` command (P0)**: Dedicated reverse engineering command that discovers compiled/built artifacts — WASM binaries, shared libraries, minified JS/CSS, source maps, and built output directories. Reports file sizes, types, WASM header metadata (version, sections), source-to-artifact mapping, and actionable recommendations.
+- **`--reverse-engineering` / `--re` flag on `scan`**: When enabled, temporarily removes `dist/`, `build/`, `.next/`, `.nuxt/` from the ignore list, allowing CodeLens to scan and analyze built output alongside source code. Artifact metadata is saved to `.codelens/artifacts.json`.
+- **Binary artifact detection in `scan`**: `.wasm`, `.so`, `.dll`, `.dylib`, `.exe`, `.pyc`, `.o`, `.a` files are now categorized into an `artifacts` file category during discovery, with metadata extraction (type classification, WASM header parsing, size reporting).
+- **`safe_read_file()` utility**: Reads files with null-byte binary detection, size limiting, and graceful error handling. Returns `None` for binary/oversized/unreadable files instead of silently reading garbage.
+- **`is_binary_file()` utility**: Checks first 8KB of a file for null bytes to detect binary content.
+- **`BINARY_EXTENSIONS` / `ARTIFACT_EXTENSIONS` constants**: Centralized sets of binary and minified file extensions for consistent reference across all engines.
+- **`.mjs` / `.cjs` support in `discover_files`**: ES module and CommonJS module extensions are now properly discovered and parsed as JavaScript files.
+- **Vue/Svelte fallback parsers**: When the dedicated Vue or Svelte parser is unavailable, CodeLens now falls back to HTML fallback parsing instead of silently skipping those files.
+- **WASM framework detection**: `framework_detect` now detects `wasm-bindgen`, `wasm-pack`, and `emscripten` from both package.json dependencies and Cargo.toml references. Also detects `.wasm` binary files in the workspace.
+- **Reverse engineering ask patterns**: `ask` command now routes queries about "compiled", "binary", "artifact", "minified", "wasm", "reverse engineer" to the `artifact-scan` command with high confidence.
 
 ### Fixed
-- **Zero IPC bridge edges for Tauri apps**: Previously, invoke() calls were treated as calls to a function named "invoke", creating 0 IPC bridge edges. Now invoke('getProfiles') correctly creates an edge to the Rust `get_profiles` command. Verified on Clash Verge Rev (78 Tauri commands, 86 IPC bridge edges — was 0).
-- **Tauri commands incorrectly marked as "ipc_exposed"**: 77/78 commands were stuck in "ipc_exposed" status because no IPC edges connected them to callers. After the fix, 77/78 are now "active" with proper ref_count.
-- **API map empty for Tauri apps**: api-map returned 0 routes for Tauri desktop apps because no Tauri-specific patterns were detected. Now returns 162 IPC routes (84 IPC_CALL + 78 IPC) for Clash Verge Rev.
+
+- **`safe_read_file` missing import**: `a11y_engine.py` imported `safe_read_file` from `utils` but the function did not exist. Removed the dead import (the function was never called in the engine body).
+- **CSS `duplicate_props` same-line false positive**: Properties reported as duplicate on the same line (e.g., "lines 99 and 99") are now correctly skipped — same-line "duplicates" are a double-counting artifact from the regex engine.
+- **Binary file corruption in `smell_engine`**: Smell engine previously opened all files with `encoding='utf-8', errors='ignore'`, silently reading binary files as garbage text and producing nonsensical smell reports. Now uses `safe_read_file()` which detects and skips binary files.
+- **Minified file pollution in `smell_engine`**: `.min.js` and `.min.css` files are now skipped by the smell engine to avoid enormous line-count false positives and ReDoS-level regex performance on single-line files.
+- **File size cap in `smell_engine`**: Added 500KB limit to prevent reading extremely large generated files into memory.
+- **Version inconsistency**: Aligned `skill.json` (was 5.7.1), `pyproject.toml` (was 5.7.1), and `CODELENS_VERSION` constant (was 5.7.1) to 6.1.0. CHANGELOG 6.0.0 was already released.
+
+## [6.0.0] — 2026-06-12
 
 ### Added
 - **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
 - **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
 - **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
 - **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
-- **`should_ignore_dir()` utility**: New shared utility in `utils.py` for path-segment-aware directory ignore checking. Replaces inline implementations across multiple engines.
-- **`safe_read_file()` utility**: New shared utility for safe file reading with size limits and encoding handling. Prevents out-of-memory on large files.
-- **`time_budget_expired()` utility**: New shared utility for checking global timeout budgets in engines. Prevents runaway scans on massive codebases.
-- **Performance safeguards in `utils.py`**: `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000), `GLOBAL_TIMEOUT_SEC` (120s) constants for all engines.
-- **`handbook --quick` mode**: New flag to skip expensive engines (secrets, vuln-scan, circular, dead-code) for faster results on large codebases.
-- **Engine status tracking in handbook**: Handbook now reports `engines_ok` and `engines_failed` lists in `meta`. Overall status is `ok`, `degraded`, or `error` based on engine results.
-- **Lazy imports in `ask` command**: All 17 engine imports moved from module-level to inside `_execute_ask_command()`. Reduces CLI startup time significantly.
-- **Thread-safe grammar loader**: `GrammarLoader` singleton now uses `threading.Lock()` for thread safety in watch command.
-- **Modern tree-sitter API support**: `GrammarLoader.get_parser()` now handles both legacy (`Parser(lang)`) and modern (`parser.language = lang`) tree-sitter APIs.
-- **Graceful command import**: `commands/__init__.py` now wraps each command module import in try/except, so one failing module doesn't prevent others from registering.
-- **`truncated` field in env-check output**: Indicates when file count or timeout limits were hit, so users know results are partial.
 
 ### Fixed
 - **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
@@ -47,14 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
 - **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
 - **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
-- **`should_ignore_dir` ImportError in tailwind_detector.py**: Was importing a function that didn't exist in `utils.py`. Now uses shared implementation from `utils.py`.
-- **`safe_read_file` ImportError in a11y_engine.py**: Removed unused import of non-existent function. a11y_engine now uses the shared `safe_read_file` from `utils.py`.
-- **Silent exception swallowing in `context.py`**: `except Exception: pass` replaced with proper `logger.debug()` call.
-- **Silent exception swallowing in `handbook.py`**: `except Exception: pass` for sub-directory package.json replaced with `logger.debug()`.
-- **Handbook always reports `status: ok`**: Now reports `ok`, `degraded`, or `error` based on engine success/failure counts.
-- **env-check returns empty output on large repos**: Added `MAX_FILE_SIZE`, `MAX_FILES` (5000), and `GLOBAL_TIMEOUT_SEC` (90s) limits. Now uses `safe_read_file()` instead of raw `open()`.
-- **Version inconsistency**: SKILL.md said "v6" but code said "5.7.1". All version references now unified to "6.0.0".
-- **CLI version hardcoded**: `codelens.py` description now uses `CODELENS_VERSION` constant instead of hardcoded "v5".
 
 ## [5.6.0] — 2026-06-11
 
