@@ -5,37 +5,21 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.0] — 2026-06-12
+## [5.9.2] — 2026-06-12
 
-### Tested against pallets/flask (83 Python files, Flask framework, 1,657 backend nodes, 5,476 edges)
+### Tested against custom Tauri 2.0 test app (12 Rust files + 4 TSX files, React+Zustand+Tokio+SQLite+Reqwest)
 
-Real-world test on a Python Flask project with `src/` layout (src/flask/).
-Confirmed: Flask framework detection works, 83 Python files parsed, 1,657 backend nodes.
-Found and fixed 7 bugs across 5 engines.
-
-### Added
-
-- **api-map route source tagging**: Routes now include a `source` field (`"production"` or `"test"`) based on file path. Test/example file routes are tagged as `source: "test"`. Stats include `production_routes` and `test_routes` counts. Prevents test routes from being confused with production API endpoints.
-- **`requires_import` pattern constraint in entrypoints**: Entrypoint patterns can now specify `requires_import` to only match when a specific module is actually imported in the file. Applied to FastAPI decorator patterns (`@app.get`, `@router.post`, etc.) so they don't false-match in Flask/Django files.
-- **Python type alias filtering in state-map**: Module-level type definitions (`TypeAlias`, `Type[...]`, `Union[...]`, `Optional[...]`, `Callable[...]`, `Literal[...]`, `Annotated[...]`, `Final[...]`, `ClassVar[...]`, etc.) are no longer classified as state stores. Both assignment form (`X = Union[...]`) and annotation form (`X: TypeAlias = ...`) are detected.
-- **Python private variable filtering in state-map**: Single-underscore-prefixed module variables (`_external`, `_anchor`, `_sentinel`, `_app_option`, etc.) are now skipped as private implementation details, not global state.
-- **CLI output allowlist for debug-leak**: `click.echo()`, `click.secho()`, `sys.stdout.write()`, `sys.stderr.write()`, `logging.*()`, `logger.*()`, `console.print()` (Rich), `typer.echo()` are no longer flagged as debug print statements. These are legitimate CLI output mechanisms, not debug leaks.
-- **HTML template skip in perf-hint**: `.html`, `.htm`, `.jinja`, `.jinja2`, `.djt`, `.vue`, `.svelte` files are now excluded from `inefficient_iteration` scanning. Template `{% for %}` / `v-for` / `{#each}` are compile-time directives, not runtime performance issues.
-- **Python src/ layout detection in config-drift**: `_detect_local_packages()` now also scans `src/` subdirectories for Python packages (directories with `__init__.py`). Also reads `pyproject.toml` `[tool.setuptools.packages.find]` for package name detection. Fixes false "missing dependency" warnings for local packages like `flask` when using src-layout.
+Real-world test on a Tauri 2.0 application with `#[tauri::command]` async handlers,
+Zustand state management, React components, and Rust state/config modules.
 
 ### Fixed
 
-- **FastAPI routes detected in Flask projects**: `entrypoints` engine previously matched `@app.get(...)` patterns in any Python file, including Flask projects that don't use FastAPI. Now requires `from fastapi import` or `import fastapi` to be present in the file before matching FastAPI patterns.
-- **API routes from test files**: `api-map` previously listed all routes including those in `tests/` and `examples/` directories as production routes. Now tagged with `source: "test"` for clear separation.
-- **State-map Python type alias false positives**: `ResponseValue`, `HeaderValue`, `RouteCallable`, `T_shell_context_processor`, etc. were classified as `module_constant` state stores. These are type definitions, not mutable state.
-- **State-map Python private variable false positives**: `_external`, `_anchor`, `_sentinel`, `_app_option` etc. were classified as state. These are private module-level variables.
-- **Debug-leak click.echo() false positive**: `click.echo()` is the standard CLI output function, not a debug print. Was flagged as `print_statement`. Now skipped via CLI output allowlist.
-- **Perf-hint HTML template false positives**: Jinja2 `{% for %}` loops in `.html` templates were flagged as `inefficient_iteration`. Template iteration is compile-time, not runtime.
-- **Config-drift Python local module false positives**: `flask`, `js_example`, `task_app`, etc. were reported as missing dependencies. These are local packages within the workspace, not external dependencies.
+- **CRITICAL: `api-map` missed all `async` Tauri IPC commands** — The regex in `_extract_tauri_rust_commands()` only matched `#\[tauri::command\]...fn name(` but not `#\[tauri::command\]...pub async fn name(`. Since most Tauri commands are async, this meant **api-map returned 0 routes for the majority of Tauri apps**. Fixed by adding `(?:async\s+)?` to the regex pattern.
+- **`max_files` feature disconnected from CLI** — After previous fix removed `--max-files` from command wrappers (because engines didn't support it), the engines were later updated to accept `max_files`, but the CLI args were never restored. This meant the `max_files` performance safeguard was completely non-functional from the CLI. Restored `--max-files` argument to `perf-hint`, `smell`, `complexity`, and `secrets` commands, properly passing the value to the engine functions.
 
 ### Changed
 
-- **Version bump**: 5.8.1 → 5.9.0. All version references (utils.py, skill.json, pyproject.toml) now consistent.
+- Version bumped from 5.8.1 to 5.9.2.
 
 ## [5.8.1] — 2026-06-12
 
