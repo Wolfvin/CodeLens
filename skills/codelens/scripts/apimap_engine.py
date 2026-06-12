@@ -2217,8 +2217,10 @@ def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict]:
     routes = []
 
     # Check if this file imports from @tauri-apps/api
+    # v6.3: Removed overly broad `invoke\s*\(` pattern — many non-Tauri projects
+    # have invoke() calls (AWS Lambda, gRPC, etc.). Only match explicit Tauri imports.
     has_tauri_import = bool(re.search(
-        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api|invoke\s*\()',
+        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api)',
         content
     ))
     if not has_tauri_import:
@@ -2230,6 +2232,9 @@ def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict]:
         content
     ):
         command_name = m.group(1)
+        # Skip if command_name looks like a URL path or non-Tauri invocation
+        if '/' in command_name or command_name.startswith('http'):
+            continue
         line_num = content[:m.start()].count('\n') + 1
 
         routes.append({

@@ -794,7 +794,8 @@ ENTRYPOINT_PATTERNS = {
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    exclude_tests: bool = False
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -807,6 +808,7 @@ def map_entrypoints(
         entry_type: Optional filter: "main", "http_handler", "event_handler",
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
+        exclude_tests: If True, exclude "test_entry" from scanning (v6.3)
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -817,6 +819,10 @@ def map_entrypoints(
         "main", "http_handler", "event_handler", "cli_command",
         "cron_job", "worker", "module_export", "test_entry"
     }
+
+    # v6.3: When exclude_tests is True, remove test_entry from valid types
+    if exclude_tests:
+        valid_types.discard("test_entry")
 
     if entry_type and entry_type not in valid_types:
         entry_type = None
@@ -916,8 +922,23 @@ def map_entrypoints(
     # ─── Phase 3: Build execution graph ───────────────────────
     execution_graph = _build_execution_graph(workspace, entrypoints)
 
+    # ─── Phase 3.5: Cap test_entry output (v6.3) ──────────────
+    # test_entry can easily reach 69K+ items on large repos, drowning
+    # out useful signals.  Cap to 100 items and record the true count.
+    TEST_ENTRY_CAP = 100
+    test_entry_total = sum(1 for e in entrypoints if e.get("type") == "test_entry")
+    if test_entry_total > TEST_ENTRY_CAP:
+        # Keep all non-test entries + first TEST_ENTRY_CAP test entries
+        non_test = [e for e in entrypoints if e.get("type") != "test_entry"]
+        test_entries = [e for e in entrypoints if e.get("type") == "test_entry"]
+        entrypoints = non_test + test_entries[:TEST_ENTRY_CAP]
+
     # ─── Phase 4: Compute stats ───────────────────────────────
     stats = _compute_stats(entrypoints)
+
+    # v6.3: Inject actual test_entry total into stats (before cap)
+    if test_entry_total > TEST_ENTRY_CAP:
+        stats["test_entry_total"] = test_entry_total
 
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)
@@ -926,6 +947,7 @@ def map_entrypoints(
         "status": "ok",
         "workspace": workspace,
         "entry_type_filter": entry_type,
+        "exclude_tests": exclude_tests,
         "stats": stats,
         "entrypoints": entrypoints[:300],  # Cap to avoid explosion
         "execution_graph": execution_graph,

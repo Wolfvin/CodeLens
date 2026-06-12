@@ -40,6 +40,17 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
+
+- **Large repo timeout fixes**: `missing_refs` O(n²) typo detection now time-budgeted (15s cap, 2-char prefix filtering, 500K comparison cap, pre-built lookup dict). `analyze` command gets `--timeout` (default 300s) with per-engine time budget and graceful degradation (skips engines when <20% budget remains). `handbook` command gets `--timeout` (default 120s) with per-engine skip and `partial: true` output flag.
+- **api-map tauri false positive fix**: Removed overly broad `invoke\s*\(` pattern from tauri import detection. Many non-Tauri projects (AWS Lambda, gRPC, n8n workflow nodes) use `invoke()` calls that were falsely detected as Tauri IPC. Now only matches explicit `@tauri-apps/api` imports.
+- **state-map react_context false positive fix**: `react_context` detection now requires actual React dependency (`has_react` check via framework_detect or package.json). Vue/Pinia projects no longer produce `react_context` false positives. File-level import check also added: `createContext` must come from a React import.
+- **entrypoints `--exclude-tests` flag**: New `--exclude-tests` flag on the `entrypoints` command filters out `test_entry` type from scanning. Reduces n8n entrypoints from 71K (98% test entries) to 1.6K production entries. `test_entry` output also capped at 100 items max. Analyze command passes `exclude_tests=True` by default.
+- **smell god_object JS/TS brace-depth tracking**: Replaced naive regex that counted ALL function-like patterns in the entire file (10-30x inflation) with proper brace-depth tracking like Rust impl blocks. Now only counts methods inside actual `class { }` body blocks. Example: `N8NStartupError` went from 87 false methods to 3 actual methods.
+- **missing_refs output improvements**: Per-category truncation (max 200 items), `truncated_counts` for actual totals, `findings` flat list for consistency with other engines, `typo_truncated` flag when time budget expires.
+- **analyze graceful degradation**: Skipped engines report `skipped: true` with `skip_reason` and `action` (suggests running individually). `skipped_engines` summary in output. Per-engine `elapsed_seconds` timing.
+- **Version**: 5.9.2 → 6.3.0.
+
 ## What's New in v6.0 — The "Analyze Everything" Release
 
 - **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.

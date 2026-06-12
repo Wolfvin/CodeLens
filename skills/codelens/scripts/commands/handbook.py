@@ -3,8 +3,9 @@
 import os
 import json
 import re
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from registry import load_config, ensure_codelens_dir
 from framework_detect import detect_frameworks
@@ -28,23 +29,45 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Total time budget in seconds for handbook generation (default: 120). "
+                             "Remaining engines are skipped when budget is nearly exhausted.")
 
 
 def execute(args, workspace):
     max_files = getattr(args, 'max_files', 5000)
-    return cmd_handbook(workspace, max_files=max_files)
+    timeout = getattr(args, 'timeout', 120)
+    return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
     max_files caps the scan file count to prevent timeout on huge repos.
+    time_budget sets a total wall-clock budget (seconds). When less than 15s
+    remain, remaining engines are skipped and partial=True is set in output.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
+
+    start_time = time.monotonic()
+    engines_skipped: List[str] = []
+
+    def _remaining() -> float:
+        """Return remaining seconds before budget expires."""
+        return time_budget - (time.monotonic() - start_time)
+
+    def _should_skip(engine_name: str) -> bool:
+        """Check if we should skip an engine due to time budget."""
+        if _remaining() < 15:
+            engines_skipped.append(engine_name)
+            logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
+                           f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
+            return True
+        return False
 
     # 1. Identity — extract from package.json / pyproject.toml / README
     identity = _extract_project_identity(workspace)
@@ -54,7 +77,6 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     registry_path = os.path.join(workspace, '.codelens', 'backend.json')
     if os.path.exists(registry_path):
         try:
-            import time
             mtime = os.path.getmtime(registry_path)
             if time.time() - mtime < 300:  # 5 minutes freshness
                 from registry import load_backend_registry, load_frontend_registry
@@ -74,7 +96,10 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
-        scan_result = cmd_scan(workspace)
+        if _should_skip('scan'):
+            scan_result = {"status": "skipped"}
+        else:
+            scan_result = cmd_scan(workspace)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
@@ -83,98 +108,118 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Failed to write output files", exc_info=True)
 
     # 4. Frameworks
-    try:
-        fw_result = detect_frameworks(workspace)
-        frameworks = fw_result.get("frameworks", [])
-    except Exception:
-        logger.warning("Framework detection failed", exc_info=True)
-        frameworks = config.get("frameworks", [])
+    frameworks = config.get("frameworks", [])
+    if _should_skip('frameworks'):
+        pass  # keep default from config
+    else:
+        try:
+            fw_result = detect_frameworks(workspace)
+            frameworks = fw_result.get("frameworks", [])
+        except Exception:
+            logger.warning("Framework detection failed", exc_info=True)
 
     # 5. Health (from smell engine)
-    try:
-        smell_result = detect_smells(workspace)
-        health = {
-            "score": smell_result.get("stats", {}).get("health_score", 0),
-            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-            "critical": smell_result.get("stats", {}).get("critical", 0),
-            "warning": smell_result.get("stats", {}).get("warning", 0),
-        }
-    except Exception:
-        logger.warning("Health detection failed", exc_info=True)
-        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    if _should_skip('smell'):
+        pass
+    else:
+        try:
+            smell_result = detect_smells(workspace)
+            health = {
+                "score": smell_result.get("stats", {}).get("health_score", 0),
+                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+                "critical": smell_result.get("stats", {}).get("critical", 0),
+                "warning": smell_result.get("stats", {}).get("warning", 0),
+            }
+        except Exception:
+            logger.warning("Health detection failed", exc_info=True)
 
     # 6. Entrypoints
-    try:
-        ep_result = map_entrypoints(workspace)
-        entrypoints = [
-            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-            for e in ep_result.get("entrypoints", [])[:30]
-        ]
-    except Exception:
-        logger.warning("Entrypoint mapping failed", exc_info=True)
-        entrypoints = []
+    entrypoints = []
+    if _should_skip('entrypoints'):
+        pass
+    else:
+        try:
+            ep_result = map_entrypoints(workspace, exclude_tests=True)
+            entrypoints = [
+                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+                for e in ep_result.get("entrypoints", [])[:30]
+            ]
+        except Exception:
+            logger.warning("Entrypoint mapping failed", exc_info=True)
 
     # 7. API Routes
-    try:
-        api_result = map_api_routes(workspace)
-        api_routes = [
-            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-            for r in api_result.get("routes", [])[:50]
-        ]
-    except Exception:
-        logger.warning("API route mapping failed", exc_info=True)
-        api_routes = []
+    api_routes = []
+    if _should_skip('apimap'):
+        pass
+    else:
+        try:
+            api_result = map_api_routes(workspace)
+            api_routes = [
+                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+                for r in api_result.get("routes", [])[:50]
+            ]
+        except Exception:
+            logger.warning("API route mapping failed", exc_info=True)
 
     # 8. State management
-    try:
-        state_result = map_state(workspace)
-        state_stores = [
-            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-            for s in state_result.get("stores", [])[:20]
-        ]
-    except Exception:
-        logger.warning("State management mapping failed", exc_info=True)
-        state_stores = []
+    state_stores = []
+    if _should_skip('statemap'):
+        pass
+    else:
+        try:
+            state_result = map_state(workspace)
+            state_stores = [
+                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+                for s in state_result.get("stores", [])[:20]
+            ]
+        except Exception:
+            logger.warning("State management mapping failed", exc_info=True)
 
-    # 9. Risks (circular deps, dead code, secrets)
+    # 9. Risks (circular deps, dead code, secrets, vulnscan)
     risks = []
-    try:
-        circ_result = detect_circular(workspace)
-        for chain in circ_result.get("chains", [])[:5]:
-            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
-    except Exception:
-        logger.warning("Circular dependency detection failed", exc_info=True)
-    try:
-        dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-        if dead_count > 0:
-            risks.append({"type": "dead_code", "count": dead_count})
-    except Exception:
-        logger.warning("Dead code detection failed", exc_info=True)
-    try:
-        secrets_result = detect_secrets(workspace)
-        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-        if secrets_count > 0:
-            risks.append({"type": "secrets", "count": secrets_count})
-    except Exception:
-        logger.warning("Secrets detection failed", exc_info=True)
-    try:
-        vuln_result = scan_vulnerabilities(workspace)
-        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-        if vuln_count > 0:
-            risks.append({"type": "vulnerabilities", "count": vuln_count})
-    except Exception:
-        logger.warning("Vulnerability scan failed", exc_info=True)
+    if not _should_skip('circular'):
+        try:
+            circ_result = detect_circular(workspace)
+            for chain in circ_result.get("chains", [])[:5]:
+                risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+        except Exception:
+            logger.warning("Circular dependency detection failed", exc_info=True)
+    if not _should_skip('deadcode'):
+        try:
+            dead_result = detect_dead_code(workspace)
+            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+            if dead_count > 0:
+                risks.append({"type": "dead_code", "count": dead_count})
+        except Exception:
+            logger.warning("Dead code detection failed", exc_info=True)
+    if not _should_skip('secrets'):
+        try:
+            secrets_result = detect_secrets(workspace)
+            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+            if secrets_count > 0:
+                risks.append({"type": "secrets", "count": secrets_count})
+        except Exception:
+            logger.warning("Secrets detection failed", exc_info=True)
+    if not _should_skip('vulnscan'):
+        try:
+            vuln_result = scan_vulnerabilities(workspace)
+            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+            if vuln_count > 0:
+                risks.append({"type": "vulnerabilities", "count": vuln_count})
+        except Exception:
+            logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
-    try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
-    except Exception:
-        logger.warning("Summary computation failed", exc_info=True)
-        summary = {}
+    summary = {}
+    if not _should_skip('summary'):
+        try:
+            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        except Exception:
+            logger.warning("Summary computation failed", exc_info=True)
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -210,6 +255,13 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         },
         "files_by_language": summary.get("files_by_language", {})
     }
+
+    # Add partial metadata if any engines were skipped due to time budget
+    if engines_skipped:
+        handbook["partial"] = True
+        handbook["time_budget_used"] = round(time.monotonic() - start_time, 2)
+        handbook["time_budget_total"] = time_budget
+        handbook["engines_skipped"] = engines_skipped
 
     # Write handbook.json
     codelens_dir = os.path.join(workspace, '.codelens')

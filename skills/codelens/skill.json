@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.2",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "6.3.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes: missing_refs O(n²) typo detection now time-budgeted (15s cap, prefix filtering, 500K comparison cap); analyze command gets --timeout (default 300s) with per-engine time budget and graceful skip; handbook command gets --timeout (default 120s) with per-engine skip and partial output. False positive fixes: api-map tauri detection tightened (removed broad invoke() pattern); state-map react_context now requires actual React import/dependency; entrypoints --exclude-tests flag (69K test entries excluded by default in analyze); smell god_object JS/TS brace-depth tracking (was 29x inflation, now accurate).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",

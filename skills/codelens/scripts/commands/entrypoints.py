@@ -11,10 +11,13 @@ def add_args(parser):
                         choices=["main", "http_handler", "event_handler", "cli_command",
                                  "cron_job", "worker", "module_export", "test_entry"],
                         help="Filter by entry point type")
+    parser.add_argument("--exclude-tests", action="store_true", default=False,
+                        help="Exclude test_entry type from scanning (reduces noise on large repos)")
 
 
 def execute(args, workspace):
-    return map_entrypoints(workspace, entry_type=args.entry_type)
+    return map_entrypoints(workspace, entry_type=args.entry_type,
+                           exclude_tests=args.exclude_tests)
 
 
 register_command("entrypoints", "Map execution entry points", add_args, execute)

@@ -15,6 +15,8 @@ Usage:
     codelens analyze /path/to/repo --focus security
     codelens analyze /path/to/repo --detail full
     codelens analyze /path/to/repo --skip-scan  (use existing registry)
+    codelens analyze /path/to/repo --timeout 300  (5 min budget for engines)
+    codelens analyze /path/to/repo --exclude-tests  (skip test entry points)
 """
 
 import os
@@ -37,6 +39,10 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
+    parser.add_argument("--timeout", type=int, default=300,
+                        help="Total time budget in seconds for analysis engines (default: 300)")
+    parser.add_argument("--exclude-tests", action="store_true", default=False,
+                        help="Exclude test entry points from entrypoints analysis")
 
 
 def execute(args, workspace):
@@ -46,6 +52,8 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
+        timeout=args.timeout,
+        exclude_tests=args.exclude_tests,
     )
 
 
@@ -55,6 +63,8 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
+    timeout: int = 300,
+    exclude_tests: bool = False,
 ) -> Dict[str, Any]:
     """
     Full repository analysis — the single command to understand an entire codebase.
@@ -70,6 +80,7 @@ def analyze_repository(
     - Navigate the codebase efficiently
     """
     start_time = time.time()
+    total_budget = float(timeout)
     workspace = os.path.abspath(workspace)
 
     # Severity filter based on detail level
@@ -86,6 +97,7 @@ def analyze_repository(
         "focus": focus,
         "detail": detail,
         "codelens_version": "6.0",
+        "time_budget_seconds": total_budget,
     }
 
     # ─── Phase 1: Ensure Registry Exists ──────────────────────
@@ -197,7 +209,7 @@ def analyze_repository(
 
     try:
         from entrypoints_engine import map_entrypoints
-        ep = map_entrypoints(workspace)
+        ep = map_entrypoints(workspace, exclude_tests=exclude_tests)
         result["architecture"]["entry_points"] = [
             {
                 "type": e.get("type", ""),
@@ -239,39 +251,60 @@ def analyze_repository(
     # --- Security ---
     if focus in ("security", "all"):
         _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items))
+                    lambda: _detect_secrets(workspace, severity_filter, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
-                    lambda: _detect_vulns(workspace, max_items))
+                    lambda: _detect_vulns(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "dataflow_violations", "Data Flow Violations",
-                    lambda: _detect_dataflow(workspace, max_items))
+                    lambda: _detect_dataflow(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "env_issues", "Environment Issues",
-                    lambda: _detect_env(workspace, max_items))
+                    lambda: _detect_env(workspace, max_items),
+                    start_time, total_budget)
 
     # --- Quality ---
     if focus in ("quality", "all"):
         _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items))
+                    lambda: _detect_smells(workspace, severity_filter, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items))
+                    lambda: _detect_debug(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "complexity", "Complexity Hotspots",
-                    lambda: _detect_complexity(workspace, max_items))
+                    lambda: _detect_complexity(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items))
+                    lambda: _detect_dead_code(workspace, max_items),
+                    start_time, total_budget)
 
     # --- Architecture ---
     if focus in ("architecture", "all"):
         _run_engine(findings, "circular_dependencies", "Circular Dependencies",
-                    lambda: _detect_circular(workspace, max_items))
+                    lambda: _detect_circular(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items))
+                    lambda: _detect_perf(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "config_drift", "Dependency Drift",
-                    lambda: _detect_config_drift(workspace, max_items))
+                    lambda: _detect_config_drift(workspace, max_items),
+                    start_time, total_budget)
         _run_engine(findings, "binary_artifacts", "Binary Artifacts",
-                    lambda: _detect_binaries(workspace, max_items))
+                    lambda: _detect_binaries(workspace, max_items),
+                    start_time, total_budget)
 
     result["findings"] = findings
     result["total_finding_categories"] = len(findings)
     result["total_issues"] = sum(f.get("total", 0) for f in findings)
+
+    # ─── Phase 7b: Skipped Engines Summary ────────────────────
+
+    skipped = [f for f in findings if f.get("skipped")]
+    if skipped:
+        result["skipped_engines"] = [
+            {"category": s["category"], "reason": s.get("skip_reason", "")}
+            for s in skipped
+        ]
 
     # ─── Phase 8: Risk Assessment ─────────────────────────────
 
@@ -297,14 +330,43 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn) -> None:
-    """Safely run an analysis engine and append findings."""
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float) -> None:
+    """Safely run an analysis engine with time budget check."""
+    elapsed = time.time() - start_time
+    remaining = total_budget - elapsed
+
+    # Skip if less than 20% of budget remains
+    if remaining < total_budget * 0.2:
+        logger.debug(f"Skipping engine {category}: time budget nearly exhausted ({remaining:.1f}s remaining)")
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": 0,
+            "severity": "info",
+            "skipped": True,
+            "skip_reason": f"Time budget nearly exhausted ({remaining:.1f}s remaining of {total_budget:.0f}s)",
+            "action": f"Run '{category}' engine individually for full results",
+        })
+        return
+
     try:
+        engine_start = time.time()
         result = engine_fn()
+        engine_elapsed = time.time() - engine_start
         if result:
+            result["elapsed_seconds"] = round(engine_elapsed, 2)
             findings.append(result)
     except Exception as e:
         logger.debug(f"Engine {category} failed: {e}")
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": 0,
+            "severity": "info",
+            "skipped": True,
+            "skip_reason": f"Engine error: {type(e).__name__}",
+            "action": f"Run '{category}' engine individually for full results",
+        })
 
 
 def _detect_secrets(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
