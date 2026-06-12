@@ -39,6 +39,7 @@ from parsers.fallback_scala import parse_scala_fallback
 from parsers.fallback_shell import parse_shell_fallback
 from parsers.fallback_gdscript import parse_gdscript_fallback
 from parsers.fallback_kotlin import parse_kotlin_fallback
+from parsers.fallback_nim import parse_nim_fallback
 
 from commands import register_command
 
@@ -769,8 +770,26 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 logger.debug(f"Failed to read GDScript file: {path}")
 
 
+    # Parse Nim files
+    nim_data = []
+    if files["nim"]:
+        for path in files["nim"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_nim_fallback(content, os.path.relpath(path, workspace))
+                nim_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Nim file: {path}")
+
     # All new language data combined
-    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data
+    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data + nim_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -870,6 +889,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "scala": len(files["scala"]),
             "shell": len(files["shell"]),
             "gdscript": len(files["gdscript"]),
+            "nim": len(files["nim"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -887,6 +907,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "scala_parsed": len(scala_data),
         "shell_parsed": len(shell_data),
         "gdscript_parsed": len(gdscript_data),
+        "nim_parsed": len(nim_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -934,19 +955,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "gdscript": "GDScript",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    # v7: Also note C/C++ fallback status if detected
-    has_cpp = fw.get("has_cpp", False)
-    if not unsupported and not has_cpp:
-        return None
-    note = ""
-    if unsupported:
-        note = f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
-    if has_cpp:
-        cpp_count = fw.get("c_cpp_file_count", 0)
-        if note:
-            note += " "
-        note += f"C/C++ files detected ({cpp_count} files) — parsed with regex-based fallback extractor. Provides function, struct, class, and call-edge extraction but may miss some patterns (e.g., template metaprogramming, complex macros)."
-    return note if note else None
+    return f"Detected {', '.join(parts)} source files — these languages use regex-based fallback extraction. Analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS/Nim)."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -979,6 +988,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "scala": [],
         "shell": [],
         "gdscript": [],
+        "nim": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -1036,8 +1046,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["java"].append(file_path)
             elif ext == '.kt':
                 files["kotlin"].append(file_path)
-            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx', '.cu', '.cuh'):
-                # .cu/.cuh = CUDA source, treated as C/C++ for parsing
+            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
                 files["c_cpp"].append(file_path)
             elif ext == '.go':
                 files["go"].append(file_path)
@@ -1062,6 +1071,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["gdscript"].append(file_path)
             elif ext in ('.scala', '.sc'):
                 files["scala"].append(file_path)
+            elif ext in ('.nim',):
+                files["nim"].append(file_path)
+            elif ext in ('.nims',):
+                files["nim"].append(file_path)
             elif ext in ('.sh', '.bash', '.zsh'):
                 files["shell"].append(file_path)
             elif filename == 'Dockerfile' or filename.endswith('.Dockerfile'):

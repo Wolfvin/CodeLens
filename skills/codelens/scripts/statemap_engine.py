@@ -33,10 +33,11 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".php",
+    ".py", ".rs", ".vue", ".svelte",
+    ".nim", ".nims",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant", "django_model", "php_global", "laravel_config", "laravel_facade", "eloquent_model"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant", "django_model"}
 
 # ─── JS/TS Keywords & Built-ins (false-positive filter) ────────
 
@@ -77,26 +78,6 @@ _JS_BUILTIN_METHODS = frozenset({
 })
 
 
-_PHP_KEYWORDS = frozenset({
-    'if', 'else', 'elseif', 'while', 'do', 'for', 'foreach', 'switch',
-    'case', 'default', 'break', 'continue', 'return', 'try', 'catch',
-    'finally', 'throw', 'new', 'class', 'function', 'public', 'private',
-    'protected', 'static', 'abstract', 'interface', 'trait', 'enum',
-    'extends', 'implements', 'use', 'namespace', 'require', 'include',
-    'echo', 'print', 'var', 'const', 'isset', 'unset', 'null', 'true', 'false',
-})
-
-_PHP_BUILTIN_METHODS = frozenset({
-    'array_push', 'array_pop', 'array_shift', 'array_unshift', 'array_merge',
-    'array_map', 'array_filter', 'array_reduce', 'array_keys', 'array_values',
-    'count', 'strlen', 'substr', 'strpos', 'str_replace', 'strtolower', 'strtoupper',
-    'trim', 'explode', 'implode', 'json_encode', 'json_decode', 'file_exists',
-    'is_array', 'is_string', 'is_int', 'is_null', 'empty', 'sizeof',
-    'in_array', 'array_key_exists', 'header', 'http_response_code',
-    'serialize', 'unserialize', 'var_dump', 'print_r', 'die', 'exit',
-})
-
-
 _TS_TYPE_SUFFIXES = (
     'Payload', 'Params', 'Request', 'Response', 'Result',
     'Input', 'Output', 'DTO', 'Args', 'Var', 'Ref',
@@ -110,15 +91,6 @@ def _is_js_keyword_or_builtin(name: str) -> bool:
     management extractors (Pinia, Vuex, etc.).
     """
     return name in _JS_KEYWORDS or name in _JS_BUILTIN_METHODS
-
-
-def _is_php_keyword_or_builtin(name: str) -> bool:
-    """Check if a name is a PHP keyword or built-in function.
-
-    Used to filter false-positive state detections in PHP state
-    extractors (Laravel, superglobals, etc.).
-    """
-    return name in _PHP_KEYWORDS or name in _PHP_BUILTIN_METHODS
 
 
 def _is_typescript_type_definition(content: str, var_name: str, line_idx: int) -> bool:
@@ -525,16 +497,6 @@ def map_state(
                     frameworks_detected.add("module_level_py")
                     stores.extend(py_global_results["stores"])
                     state_flow.extend(py_global_results["flow"])
-
-            # ─── PHP / Laravel State Management ─────────────────
-            if ext == ".php":
-                php_state_results = _extract_php_state(content, rel_path)
-                if php_state_results["stores"]:
-                    for s in php_state_results["stores"]:
-                        fw = s.get("framework", "php_state")
-                        frameworks_detected.add(fw)
-                    stores.extend(php_state_results["stores"])
-                    state_flow.extend(php_state_results["flow"])
 
             # ─── Rust State Management ──────────────────────────
             if ext == ".rs":
@@ -2610,172 +2572,6 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "actions": [],
             "consumers": [],
         })
-
-    return {"stores": stores, "flow": flow}
-
-
-# ─── PHP / Laravel State Management ─────────────────────────────
-
-def _extract_php_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract PHP state management patterns.
-
-    Detects:
-    - PHP superglobals ($_SESSION, $_GLOBALS, $_ENV, $_SERVER, $_GET, $_POST, $_REQUEST, $_COOKIE)
-    - Laravel Config state (Config::get, Config::set, config())
-    - Laravel Facade state (Cache::, Session::, DB::, Redis::, etc.)
-    - Eloquent model state ($fillable, $hidden, protected static $)
-    """
-    stores = []
-    flow = []
-
-    # Skip test files
-    if any(x in rel_path for x in ['Test', 'test', '_test', 'PHPUnit', 'pest.php']):
-        return {"stores": [], "flow": []}
-
-    # ─── PHP Superglobals ──────────────────────────────────────
-    for m in re.finditer(r'\$_(SESSION|GLOBALS|ENV|SERVER|GET|POST|REQUEST|COOKIE)\b', content):
-        sg_name = f"$_{m.group(1)}"
-        line_num = content[:m.start()].count('\n') + 1
-        # Avoid duplicates for the same superglobal in the same file
-        if any(s["name"] == sg_name and s["defined_in"] == rel_path for s in stores):
-            continue
-        stores.append({
-            "name": sg_name,
-            "type": "php_global",
-            "framework": "php_superglobal",
-            "defined_in": rel_path,
-            "line": line_num,
-            "slices": [],
-            "actions": [],
-            "consumers": [],
-        })
-        flow.append({
-            "from": rel_path,
-            "action": f"access({sg_name})",
-            "to": sg_name,
-            "file": rel_path,
-            "type": "read",
-        })
-
-    # ─── Laravel Config state ──────────────────────────────────
-    # Config::get('key'), Config::set('key', value), Config::has('key')
-    for m in re.finditer(r"Config::(get|set|has)\s*\(", content):
-        method = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        # Extract config key if possible
-        key_match = re.search(r"Config::" + method + r"\s*\(\s*['\"]([^'\"]+)['\"]", content[m.start():m.start() + 80])
-        key_name = key_match.group(1) if key_match else "config"
-        store_name = f"Config::{key_name}"
-        if not any(s["name"] == store_name and s["defined_in"] == rel_path for s in stores):
-            stores.append({
-                "name": store_name,
-                "type": "laravel_config",
-                "framework": "laravel_config",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": ["set"] if method == "set" else [],
-                "consumers": [],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"Config::{method}({key_name})",
-                "to": store_name,
-                "file": rel_path,
-                "type": "write" if method == "set" else "read",
-            })
-
-    # config('key') helper function
-    for m in re.finditer(r"config\s*\(\s*['\"]", content):
-        line_num = content[:m.start()].count('\n') + 1
-        key_match = re.search(r"config\s*\(\s*['\"]([^'\"]+)['\"]", content[m.start():m.start() + 80])
-        if key_match:
-            key_name = key_match.group(1)
-            store_name = f"config({key_name})"
-            if not any(s["name"] == store_name and s["defined_in"] == rel_path for s in stores):
-                stores.append({
-                    "name": store_name,
-                    "type": "laravel_config",
-                    "framework": "laravel_config",
-                    "defined_in": rel_path,
-                    "line": line_num,
-                    "slices": [],
-                    "actions": [],
-                    "consumers": [],
-                })
-
-    # ─── Laravel Facade state ──────────────────────────────────
-    # Cache::get(), Cache::put(), Session::get(), Session::put(), etc.
-    for m in re.finditer(r"(Cache|Session|Config|App|Route|DB|Redis|Queue|Mail|Log|Event|Bus)::", content):
-        facade_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        store_name = f"{facade_name}::facade"
-        if not any(s["name"] == store_name and s["defined_in"] == rel_path for s in stores):
-            stores.append({
-                "name": store_name,
-                "type": "laravel_facade",
-                "framework": "laravel_facade",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"{facade_name}::call()",
-                "to": store_name,
-                "file": rel_path,
-                "type": "read",
-            })
-
-    # ─── Eloquent model state ──────────────────────────────────
-    # Model::$fillable, Model::$hidden, protected static $
-    for m in re.finditer(r"\$fillable\b", content):
-        line_num = content[:m.start()].count('\n') + 1
-        if not any(s["name"] == "$fillable" and s["defined_in"] == rel_path for s in stores):
-            stores.append({
-                "name": "$fillable",
-                "type": "eloquent_model",
-                "framework": "eloquent_model",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-            })
-
-    for m in re.finditer(r"\$hidden\b", content):
-        line_num = content[:m.start()].count('\n') + 1
-        if not any(s["name"] == "$hidden" and s["defined_in"] == rel_path for s in stores):
-            stores.append({
-                "name": "$hidden",
-                "type": "eloquent_model",
-                "framework": "eloquent_model",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-            })
-
-    for m in re.finditer(r"protected\s+static\s+\$", content):
-        line_num = content[:m.start()].count('\n') + 1
-        # Extract variable name
-        var_match = re.search(r"protected\s+static\s+\$(\w+)", content[m.start():m.start() + 60])
-        var_name = f"${var_match.group(1)}" if var_match else "$static_prop"
-        store_name = f"static::{var_name}"
-        if not any(s["name"] == store_name and s["defined_in"] == rel_path for s in stores):
-            stores.append({
-                "name": store_name,
-                "type": "eloquent_model",
-                "framework": "eloquent_model",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-            })
 
     return {"stores": stores, "flow": flow}
 

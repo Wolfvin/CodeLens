@@ -32,7 +32,7 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Nim, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
@@ -40,15 +40,18 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.6 — Tested on grafana/grafana (21,850 files, React+Go gRPC monorepo)
+## What's New in v6.5 — Tested on nim-lang/Nim (3,707 .nim files, self-hosting Nim compiler)
 
-- **Bugfix: `analyze` timeout on large repos**: Scan phase consumed the entire engine time budget, causing all remaining engines to be skipped. Now the engine budget resets AFTER scan completes, giving all engines the full timeout budget regardless of scan duration. Added `scan_elapsed_seconds` and `engine_elapsed_seconds` to output.
-- **Bugfix: `api-map` 68% test/mock false positives**: Routes from test files (.test.tsx), mock files (mockApi.ts, mswAPI.ts), and fixture directories were reported as production routes. Expanded mock detection patterns to include MSW handlers, fixture dirs, and common mock file naming. `analyze` now passes `production_only=True` to api-map.
-- **Bugfix: Zombie CSS `file: unknown, line: 0`**: Dead CSS classes with HTML references but no CSS definition showed `file: "unknown"`. Now falls back to HTML path when CSS list is empty.
-- **Bugfix: `dataflow` test violations inflating analyze counts**: 5,303 violations were reported but 99%+ were from test/mock files. `analyze` now only counts production violations and shows them first.
-- **Bugfix: `debug-leak` mock_data in config files**: jest.config.js, playwright.config.ts flagged as mock_data leaks. Now skipped entirely in config files.
-- **Bugfix: `state-map` markdown bracket rendering**: `[module_constant]` was consumed by markdown as a link reference, rendering as `odule_constant]`. Now brackets are escaped.
-- **Version**: 6.4.0 → 6.6.0.
+- **Nim parser wired into scan pipeline**: `fallback_nim.py` existed but was never imported by `scan.py`. Added import, file category (`.nim`/`.nims`), parsing block, and stats. Scan now produces 30,987 nodes + 80,405 edges from 3,707 Nim files (previously: 529 nodes from non-Nim files only).
+- **Framework detection substring matching bug fix**: `if ignore in root` in `framework_detect.py` caused "target" to match "test-target-nim", silently skipping the entire workspace. Replaced with `_should_skip_dir()` using path-segment-aware matching. Now correctly detects `has_nim: True` and frameworks `["nim", "jester"]`.
+- **Smell engine Nim regex fix**: `_extract_function_starts` used `\\s+` (double-escaped) instead of `\s+`, so Nim functions were never detected. Fixed and added `method`/`iterator` to pattern. Also added Nim function end detection (indentation-based, like Python).
+- **Complexity engine Nim function extraction**: Added `_extract_nim_functions()` and `_get_nim_function_body()` with full proc/func/method/iterator/template/macro extraction. Now finds 1,109+ functions (previously: 0).
+- **`echo()` no longer false-positive as debug leak in Nim**: In Nim, `echo()` is standard output. Added Nim-specific filtering — only flagged with debug patterns. `debugEcho()` is always flagged as it's Nim's debug-only output. Also added `doAssert()`/`assert()` to debugger patterns.
+- **Nim framework detection**: `detect_frameworks()` now detects `.nim` files and parses `.nimble` files for jester, prologue, karax, happyx, norm, nimcrypto. Nim recommended config paths include `src/`, `lib/`, `nimble/`, and `compiler/` for self-hosting repos.
+- **Nim entrypoints**: `entrypoints_engine.py` now detects `when isMainModule:` and `proc main()`. Found 273 Nim entrypoints (previously: 2 from C/Python).
+- **Nim project identity in handbook**: Parses `.nimble` files for name/version/description. Classifies as nim-compiler, nim-web-service, nim-database, nim-frontend-app, or nim-project.
+- **`.nim`/`.nims` added to 3 engine SOURCE_EXTENSIONS** that were missing it (statemap, secrets, apimap).
+- **Version**: 6.3.1 → 6.5.0.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 

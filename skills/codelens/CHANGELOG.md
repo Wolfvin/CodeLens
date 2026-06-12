@@ -5,27 +5,38 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
-## [6.6.0] — 2026-06-12
+## [6.5.0] — 2026-06-12
 
-### Tested against grafana/grafana (21,850 files: 8,328 TSX + 5,873 Go + 448 JS + 93 Shell, React+Go gRPC monorepo)
+### Tested against nim-lang/Nim (3,707 .nim files, 15 .nimble files, self-hosting Nim compiler)
 
-Real-world test on a massive Go+React+TypeScript polyglot monorepo with gRPC, SCSS,
-and complex monorepo structure (yarn + lerna + nx). Exposed critical false positive
-issues in api-map, dataflow, and debug-leak engines, plus a timeout bug in analyze.
+Real-world test on the Nim programming language's own compiler — a unique self-hosting, indentation-based
+language with 3,707 .nim source files and 35 .nims config files. This exposed critical gaps in Nim language
+support: the Nim parser existed but was never wired into the scan pipeline, framework detection used
+substring matching that incorrectly excluded directories containing "target", and multiple engines had
+Nim function extraction bugs.
 
 ### Fixed
 
-- **`analyze` timeout on large repos without `--skip-scan`** (CRITICAL): The scan phase could take 60-90s on repos with 20K+ files, consuming the entire engine time budget. After scan completed, the 20% remaining-budget check would skip all remaining engines. Now resets the engine time budget AFTER scan completes, so all engines get the full budget regardless of scan duration. Added `scan_elapsed_seconds` and `engine_elapsed_seconds` to output for transparency.
+- **Nim parser not wired into scan pipeline** (CRITICAL): `fallback_nim.py` existed in `parsers/` but was never imported by `scan.py`. Added import, file category, parsing block, and stats reporting. Scan now detects 3,707 Nim files producing 30,987 nodes + 80,405 edges (previously: 529 nodes / 1,485 edges from non-Nim files only).
+- **Framework detection substring matching false positives** (CRITICAL): `framework_detect.py` used `if ignore in root` for directory exclusion, causing "target" to match "test-target-nim", silently skipping the entire workspace. Replaced with `_should_skip_dir()` using path-segment-aware matching. Now correctly detects `has_nim: True`.
+- **Smell engine Nim regex double-escaped** (BUG): `_extract_function_starts` used `\\s+` instead of `\s+`, so Nim function declarations were never matched. Fixed and added `method`/`iterator` to the pattern.
+- **Smell engine Nim function end detection missing** (BUG): `_find_function_end()` had no Nim case, falling through to brace-counting. Added indentation-based function end detection.
+- **Complexity engine Nim function extraction missing** (BUG): `_extract_functions()` found 0 Nim functions. Added `_extract_nim_functions()` and `_get_nim_function_body()`. Now finds 1,109+ functions.
+- **`echo()` false positive as debug leak in Nim** (FALSE POSITIVE): In Nim, `echo()` is standard output. Added Nim-specific filtering — only flagged with debug patterns. `debugEcho()` always flagged.
 
-- **`api-map` 68% test/mock false positives**: On grafana/grafana, 183 of 270 routes (68%) were from test files (.test.tsx), mock files (mockApi.ts, mswAPI.ts), and fixture directories. These are not real production routes. Expanded test/mock detection patterns to include: `/mocks/`, `/mock/`, `/fixtures/`, `/__mocks__/`, `mockApi`, `mockServer`, `mswAPI`, `MockApi`, `.mock.`, `_mock.`, `Mock.ts`, `Mock.js`, `/handlers/`, `handlers.ts`, `handlers.js` (MSW handlers). `analyze` command now passes `production_only=True` to api-map.
+### Added
 
-- **Zombie CSS `file: unknown, line: 0`**: When a CSS class had an `html` reference but empty `css` list, the dead-code engine fell back to `file: "unknown"` instead of using the HTML file path. Now falls back to `html` path when `css` list is empty, providing actionable file location info for every zombie CSS finding.
+- **Nim framework detection**: `detect_frameworks()` now detects `.nim` files and parses `.nimble` files for jester, prologue, karax, happyx, norm, nimcrypto.
+- **Nim entrypoints detection**: `entrypoints_engine.py` now detects `when isMainModule:` and `proc main()`. Found 273 Nim entrypoints (previously: 2).
+- **Nim debug leak patterns**: Added `debugEcho()` to PRINT_PATTERNS, `doAssert()`/`assert()` to DEBUGGER_PATTERNS.
+- **Nim project identity in handbook**: Parses `.nimble` files for name/version/description. Classifies as nim-compiler, nim-web-service, nim-database, nim-frontend-app, or nim-project.
+- **`.nim`/`.nims` in engine SOURCE_EXTENSIONS**: Added to 3 engines that were missing it.
+- **Nim directory hints**: Added `compiler/` and `nimble/` to handbook directory map.
 
-- **`dataflow` test file violations inflating counts in `analyze`**: The `analyze` command reported 5,303 dataflow violations, but 99%+ were from test/mock files. Now `analyze` only counts production violations in the total (test violations still visible in `total_including_tests`), and shows production violations first in `top_items`.
+### Changed
 
-- **`debug-leak` mock_data false positives in config files**: jest.config.js, playwright.config.ts, and similar test config files contained legitimate test configuration patterns (testEnvironment, testRegex, testDir) that were flagged as "mock_data" leaks. Now `mock_data` detection is completely skipped in config files — these patterns are never debug leaks in their context.
-
-- **`state-map` markdown rendering broken for `[module_constant]`**: Square brackets around store types (e.g., `[module_constant]`, `[context]`, `[store]`) were consumed by markdown as link references, rendering as `odule_constant]` or silently disappearing. Now brackets are escaped as `\[module_constant\]` so they render correctly in all markdown viewers.
+- **`lang_note` message updated**: Changed to "regex-based fallback extraction", added Nim to well-supported languages.
+- **Nim no longer listed as unsupported** since it now has a dedicated fallback parser.
 
 ## [6.4.0] — 2026-06-12
 

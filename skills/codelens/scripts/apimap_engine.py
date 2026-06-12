@@ -40,6 +40,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql", ".php", ".go",
+    ".nim", ".nims",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}

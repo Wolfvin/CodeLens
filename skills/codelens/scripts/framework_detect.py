@@ -13,6 +13,18 @@ _logger = logging.getLogger("codelens.framework_detect")
 from utils import DEFAULT_IGNORE_DIRS
 
 
+def _should_skip_dir(root: str) -> bool:
+    """Check if a directory should be skipped during file walking.
+
+    Uses path-segment-aware matching to avoid false positives.
+    For example, 'target' should match '/target/' but NOT '/test-target-nim/'.
+    """
+    root_norm = root.replace('\\', '/')
+    # Split path into segments for proper matching
+    segments = set(root_norm.split('/'))
+    return bool(segments & DEFAULT_IGNORE_DIRS)
+
+
 # Known framework signatures
 FRAMEWORK_SIGNATURES = {
     "react": {
@@ -106,13 +118,6 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["pydantic"],
         "pip_packages": ["pydantic"],
         "config_files": [],
-        "indicators": []
-    },
-    # v7: Python testing frameworks
-    "pytest": {
-        "packages": ["pytest"],
-        "pip_packages": ["pytest"],
-        "config_files": ["pytest.ini", "conftest.py"],
         "indicators": []
     },
     # Desktop app frameworks
@@ -241,11 +246,11 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["laravel/framework", "illuminate/support"],
         "config_files": ["artisan"],
-        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php", "src/Illuminate/"]
+        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php"]
     },
     "symfony": {
         "packages": [],
-        "composer_packages": ["symfony/framework-bundle", "symfony/flex", "symfony/symfony"],
+        "composer_packages": ["symfony/framework-bundle", "symfony/flex"],
         "config_files": ["symfony.lock"],
         "indicators": ["config/bundles.php", "src/Kernel.php"]
     },
@@ -436,6 +441,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
+        "has_nim": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -678,7 +684,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 3d. Check PHP/composer.json for framework detection
     composer_deps = set()
-    composer = {}
     composer_path = os.path.join(workspace, "composer.json")
     if os.path.exists(composer_path):
         detected["has_php"] = True
@@ -706,39 +711,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_laravel"] = True
                     elif fw_name == "symfony":
                         detected["has_symfony"] = True
-                    break
-
-        # Check composer.json name field (when the repo IS the framework)
-        composer_name = composer.get("name", "")
-        if composer_name:
-            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-                if fw_name in detected["frameworks"]:
-                    continue
-                composer_pkgs = sig.get("composer_packages", [])
-                if composer_name in composer_pkgs:
-                    detected["frameworks"].append(fw_name)
-                    if fw_name == "laravel":
-                        detected["has_laravel"] = True
-                    elif fw_name == "symfony":
-                        detected["has_symfony"] = True
-                    break
-
-        # Check composer.json replace section (common in framework monorepos)
-        composer_replace = composer.get("replace", {})
-        if composer_replace:
-            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-                if fw_name in detected["frameworks"]:
-                    continue
-                composer_pkgs = sig.get("composer_packages", [])
-                for pkg_name in composer_pkgs:
-                    if pkg_name in composer_replace:
-                        detected["frameworks"].append(fw_name)
-                        if fw_name == "laravel":
-                            detected["has_laravel"] = True
-                        elif fw_name == "symfony":
-                            detected["has_symfony"] = True
-                        break
-                if fw_name in detected["frameworks"]:
                     break
 
     # 4. Check Rust/Cargo.toml for framework detection
@@ -826,11 +798,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
+            skip = _should_skip_dir(root)
             if skip or '.codelens' in root:
                 continue
             for f in files:
@@ -845,11 +813,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Also check for src-tauri directory
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
-                skip = False
-                for ignore in DEFAULT_IGNORE_DIRS:
-                    if ignore in root:
-                        skip = True
-                        break
+                skip = _should_skip_dir(root)
                 if skip or '.codelens' in root:
                     continue
                 if 'src-tauri' in dirs:
@@ -866,11 +830,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
+        skip = _should_skip_dir(root)
         if skip:
             continue
 
@@ -887,6 +847,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            elif f.endswith('.nim') and not detected["has_nim"]:
+                if "nim" not in detected["frameworks"]:
+                    detected["frameworks"].append("nim")
+                detected["has_nim"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -914,11 +878,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
+            skip = _should_skip_dir(root)
             if skip:
                 continue
             for f in files:
@@ -965,15 +925,45 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, Kotlin, etc.)
+    # 6c. Detect Nim frameworks from .nimble files
+    # Parse .nimble files for dependency/framework detection
+    if detected["has_nim"]:
+        _NIM_FRAMEWORK_INDICATORS = {
+            "jester": ["jester"],
+            "prologue": ["prologue"],
+            "karax": ["karax"],
+            "happyx": ["happyx"],
+            "norm": ["norm"],
+            "nimcrypto": ["nimcrypto"],
+        }
+        for root, dirs, fnames in os.walk(workspace):
+            skip = _should_skip_dir(root)
+            if skip or '.codelens' in root:
+                continue
+            for fn in fnames:
+                if fn.endswith('.nimble'):
+                    try:
+                        nimble_path = os.path.join(root, fn)
+                        with open(nimble_path, 'r', encoding='utf-8') as f:
+                            nimble_content = f.read()
+                        # Check for Nim framework deps in requires clause
+                        for fw_name, indicators in _NIM_FRAMEWORK_INDICATORS.items():
+                            if fw_name in detected["frameworks"]:
+                                continue
+                            for indicator in indicators:
+                                if indicator in nimble_content:
+                                    detected["frameworks"].append(fw_name)
+                                    break
+                    except IOError:
+                        pass
+    # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
-    # Note: C/C++ were previously listed here but now have fallback parser support
-    # (fallback_c.py handles both C and C++ with regex extraction).
-    # They are no longer listed as unsupported.
+    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        # kotlin: only mark as unsupported if NOT detected as parsed
-        # (fallback_kotlin.py exists, so only mark if parser clearly fails)
+        "kotlin": ["build.gradle.kts"],
+        "c": ["CMakeLists.txt", "Makefile"],
+        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
@@ -984,60 +974,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
-
-    # 7b. Detect C/C++ as primary language (with fallback parser support)
-    # C/C++ have fallback parsers (fallback_c.py) but are not tree-sitter supported.
-    # We detect them for project identity but do NOT add to unsupported_langs
-    # since the parsers produce meaningful results.
-    c_cpp_source_count = 0
-    for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        for f in files:
-            if f.endswith(('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.cu', '.cuh')):
-                c_cpp_source_count += 1
-    detected["has_cpp"] = c_cpp_source_count > 0
-    detected["c_cpp_file_count"] = c_cpp_source_count
-
-    # 7c. Determine primary vs secondary language for framework prioritization
-    # If C/C++ files outnumber JS/TS files significantly, don't let minor
-    # web UI frameworks dominate the framework detection.
-    js_ts_source_count = 0
-    for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        for f in files:
-            if f.endswith(('.js', '.ts', '.tsx', '.jsx', '.svelte', '.vue')):
-                js_ts_source_count += 1
-    detected["js_ts_file_count"] = js_ts_source_count
-
-    # If C/C++ is the primary language, de-prioritize web UI frameworks
-    if c_cpp_source_count > js_ts_source_count * 2 and c_cpp_source_count > 50:
-        # Remove web UI frameworks that are likely from minor UI components
-        # but keep cmake as it's the primary build system
-        _web_ui_frameworks = {'svelte', 'tailwind', 'react', 'vue', 'next.js',
-                               'nuxt', 'angular', 'sveltekit', 'remix', 'astro'}
-        detected["frameworks"] = [fw for fw in detected["frameworks"]
-                                  if fw not in _web_ui_frameworks]
-        # Re-add cmake if it was removed (it shouldn't be, but just in case)
-        cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-        if os.path.isfile(cmake_path) and 'cmake' not in detected["frameworks"]:
-            detected["frameworks"].insert(0, 'cmake')
-        # Reset web UI flags since they're not primary
-        if c_cpp_source_count > js_ts_source_count * 5:
-            detected["has_svelte"] = False
-            detected["has_tailwind"] = False
-            detected["has_vue"] = False
 
     return detected
 
@@ -1146,6 +1082,14 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
+
+    # Nim: add Nim-specific paths
+    if fw.get("has_nim"):
+        config["backend_paths"].extend(["src/", "lib/", "nimble/"])
+        # For self-hosting compilers like nim-lang/Nim, also add compiler/ path
+        compiler_dir = os.path.join(workspace, "compiler")
+        if os.path.isdir(compiler_dir):
+            config["backend_paths"].append("compiler/")
 
     # Monorepo: add sub-directory paths
     if fw.get("is_monorepo"):

@@ -284,7 +284,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     """
     identity = {
         "name": os.path.basename(workspace),
-        "description": _extract_readme_description(workspace),
+        "description": "",
         "version": "0.0.0",
         "type": "unknown",
         # v6: monorepo & sub-dir info
@@ -475,54 +475,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
 
-    # v7: Also try config.json for exercism-style projects and other JSON configs
-    if not has_pyproject and not has_package_json:
-        config_json_path = os.path.join(workspace, 'config.json')
-        if os.path.isfile(config_json_path):
-            try:
-                with open(config_json_path, 'r', encoding='utf-8') as f:
-                    config_json = json.load(f)
-                # Exercism track config has 'language' and 'slug' fields
-                slug = config_json.get('slug', '')
-                language = config_json.get('language', '')
-                version = config_json.get('version', '')
-                blurb = config_json.get('blurb', '')
-                if slug:
-                    identity["name"] = slug
-                elif language:
-                    identity["name"] = language
-                if version:
-                    identity["version"] = str(version)
-                # Set description from blurb if available and README didn't provide one
-                if blurb and (not identity["description"] or identity["description"] == "<br>"):
-                    identity["description"] = blurb
-                # If this looks like an exercism track, set description and type
-                if not identity["description"] and language:
-                    identity["description"] = f"{language} programming exercises"
-                # Detect exercism-style exercise platform
-                if 'exercises' in config_json and language:
-                    python_type = "exercise-platform"
-                elif language and language.lower() in ('python',):
-                    python_type = "python-project"
-            except Exception:
-                pass
-
-    # v7: Also try setup.py for name and version
-    if identity["version"] == "0.0.0" and identity["name"] == os.path.basename(workspace):
-        setup_py_path = os.path.join(workspace, 'setup.py')
-        if os.path.isfile(setup_py_path):
-            try:
-                with open(setup_py_path, 'r', encoding='utf-8') as f:
-                    setup_content = f.read()
-                name_match = re.search(r"name\s*=\s*['\"]([^'\"]+)['\"]", setup_content)
-                ver_match = re.search(r"version\s*=\s*['\"]([^'\"]+)['\"]", setup_content)
-                if name_match:
-                    identity["name"] = name_match.group(1)
-                if ver_match:
-                    identity["version"] = ver_match.group(1)
-            except Exception:
-                pass
-
     # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')
     if os.path.isfile(cargo_path):
@@ -577,10 +529,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
     # v6.4: Detect PHP projects via composer.json
     php_type = None
-    has_php = False
     composer_path = os.path.join(workspace, 'composer.json')
     if os.path.isfile(composer_path):
-        has_php = True
         try:
             with open(composer_path, 'r', encoding='utf-8') as f:
                 composer_data = json.load(f)
@@ -590,52 +540,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             php_version = composer_data.get('version', '')
             if php_version:
                 identity["version"] = php_version
-            else:
-                # Fallback 1: git tags (most PHP packages use git tags for versioning)
-                try:
-                    import subprocess
-                    git_result = subprocess.run(
-                        ['git', 'describe', '--tags', '--abbrev=0'],
-                        capture_output=True, text=True, timeout=5,
-                        cwd=workspace
-                    )
-                    if git_result.returncode == 0 and git_result.stdout.strip():
-                        tag = git_result.stdout.strip().lstrip('v')
-                        if tag and re.match(r'^\d', tag):
-                            identity["version"] = tag
-                except Exception:
-                    pass
-            # Fallback 2: VERSION file
-            if identity["version"] == "0.0.0":
-                version_file = os.path.join(workspace, 'VERSION')
-                if os.path.isfile(version_file):
-                    try:
-                        with open(version_file, 'r', encoding='utf-8') as f:
-                            ver = f.read().strip()
-                            if ver and re.match(r'^\d', ver):
-                                identity["version"] = ver
-                    except Exception:
-                        pass
-            # Fallback 3: CHANGELOG.md version headers
-            if identity["version"] == "0.0.0":
-                changelog_path = os.path.join(workspace, 'CHANGELOG.md')
-                if os.path.isfile(changelog_path):
-                    try:
-                        with open(changelog_path, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                m = re.match(r'^#+\s*\[?v?(\d+\.\d+\.\d+)', line)
-                                if m:
-                                    identity["version"] = m.group(1)
-                                    break
-                    except Exception:
-                        pass
-            # Fallback 4: composer.json extra.branch-alias
-            if identity["version"] == "0.0.0":
-                branch_alias = composer_data.get('extra', {}).get('branch-alias', {})
-                for _branch, alias_ver in branch_alias.items():
-                    if isinstance(alias_ver, str) and re.match(r'^\d+\.\d+', alias_ver):
-                        identity["version"] = alias_ver.rstrip('.x-dev').rstrip('-dev').rstrip('.x')
-                        break
             # Detect PHP framework from require dependencies
             php_req = composer_data.get('require', {})
             php_req_str = ' '.join(php_req.keys()).lower()
@@ -657,20 +561,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 php_type = "php-project"
         except Exception:
             logger.warning("composer.json parsing failed", exc_info=True)
-    else:
-        # Check for PHP files even without composer.json
-        _php_count = 0
-        for _root, _dirs, _files in os.walk(workspace):
-            _dirs[:] = [d for d in _dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            for _f in _files:
-                if _f.endswith('.php'):
-                    _php_count += 1
-                    if _php_count >= 3:
-                        break
-            if _php_count >= 3:
-                break
-        if _php_count >= 3:
-            has_php = True
 
     # v6.4: Detect C/C++ projects
     c_cpp_type = None
@@ -691,20 +581,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = proj_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            # v7: Classify CMake project by content heuristics
-            cmake_lower = cmake_content.lower()
-            if 'ggml' in cmake_lower or 'llama' in cmake_lower or 'tensor' in cmake_lower:
-                c_cpp_type = "ml-inference-engine"
-            elif 'cuda' in cmake_lower or 'cudnn' in cmake_lower or 'tensorrt' in cmake_lower:
-                c_cpp_type = "gpu-computing"
-            elif 'opencv' in cmake_lower or 'ffmpeg' in cmake_lower or 'avcodec' in cmake_lower:
-                c_cpp_type = "multimedia-library"
-            elif 'opengl' in cmake_lower or 'vulkan' in cmake_lower or 'glfw' in cmake_lower:
-                c_cpp_type = "graphics-engine"
-            elif 'boost.asio' in cmake_lower or 'libevent' in cmake_lower or 'nginx' in cmake_lower:
-                c_cpp_type = "network-server"
-            else:
-                c_cpp_type = "cmake-project"
+            c_cpp_type = "cmake-project"
         except Exception:
             pass
 
@@ -764,8 +641,73 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
+    # v6.5: Detect Nim projects from .nimble files
+    nim_type = None
+    nimble_files = []
+    if os.path.isdir(workspace):
+        for fn in os.listdir(workspace):
+            if fn.endswith('.nimble'):
+                nimble_files.append(fn)
+    if nimble_files:
+        nimble_path = os.path.join(workspace, nimble_files[0])
+        try:
+            with open(nimble_path, 'r', encoding='utf-8') as f:
+                nimble_content = f.read()
+            # Extract name, version, description from .nimble file
+            name_match = re.search(r'(?:name|packageName)\s*(?::\s*|=\s*)["\']?([\w-]+)', nimble_content)
+            ver_match = re.search(r'(?:version)\s*(?::\s*|=\s*)["\']?([\d.]+)', nimble_content)
+            desc_match = re.search(r'(?:description)\s*(?::\s*|=\s*)["\'](.+?)["\']', nimble_content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
+            # Classify Nim project type
+            nimble_lower = nimble_content.lower()
+            if 'jester' in nimble_lower or 'prologue' in nimble_lower:
+                nim_type = "nim-web-service"
+            elif 'norm' in nimble_lower or 'sqlite' in nimble_lower:
+                nim_type = "nim-database"
+            elif 'karax' in nimble_lower or 'happyx' in nimble_lower:
+                nim_type = "nim-frontend-app"
+            else:
+                # Check if it's a self-hosting compiler (has compiler/ dir with .nim files)
+                compiler_dir = os.path.join(workspace, 'compiler')
+                if os.path.isdir(compiler_dir):
+                    nim_src_count = 0
+                    for root, dirs, fnames in os.walk(compiler_dir):
+                        for fn in fnames:
+                            if fn.endswith('.nim'):
+                                nim_src_count += 1
+                        if nim_src_count >= 5:
+                            break
+                    if nim_src_count >= 5:
+                        nim_type = "nim-compiler"
+                    else:
+                        nim_type = "nim-project"
+                else:
+                    nim_type = "nim-project"
+        except Exception:
+            logger.warning(".nimble parsing failed", exc_info=True)
+            nim_type = "nim-project"
+    elif os.path.isdir(workspace):
+        # No .nimble file, but check for .nim files
+        nim_count = 0
+        for root, dirs, fnames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for fn in fnames:
+                if fn.endswith('.nim'):
+                    nim_count += 1
+                if nim_count >= 10:
+                    break
+            if nim_count >= 10:
+                break
+        if nim_count >= 10:
+            nim_type = "nim-project"
+
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, nim_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -784,51 +726,14 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
+        if nim_type:
+            type_parts.append("nim")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
         # v6: If monorepo indicators found, append -monorepo suffix
         if identity["is_monorepo"]:
             identity["type"] = active_types[0] + "-monorepo"
-    # v7: Detect Python projects without pyproject.toml
-    # A Python project may only have requirements.txt, pytest.ini, setup.py,
-    # or conftest.py — without pyproject.toml the type stays "unknown".
-    if identity["type"] == "unknown":
-        python_indicators = 0
-        _PYTHON_PROJECT_FILES = {
-            "requirements.txt", "setup.py", "setup.cfg", "pytest.ini",
-            "conftest.py", "tox.ini", "MANIFEST.in", "pylintrc",
-        }
-        for indicator in _PYTHON_PROJECT_FILES:
-            if os.path.isfile(os.path.join(workspace, indicator)):
-                python_indicators += 1
-        # Also check for .py files in the root or exercises/ directory
-        py_file_count = 0
-        for root_check, dirs_check, files_check in os.walk(workspace):
-            dirs_check[:] = [d for d in dirs_check if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            if '.codelens' in root_check:
-                dirs_check.clear()
-                continue
-            for f in files_check:
-                if f.endswith('.py'):
-                    py_file_count += 1
-                    if py_file_count >= 5:
-                        break
-            if py_file_count >= 5:
-                break
-        if python_indicators >= 1 and py_file_count >= 5:
-            # Determine the specific Python project subtype
-            if os.path.isfile(os.path.join(workspace, 'config.json')) and os.path.isdir(os.path.join(workspace, 'exercises')):
-                python_type = "exercise-platform"
-            elif os.path.isfile(os.path.join(workspace, 'setup.py')) or os.path.isfile(os.path.join(workspace, 'setup.cfg')):
-                python_type = "python-library"
-            elif os.path.isfile(os.path.join(workspace, 'conftest.py')) or os.path.isfile(os.path.join(workspace, 'pytest.ini')):
-                python_type = "python-project"
-            elif python_indicators >= 2:
-                python_type = "python-project"
-            else:
-                python_type = "python-project"
-
     # If no type detected, remains "unknown"
 
     # v6: When frameworks are found in subdirectory package.json files,
@@ -847,67 +752,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     return identity
 
 
-def _extract_readme_description(workspace: str) -> str:
-    """Extract a short description from README.md.
-
-    Looks for the first non-heading, non-empty paragraph after the title.
-    Returns at most 200 characters.
-    """
-    for readme_name in ('README.md', 'Readme.md', 'readme.md', 'README.rst', 'README.txt', 'README'):
-        readme_path = os.path.join(workspace, readme_name)
-        if not os.path.isfile(readme_path):
-            continue
-        try:
-            with open(readme_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(8192)  # Read first 8KB
-            lines = content.split('\n')
-            # Skip title line (first # heading) and find first non-empty, non-heading paragraph
-            past_title = False
-            desc_lines = []
-            for line in lines:
-                stripped = line.strip()
-                if not stripped:
-                    if desc_lines:
-                        break  # End of first paragraph
-                    continue
-                if stripped.startswith('#'):
-                    if past_title:
-                        break  # Next heading — stop
-                    past_title = True
-                    continue
-                if stripped.startswith('```') or stripped.startswith('.. '):
-                    if desc_lines:
-                        break
-                    continue
-                # This is a content line
-                # Clean markdown links: [text](url) → text
-                cleaned = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', stripped)
-                # Clean bold/italic: **text** → text, *text* → text
-                cleaned = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', cleaned)
-                desc_lines.append(cleaned)
-                if len(' '.join(desc_lines)) > 200:
-                    break
-            if desc_lines:
-                desc = ' '.join(desc_lines)
-                # Skip if description is just HTML tags or very short
-                if desc.startswith('<') and '>' in desc and len(desc) < 20:
-                    return ""
-                if len(desc) > 200:
-                    desc = desc[:197] + '...'
-                return desc
-        except Exception:
-            pass
-    return ""
-
-
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
     """Build a one-level-deep directory map with descriptions."""
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
-
-    # Detect if this is a PHP/Laravel project for framework-aware descriptions
-    is_php_project = os.path.isfile(os.path.join(workspace, 'composer.json'))
-    is_laravel = os.path.isdir(os.path.join(workspace, 'src', 'Illuminate')) or is_php_project
-
     dir_hints = {
         'src': 'Application source code',
         'app': 'Application pages/routes',
@@ -941,41 +788,10 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
-        # v7: Exercise/learning platform directories
-        'exercises': 'Programming exercises',
-        'concepts': 'Learning concepts',
-        'reference': 'Reference implementations',
-        'practice': 'Practice exercises',
-        'solutions': 'Exercise solutions',
-        'stubs': 'Stub implementations',
-        '.meta': 'Exercise metadata',
-        'bin': 'Executable scripts',
+        'compiler': 'Nim compiler source',
+        'nimble': 'Nimble package files',
+        'lib': 'Shared libraries and utilities',
     }
-
-    # PHP/Laravel-specific directory overrides
-    if is_php_project:
-        php_dir_hints = {
-            'app': 'Application source code',
-            'routes': 'Route definitions',
-            'config': 'Laravel configuration files',
-            'config-stubs': 'Laravel configuration stubs/publishable configs',
-            'database': 'Database migrations and seeders',
-            'resources': 'Views, assets, and language files',
-            'bootstrap': 'Framework bootstrap files',
-            'public': 'Web server document root',
-            'storage': 'Logs, cache, and compiled files',
-            'tests': 'PHPUnit test files',
-            'types': 'PHP type definition stubs',
-        }
-        dir_hints.update(php_dir_hints)
-
-    # Laravel framework source code overrides (for projects like laravel/framework)
-    if is_laravel and os.path.isdir(os.path.join(workspace, 'src', 'Illuminate')):
-        laravel_src_hints = {
-            'src': 'Laravel framework source code (Illuminate components)',
-        }
-        dir_hints.update(laravel_src_hints)
-
     dir_map = {}
     try:
         for entry in sorted(os.listdir(workspace)):
@@ -991,7 +807,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                         for f in filenames:
                             ext = os.path.splitext(f)[1].lower()
-                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte', '.php'}:
+                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
                                 src_count += 1
                 except Exception:
                     logger.warning("Directory file counting failed", exc_info=True)
@@ -1014,90 +830,55 @@ def _detect_conventions(workspace: str) -> Dict[str, Any]:
         "patterns": {}
     }
 
-    # Detect PHP project for convention overrides
-    is_php_project = os.path.isfile(os.path.join(workspace, 'composer.json'))
-    php_framework = None
-    if is_php_project:
-        try:
-            with open(os.path.join(workspace, 'composer.json'), 'r', encoding='utf-8') as f:
-                composer_data = json.load(f)
-            php_req = composer_data.get('require', {})
-            if 'laravel/framework' in php_req or 'laravel/laravel' in php_req:
-                php_framework = "laravel"
-            elif 'symfony/symfony' in php_req or 'symfony/framework-bundle' in php_req:
-                php_framework = "symfony"
-        except Exception:
-            pass
-
     # Try to import convention_engine if it exists
     try:
         from convention_engine import detect_conventions
         result = detect_conventions(workspace)
         if result.get("status") == "ok":
-            conventions = result.get("conventions", conventions)
+            return result.get("conventions", conventions)
     except ImportError:
         pass
     except Exception:
         logger.warning("Convention engine failed", exc_info=True)
 
-    # Apply PHP-specific convention overrides
-    if is_php_project:
-        patterns = conventions.setdefault("patterns", {})
-        # PHP uses require/include or Composer autoload, not ES modules
-        patterns["import_style"] = "composer_autoload"
-        patterns["module_system"] = "Composer"
-        patterns["error_handling"] = "exceptions"
+    # Fallback: basic convention detection from filenames
+    files = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for fn in filenames:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in {'.py', '.js', '.ts', '.tsx', '.rs'}:
+                files.append(fn)
 
-        # Add PHP naming conventions
-        naming = conventions.setdefault("naming", {})
-        php_info = {
-            "naming": "PascalCase classes, camelCase methods",
-        }
-        if php_framework:
-            php_info["framework"] = php_framework
-        naming["php"] = php_info
+    snake_count = sum(1 for f in files if '_' in os.path.splitext(f)[0] and f == f.lower())
+    kebab_count = sum(1 for f in files if '-' in os.path.splitext(f)[0] and f == f.lower())
+    camel_count = sum(1 for f in files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+    pascal_count = sum(1 for f in files if f[0].isupper() and f[0].isalpha())
 
-        return conventions
+    if snake_count > kebab_count and snake_count > camel_count:
+        conventions["naming"]["files"] = "snake_case"
+    elif kebab_count > snake_count and kebab_count > camel_count:
+        conventions["naming"]["files"] = "kebab-case"
+    elif pascal_count > camel_count:
+        conventions["naming"]["files"] = "PascalCase"
+    elif camel_count > 0:
+        conventions["naming"]["files"] = "camelCase"
 
-    # Fallback: basic convention detection from filenames (only if no convention_engine result)
-    if not conventions.get("naming") and not conventions.get("patterns"):
-        files = []
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            for fn in filenames:
-                ext = os.path.splitext(fn)[1].lower()
-                if ext in {'.py', '.js', '.ts', '.tsx', '.rs', '.php'}:
-                    files.append(fn)
+    py_files = [f for f in files if f.endswith('.py')]
+    js_files = [f for f in files if f.endswith(('.js', '.ts', '.tsx'))]
 
-        snake_count = sum(1 for f in files if '_' in os.path.splitext(f)[0] and f == f.lower())
-        kebab_count = sum(1 for f in files if '-' in os.path.splitext(f)[0] and f == f.lower())
-        camel_count = sum(1 for f in files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
-        pascal_count = sum(1 for f in files if f[0].isupper() and f[0].isalpha())
+    if py_files:
+        py_snake = sum(1 for f in py_files if '_' in os.path.splitext(f)[0])
+        if py_snake > len(py_files) * 0.5:
+            conventions["naming"]["python_files"] = "snake_case"
 
-        if snake_count > kebab_count and snake_count > camel_count:
-            conventions["naming"]["files"] = "snake_case"
-        elif kebab_count > snake_count and kebab_count > camel_count:
-            conventions["naming"]["files"] = "kebab-case"
-        elif pascal_count > camel_count:
-            conventions["naming"]["files"] = "PascalCase"
-        elif camel_count > 0:
-            conventions["naming"]["files"] = "camelCase"
-
-        py_files = [f for f in files if f.endswith('.py')]
-        js_files = [f for f in files if f.endswith(('.js', '.ts', '.tsx'))]
-
-        if py_files:
-            py_snake = sum(1 for f in py_files if '_' in os.path.splitext(f)[0])
-            if py_snake > len(py_files) * 0.5:
-                conventions["naming"]["python_files"] = "snake_case"
-
-        if js_files:
-            js_kebab = sum(1 for f in js_files if '-' in os.path.splitext(f)[0])
-            js_camel = sum(1 for f in js_files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
-            if js_kebab > js_camel:
-                conventions["naming"]["javascript_files"] = "kebab-case"
-            elif js_camel > 0:
-                conventions["naming"]["javascript_files"] = "camelCase"
+    if js_files:
+        js_kebab = sum(1 for f in js_files if '-' in os.path.splitext(f)[0])
+        js_camel = sum(1 for f in js_files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+        if js_kebab > js_camel:
+            conventions["naming"]["javascript_files"] = "kebab-case"
+        elif js_camel > 0:
+            conventions["naming"]["javascript_files"] = "camelCase"
 
     return conventions
 
