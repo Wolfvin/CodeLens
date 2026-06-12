@@ -26,8 +26,9 @@ FRAMEWORK_SIGNATURES = {
         "indicators": ["use client", "use server", "getServerSideProps", "getStaticProps"]
     },
     "remix": {
-        "packages": ["@remix-run/react"],
-        "config_files": ["remix.config.js"],
+        "packages": ["@remix-run/react", "@remix-run/node", "@remix-run/server-runtime"],
+        "config_files": ["remix.config.js", "remix.config.ts"],
+        "name_prefixes": ["@remix-run/"],
         "indicators": []
     },
     "astro": {
@@ -189,89 +190,6 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
-    # Flutter / Dart
-    "flutter": {
-        "packages": [],
-        "config_files": ["pubspec.yaml"],
-        "indicators": [".dart", "lib/main.dart"]
-    },
-    # Android
-    "android": {
-        "packages": [],
-        "config_files": ["AndroidManifest.xml", "build.gradle", "build.gradle.kts"],
-        "indicators": ["res/values/", "AndroidManifest.xml"]
-    },
-    # Gradle (generic Java/Kotlin build)
-    "gradle": {
-        "packages": [],
-        "config_files": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
-        "indicators": []
-    },
-    # Maven
-    "maven": {
-        "packages": [],
-        "config_files": ["pom.xml"],
-        "indicators": []
-    },
-    # Make / Autotools (C/C++)
-    "make": {
-        "packages": [],
-        "config_files": ["Makefile", "Makefile.am", "configure.ac", "configure"],
-        "indicators": []
-    },
-    # SCons (Python-based build, used by Godot etc.)
-    "scons": {
-        "packages": [],
-        "config_files": ["SConstruct", "SConscript"],
-        "indicators": []
-    },
-    # Emscripten (WASM compilation)
-    "emscripten": {
-        "packages": [],
-        "config_files": [".emscripten", "emscripten.cmake"],
-        "indicators": [".wasm"]
-    },
-    # Godot Engine
-    "godot": {
-        "packages": [],
-        "config_files": ["project.godot", "SConstruct"],
-        "indicators": [".tscn", ".gd", ".godot/"]
-    },
-    # ESP-IDF (IoT/Embedded)
-    "esp-idf": {
-        "packages": [],
-        "config_files": ["sdkconfig", "sdkconfig.defaults", "Kconfig"],
-        "indicators": ["components/", "main/main.c"]
-    },
-    # .NET
-    "dotnet": {
-        "packages": [],
-        "config_files": [".csproj", ".sln", "global.json", "Directory.Build.props"],
-        "indicators": []
-    },
-    # Lua
-    "lua": {
-        "packages": [],
-        "config_files": [".luacheckrc", "rockspec"],
-        "indicators": [".lua"]
-    },
-    # PHP / Laravel / WordPress
-    "php": {
-        "packages": [],
-        "config_files": ["composer.json", "php.ini"],
-        "indicators": [".php"]
-    },
-    "laravel": {
-        "packages": ["laravel/framework"],
-        "pip_packages": [],
-        "config_files": ["artisan", "config/app.php"],
-        "indicators": ["resources/views/", "app/Http/"]
-    },
-    "wordpress": {
-        "packages": [],
-        "config_files": ["wp-config.php", "wp-config-sample.php"],
-        "indicators": ["wp-content/", "wp-includes/"]
-    },
 }
 
 
@@ -324,20 +242,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
-        "has_flutter": False,
-        "has_android": False,
-        "has_gradle": False,
-        "has_maven": False,
-        "has_make": False,
-        "has_scons": False,
-        "has_godot": False,
-        "has_esp_idf": False,
-        "has_dotnet": False,
-        "has_laravel": False,
-        "has_wordpress": False,
+        "has_remix": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "is_monorepo": False,
+        "monorepo_tools": [],
     }
 
     # 1. Check package.json (root + monorepo sub-packages)
@@ -358,6 +268,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
+
+            # Check package name prefixes (e.g., @remix-run/* in monorepo packages)
+            pkg_name = pkg.get("name", "")
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                for prefix in sig.get("name_prefixes", []):
+                    if pkg_name.startswith(prefix):
+                        detected["frameworks"].append(fw_name)
+                        if fw_name == "remix":
+                            detected["has_react"] = True
+                        break
         except (json.JSONDecodeError, IOError):
             pass
 
@@ -384,6 +306,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "remix":
+                        detected["has_remix"] = True
+                        detected["has_react"] = True  # Remix is React-based
                     break
 
         # Detect CSS preprocessor
@@ -414,28 +339,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
-                elif fw_name == "flutter":
-                    detected["has_flutter"] = True
-                elif fw_name == "android":
-                    detected["has_android"] = True
-                elif fw_name == "gradle":
-                    detected["has_gradle"] = True
-                elif fw_name == "maven":
-                    detected["has_maven"] = True
-                elif fw_name == "make":
-                    detected["has_make"] = True
-                elif fw_name == "scons":
-                    detected["has_scons"] = True
-                elif fw_name == "godot":
-                    detected["has_godot"] = True
-                elif fw_name == "esp-idf":
-                    detected["has_esp_idf"] = True
-                elif fw_name == "dotnet":
-                    detected["has_dotnet"] = True
-                elif fw_name == "laravel":
-                    detected["has_laravel"] = True
-                elif fw_name == "wordpress":
-                    detected["has_wordpress"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -687,7 +590,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
     # These languages are detected but not parsed by tree-sitter.
-    # Note: fallback parsers exist for C/C++, Go, Java, Lua, C# — they ARE parsed, just not via tree-sitter.
     UNSUPPORTED_MARKERS = {
         "go": ["go.mod", "go.sum"],
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
@@ -697,9 +599,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
-        "dart": ["pubspec.yaml"],
-        "lua": [".luacheckrc"],
-        "php": ["composer.json"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -709,82 +608,60 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang == "go" and "golang" not in detected["frameworks"]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
-                elif lang == "dart" and "flutter" not in detected["frameworks"]:
-                    detected["frameworks"].append("flutter")
-                    detected["has_flutter"] = True
                 break
 
-    # 8. Detect additional languages and build systems from file extensions
-    _lang_file_counts = {
-        "c": 0, "cpp": 0, "lua": 0, "java": 0, "go": 0,
-        "csharp": 0, "php": 0, "zig": 0, "python": 0,
-        "rust": 0, "javascript": 0, "typescript": 0,
+    # 8. Detect monorepo structure
+    _MONOREPO_INDICATORS = {
+        "turbo.json": "turborepo",
+        "pnpm-workspace.yaml": "pnpm-workspace",
+        "lerna.json": "lerna",
+        "nx.json": "nx",
     }
-    _lang_extensions = {
-        ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp",
-        ".cc": "cpp", ".cxx": "cpp", ".hh": "cpp", ".hxx": "cpp",
-        ".lua": "lua",
-        ".java": "java",
-        ".go": "go",
-        ".cs": "csharp",
-        ".php": "php",
-        ".zig": "zig",
-        ".py": "python",
-        ".rs": "rust",
-        ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-        ".ts": "typescript", ".tsx": "typescript",
-    }
-    for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            lang = _lang_extensions.get(ext)
-            if lang:
-                _lang_file_counts[lang] = _lang_file_counts.get(lang, 0) + 1
+    for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
+        if os.path.isfile(os.path.join(workspace, indicator_file)):
+            detected["is_monorepo"] = True
+            if tool_name not in detected["monorepo_tools"]:
+                detected["monorepo_tools"].append(tool_name)
 
-    # Add language frameworks if files exist
-    if _lang_file_counts.get("c", 0) > 0 and "c" not in detected["frameworks"]:
-        detected["frameworks"].append("c")
-    if _lang_file_counts.get("cpp", 0) > 0 and "cpp" not in detected["frameworks"]:
-        detected["frameworks"].append("cpp")
-    if _lang_file_counts.get("lua", 0) > 0 and "lua" not in detected["frameworks"]:
-        detected["frameworks"].append("lua")
-    if _lang_file_counts.get("java", 0) > 0 and "java" not in detected["frameworks"]:
-        detected["frameworks"].append("java")
-    if _lang_file_counts.get("go", 0) > 0 and "golang" not in detected["frameworks"]:
-        detected["frameworks"].append("golang")
-        detected["has_golang"] = True
-    if _lang_file_counts.get("csharp", 0) > 0 and "csharp" not in detected["frameworks"]:
-        detected["frameworks"].append("csharp")
-    if _lang_file_counts.get("php", 0) > 0 and "php" not in detected["frameworks"]:
-        detected["frameworks"].append("php")
-    if _lang_file_counts.get("zig", 0) > 0 and "zig" not in detected["frameworks"]:
-        detected["frameworks"].append("zig")
+    # Check for Cargo workspace monorepo
+    cargo_toml_path = os.path.join(workspace, 'Cargo.toml')
+    if os.path.isfile(cargo_toml_path):
+        try:
+            with open(cargo_toml_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if '[workspace]' in cargo_content:
+                detected["is_monorepo"] = True
+                if "cargo-workspace" not in detected["monorepo_tools"]:
+                    detected["monorepo_tools"].append("cargo-workspace")
+        except IOError:
+            pass
 
-    # 9. Detect CMake build system
-    if os.path.exists(os.path.join(workspace, "CMakeLists.txt")) and "cmake" not in detected["frameworks"]:
-        detected["frameworks"].append("cmake")
+    # Check for Rust crate directories with multiple Cargo.toml (Rust monorepo)
+    for crate_dir_name in ('crates', 'ext'):
+        crate_dir = os.path.join(workspace, crate_dir_name)
+        if os.path.isdir(crate_dir):
+            sub_crates = 0
+            try:
+                for entry in os.listdir(crate_dir):
+                    sub_cargo = os.path.join(crate_dir, entry, 'Cargo.toml')
+                    if os.path.isfile(sub_cargo):
+                        sub_crates += 1
+            except OSError:
+                pass
+            if sub_crates >= 2:
+                detected["is_monorepo"] = True
+                if "cargo-workspace" not in detected["monorepo_tools"]:
+                    detected["monorepo_tools"].append("cargo-workspace")
 
-    # 10. Detect Zig build system
-    if os.path.exists(os.path.join(workspace, "build.zig")) and "zig-build" not in detected["frameworks"]:
-        detected["frameworks"].append("zig-build")
-
-    # Store language file counts for downstream use
-    detected["language_file_counts"] = {k: v for k, v in _lang_file_counts.items() if v > 0}
-
-    # Determine polyglot project type
-    active_langs = [k for k, v in _lang_file_counts.items() if v > 0]
-    if len(active_langs) > 1:
-        detected["is_polyglot"] = True
-        detected["project_type"] = "-".join(sorted(active_langs)) + "-polyglot"
-    else:
-        detected["is_polyglot"] = False
+    # Check for monorepo with multiple sub-package.json files
+    if not detected["is_monorepo"] and len(pkg_files) > 3:
+        detected["is_monorepo"] = True
+        if "pnpm-workspace" not in detected["monorepo_tools"] and os.path.isfile(
+            os.path.join(workspace, "pnpm-workspace.yaml")
+        ):
+            detected["monorepo_tools"].append("pnpm-workspace")
+        if not detected["monorepo_tools"]:
+            detected["monorepo_tools"].append("multi-package")
 
     return detected
 
@@ -820,6 +697,11 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_react"]:
         config["jsx_mode"] = True
         config["frontend_paths"].extend(["src/components/", "src/views/"])
+
+    if fw.get("has_remix"):
+        config["jsx_mode"] = True
+        config["frontend_paths"].extend(["app/", "src/app/", "app/routes/"])
+        config["backend_paths"].extend(["app/", "src/app/"])
 
     if fw["has_vue"]:
         config["vue_mode"] = True

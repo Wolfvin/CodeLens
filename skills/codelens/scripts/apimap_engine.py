@@ -120,8 +120,24 @@ def map_api_routes(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # Skip test and spec files — they define mock routes, not real API endpoints
+            lower_name = filename.lower()
+            if lower_name.endswith(('.test.js', '.test.ts', '.test.tsx', '.test.jsx',
+                                    '.spec.js', '.spec.ts', '.spec.tsx', '.spec.jsx',
+                                    '.test.py', '_test.py', '.spec.py', '_spec.py',
+                                    '.bench.ts', '.bench.js')):
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Also skip files in test-specific directories
+            if '/test/' in rel_path or '/tests/' in rel_path or '/__tests__/' in rel_path:
+                continue
+
+            # Also skip benchmark files and directories
+            if '/bench/' in rel_path or '/benchmark/' in rel_path:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:

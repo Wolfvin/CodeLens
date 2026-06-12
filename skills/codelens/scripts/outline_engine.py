@@ -77,16 +77,6 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
-    elif ext in ('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hh', '.hxx'):
-        outline = _outline_c_cpp(content, detail_level)
-    elif ext == '.lua':
-        outline = _outline_lua(content, detail_level)
-    elif ext in ('.java', '.kt'):
-        outline = _outline_java(content, detail_level)
-    elif ext == '.php':
-        outline = _outline_php(content, detail_level)
-    elif ext == '.zig':
-        outline = _outline_zig(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -116,9 +106,10 @@ def get_workspace_outline(
 
     Args:
         workspace: Absolute path to workspace root.
-        file_filter: Optional substring filter for file paths.
+        file_filter: Optional file path filter.
         config: Optional codelens config dict.
-        max_files: Maximum number of files to outline (0 = unlimited).
+        max_files: Maximum number of files to outline (default: 5000).
+                   Use 0 for unlimited. Prevents timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -128,15 +119,13 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
-        '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hh', '.hxx',
-        '.lua', '.java', '.kt', '.cs', '.php',
-        '.zig',
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
     }
 
     outlines = []
     errors = []
-    files_counted = 0
+    files_count = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -153,8 +142,9 @@ def get_workspace_outline(
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
-            # Respect max_files limit
-            if max_files > 0 and files_counted >= max_files:
+            # Respect max_files limit (0 = unlimited)
+            if max_files > 0 and files_count >= max_files:
+                truncated = True
                 break
 
             file_path = os.path.join(root, filename)
@@ -163,20 +153,22 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            files_count += 1
             result = get_file_outline(file_path, workspace, detail_level="minimal")
             if result["status"] == "ok":
                 outlines.append(result)
-                files_counted += 1
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
 
-        if max_files > 0 and files_counted >= max_files:
+        if truncated:
             break
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
+        "truncated": truncated,
+        "max_files": max_files if max_files > 0 else "unlimited",
         "outlines": outlines,
         "errors": errors if errors else None
     }
@@ -526,331 +518,6 @@ def _outline_go(content: str, detail: str) -> Dict:
             outline["variables"].append({"name": const_name, "line": line_num, "const": True})
             if is_exported:
                 outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
-
-    return outline
-
-
-def _outline_c_cpp(content: str, detail: str) -> Dict:
-    """Outline for C/C++ source files using regex-based extraction."""
-    import re
-    outline = {
-        "functions": [],
-        "classes": [],
-        "structs": [],
-        "enums": [],
-        "macros": [],
-        "includes": [],
-        "typedefs": [],
-        "variables": [],
-    }
-
-    # C/C++ keywords to exclude from function detection
-    cpp_keywords = {
-        'if', 'else', 'for', 'while', 'do', 'switch', 'case',
-        'return', 'break', 'continue', 'goto', 'sizeof',
-        'typedef', 'struct', 'class', 'union', 'enum',
-        'namespace', 'using', 'template', 'typename',
-        'try', 'catch', 'throw', 'new', 'delete',
-        'public', 'private', 'protected', 'virtual',
-        'static', 'extern', 'inline', 'const', 'constexpr',
-        'nullptr', 'true', 'false', 'this', 'operator',
-        'auto', 'register', 'volatile', 'friend',
-        'noexcept', 'override', 'final', 'explicit',
-    }
-
-    lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('//') or stripped.startswith('/*'):
-            continue
-
-        # ─── #include ───────────────────────────
-        m = re.match(r'#\s*include\s+[<"]([^>"]+)[>"]', stripped)
-        if m:
-            outline["includes"].append({"name": m.group(1), "line": line_num})
-            continue
-
-        # ─── #define (only named macros, skip include guards) ──
-        m = re.match(r'#\s*define\s+(\w+)', stripped)
-        if m:
-            name = m.group(1)
-            # Skip include guard patterns (_H, _H_, _INCLUDED, etc.)
-            if name.startswith('_') and name.endswith('_'):
-                continue
-            if name.endswith('_H') or name.endswith('_H_') or name.endswith('_INCLUDED'):
-                continue
-            outline["macros"].append({"name": name, "line": line_num})
-            continue
-
-        # ─── Skip other preprocessor directives (#ifdef, #ifndef, #endif, #if, #else, #elif, #pragma) ──
-        if stripped.startswith('#'):
-            continue
-
-        # ─── typedef ────────────────────────────
-        m = re.match(r'typedef\s+.*?\s+(\w+)\s*;', stripped)
-        if m:
-            outline["typedefs"].append({"name": m.group(1), "line": line_num})
-            continue
-
-        # ─── struct/enum/class/union ─────────────
-        m = re.match(r'(?:typedef\s+)?(?:struct|class|union)\s+(\w+)\s*(?::|{|$)', stripped)
-        if m:
-            name = m.group(1)
-            if name not in cpp_keywords:
-                key = "classes" if 'class ' in stripped else "structs"
-                outline[key].append({"name": name, "line": line_num})
-                continue
-
-        m = re.match(r'(?:typedef\s+)?enum\s+(?:class\s+)?(\w+)\s*(?::|{|$)', stripped)
-        if m:
-            outline["enums"].append({"name": m.group(1), "line": line_num})
-            continue
-
-        # ─── Function definition ────────────────
-        # Must NOT be a preprocessor directive
-        m = re.match(
-            r'^(?:(?:static|virtual|inline|const|constexpr|extern|unsigned|signed)\s+)*'
-            r'(?:\w+(?:::\w+)*\s+)'
-            r'(\w+)\s*\(([^)]*)\)\s*'
-            r'(?:const\s*)?'
-            r'(?:override\s*)?'
-            r'(?:noexcept\s*)?'
-            r'(?:->\s*\w+\s*)?'
-            r'[{;]',
-            stripped
-        )
-        if m:
-            fn_name = m.group(1)
-            if fn_name in cpp_keywords:
-                continue
-            # Skip if this looks like a variable declaration with initializer
-            if '=' in stripped and '{' not in stripped:
-                continue
-            outline["functions"].append({"name": fn_name, "line": line_num})
-            continue
-
-        # ─── Method definition outside class (ClassName::methodName) ──
-        m = re.match(
-            r'^(?:(?:static|virtual|inline|const|constexpr)\s+)*'
-            r'(?:\w+(?:::\w+)*\s+)?'
-            r'(\w+)::(\w+)\s*\(([^)]*)\)\s*'
-            r'(?:const\s*)?'
-            r'[{;]',
-            stripped
-        )
-        if m:
-            class_name = m.group(1)
-            method_name = m.group(2)
-            if class_name not in cpp_keywords and method_name not in cpp_keywords:
-                outline["functions"].append({"name": f"{class_name}::{method_name}", "line": line_num})
-                continue
-
-    return outline
-
-
-def _outline_lua(content: str, detail: str) -> Dict:
-    """Outline for Lua source files using regex-based extraction."""
-    import re
-    outline = {
-        "functions": [],
-        "tables": [],
-        "requires": [],
-        "variables": [],
-    }
-
-    lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('--'):
-            continue
-
-        # ─── require() ──────────────────────
-        m = re.search(r'require\s*\(\s*["\']([^"\']+)["\']\s*\)', stripped)
-        if m:
-            outline["requires"].append({"name": m.group(1), "line": line_num})
-
-        # ─── function foo() or function M.foo() ──
-        m = re.match(r'\s*function\s+(\w+(?:[:\.]\w+)*)', line)
-        if m:
-            name = m.group(1)
-            ftype = "method" if (':' in name or '.' in name) else "function"
-            outline["functions"].append({"name": name, "line": line_num, "type": ftype})
-            continue
-
-        # ─── local function foo() ───────────
-        m = re.match(r'\s*local\s+function\s+(\w+)', line)
-        if m:
-            outline["functions"].append({"name": m.group(1), "line": line_num, "type": "local_function"})
-            continue
-
-        # ─── Table declarations ─────────────
-        m = re.match(r'\s*(\w+)\s*=\s*\{', line)
-        if m:
-            name = m.group(1)
-            if name not in ('local', 'function', 'if', 'for', 'while', 'return', 'do', 'then'):
-                outline["tables"].append({"name": name, "line": line_num})
-                continue
-
-        # ─── Module exports (M.foo = ...) ──
-        m = re.match(r'\s*(\w+(?:[:\.]\w+)+)\s*=\s*function', line)
-        if m:
-            outline["functions"].append({"name": m.group(1), "line": line_num, "type": "exported_function"})
-
-    return outline
-
-
-def _outline_java(content: str, detail: str) -> Dict:
-    """Outline for Java/Kotlin source files using regex-based extraction."""
-    import re
-    outline = {
-        "functions": [],
-        "classes": [],
-        "interfaces": [],
-        "enums": [],
-        "imports": [],
-        "variables": [],
-    }
-
-    lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
-            continue
-
-        # ─── import ─────────────────────────
-        m = re.match(r'import\s+(?:static\s+)?([\w.]+(?:\.\*)?)', stripped)
-        if m:
-            outline["imports"].append({"name": m.group(1), "line": line_num})
-            continue
-
-        # ─── package ────────────────────────
-        m = re.match(r'package\s+([\w.]+)', stripped)
-        if m:
-            outline["package"] = m.group(1)
-            continue
-
-        # ─── class/interface/enum ───────────
-        m = re.match(r'(?:public|private|protected)?\s*(?:abstract\s+|final\s+|static\s+)*'
-                      r'(class|interface|enum)\s+(\w+)', stripped)
-        if m:
-            kind = m.group(1)
-            name = m.group(2)
-            if kind == 'interface':
-                outline["interfaces"].append({"name": name, "line": line_num})
-            elif kind == 'enum':
-                outline["enums"].append({"name": name, "line": line_num})
-            else:
-                outline["classes"].append({"name": name, "line": line_num})
-            continue
-
-        # ─── method ─────────────────────────
-        m = re.match(
-            r'(?:public|private|protected)?\s*(?:static\s+|abstract\s+|final\s+|synchronized\s+)*'
-            r'(?:[\w<>\[\]?,\s]+)\s+(\w+)\s*\([^)]*\)',
-            stripped
-        )
-        if m:
-            fn_name = m.group(1)
-            if fn_name not in ('if', 'while', 'for', 'switch', 'catch', 'class', 'interface', 'new', 'return'):
-                outline["functions"].append({"name": fn_name, "line": line_num})
-
-    return outline
-
-
-def _outline_php(content: str, detail: str) -> Dict:
-    """Outline for PHP source files using regex-based extraction."""
-    import re
-    outline = {
-        "functions": [],
-        "classes": [],
-        "interfaces": [],
-        "traits": [],
-        "enums": [],
-        "includes": [],
-        "variables": [],
-    }
-
-    lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
-            continue
-
-        # ─── function ───────────────────────
-        m = re.match(r'function\s+(\w+)\s*\(', stripped)
-        if m:
-            outline["functions"].append({"name": m.group(1), "line": line_num})
-            continue
-
-        # ─── class/interface/trait/enum ─────
-        m = re.match(r'(?:abstract\s+|final\s+)?(class|interface|trait|enum)\s+(\w+)', stripped)
-        if m:
-            kind = m.group(1)
-            name = m.group(2)
-            if kind == 'interface':
-                outline["interfaces"].append({"name": name, "line": line_num})
-            elif kind == 'trait':
-                outline["traits"].append({"name": name, "line": line_num})
-            elif kind == 'enum':
-                outline["enums"].append({"name": name, "line": line_num})
-            else:
-                outline["classes"].append({"name": name, "line": line_num})
-            continue
-
-        # ─── require/include ────────────────
-        m = re.match(r'(?:require|include)(?:_once)?\s+["\']([^"\']+)["\']', stripped)
-        if m:
-            outline["includes"].append({"name": m.group(1), "line": line_num})
-
-    return outline
-
-
-def _outline_zig(content: str, detail: str) -> Dict:
-    """Outline for Zig source files using regex-based extraction."""
-    import re
-    outline = {
-        "functions": [],
-        "structs": [],
-        "enums": [],
-        "constants": [],
-        "imports": [],
-        "variables": [],
-    }
-
-    lines = content.split('\n')
-    for line_num, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('//'):
-            continue
-
-        # ─── @import() ─────────────────────
-        m = re.search(r'@import\s*\(\s*"([^"]+)"\s*\)', stripped)
-        if m:
-            outline["imports"].append({"name": m.group(1), "line": line_num})
-
-        # ─── pub fn / fn ───────────────────
-        m = re.match(r'(?:pub\s+)?fn\s+(\w+)\s*\(', stripped)
-        if m:
-            fn_name = m.group(1)
-            is_pub = stripped.startswith('pub')
-            outline["functions"].append({"name": fn_name, "line": line_num, "visibility": "pub" if is_pub else "private"})
-            continue
-
-        # ─── pub const / const ─────────────
-        m = re.match(r'(?:pub\s+)?const\s+(\w+)\s*=', stripped)
-        if m:
-            outline["constants"].append({"name": m.group(1), "line": line_num})
-            continue
 
     return outline
 
@@ -1245,10 +912,6 @@ def _detect_language(ext: str) -> str:
         '.rs': 'rust', '.py': 'python', '.go': 'go',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
-        '.vue': 'vue', '.svelte': 'svelte',
-        '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.hpp': 'cpp',
-        '.cc': 'cpp', '.cxx': 'cpp', '.hh': 'cpp', '.hxx': 'cpp',
-        '.lua': 'lua', '.java': 'java', '.kt': 'kotlin',
-        '.cs': 'csharp', '.php': 'php', '.zig': 'zig',
+        '.vue': 'vue', '.svelte': 'svelte'
     }
     return mapping.get(ext, 'unknown')
