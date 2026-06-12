@@ -26,7 +26,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, is_bundled_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -118,6 +118,10 @@ def compute_complexity(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip bundled/compiled files (dist/, build/, .global.js, .bundle.js, etc.)
+            if is_bundled_file(rel_path):
+                continue
 
             # Skip large files
             try:

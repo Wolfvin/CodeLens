@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -117,22 +117,28 @@ DEBUGGER_PATTERNS = [
 # Rust logging macros from the `log` crate — these are NOT debugger statements.
 # They are proper structured logging and should not be flagged as debug leaks.
 # Only `dbg!()` is a true debugger statement (it prints and returns a value for debugging).
-RUST_LOG_MACROS = [
+#
+# v5.9.3: Split into production-level (info/warn/error) and debug-level (debug/trace).
+# Production-level macros should NOT be flagged at all — they are appropriate for
+# production code and are controlled by log level at runtime.
+# Debug-level macros (debug!/trace!) are debatable but flag them as low-severity
+# since they might indicate leftover verbose logging.
+RUST_LOG_MACROS_DEBUG_ONLY = [
     (r'\blog::debug!\s*\(', "log::debug!()"),
-    (r'\blog::info!\s*\(', "log::info!()"),
-    (r'\blog::warn!\s*\(', "log::warn!()"),
-    (r'\blog::error!\s*\(', "log::error!()"),
     (r'\blog::trace!\s*\(', "log::trace!()"),
     (r'\bdebug!\s*\(', "debug!()"),
-    (r'\binfo!\s*\(', "info!()"),
-    (r'\bwarn!\s*\(', "warn!()"),
-    (r'\berror!\s*\(', "error!()"),
     (r'\btrace!\s*\(', "trace!()"),
     (r'\btracing::debug!\s*\(', "tracing::debug!()"),
-    (r'\btracing::info!\s*\(', "tracing::info!()"),
-    (r'\btracing::warn!\s*\(', "tracing::warn!()"),
-    (r'\btracing::error!\s*\(', "tracing::error!()"),
     (r'\btracing::trace!\s*\(', "tracing::trace!()"),
+]
+
+# Production-level Rust logging macros — these should NEVER be flagged as debug leaks.
+# They are proper structured logging controlled by log level at runtime.
+# Checked to explicitly EXCLUDE them from debug leak results.
+RUST_LOG_MACROS_PRODUCTION = [
+    r'\blog::info!\s*\(', r'\blog::warn!\s*\(', r'\blog::error!\s*\(',
+    r'\binfo!\s*\(', r'\bwarn!\s*\(', r'\berror!\s*\(',
+    r'\btracing::info!\s*\(', r'\btracing::warn!\s*\(', r'\btracing::error!\s*\(',
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -278,6 +284,10 @@ def detect_debug_leaks(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # v5.9.3: Skip bundled/compiled files (dist/, .global.js, etc.)
+            if is_bundled_file(rel_path):
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -611,36 +621,45 @@ def _detect_debugger_statements(
             break
 
         # Then check for Rust logging macros (not debugger statements, but debug logging)
-        # These are from the `log` crate or `tracing` crate and are proper structured logging.
-        # We flag them as low-severity debug_log entries, not high-severity debugger statements.
+        # v5.9.3: Only flag debug/trace level macros. Production macros (info/warn/error)
+        # are proper structured logging and should NOT be flagged at all.
         if ext == ".rs":
-            for pattern, label in RUST_LOG_MACROS:
-                m = re.search(pattern, stripped)
-                if not m:
-                    continue
+            # First, skip if this is a production-level log macro (info/warn/error)
+            is_production_log = False
+            for prod_pattern in RUST_LOG_MACROS_PRODUCTION:
+                if re.search(prod_pattern, stripped):
+                    is_production_log = True
+                    break
 
-                # Downgrade severity in test files — logging in tests is expected
-                if is_test_file:
-                    severity = "low"
-                    should_remove = False
-                    message = f"Debug logging in test: {label}"
-                else:
-                    severity = "low"
-                    should_remove = False
-                    message = f"Debug logging statement: {label} (structured logging, not a debugger)"
+            if not is_production_log:
+                # Only flag debug/trace level macros
+                for pattern, label in RUST_LOG_MACROS_DEBUG_ONLY:
+                    m = re.search(pattern, stripped)
+                    if not m:
+                        continue
 
-                leaks.append({
-                    "category": "debug_log",
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": label,
-                    "message": message,
-                    "content": stripped[:120],
-                    "match": label,
-                    "severity": severity,
-                    "should_remove": should_remove,
-                })
-                break
+                    # Downgrade severity in test files — logging in tests is expected
+                    if is_test_file:
+                        severity = "low"
+                        should_remove = False
+                        message = f"Debug logging in test: {label}"
+                    else:
+                        severity = "low"
+                        should_remove = False
+                        message = f"Debug-level logging: {label} (consider using info!/warn! for production)"
+
+                    leaks.append({
+                        "category": "debug_log",
+                        "file": rel_path,
+                        "line": i + 1,
+                        "pattern": label,
+                        "message": message,
+                        "content": stripped[:120],
+                        "match": label,
+                        "severity": severity,
+                        "should_remove": should_remove,
+                    })
+                    break
 
 
 def _detect_todo_fixme(

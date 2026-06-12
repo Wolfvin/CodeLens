@@ -29,7 +29,7 @@ import signal
 import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file
 
 # ─── Safety Limits ────────────────────────────────────────────
 
@@ -512,6 +512,10 @@ def detect_perf_hints(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # v5.9.3: Skip bundled/compiled files
+            if is_bundled_file(rel_path):
+                continue
 
             try:
                 file_size = os.path.getsize(file_path)

@@ -202,6 +202,37 @@ Confirmed: 13,068 backend nodes, 61,867 edges, 943 frontend classes, 42 IDs, 7 f
 - **Missing-refs Tailwind utility class false positives** (30% reduction: 92 → 25 issues): `aspect-square`, `backdrop-blur-*`, `line-clamp-*`, `group`, `peer` and other Tailwind utility classes were flagged as "used in HTML/JSX but has no CSS definition" because their prefixes were missing from the `_is_likely_tailwind()` prefix list. Added missing prefixes: `aspect-`, `backdrop-blur-`, `backdrop-brightness-`, `backdrop-contrast-`, `backdrop-grayscale-`, `backdrop-hue-rotate-`, `backdrop-invert-`, `backdrop-opacity-`, `backdrop-saturate-`, `backdrop-sepia-`, `backdrop-filter`, `container`, `columns-`, `line-clamp-`, `group`, `peer`, and others. Also added `_is_utility_base()` as a final fallback check to catch standalone utilities not in the prefix list.
 - **Debug-leak Rust doc comment false positives** (74% reduction: 1,036 → 268 commented_code): Rust doc comments (`///` and `//!`) were treated as regular `//` comments and scored for code likelihood. Since doc comments often contain code-like patterns (e.g., `/// Returns the value of x`, `/// let y = foo()`), they easily scored above the threshold. Fixed by skipping lines starting with `///` or `//!` when detecting commented code blocks in `.rs` files, and only grouping plain `//` comments (not doc comments) into consecutive blocks.
 
+## [5.9.3] — 2026-06-12
+
+### Tested against tauri-apps/tauri (1,099 files: 323 Rust + 40 JS + 28 TS/TSX + 12 Svelte, polyglot desktop framework monorepo)
+
+Real-world test on a Rust+TypeScript polyglot desktop app framework with Cargo workspace + pnpm workspace monorepo.
+Found and fixed 8 significant issues, most critically false positive inflation in smell, debug-leak, and secrets engines.
+
+### Fixed
+
+- **God object false positives in bundled/minified JS files** (CRITICAL — 295 false positive "critical" smells eliminated): `smell_engine.py` god object detection used an overly broad regex `r'\w+\s*\('` that matched ANY word followed by `(`, including chained method calls like `.then()`, `.catch()`, `.map()`. In bundled files like `bundle.global.js`, this counted 982 "methods" for a class named `did` (actually a variable in minified output). Fixed with: (1) improved regex that only matches class method definitions, (2) require actual `class` declaration in file, (3) `is_bundled_file()` check to skip dist/, build/, .global.js, .bundle.js, .chunk.js, .umd.js files.
+
+- **Rust production log macros flagged as debug leaks** (HIGH — 1000+ false positive debug leaks eliminated): `debugleak_engine.py` flagged ALL Rust `log` crate macros (`info!()`, `warn!()`, `error!()`, `debug!()`, `trace!()`) as "debug logging statements". However, `info!()`, `warn!()`, and `error!()` are production-appropriate structured logging controlled by log level at runtime — they are NOT debug code. Fixed by splitting `RUST_LOG_MACROS` into `RUST_LOG_MACROS_DEBUG_ONLY` (debug!/trace! only) and `RUST_LOG_MACROS_PRODUCTION` (info!/warn!/error! — now excluded entirely from debug leak detection).
+
+- **Risk assessment score=0 bug** (HIGH): `analyze` command risk scoring used linear subtraction (`score -= min(total * 5, 30)`) with per-category caps. With 9 finding categories, deductions easily exceeded 100, always resulting in score=0 for medium+ projects. Fixed with logarithmic scaling: `deduction = min(15, 3 + int(log2(total)))` per category, giving diminishing returns for each additional issue. Now produces meaningful scores (e.g., 28 for tauri instead of 0).
+
+- **Secrets false positives for Rust env vars and crate names** (MEDIUM): Entropy-based detection flagged `OTHE` (env var name), `sha2` (Rust crate name), `OBJC` (Objective-C env var) as high-entropy secrets. Fixed by: (1) adding Rust `std::env::var()` and `env!()` macro patterns to `ENV_REFERENCE_LINE_PATTERNS`, (2) adding common Rust crate names and env var names to `SAFE_VALUE_PATTERNS` and `ENTROPY_EXCLUSION_PATTERNS`.
+
+- **Complexity analysis on bundled files** (MEDIUM): `complexity_engine.py` analyzed bundled/compiled JS files (e.g., `packages/cli/index.js` with cyclomatic=197) producing meaningless complexity metrics. Fixed by adding `is_bundled_file()` check.
+
+- **Analyze `total_lines=0`** (MEDIUM): `analyze` command architecture overview always showed `total_lines: 0` because `outline_engine.get_workspace_outline()` never computed a `total_lines` field. Fixed by computing line count from outlined files in `analyze.py`.
+
+- **Debug leak scanning of bundled files** (MEDIUM): `debugleak_engine.py` scanned bundled output files like `bundle.global.js`, producing hundreds of false positives. Fixed by adding `is_bundled_file()` check.
+
+- **Perf hint scanning of bundled files** (LOW): `perfhint_engine.py` scanned bundled output files. Fixed by adding `is_bundled_file()` check.
+
+### Added
+
+- **`is_bundled_file()` utility function** (`utils.py`): Detects bundled/compiled output files by checking both filename patterns (`.global.js`, `.bundle.js`, `.chunk.js`, `.umd.js`, `.min.js`) and directory paths (`dist/`, `build/`, `out/`, `bundle/`, `bundled/`, `compiled/`, `output/`). More aggressive than `is_generated_file()` which only checks filenames.
+
+- **`BUNDLED_DIR_PATTERNS`** constant in `utils.py`: Set of directory names that indicate build output.
+
 ## [5.9.2] — 2026-06-12
 
 ### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)

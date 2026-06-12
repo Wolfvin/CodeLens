@@ -291,6 +291,12 @@ SAFE_VALUE_PATTERNS = [
     # v5.9: Test-only key patterns — these look like secrets but are explicitly test/dev keys
     r'(?i)^(test-secret|dev-secret|dev-key|test-key|development-only|for-testing)',
     r'(?i)^(change-me|replace-me|update-me|default-secret|insecure)',
+    # v5.9.3: Rust/Tauri common env var names and crate names that trigger false positives
+    # These are environment variable references in code, not actual secrets
+    r'(?i)^(OTHER|OBJC|OPENSSL|APPLE|ANDROID|CARGO|RUSTC|RUSTUP|CARGO_PKG)',
+    r'(?i)^(sha2|sha256|sha512|aes|rsa|ecdsa|ed25519|hmac|blake2)$',  # Rust crate names
+    r'(?i)^(reqwest|hyper|tokio|actix|axum|warp|rocket|tide)$',       # Rust crate names
+    r'(?i)^(serde|clap|log|tracing|anyhow|thiserror|once_cell)$',      # Rust crate names
 ]
 
 # ─── Template Expression Patterns (line-level) ──────────────────
@@ -322,6 +328,11 @@ ENV_REFERENCE_LINE_PATTERNS = [
     re.compile(r'process\.env\.SECRET'),
     re.compile(r'process\.env\.TOKEN'),
     re.compile(r'process\.env\.KEY'),
+    # v5.9.3: Rust std::env patterns
+    re.compile(r'std::env::var\b'),               # std::env::var("KEY")
+    re.compile(r'std::env::var_os\b'),            # std::env::var_os("KEY")
+    re.compile(r'env!\s*\('),                      # env!("KEY") macro
+    re.compile(r'option_env!\s*\('),              # option_env!("KEY") macro
 ]
 
 # ─── Line-level Exclusion Patterns ────────────────────────────
@@ -419,6 +430,14 @@ ENTROPY_EXCLUSION_PATTERNS = [
     re.compile(r'^\{%'),                                      # Django/Jinja2 {% ... %}
     re.compile(r'^<%='),                                      # ERB <%= ... %>
     re.compile(r'^[A-Za-z0-9+/]+=*$'),                        # Pure base64 (likely encoded data, not secret)
+    # v5.9.3: Rust crate names and env var patterns that trigger false positives
+    re.compile(r'(?i)^(sha2|sha256|sha512|aes|rsa|ecdsa|hmac|blake2|ed25519)$'),
+    re.compile(r'(?i)^(reqwest|hyper|tokio|actix|axum|warp|rocket|tide)$'),
+    re.compile(r'(?i)^(serde|clap|log|tracing|anyhow|thiserror|once_cell)$'),
+    re.compile(r'(?i)^(OTHER|OBJC|OPENSSL|APPLE|ANDROID)$'),
+    re.compile(r'^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$'), # HTTP methods
+    # v5.9.3: CSP hashes (sha256-/sha384-/sha512- in Content-Security-Policy are NOT secrets)
+    re.compile(r"^sha(256|384|512)-[A-Za-z0-9+/=]+$"),
 ]
 
 def detect_secrets(

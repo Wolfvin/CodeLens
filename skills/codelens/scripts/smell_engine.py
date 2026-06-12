@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, is_bundled_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -108,6 +108,10 @@ def detect_smells(
 
             # Skip minified files
             if '.min.' in filename:
+                continue
+
+            # Skip bundled/compiled files (dist/, build/, .global.js, etc.)
+            if is_bundled_file(rel_path):
                 continue
 
             # Skip generated files (generated/, vendor/, _pb2.py, etc.)
@@ -346,10 +350,7 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     # v5.9.2: Skip test/story/fixture files — long functions are expected there
-    # v5.9.3: Expanded with directory patterns for better coverage
-    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__',
-                      '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
-                      '/fixtures/', '/fixture/', '/mocks/', '/samples/']
+    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
     if any(kw in rel_path for kw in _skip_keywords):
         return smells
 
@@ -439,31 +440,6 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
-    elif ext == ".php":
-        # PHP: interface/abstract methods end with ';' (no body)
-        # Check if the function line ends with ';' before any '{'
-        start_line = lines[start]
-        semicolon_pos = start_line.find(';')
-        brace_pos = start_line.find('{')
-        if semicolon_pos >= 0 and (brace_pos < 0 or semicolon_pos < brace_pos):
-            # Interface/abstract method declaration — no body, just a signature
-            return start + 1
-        # Otherwise count braces for concrete methods
-        brace_count = 0
-        for i in range(start, min(start + 300, len(lines))):
-            # Check for semicolon before brace on first line (e.g., multiline signature ending with ;)
-            if i == start:
-                line_stripped = lines[i].rstrip()
-                if line_stripped.endswith(';') and brace_count == 0:
-                    return i + 1
-            for ch in lines[i]:
-                if ch == '{':
-                    brace_count += 1
-                elif ch == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        return i + 1
-        return min(start + 300, len(lines))
     else:
         # JS/TS/Rust: count braces
         brace_count = 0
@@ -499,10 +475,7 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
     
     # Skip test/story/fixture files — deep nesting is expected there
-    # v5.9.3: Expanded with directory patterns
-    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__',
-                     '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
-                     '/fixtures/', '/fixture/', '/mocks/', '/samples/']
+    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
     if any(kw in rel_path for kw in skip_keywords):
         return smells
     
@@ -823,14 +796,11 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     lines = content.split('\n')
 
     # Skip magic number detection entirely for config/framework config files
-    # v5.9.3: Added directory patterns for test fixtures
     config_file_keywords = [
         'config', 'eslint', 'prettier', 'vitest', 'jest',
         'playwright', 'postcss', 'next.config', 'tsconfig',
         '.fixture.', '.stories.', '.story.', '.test.', '.spec.',
         'constants', 'const.py', 'consts', 'enums',
-        '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
-        '/fixtures/', '/fixture/', '/mocks/', '/samples/',
     ]
     rel_lower = rel_path.lower()
     if any(kw in rel_lower for kw in config_file_keywords):
@@ -1008,15 +978,25 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods using brace-depth tracking (like Rust impl detection)
-        # This avoids false positives from matching random function calls like if(), for(), etc.
+        # Count class methods — improved v5.9.3: Only count methods inside class bodies
+        # Use class body scoping to avoid counting control flow, function calls, etc.
+        # Strategy: find class { ... } blocks, then count method-like definitions inside
         lines = content.split('\n')
-        class_blocks = []  # list of (class_name, method_count)
+        class_method_counts = {}  # class_name -> method_count
+
         in_class = False
         class_name = ""
-        class_start_depth = 0
         brace_depth = 0
-        class_method_count = 0
+        class_start_depth = 0
+        method_count = 0
+
+        # Keywords that are NOT method definitions
+        _non_method_keywords = frozenset({
+            'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'return',
+            'throw', 'try', 'catch', 'finally', 'new', 'delete', 'typeof',
+            'instanceof', 'void', 'yield', 'await', 'break', 'continue',
+            'import', 'export', 'from', 'require', 'console',
+        })
 
         for line in lines:
             stripped = line.strip()
@@ -1028,64 +1008,70 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                 elif ch == '}':
                     brace_depth -= 1
 
-            # Detect class start (export/default/abstract optional prefixes)
-            cls_match = re.match(r'(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)', stripped)
-            if cls_match:
-                # Save previous class if still open
-                if in_class and class_method_count >= GOD_CLASS_METHODS:
-                    class_blocks.append((class_name, class_method_count))
+            # Detect class declaration start
+            class_match = re.match(r'(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)', stripped)
+            if class_match and '{' in stripped:
+                if in_class:
+                    # Save previous class before starting new one
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
                 in_class = True
-                class_name = cls_match.group(1)
-                if '{' in stripped:
-                    class_start_depth = brace_depth
-                else:
-                    class_start_depth = brace_depth + 1  # opening brace on next line
-                class_method_count = 0
+                class_name = class_match.group(1)
+                class_start_depth = brace_depth
+                method_count = 0
+                continue
+            elif class_match:
+                # Class without opening brace on same line
+                if in_class:
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
+                in_class = True
+                class_name = class_match.group(1)
+                class_start_depth = brace_depth + 1
+                method_count = 0
                 continue
 
             if in_class:
-                # Count actual method definitions inside the class body
-                # Pattern: [async] [visibility] [static] [get|set] methodName( or methodName<
-                if re.match(r'(?:async\s+)?(?:private\s+|public\s+|protected\s+|static\s+|readonly\s+)*(?:get\s+|set\s+)?(?:#\s*)?\*?\s*\w+\s*[<(]', stripped):
-                    # Exclude control-flow keywords and other non-method patterns
-                    first_word = re.match(r'(\w+)', stripped)
-                    if first_word and first_word.group(1) not in {
-                        'if', 'for', 'while', 'switch', 'catch', 'return', 'throw',
-                        'new', 'typeof', 'instanceof', 'void', 'delete', 'class',
-                        'import', 'export', 'function', 'const', 'let', 'var',
-                        'else', 'do', 'try', 'finally', 'with', 'yield', 'await',
-                        'break', 'continue', 'case', 'debugger', 'super', 'this',
-                        'true', 'false', 'null', 'undefined',
-                    }:
-                        class_method_count += 1
-
-                # End class when brace depth returns to (or below) start level
+                # End class block when brace depth returns
                 if brace_depth < class_start_depth:
                     in_class = False
-                    if class_method_count >= GOD_CLASS_METHODS:
-                        class_blocks.append((class_name, class_method_count))
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
+                    continue
 
-        # Handle class still open at end of file
-        if in_class and class_method_count >= GOD_CLASS_METHODS:
-            class_blocks.append((class_name, class_method_count))
+                # Count method definitions inside class body
+                # Method patterns: methodName() {, methodName = () =>, get propName(), etc.
+                method_match = re.match(
+                    r'(?:public\s+|private\s+|protected\s+|static\s+|abstract\s+|readonly\s+|override\s+)*'
+                    r'(?:async\s+)?'
+                    r'(?:get\s+|set\s+|#)?'
+                    r'([a-zA-Z_$][\w$]*)\s*(?:<[^>]+>)?\s*\(',
+                    stripped
+                )
+                if method_match:
+                    name = method_match.group(1)
+                    # Skip non-method keywords, constructor calls, and property access chains
+                    if name not in _non_method_keywords and not stripped.startswith('.'):
+                        method_count += 1
 
-        for name, count in class_blocks:
+        # Report god objects from all detected classes
+        for cls_name, count in class_method_counts.items():
             if count >= GOD_CLASS_METHODS_CRITICAL:
                 smells.append({
                     "file": rel_path,
-                    "class": name,
+                    "class": cls_name,
                     "method_count": count,
                     "severity": "critical",
-                    "message": f"Class '{name}' has {count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "message": f"Class '{cls_name}' has {count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
                     "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
                 })
             elif count >= GOD_CLASS_METHODS:
                 smells.append({
                     "file": rel_path,
-                    "class": name,
+                    "class": cls_name,
                     "method_count": count,
                     "severity": "warning",
-                    "message": f"Class '{name}' has {count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "message": f"Class '{cls_name}' has {count} methods (threshold: {GOD_CLASS_METHODS})",
                     "suggestion": "Consider extracting some methods into a separate class."
                 })
 
