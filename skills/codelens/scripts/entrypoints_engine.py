@@ -30,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go", ".lua",
+    ".go", ".dart",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -100,6 +100,14 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "go_main_fn",
+            },
+            # Dart/Flutter
+            {
+                "regex": r'(?:void|Future<void>)\s+main\s*\(',
+                "language": {".dart"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "dart_main_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -292,6 +300,24 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
+            },
+            # NestJS @Controller + @Get/@Post/etc
+            {
+                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*["\']([^"\']*)["\']\s*\)',
+                "language": {".ts", ".js", ".tsx"},
+                "extract": "nestjs_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "nestjs_http_handler",
+            },
+            # NestJS @Controller with no method path
+            {
+                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*\)',
+                "language": {".ts", ".js", ".tsx"},
+                "extract": "nestjs_route",
+                "method_group": 1,
+                "path_group": None,
+                "label": "nestjs_http_handler_no_path",
             },
         ],
     },
@@ -741,68 +767,6 @@ ENTRYPOINT_PATTERNS = {
                 "name_group": 1,
                 "label": "rust_test_module",
             },
-            # Lua busted framework: describe/it
-            {
-                "regex": r'(?:describe|context)\s*\(\s*["\']([^"\']+)["\']',
-                "language": {".lua"},
-                "extract": "test_name",
-                "name_group": 1,
-                "label": "lua_busted_describe",
-            },
-            {
-                "regex": r'it\s*\(\s*["\']([^"\']+)["\']',
-                "language": {".lua"},
-                "extract": "test_name",
-                "name_group": 1,
-                "label": "lua_busted_it",
-            },
-        ],
-    },
-
-    # ═══════════════════════════════════════════════════════════
-    # 9. NEOVIM PLUGIN — Neovim plugin entry points
-    # ═══════════════════════════════════════════════════════════
-    "neovim_plugin": {
-        "patterns": [
-            # Neovim init.lua / init.vim (plugin entry)
-            {
-                "regex": r'vim\.api\.nvim_create_user_command\s*\(\s*["\'](\w+)["\']',
-                "language": {".lua"},
-                "extract": "handler",
-                "handler_group": 1,
-                "label": "nvim_user_command",
-            },
-            # vim.keymap.set
-            {
-                "regex": r'vim\.keymap\.set\s*\(\s*["\'](\w+)["\']\s*,\s*["\']([^"\']+)["\']',
-                "language": {".lua"},
-                "extract": "custom",
-                "label": "nvim_keymap",
-            },
-            # vim.api.nvim_create_autocmd
-            {
-                "regex": r'vim\.api\.nvim_create_autocmd\s*\(\s*["\'](\w+)["\']',
-                "language": {".lua"},
-                "extract": "handler",
-                "handler_group": 1,
-                "label": "nvim_autocmd",
-            },
-            # Lua module return (M = {}; return M)
-            {
-                "regex": r'return\s+(\w+)\s*$',
-                "language": {".lua"},
-                "extract": "handler",
-                "handler_group": 1,
-                "label": "lua_module_return",
-            },
-            # Neovim lazy.nvim plugin spec
-            {
-                "regex": r'lazy\.setup\s*\(',
-                "language": {".lua"},
-                "extract": "handler_only",
-                "handler_group": 0,
-                "label": "lazy_nvim_setup",
-            },
         ],
     },
 }
@@ -832,7 +796,7 @@ def map_entrypoints(
 
     valid_types = {
         "main", "http_handler", "event_handler", "cli_command",
-        "cron_job", "worker", "module_export", "test_entry", "neovim_plugin"
+        "cron_job", "worker", "module_export", "test_entry"
     }
 
     if entry_type and entry_type not in valid_types:
