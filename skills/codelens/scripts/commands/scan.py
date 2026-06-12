@@ -30,8 +30,13 @@ from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
 from parsers.fallback_php import parse_php_fallback
-from parsers.fallback_elixir import parse_elixir_fallback
 from parsers.blade_parser import parse_blade_template
+from parsers.fallback_ruby import parse_ruby_fallback
+from parsers.fallback_elixir import parse_elixir_fallback
+from parsers.fallback_dart_extra import parse_dart_fallback
+from parsers.fallback_swift import parse_swift_fallback
+from parsers.fallback_scala import parse_scala_fallback
+from parsers.fallback_shell import parse_shell_fallback
 
 from commands import register_command
 
@@ -617,6 +622,24 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read PHP file: {path}")
 
+    # Parse Ruby files
+    ruby_data = []
+    if files["ruby"]:
+        for path in files["ruby"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_ruby_fallback(content, os.path.relpath(path, workspace))
+                ruby_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Ruby file: {path}")
+
     # Parse Elixir files
     elixir_data = []
     if files["elixir"]:
@@ -635,9 +658,81 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Elixir file: {path}")
 
+    # Parse Dart files
+    dart_data = []
+    if files["dart"]:
+        for path in files["dart"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_dart_fallback(content, os.path.relpath(path, workspace))
+                dart_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Dart file: {path}")
+
+    # Parse Swift files
+    swift_data = []
+    if files["swift"]:
+        for path in files["swift"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_swift_fallback(content, os.path.relpath(path, workspace))
+                swift_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Swift file: {path}")
+
+    # Parse Scala files
+    scala_data = []
+    if files["scala"]:
+        for path in files["scala"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_scala_fallback(content, os.path.relpath(path, workspace))
+                scala_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Scala file: {path}")
+
+    # Parse Shell/Bash files
+    shell_data = []
+    if files["shell"]:
+        for path in files["shell"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_shell_fallback(content, os.path.relpath(path, workspace))
+                shell_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Shell file: {path}")
+
 
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + elixir_data
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -729,7 +824,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "csharp": len(files["csharp"]),
             "php": len(files["php"]),
             "blade": len(files["blade"]),
+            "ruby": len(files["ruby"]),
             "elixir": len(files["elixir"]),
+            "dart": len(files["dart"]),
+            "swift": len(files["swift"]),
+            "scala": len(files["scala"]),
+            "shell": len(files["shell"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -738,8 +838,13 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
         "php_parsed": len(php_data),
-        "elixir_parsed": len(elixir_data),
         "blade_parsed": len(blade_data),
+        "ruby_parsed": len(ruby_data),
+        "elixir_parsed": len(elixir_data),
+        "dart_parsed": len(dart_data),
+        "swift_parsed": len(swift_data),
+        "scala_parsed": len(scala_data),
+        "shell_parsed": len(shell_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -761,7 +866,8 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade"}
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade",
+                 "ruby", "elixir", "dart", "swift", "scala", "shell", "go", "java", "c", "cpp", "csharp", "lua"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -769,9 +875,20 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "c": "C",
         "cpp": "C++",
         "csharp": "C#",
-        "elixir": "Elixir",
         "swift": "Swift",
         "ruby": "Ruby",
+        "elixir": "Elixir",
+        "dart": "Dart",
+        "scala": "Scala",
+        "shell": "Shell/Bash",
+        "r": "R",
+        "haskell": "Haskell",
+        "perl": "Perl",
+        "clojure": "Clojure",
+        "fsharp": "F#",
+        "ocaml": "OCaml",
+        "zig": "Zig",
+        "nim": "Nim",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
     return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
@@ -799,7 +916,12 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "csharp": [],
         "php": [],
         "blade": [],
+        "ruby": [],
         "elixir": [],
+        "dart": [],
+        "swift": [],
+        "scala": [],
+        "shell": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -868,7 +990,25 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                     files["blade"].append(file_path)
                 else:
                     files["php"].append(file_path)
+            elif ext == '.rb':
+                files["ruby"].append(file_path)
             elif ext in ('.ex', '.exs'):
+                files["elixir"].append(file_path)
+            elif ext == '.dart':
+                files["dart"].append(file_path)
+            elif ext == '.swift':
+                files["swift"].append(file_path)
+            elif ext in ('.scala', '.sc'):
+                files["scala"].append(file_path)
+            elif ext in ('.sh', '.bash', '.zsh'):
+                files["shell"].append(file_path)
+            elif filename == 'Dockerfile' or filename.endswith('.Dockerfile'):
+                files["shell"].append(file_path)
+            elif filename in ('Rakefile', 'Gemfile', 'Capfile', 'Vagrantfile'):
+                files["ruby"].append(file_path)
+            elif ext == '.rake':
+                files["ruby"].append(file_path)
+            elif filename == 'mix.exs':
                 files["elixir"].append(file_path)
 
     return files

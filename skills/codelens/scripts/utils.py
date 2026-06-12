@@ -120,7 +120,8 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte',
+                         '.rb', '.ex', '.exs', '.dart', '.swift', '.scala', '.sh', '.bash', '.go', '.php'}
 
 
 # ─── Performance Safeguards ────────────────────────────────
@@ -389,7 +390,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.2.0"
+CODELENS_VERSION = "5.10.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
