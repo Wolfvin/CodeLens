@@ -39,6 +39,8 @@ from parsers.fallback_scala import parse_scala_fallback
 from parsers.fallback_shell import parse_shell_fallback
 from parsers.fallback_gdscript import parse_gdscript_fallback
 from parsers.fallback_kotlin import parse_kotlin_fallback
+from parsers.fallback_vim import parse_vim_fallback
+from parsers.fallback_zig import parse_zig_fallback
 
 from commands import register_command
 
@@ -768,9 +770,45 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read GDScript file: {path}")
 
+    # Parse VimScript files
+    vim_data = []
+    if files["vim"]:
+        for path in files["vim"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_vim_fallback(content, os.path.relpath(path, workspace))
+                vim_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read VimScript file: {path}")
+
+    # Parse Zig files
+    zig_data = []
+    if files["zig"]:
+        for path in files["zig"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_zig_fallback(content, os.path.relpath(path, workspace))
+                zig_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Zig file: {path}")
+
 
     # All new language data combined
-    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data
+    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data + vim_data + zig_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -870,6 +908,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "scala": len(files["scala"]),
             "shell": len(files["shell"]),
             "gdscript": len(files["gdscript"]),
+            "vim": len(files["vim"]),
+            "zig": len(files["zig"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -887,6 +927,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "scala_parsed": len(scala_data),
         "shell_parsed": len(shell_data),
         "gdscript_parsed": len(gdscript_data),
+        "vim_parsed": len(vim_data),
+        "zig_parsed": len(zig_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -932,9 +974,10 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "erlang": "Erlang",
         "fortran": "Fortran",
         "gdscript": "GDScript",
+        "vimscript": "VimScript",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
+    return f"Detected {', '.join(parts)} source files — these languages do not have dedicated tree-sitter parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -967,6 +1010,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "scala": [],
         "shell": [],
         "gdscript": [],
+        "vim": [],
+        "zig": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -1053,6 +1098,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["shell"].append(file_path)
             elif filename == 'Dockerfile' or filename.endswith('.Dockerfile'):
                 files["shell"].append(file_path)
+            elif ext == '.vim':
+                files["vim"].append(file_path)
+            elif ext == '.zig':
+                files["zig"].append(file_path)
             elif filename in ('Rakefile', 'Gemfile', 'Capfile', 'Vagrantfile'):
                 files["ruby"].append(file_path)
             elif ext == '.rake':

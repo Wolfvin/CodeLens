@@ -429,6 +429,59 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
+    # Auto-generated source files: .gen.lua, .gen.ts, .generated.go, .pb.go, etc.
+    # These are machine-written API/type stubs that inflate complexity and smell counts.
+    if '.gen.' in lower or '.generated.' in lower or '.auto.' in lower:
+        return True
+    if lower.endswith('.pb.go') or lower.endswith('.pb.rs'):
+        return True  # Protobuf-generated code
+    return False
+
+
+def is_generated_source_file(rel_path: str) -> bool:
+    """Check if a source file is auto-generated and should be excluded from quality analysis.
+
+    Generated source files (like API stubs, protobuf output, type meta files)
+    are not written by developers and should not be flagged for complexity, smells,
+    dead code, etc. They inflate counts with findings the developer cannot fix.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be an auto-generated source file.
+    """
+    lower = rel_path.lower()
+    filename = lower.replace('\\', '/').split('/')[-1]
+
+    # .gen.* pattern: api.gen.lua, types.gen.ts, etc.
+    if '.gen.' in filename:
+        return True
+
+    # .generated.* pattern
+    if '.generated.' in filename:
+        return True
+
+    # .auto.* pattern
+    if '.auto.' in filename:
+        return True
+
+    # _meta.lua / _meta.ts pattern (Neovim type stubs, etc.)
+    if filename.startswith('_meta.'):
+        return True
+
+    # Protobuf-generated files
+    if filename.endswith('.pb.go') or filename.endswith('.pb.rs'):
+        return True
+
+    # GraphQL code generation
+    if filename.endswith('.generated.ts') or filename.endswith('.generated.js'):
+        return True
+
+    # OpenAPI/Swagger generated clients
+    if 'generated' in lower.split('/') and filename.endswith(('.ts', '.js', '.py', '.go', '.java')):
+        return True
+
     return False
 
 

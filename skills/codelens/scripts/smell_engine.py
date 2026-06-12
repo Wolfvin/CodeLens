@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, is_generated_source_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -165,6 +165,10 @@ def detect_smells(
             # Note: is_generated_file expects a filename, not a path — pass both
             # the filename (for exact match) and the rel_path (for extension checks)
             if is_generated_file(filename) or is_generated_file(rel_path):
+                continue
+
+            # Skip auto-generated source files (.gen.lua, _meta.ts, .pb.go, etc.)
+            if is_generated_source_file(rel_path):
                 continue
 
             # Skip files exceeding size cap

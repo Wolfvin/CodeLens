@@ -581,6 +581,21 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = proj_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
+            else:
+                # Try version variables: set(PROJECT_VERSION_MAJOR x) or set(NVIM_VERSION_MAJOR x)
+                ver_major = re.search(r'set\s*\(\s*\w*VERSION_MAJOR\s+(\d+)\)', cmake_content)
+                ver_minor = re.search(r'set\s*\(\s*\w*VERSION_MINOR\s+(\d+)\)', cmake_content)
+                ver_patch = re.search(r'set\s*\(\s*\w*VERSION_PATCH\s+(\d+)\)', cmake_content)
+                ver_prerelease = re.search(r'set\s*\(\s*\w*VERSION_PRERELEASE\s+"([^"]*)"', cmake_content)
+                if ver_major:
+                    version_str = ver_major.group(1)
+                    if ver_minor:
+                        version_str += f".{ver_minor.group(1)}"
+                    if ver_patch:
+                        version_str += f".{ver_patch.group(1)}"
+                    if ver_prerelease:
+                        version_str += ver_prerelease.group(1)
+                    identity["version"] = version_str
             c_cpp_type = "cmake-project"
         except Exception:
             pass
@@ -644,7 +659,19 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     # v6.4: Combined type detection — handle polyglot projects
     active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
 
-    if len(active_types) >= 2:
+    # v6.5: Detect neovim (C core + Lua runtime + VimScript)
+    runtime_lua_dir = os.path.join(workspace, 'runtime', 'lua')
+    if os.path.isdir(runtime_lua_dir) and c_cpp_type and lua_type:
+        identity["type"] = "neovim"
+    # v6.5: Detect VimScript-heavy project
+    elif c_cpp_type and lua_type:
+        type_parts = []
+        if c_cpp_type:
+            type_parts.append("c-cpp")
+        if lua_type:
+            type_parts.append("lua")
+        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
+    elif len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:

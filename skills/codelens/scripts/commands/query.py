@@ -381,7 +381,12 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         "match_count": total_matches,
         "action": worst_action,
         "action_reason": f"Found {total_matches} definitions. List all before making changes.",
-        "matches": matches_summary,
+        "matches": matches_summary[:limit] if limit and limit > 0 else matches_summary,
+        "pagination": {
+            "total_matches": total_matches,
+            "shown": min(len(matches_summary), limit) if limit and limit > 0 else len(matches_summary),
+            "has_more": total_matches > limit if limit and limit > 0 else False,
+        }
     }
 
 

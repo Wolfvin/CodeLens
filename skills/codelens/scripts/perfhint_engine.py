@@ -29,7 +29,7 @@ import signal
 import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file
+from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file, is_generated_source_file
 
 # ─── Safety Limits ────────────────────────────────────────────
 
@@ -522,6 +522,10 @@ def detect_perf_hints(
             if is_bundled_file(rel_path):
                 continue
 
+            # Skip auto-generated source files (.gen.lua, _meta.ts, .pb.go, etc.)
+            if is_generated_source_file(rel_path):
+                continue
+
             try:
                 file_size = os.path.getsize(file_path)
                 if file_size > MAX_FILE_SIZE:
@@ -786,6 +790,9 @@ def _detect_recursive_functions(
     """
     findings: List[Dict[str, Any]] = []
 
+    # Determine language from file extension for language-aware suggestions
+    lang = _detect_language_from_path(rel_path)
+
     # Match function definitions and capture the function name
     func_pattern = r'(?:function|const|let|var|def)\s+(\w+)'
     for func_match in re.finditer(func_pattern, content):
@@ -821,6 +828,7 @@ def _detect_recursive_functions(
 
             if not has_cache:
                 line_num = content[:func_match.start()].count('\n') + 1
+                fix = _language_aware_memoization_suggestion(lang, pattern_def["fix_suggestion"])
                 findings.append({
                     "type": "performance_hint",
                     "category": cat_def["category"],
@@ -832,10 +840,53 @@ def _detect_recursive_functions(
                         f"Recursive function '{func_name}' at line {line_num} in {rel_path} "
                         f"has no memoization — may recompute identical sub-problems."
                     ),
-                    "fix_suggestion": pattern_def["fix_suggestion"],
+                    "fix_suggestion": fix,
                 })
 
     return findings
+
+
+def _detect_language_from_path(rel_path: str) -> str:
+    """Detect programming language from file extension."""
+    ext = os.path.splitext(rel_path)[1].lower()
+    lang_map = {
+        '.py': 'python', '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+        '.ts': 'typescript', '.tsx': 'typescript', '.jsx': 'javascript',
+        '.rs': 'rust', '.go': 'go', '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp',
+        '.h': 'c', '.hpp': 'cpp', '.java': 'java', '.kt': 'kotlin',
+        '.cs': 'csharp', '.php': 'php', '.rb': 'ruby', '.lua': 'lua',
+        '.vim': 'vimscript', '.zig': 'zig', '.swift': 'swift', '.scala': 'scala',
+        '.ex': 'elixir', '.exs': 'elixir', '.dart': 'dart', '.sh': 'shell',
+        '.bash': 'shell', '.zsh': 'shell', '.gd': 'gdscript',
+    }
+    return lang_map.get(ext, 'unknown')
+
+
+def _language_aware_memoization_suggestion(lang: str, default_suggestion: str) -> str:
+    """Return a language-specific memoization suggestion instead of the generic one."""
+    suggestions = {
+        'python': "Add @functools.lru_cache or @cache decorator to avoid redundant computation.",
+        'javascript': "Add memoization (useMemo, or a custom cache Map) to avoid redundant computation.",
+        'typescript': "Add memoization (useMemo, or a custom cache Map) to avoid redundant computation.",
+        'rust': "Add memoization using a HashMap cache or the cached crate to avoid redundant computation.",
+        'go': "Add memoization using sync.Map or a structured cache to avoid redundant computation.",
+        'c': "Add a lookup table or hash map cache to avoid redundant computation.",
+        'cpp': "Add std::unordered_map cache or function-level memoization to avoid redundant computation.",
+        'java': "Add memoization using HashMap or Guava Cache to avoid redundant computation.",
+        'kotlin': "Add memoization using HashMap or Kotlin's memoize pattern to avoid redundant computation.",
+        'csharp': "Add MemoryCache or a Dictionary cache to avoid redundant computation.",
+        'php': "Add static variable cache or use array_key_exists() memoization to avoid redundant computation.",
+        'ruby': "Add memoization using @cache ||= or the memoist gem to avoid redundant computation.",
+        'lua': "Add a local table cache to store computed results and avoid redundant computation.",
+        'vimscript': "Add g: cache variable to store computed results and avoid redundant computation.",
+        'zig': "Add a HashMap cache using std.HashMap to avoid redundant computation.",
+        'swift': "Add NSCache or a Dictionary cache to avoid redundant computation.",
+        'scala': "Add memoization using a Map cache or lazy val to avoid redundant computation.",
+        'elixir': "Add memoization using Agent or ETS cache to avoid redundant computation.",
+        'dart': "Add memoization using a Map cache to avoid redundant computation.",
+        'gdscript': "Add a Dictionary cache to store computed results and avoid redundant computation.",
+    }
+    return suggestions.get(lang, default_suggestion)
 
 def _detect_duplicate_api_calls(
     content: str,
