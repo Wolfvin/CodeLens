@@ -28,7 +28,8 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
+    ".py", ".rs", ".vue", ".svelte",
+    ".php", ".go", ".java", ".cs", ".dart", ".lua",
 }
 
 # Thresholds
@@ -350,6 +351,19 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
+    elif ext == ".php":
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # PHP method with visibility: public function, private function, protected function
+            m = re.match(r'(?:public|private|protected)\s+(?:static\s+)?function\s+(\w+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+            # PHP standalone function
+            elif re.match(r'function\s+(\w+)', stripped):
+                m = re.match(r'function\s+(\w+)', stripped)
+                if m:
+                    fn_starts.append((i, m.group(1)))
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -617,6 +631,65 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
+                })
+
+    elif ext == ".php":
+        # PHP function/method: (public|private|protected) function name(params)
+        for m in re.finditer(r'(?:public|private|protected)\s+(?:static\s+)?function\s+\w+\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options array or DTO class for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an associative array or config object."
+                })
+
+        # PHP standalone functions: function name(params)
+        for m in re.finditer(r'\bfunction\s+(\w+)\s*\(([^)]*)\)', content):
+            params_str = m.group(2).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options array or DTO class for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an associative array or config object."
                 })
 
     return smells

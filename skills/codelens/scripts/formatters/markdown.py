@@ -124,6 +124,8 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_ask(data, lines)
     elif command == "summary":
         _md_summary(data, lines)
+    elif command == "analyze":
+        _md_analyze(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
@@ -2111,4 +2113,197 @@ def _md_summary(data: Dict, lines: list) -> None:
 
     # Detail/focus info
     lines.append(f"_Focus: {data.get('focus', 'all')} | Detail: {data.get('detail', 'standard')}_")
+
+
+def _md_analyze(data: Dict, lines: list) -> None:
+    """Markdown for analyze command — comprehensive repo analysis report."""
+    identity = data.get("identity", {})
+    frameworks = data.get("frameworks", [])
+    languages = data.get("languages", {})
+    scan = data.get("scan", {})
+    architecture = data.get("architecture", {})
+    api_map = data.get("api_map", {})
+    findings = data.get("findings", [])
+    risk = data.get("risk_assessment", {})
+    action_plan = data.get("action_plan", [])
+    recommendations = data.get("recommendations", [])
+
+    # Header
+    name = identity.get("name", os.path.basename(data.get("workspace", "unknown")))
+    lines.append(f"# Repository Analysis: {name}")
+    lines.append("")
+
+    # Risk badge
+    if risk:
+        lines.append(f"**Risk:** {risk.get('summary', 'Unknown')}")
+        lines.append("")
+
+    # Identity
+    lines.append(f"**Type:** {identity.get('type', 'unknown')} | **Version:** {identity.get('version', '0.0.0')}")
+    if identity.get("description"):
+        lines.append(f"**Description:** {identity['description']}")
+    if identity.get("is_monorepo"):
+        lines.append("**Monorepo:** Yes")
+    lines.append("")
+
+    # Languages & Frameworks
+    if languages:
+        lang_parts = [f"{k}: {v}" for k, v in languages.items()]
+        lines.append(f"**Languages:** {', '.join(lang_parts)}")
+    if frameworks:
+        lines.append(f"**Frameworks:** {', '.join(frameworks)}")
+    lines.append("")
+
+    # Scan results
+    if scan and not scan.get("error"):
+        lines.append("## Codebase Scale")
+        if isinstance(scan.get("backend_nodes"), int):
+            lines.append(f"- **Backend:** {scan.get('backend_nodes', 0)} nodes, {scan.get('backend_edges', 0)} edges")
+        if isinstance(scan.get("frontend_classes"), int):
+            lines.append(f"- **Frontend:** {scan.get('frontend_classes', 0)} classes, {scan.get('frontend_ids', 0)} IDs")
+        if scan.get("frameworks"):
+            lines.append(f"- **Detected frameworks:** {', '.join(scan['frameworks'])}")
+        if scan.get("unsupported_langs"):
+            lines.append(f"- **Unsupported languages:** {', '.join(scan['unsupported_langs'])}")
+        lines.append("")
+
+    # Architecture
+    if architecture:
+        lines.append("## Architecture")
+        lines.append(f"- **Files:** {architecture.get('total_files', 0)}")
+        lines.append(f"- **Lines:** {architecture.get('total_lines', 0)}")
+
+        # Directory structure
+        dirs = architecture.get("directories", [])
+        if dirs:
+            lines.append("")
+            lines.append("**Directory Structure:**")
+            for d in dirs[:20]:
+                lines.append(f"  - `{d}`")
+
+        # Key modules
+        modules = architecture.get("key_modules", [])
+        if modules:
+            lines.append("")
+            lines.append("**Key Modules:**")
+            for m in modules[:15]:
+                file = m.get("file", "")
+                classes = m.get("classes", [])
+                fns = m.get("functions", [])
+                parts = []
+                if classes:
+                    parts.append(f"classes: {', '.join(classes[:3])}")
+                if fns:
+                    parts.append(f"functions: {', '.join(fns[:3])}")
+                lines.append(f"  - `{file}` — {'; '.join(parts)}")
+
+        # Entry points
+        entry_points = architecture.get("entry_points", [])
+        if entry_points:
+            lines.append("")
+            lines.append("**Entry Points:**")
+            for ep in entry_points[:10]:
+                lines.append(f"  - [{ep.get('type', '')}] `{ep.get('file', '')}:{ep.get('line', '')}` — {ep.get('handler', '')}")
+
+        lines.append("")
+
+    # API Map
+    if api_map and api_map.get("total_routes", 0) > 0:
+        lines.append("## API Routes")
+        lines.append(f"**Total:** {api_map.get('total_routes', 0)} routes")
+        by_method = api_map.get("by_method", {})
+        if by_method:
+            lines.append(f"**Methods:** {', '.join(f'{k}: {v}' for k, v in by_method.items())}")
+        routes = api_map.get("routes", [])
+        if routes:
+            lines.append("")
+            for r in routes:
+                method = r.get("method", "")
+                path = r.get("path", "")
+                handler = r.get("handler", "")
+                auth = " [AUTH]" if r.get("auth") else ""
+                lines.append(f"  - `{method} {path}` → {handler}{auth}")
+        lines.append("")
+
+    # Findings
+    if findings:
+        lines.append("## Findings")
+        for f in findings:
+            cat = f.get("category", "").replace("_", " ").title()
+            label = f.get("label", cat)
+            total = f.get("total", 0)
+            sev = f.get("severity", "")
+            action = f.get("action", "")
+            impact = f.get("impact", "")
+
+            # Header with severity indicator
+            sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(sev, "⚪")
+            lines.append(f"### {sev_icon} {label}: {total}")
+            lines.append("")
+
+            # By severity/category breakdown
+            by_sev = f.get("by_severity", {})
+            if by_sev:
+                parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+                lines.append(f"- **Breakdown:** {', '.join(parts)}")
+
+            by_cat = f.get("by_category", {})
+            if by_cat:
+                parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+                lines.append(f"- **Categories:** {', '.join(parts)}")
+
+            health = f.get("health_score")
+            if health is not None:
+                lines.append(f"- **Health Score:** {health}/100")
+
+            # Top items
+            top_items = f.get("top_items", [])
+            if top_items:
+                for item in top_items[:5]:
+                    if isinstance(item, dict):
+                        # Handle dataflow violations (source→sink)
+                        source = item.get("source", {})
+                        sink = item.get("sink", {})
+                        if source and sink:
+                            src_label = source.get("match", source.get("label", ""))[:40]
+                            snk_label = sink.get("match", sink.get("label", ""))[:40]
+                            lines.append(f"  - `{source.get('file', '')}:{source.get('line', '')}` → `{sink.get('file', '')}:{sink.get('line', '')}` — {src_label} → {snk_label}")
+                        else:
+                            file = item.get("file", "")
+                            line = item.get("line", "")
+                            msg = item.get("message", item.get("description", item.get("name", item.get("hint", ""))))[:80]
+                            item_sev = item.get("severity", "")
+                            sev_tag = f"[{item_sev.upper()}] " if item_sev else ""
+                            lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}")
+                    elif isinstance(item, (str, list)):
+                        lines.append(f"  - {item}")
+
+            if action:
+                lines.append(f"- **Action:** {action}")
+            if impact and sev in ("critical", "high"):
+                lines.append(f"- **Impact:** {impact}")
+            lines.append("")
+
+    # Action Plan
+    if action_plan:
+        lines.append("## Action Plan (Prioritized)")
+        for item in action_plan:
+            priority = item.get("priority", "P3")
+            label = item.get("label", "")
+            total = item.get("total", 0)
+            action = item.get("action", "")
+            lines.append(f"- **{priority}** {label} ({total}): {action}")
+        lines.append("")
+
+    # Recommendations
+    if recommendations:
+        lines.append("## Recommendations")
+        for r in recommendations:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    # Footer
+    elapsed = data.get("elapsed_seconds", 0)
+    lines.append(f"---")
+    lines.append(f"_Analyzed in {elapsed}s | Focus: {data.get('focus', 'all')} | Detail: {data.get('detail', 'standard')} | CodeLens v6.0_")
 

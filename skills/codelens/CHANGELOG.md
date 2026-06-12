@@ -5,6 +5,38 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] — 2026-06-12
+
+### The "Analyze Everything" Release
+
+The single biggest improvement for AI agents: **`analyze` command** — one command to understand an entire repository.
+
+### Added
+
+- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces a comprehensive report with: project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations. Use: `codelens analyze /path/to/repo`
+- **PHP support in all engines**: Added `.php` to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files are now scanned for code smells, complexity, debug leaks, and performance hints.
+- **PHP debug leak patterns**: Added detection for `var_dump()`, `print_r()`, `phpinfo()` (print_statement), `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()` (debugger).
+- **PHP complexity detection**: Added `_extract_php_functions()` to complexity_engine.py. Detects `public function`, `private function`, `protected function`, and standalone `function` declarations. Computes cyclomatic/cognitive complexity for PHP methods.
+- **PHP smell detection**: Added PHP function/method detection patterns to smell_engine.py for long functions, deep nesting, and many parameters. Detects `(public|private|protected) function name(` and standalone `function name(`.
+- **PHP performance hints**: Added 8 PHP-specific perf patterns:
+  - N+1: Doctrine `$em->find()` / `$repo->find()` inside loops, Eloquent `::find()` / `::where()` inside loops
+  - Sync blocking: `sleep()`, `file_get_contents()` for HTTP URLs, `exec()`/`shell_exec()`/`system()`/`passthru()`
+  - Memory leak: `$this->prop[] = ` without `unset()` in long-running processes
+  - Cache miss: Redis `$redis->keys()` (production danger), `$redis->set()` without TTL
+- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines (smell, complexity, debug-leak).
+- **Risk assessment in analyze**: Computes a 0-100 risk score based on finding severity counts with emoji indicators (🔴🟠🟡🟢).
+- **Prioritized action plan**: Auto-generates P0-P3 action items sorted by severity with concrete next steps.
+- **Contextual recommendations**: Generates language/framework-specific recommendations (e.g., "PHP project — consider phpstan", "Go project — run go vet").
+
+### Tested against
+
+- **ChaosServer** (53 PHP files, custom async PHP server with ReactPHP + Doctrine + Redis): Confirmed all engines work with PHP. Found 30 secrets, 141 smells, 25 debug leaks, 10 complexity hotspots, 5 perf hints.
+
+### Changed
+
+- **Version bump**: 5.8.1 → 6.0.0
+- **Total commands**: 44 → 45 (added `analyze`)
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

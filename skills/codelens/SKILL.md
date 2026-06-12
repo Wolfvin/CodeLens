@@ -40,6 +40,20 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.0 — The "Analyze Everything" Release
+
+- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.
+- **PHP support in all engines**: `.php` added to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files now scanned for code smells, complexity, debug leaks, and performance hints.
+- **PHP debug leak detection**: `var_dump()`, `print_r()`, `phpinfo()`, `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()`.
+- **PHP complexity detection**: New `_extract_php_functions()` — detects `public/private/protected function` and standalone `function` declarations.
+- **PHP smell detection**: Long functions, deep nesting, many parameters for PHP methods.
+- **PHP performance hints**: 8 PHP-specific patterns — Doctrine N+1, Eloquent N+1, sleep(), blocking file_get_contents(), exec()/shell_exec(), memory leaks in long-running processes, Redis KEYS command, missing TTL.
+- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines.
+- **Risk assessment**: 0-100 risk score with emoji indicators (🔴🟠🟡🟢) based on finding severity.
+- **Prioritized action plan**: Auto-generates P0-P3 action items with concrete next steps.
+- **Contextual recommendations**: Language/framework-specific recommendations (PHP: phpstan, Go: go vet, Python: mypy+ruff).
+- **Total commands**: 44 → 45.
+
 ## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 
 - **Go project type detection**: `handbook` parses `go.mod` for module name, Go version, and classifies projects as `go-database`, `go-web-service`, `go-grpc-service`, `go-infrastructure`, or `go-project`.
@@ -155,6 +169,38 @@ python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
 ---
 
 ## Available Tools
+
+### 0. `codelens_analyze` — Full Repository Analysis (NEW v6.0)
+
+**The one-shot command to understand an entire repository.** Automatically runs init + scan + all engines, then produces a comprehensive report with risk assessment and action plan.
+
+This is the recommended first command when you encounter a new repository. It replaces running 10+ individual commands.
+
+```bash
+# Full analysis (runs init + scan + all engines)
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace
+
+# Security-focused analysis only
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --focus security
+
+# Full detail (no severity filtering)
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --detail full
+
+# Skip re-scanning if registry already exists
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --skip-scan
+```
+
+**Output includes:**
+- Project identity (name, type, version, description)
+- Frameworks and languages detected
+- Architecture overview (files, lines, directory structure, key modules, entry points)
+- API route map
+- Prioritized findings from all engines (secrets, smells, complexity, debug leaks, dead code, circular deps, perf hints, config drift, binary artifacts, data flow, env issues, vulnerabilities)
+- Risk assessment (0-100 score with 🔴🟠🟡🟢 indicator)
+- Prioritized action plan (P0-P3)
+- Contextual recommendations (language/framework-specific)
+
+**When to use:** Always run `analyze` when you first encounter a repository. Use `summary` for quick checks, `analyze` for deep understanding.
 
 ### 1. `codelens_init` — Initialize Workspace
 

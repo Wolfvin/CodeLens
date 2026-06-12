@@ -35,6 +35,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".go",
     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
+    ".php", ".java", ".cs", ".dart", ".lua",
 }
 
 # Cyclomatic complexity thresholds
@@ -278,6 +279,8 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_go_functions(lines, content)
     elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
         functions = _extract_c_cpp_functions(lines, content, ext)
+    elif ext == ".php":
+        functions = _extract_php_functions(lines, content)
 
     return functions
 
@@ -428,6 +431,45 @@ def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[D
                 continue
             functions.append({
                 "name": fn_name,
+                "line": i + 1,
+                "type": "function",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_php_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract PHP function/method definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # PHP method with visibility: public/private/protected [static] function name(params)
+        m = re.match(
+            r'(?:public|private|protected)\s+(?:static\s+)?function\s+(\w+)\s*\(([^)]*)\)',
+            stripped
+        )
+        if m:
+            functions.append({
+                "name": m.group(1),
+                "line": i + 1,
+                "type": "method",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+            continue
+
+        # PHP standalone function: function name(params)
+        m = re.match(
+            r'function\s+(\w+)\s*\(([^)]*)\)',
+            stripped
+        )
+        if m:
+            functions.append({
+                "name": m.group(1),
                 "line": i + 1,
                 "type": "function",
                 "params_str": m.group(2),

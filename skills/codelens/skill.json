@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "6.0.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.0.0: New 'analyze' command (one-shot full repo analysis), PHP support in all engines (smell, complexity, debug-leak, perf-hint), PHP-specific patterns (var_dump, dd(), Doctrine N+1, Redis KEYS, memory leaks), multi-language SOURCE_EXTENSIONS (Java, C#, Dart, Lua). v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -154,4 +154,17 @@
     "fiber",
     "grpc",
     "protobuf",
-    "go-database"  ]}
+    "go-database",
+    "analyze-command",
+    "full-analysis",
+    "repo-analysis",
+    "one-shot",
+    "risk-assessment",
+    "action-plan",
+    "php-debug-detection",
+    "doctrine-orm",
+    "redis-patterns",
+    "java",
+    "csharp",
+    "dart",
+    "lua"  ]}
