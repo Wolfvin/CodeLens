@@ -341,6 +341,41 @@ ENTRYPOINT_PATTERNS = {
                 "path_group": 1,
                 "label": "go_echo_handler",
             },
+            # Nim Jester web framework routes
+            {
+                "regex": r'(?:get|post|put|delete|patch|head|options|error)\s+@"([^"]+)"',
+                "language": {".nim", ".nims"},
+                "extract": "http_route_nim_jester",
+                "method_group": 0,
+                "path_group": 1,
+                "label": "nim_jester_route",
+            },
+            # Nim Jester — match directive (pattern matching routes)
+            {
+                "regex": r'match\s+@"([^"]+)"',
+                "language": {".nim", ".nims"},
+                "extract": "http_route_nim_jester_match",
+                "path_group": 1,
+                "label": "nim_jester_match",
+            },
+            # Nim Prologue web framework routes
+            {
+                "regex": r'(?:app|result)\.(?:get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"',
+                "language": {".nim", ".nims"},
+                "extract": "http_route",
+                "method_group": 0,
+                "path_group": 1,
+                "label": "nim_prologue_route",
+            },
+            # Nim HappyX web framework routes
+            {
+                "regex": r'(?:get|post|put|delete|patch)\s+@\{([^}]+)\}',
+                "language": {".nim", ".nims"},
+                "extract": "http_route_nim_happyx",
+                "method_group": 0,
+                "path_group": 1,
+                "label": "nim_happyx_route",
+            },
             # C++ crow/drogon HTTP handlers
             {
                 "regex": r'CROW_ROUTE\s*\([^,]+,\s*["\']([^"\']+)["\']',

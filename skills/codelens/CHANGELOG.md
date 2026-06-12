@@ -5,6 +5,44 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Deep Nim Integration — Tested on nim-lang/Nim (3,707 .nim files, 30,984 nodes, 79,548 edges)
+
+Continued testing on the self-hosting Nim compiler. This release deepens Nim support
+across all analysis engines, adds Nim-specific CVEs to the vulnerability database,
+and fixes a critical framework detection bug that affected all repos with "target" in
+their path name.
+
+### Added
+
+- **`debugEcho()` detection in debug-leak**: Nim's `debugEcho()` is a debug-only print that should never appear in production. Now flagged as a `print_statement` with medium severity. Unlike regular `echo()` (which is standard Nim output), `debugEcho()` is always flagged.
+- **`doAssert()` and `doAssertRaises()` in debug-leak debugger category**: Nim's debug assertions crash in production. Flagged as high-severity `debugger` findings in non-test files. Skipped in test files where assertions are expected.
+- **`assert()` detection for Nim and Python**: Debug assertions (`assert()`) flagged in non-test `.nim`/`.nims`/`.py` files. Skipped in test files.
+- **Nim dev_only guard patterns**: Added 4 new `DEV_ONLY_PATTERNS` for Nim:
+  - `when defined(debug):` — flagged with `should_remove=True`
+  - `when not defined(release):` — flagged with `should_remove=True`
+  - `when defined(testing):` — flagged as dev-only guard
+  - `when isMainModule:` — flagged as low severity, `should_remove=False` (legitimate, equivalent to `if __name__ == "__main__"`)
+- **Nim smell detection**: `_detect_long_functions()` now detects Nim `proc`/`func`/`method`/`iterator`/`template`/`macro` declarations and calculates their body length using indentation-based block tracking. `_detect_many_params()` detects Nim procs with excessive parameters. `_find_function_end()` supports Nim's indentation-based syntax.
+- **Nim HTTP handler entrypoints**: Added Jester (`get @"path"`, `match @"path"`), Prologue (`app.get("path"`), and HappyX (`get @{path}`) route patterns to `entrypoints_engine.py`.
+- **Nimble CVE database**: Added 7 Nim-specific vulnerabilities to `VULN_DB`:
+  - Nim compiler: CVE-2023-2630 (code injection), CVE-2022-28589 (path traversal)
+  - Jester: CSRF protection missing
+  - Norm: SQL injection via string interpolation
+  - nimcrypto: timing side-channel in HMAC
+  - Karax: XSS via unescaped HTML
+  - Prologue: session fixation vulnerability
+
+### Fixed
+
+- **CRITICAL: `framework_detect.py` substring matching bug**: The `if ignore in root` check in framework detection used Python's `in` operator for substring matching, which caused false positives. For example, a workspace at `/home/user/test-target-nim/` would match the `target` ignore directory, preventing ALL framework detection, Nim file discovery, and Tailwind CSS analysis. Fixed by replacing substring matching with path-segment-aware matching (same algorithm used in `scan.py`'s `should_ignore()`). Affected 4 file walk loops: nimble detection (4b), Tauri detection (5), file pattern detection (5), and Tailwind CSS detection (6).
+- **`has_nim: False` for Nim repos with "target" in path**: Consequence of the substring matching bug. Now correctly reports `has_nim: True` and detects `nim`/`jester` frameworks.
+
+### Changed
+
+- **Version bump**: 5.8.2 → 5.9.0
+
 ## [5.8.2] — 2026-06-12
 
 ### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)

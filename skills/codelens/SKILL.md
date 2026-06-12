@@ -40,6 +40,15 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v5.9.0 — Deep Nim Integration (3,707 .nim files, 30,984 nodes, 79,548 edges)
+
+- **debugEcho/doAssert/doAssertRaises detection**: Nim's debug-only `debugEcho()` always flagged. `doAssert()` and `doAssertRaises()` flagged as high-severity debugger statements in non-test files.
+- **Nim dev_only guards**: Detects `when defined(debug):`, `when not defined(release):`, `when defined(testing):`, and `when isMainModule:` (low severity, legitimate).
+- **Nim smell detection**: Long function detection and too-many-params for Nim procs using indentation-based block tracking.
+- **Nim HTTP handler entrypoints**: Jester (`get @"path"`), Prologue (`app.get("path")`), HappyX (`get @{path}`) route patterns.
+- **Nimble CVE database**: 7 Nim-specific vulnerabilities (Nim compiler code injection/path traversal, Jester CSRF, Norm SQL injection, nimcrypto timing side-channel, Karax XSS, Prologue session fixation).
+- **CRITICAL FIX: framework_detect substring matching bug**: `if ignore in root` used Python's `in` operator for substring matching, causing repos with "target" in their path (e.g., `test-target-nim`) to have ALL framework detection disabled. Now uses path-segment-aware matching.
+
 ## What's New in v5.8.2 — Tested on nim-lang/Nim (3,672 .nim files, self-hosting compiler)
 
 - **Nim fallback parser**: New `fallback_nim.py` extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Before: 40/3734 files parsed (1.1%). After: 3,710/3,734 files parsed (99.6%).

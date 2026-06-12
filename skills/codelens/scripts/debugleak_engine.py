@@ -58,6 +58,7 @@ PRINT_PATTERNS = [
     (r'\bpprint\.pprint\s*\(', "pprint.pprint()"),
     (r'\bpprint\s*\(', "pprint()"),
     (r'\becho\s*\(', "echo()"),
+    (r'\bdebugEcho\s*\(', "debugEcho()"),       # Nim debug-only echo
     (r'\bfmt\.Println\s*\(', "fmt.Println()"),
     (r'\bfmt\.Printf\s*\(', "fmt.Printf()"),
     (r'\bprintln!\s*\(', "println!()"),
@@ -77,6 +78,9 @@ DEBUGGER_PATTERNS = [
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
     (r'\bnode\s+--inspect\b', "node --inspect"),
+    (r'\bdoAssert\s*\(', "doAssert()"),      # Nim: debug assertion (not for production)
+    (r'\bdoAssertRaises\s*\(', "doAssertRaises()"),  # Nim: debug exception assertion
+    (r'\bassert\s*\(', "assert()"),          # Nim/Python: debug assertion
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -137,6 +141,11 @@ DEV_ONLY_PATTERNS = [
     (r'\bcfg\.Debug\b', "cfg.Debug"),
     (r'\bdebug_mode\b', "debug_mode"),
     (r'\bDEV_MODE\b', "DEV_MODE"),
+    # Nim: compile-time conditional debug blocks
+    (r'\bwhen\s+defined\s*\(\s*debug\s*\)\s*:', "when defined(debug)"),       # Nim debug guard
+    (r'\bwhen\s+not\s+defined\s*\(\s*release\s*\)\s*:', "when not defined(release)"),  # Nim non-release guard
+    (r'\bwhen\s+defined\s*\(\s*testing\s*\)\s*:', "when defined(testing)"),   # Nim testing guard
+    (r'\bwhen\s+isMainModule\s*:', "when isMainModule"),                      # Nim main module guard
 ]
 
 
@@ -354,6 +363,8 @@ def _detect_print_statements(
                 continue
             if label in ("print()", "pprint()", "pprint.pprint()") and ext not in {".py", ".rs"}:
                 continue
+            if label == "debugEcho()" and ext not in {".nim", ".nims"}:
+                continue
 
             m = re.search(pattern, stripped)
             if not m:
@@ -443,10 +454,24 @@ def _detect_debugger_statements(
                 continue
             if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
                 continue
+            if label in ("doAssert()", "doAssertRaises()") and ext not in {".nim", ".nims"}:
+                continue
 
             m = re.search(pattern, stripped)
             if not m:
                 continue
+
+            # Nim: doAssert is a debug assertion that crashes in production.
+            # In test files, it's acceptable — only flag in non-test files.
+            if label in ("doAssert()", "doAssertRaises()") and is_test_file:
+                continue
+
+            # Nim/Python: assert() in test files is acceptable
+            if label == "assert()":
+                if ext not in {".nim", ".nims", ".py"}:
+                    continue
+                if is_test_file:
+                    continue
 
             severity = "high"
             should_remove = True
@@ -688,10 +713,16 @@ def _detect_dev_only(
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             # But #ifdef is a comment-style preprocessor directive
+            # And Nim "when defined(debug):" starts with "when", not "#"
             if '#ifdef' not in stripped and '#if' not in stripped:
                 continue
 
         for pattern, label in DEV_ONLY_PATTERNS:
+            # Language filter for Nim-specific patterns
+            if label in ("when defined(debug)", "when not defined(release)",
+                         "when defined(testing)", "when isMainModule") and ext not in {".nim", ".nims"}:
+                continue
+
             m = re.search(pattern, stripped)
             if not m:
                 continue
@@ -701,9 +732,16 @@ def _detect_dev_only(
 
             # Some dev-only checks are legitimate (feature flags)
             # But hardcoded DEBUG checks in production code are suspect
-            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode"):
+            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode",
+                         "when defined(debug)", "when not defined(release)"):
                 should_remove = True
                 severity = "medium"
+
+            # Nim: when isMainModule is legitimate (equivalent to if __name__ == "__main__")
+            # Don't suggest removal, just note it as a dev-only guard
+            if label == "when isMainModule":
+                should_remove = False
+                severity = "low"
 
             leaks.append({
                 "category": "dev_only",

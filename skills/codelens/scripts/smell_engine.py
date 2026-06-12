@@ -351,6 +351,14 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
+    elif ext in {".nim", ".nims"}:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if re.match(r'(?:proc|func|method|iterator|template|macro)\s+\w+', stripped):
+                m = re.match(r'(?:proc|func|method|iterator|template|macro)\s+(\w+)', stripped)
+                if m:
+                    fn_starts.append((i, m.group(1).strip('`')))
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -393,6 +401,27 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             current_indent = len(lines[i]) - len(lines[i].lstrip())
             if current_indent <= base_indent and stripped:
                 return i
+        return len(lines)
+    elif ext in {".nim", ".nims"}:
+        # Nim: indentation-based, like Python but proc body is at higher indent
+        # Find the indent level of the proc definition
+        base_indent = len(lines[start]) - len(lines[start].lstrip())
+        found_body = False
+        for i in range(start + 1, len(lines)):
+            stripped = lines[i].rstrip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            current_indent = len(lines[i]) - len(lines[i].lstrip())
+            # Body lines must be more indented than the proc line
+            if not found_body:
+                if current_indent > base_indent:
+                    found_body = True
+                continue
+            # Function ends when indent returns to same or lower level
+            if current_indent <= base_indent and stripped:
+                # Check if it's a new top-level declaration
+                if re.match(r'(proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|include|when)\s', stripped):
+                    return i
         return len(lines)
     else:
         # JS/TS/Rust: count braces
@@ -618,6 +647,37 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
+                })
+
+    elif ext in {".nim", ".nims"}:
+        # Nim: proc name*(params): ReturnType =
+        for m in re.finditer(r'(?:proc|func|method)\s+\w+\s*\*?\s*(?:\[.*?\])?\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            # Nim params format: name: Type, name: Type or name, name: Type
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Proc has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an object or tuple for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Proc has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an options object or template for grouping."
                 })
 
     return smells

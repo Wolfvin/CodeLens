@@ -604,8 +604,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     nimble_deps = set()
     for root, dirs, fnames in os.walk(workspace):
         skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
+        normalized_root = root.replace('\\', '/')
+        for ignore_dir in DEFAULT_IGNORE_DIRS:
+            seg = '/' + ignore_dir + '/'
+            if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
                 skip = True
                 break
         if skip or '.codelens' in root:
@@ -645,8 +647,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
             skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
+            normalized_root = root.replace('\\', '/')
+            for ignore_dir in DEFAULT_IGNORE_DIRS:
+                seg = '/' + ignore_dir + '/'
+                if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
                     skip = True
                     break
             if skip or '.codelens' in root:
@@ -664,8 +668,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
                 skip = False
-                for ignore in DEFAULT_IGNORE_DIRS:
-                    if ignore in root:
+                normalized_root = root.replace('\\', '/')
+                for ignore_dir in DEFAULT_IGNORE_DIRS:
+                    seg = '/' + ignore_dir + '/'
+                    if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
                         skip = True
                         break
                 if skip or '.codelens' in root:
@@ -676,12 +682,16 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tauri"] = True
                     break
 
-    # 5. Check file patterns (for Vue, Svelte)
+    # 5. Check file patterns (for Vue, Svelte, Nim)
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs
+        # Skip ignored dirs — use path-segment-aware matching to avoid
+        # false positives like "test-target-nim" matching "target".
         skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
+        normalized_root = root.replace('\\', '/')
+        for ignore_dir in DEFAULT_IGNORE_DIRS:
+            # Check if ignore_dir appears as a complete path segment
+            seg = '/' + ignore_dir + '/'
+            if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
                 skip = True
                 break
         if skip:
@@ -732,8 +742,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
             skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
+            normalized_root = root.replace('\\', '/')
+            for ignore_dir in DEFAULT_IGNORE_DIRS:
+                seg = '/' + ignore_dir + '/'
+                if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
                     skip = True
                     break
             if skip:
