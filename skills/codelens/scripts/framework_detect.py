@@ -189,6 +189,36 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # NestJS framework (Node.js)
+    "nestjs": {
+        "packages": ["@nestjs/core", "@nestjs/common"],
+        "config_files": ["nest-cli.json"],
+        "indicators": []
+    },
+    # Express.js
+    "express": {
+        "packages": ["express"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Fastify
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Flutter/Dart
+    "flutter": {
+        "packages": [],
+        "config_files": ["pubspec.yaml"],
+        "indicators": []
+    },
+    # Dart (server/CLI, non-Flutter)
+    "dart": {
+        "packages": [],
+        "config_files": ["pubspec.yaml"],
+        "indicators": []
+    },
 }
 
 
@@ -203,11 +233,16 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
         pkg_files.append(root_pkg)
 
     # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
-    monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
+    monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules', 'server', 'web', 'mobile', 'api', 'backend', 'frontend')
     for subdir in monorepo_dirs:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
             continue
+        # Check for package.json directly in this subdirectory
+        direct_pkg = os.path.join(subdir_path, "package.json")
+        if os.path.isfile(direct_pkg):
+            pkg_files.append(direct_pkg)
+        # Also check one level deeper (e.g., packages/sdk/)
         try:
             for entry in os.listdir(subdir_path):
                 entry_path = os.path.join(subdir_path, entry)
@@ -241,6 +276,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_nestjs": False,
+        "has_express": False,
+        "has_flutter": False,
+        "has_dart": False,
+        "has_docker": False,
+        "has_cicd": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -290,6 +331,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "nestjs":
+                        detected["has_nestjs"] = True
+                    elif fw_name == "express":
+                        detected["has_express"] = True
+                    elif fw_name == "fastify":
+                        detected["has_fastify"] = True
                     break
 
         # Detect CSS preprocessor
@@ -320,6 +367,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
+                elif fw_name == "nestjs":
+                    detected["has_nestjs"] = True
+                elif fw_name == "express":
+                    detected["has_express"] = True
+                elif fw_name == "fastify":
+                    detected["has_fastify"] = True
+                elif fw_name == "flutter":
+                    detected["has_flutter"] = True
+                    detected["has_dart"] = True
+                elif fw_name == "dart":
+                    detected["has_dart"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -580,6 +638,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
+        "elixir": ["mix.exs"],
+        "haskell": ["stack.yaml", "cabal.file"],
+        "scala": ["build.sbt"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -590,6 +651,93 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
                 break
+
+    # 8. Detect Flutter/Dart from pubspec.yaml
+    # pubspec.yaml can be at root or in mobile/ subdirectory
+    pubspec_dirs = [workspace]
+    for subdir in ('mobile', 'app', 'flutter', 'client', 'packages'):
+        subdir_path = os.path.join(workspace, subdir)
+        if os.path.isdir(subdir_path):
+            pubspec_dirs.append(subdir_path)
+            # Also check one level deeper in packages/*
+            try:
+                for entry in os.listdir(subdir_path):
+                    entry_path = os.path.join(subdir_path, entry)
+                    if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, "pubspec.yaml")):
+                        pubspec_dirs.append(entry_path)
+            except OSError:
+                pass
+
+    for pubspec_dir in pubspec_dirs:
+        pubspec_path = os.path.join(pubspec_dir, "pubspec.yaml")
+        if os.path.exists(pubspec_path):
+            is_flutter = False
+            try:
+                with open(pubspec_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                # Check for Flutter SDK constraint
+                if 'flutter' in content.lower():
+                    is_flutter = True
+                # Check for Flutter-specific dependencies
+                flutter_deps = ['flutter', 'flutter_test', 'flutter_localizations',
+                                'cupertino_icons', 'material', 'hooks_riverpod',
+                                'provider', 'bloc', 'get', 'auto_route']
+                for dep in flutter_deps:
+                    if dep in content:
+                        is_flutter = True
+                        break
+            except IOError:
+                pass
+
+            if is_flutter and not detected["has_flutter"]:
+                if "flutter" not in detected["frameworks"]:
+                    detected["frameworks"].append("flutter")
+                detected["has_flutter"] = True
+                detected["has_dart"] = True
+            elif not is_flutter and not detected["has_dart"]:
+                if "dart" not in detected["frameworks"]:
+                    detected["frameworks"].append("dart")
+                detected["has_dart"] = True
+
+    # 9. Detect Docker/Containerization
+    docker_markers = ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
+                      'docker-compose.prod.yml', 'docker-compose.dev.yml',
+                      'docker-compose.override.yml', '.dockerignore']
+    for marker in docker_markers:
+        if os.path.exists(os.path.join(workspace, marker)):
+            detected["has_docker"] = True
+            break
+    # Also check subdirectories (docker/, deployment/, etc.)
+    if not detected["has_docker"]:
+        for subdir in ('docker', 'deployment', 'deploy', 'containers'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                try:
+                    for f in os.listdir(subdir_path):
+                        if f.startswith('Dockerfile') or f.startswith('docker-compose'):
+                            detected["has_docker"] = True
+                            break
+                except OSError:
+                    pass
+                if detected["has_docker"]:
+                    break
+
+    # 10. Detect CI/CD pipelines
+    cicd_markers = [
+        os.path.join('.github', 'workflows'),   # GitHub Actions
+        os.path.join('.gitlab-ci.yml'),           # GitLab CI
+        os.path.join('.circleci'),                # CircleCI
+        os.path.join('Jenkinsfile'),              # Jenkins
+        os.path.join('.travis.yml'),              # Travis CI
+        os.path.join('bitbucket-pipelines.yml'),  # Bitbucket
+        os.path.join('.buildkite'),               # Buildkite
+        os.path.join('azure-pipelines.yml'),      # Azure DevOps
+    ]
+    for marker in cicd_markers:
+        marker_path = os.path.join(workspace, marker)
+        if os.path.exists(marker_path):
+            detected["has_cicd"] = True
+            break
 
     return detected
 
@@ -636,6 +784,40 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
 
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
+
+    # NestJS: add NestJS-specific paths
+    if fw.get("has_nestjs"):
+        config["backend_paths"].extend(["server/src/", "src/controllers/", "src/services/",
+                                         "src/modules/", "src/providers/", "src/guards/",
+                                         "src/interceptors/", "src/pipes/", "src/dto/",
+                                         "src/entities/", "src/repositories/"])
+        # Also check for common NestJS directory patterns
+        for nest_dir in ('server', 'api', 'backend'):
+            nest_path = os.path.join(workspace, nest_dir, "src")
+            if os.path.isdir(nest_path):
+                rel = os.path.relpath(nest_path, workspace)
+                config["backend_paths"].append(rel + "/")
+
+    # Express/Fastify: add server paths
+    if fw.get("has_express") or fw.get("has_fastify"):
+        config["backend_paths"].extend(["server/", "api/", "src/routes/", "src/controllers/",
+                                         "src/middleware/", "src/models/"])
+
+    # Flutter: add Flutter-specific paths
+    if fw.get("has_flutter"):
+        config["frontend_paths"].extend(["mobile/lib/", "app/lib/", "flutter/lib/",
+                                          "lib/pages/", "lib/widgets/", "lib/screens/",
+                                          "lib/components/"])
+        config["backend_paths"].extend(["mobile/lib/services/", "mobile/lib/repositories/",
+                                         "mobile/lib/providers/", "mobile/lib/domain/",
+                                         "mobile/lib/infrastructure/"])
+        # Check for common Flutter directory patterns
+        for flutter_dir in ('mobile', 'app', 'flutter', 'client'):
+            lib_path = os.path.join(workspace, flutter_dir, "lib")
+            if os.path.isdir(lib_path):
+                rel = os.path.relpath(lib_path, workspace)
+                config["frontend_paths"].append(rel + "/")
+                config["backend_paths"].append(rel + "/")
 
     # Rust: add Rust-specific paths
     if fw.get("has_rust"):

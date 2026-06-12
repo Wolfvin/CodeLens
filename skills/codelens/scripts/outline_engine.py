@@ -77,6 +77,8 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
+    elif ext == '.dart':
+        outline = _outline_dart(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -111,7 +113,7 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.dart'
     }
 
     outlines = []
@@ -891,6 +893,154 @@ def _detect_language(ext: str) -> str:
         '.rs': 'rust', '.py': 'python', '.go': 'go',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
-        '.vue': 'vue', '.svelte': 'svelte'
+        '.vue': 'vue', '.svelte': 'svelte',
+        '.dart': 'dart',
     }
     return mapping.get(ext, 'unknown')
+
+
+def _outline_dart(content: str, detail: str) -> Dict:
+    """Extract outline from Dart source files.
+
+    Extracts: imports, classes, enums, mixins, extensions, typedefs,
+    top-level functions, and Flutter-specific patterns (widgets, providers, routes).
+    """
+    import re
+
+    outline = {
+        "imports": [],
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "types": [],
+        "exports": [],
+        "variables": [],
+        "components": [],
+    }
+
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Imports
+        m = re.match(r"import\s+['\"]([^'\"]+)['\"]", stripped)
+        if m:
+            outline["imports"].append({
+                "text": stripped,
+                "line": i,
+            })
+            continue
+
+        # Part directives
+        if stripped.startswith('part '):
+            outline["imports"].append({
+                "text": stripped,
+                "line": i,
+            })
+            continue
+
+        # Typedef
+        m = re.match(r'typedef\s+(?:_\w+\s*=\s*)?(\w+)', stripped)
+        if m:
+            outline["types"].append({
+                "name": m.group(1),
+                "line": i,
+            })
+            continue
+
+        # Enum
+        m = re.match(r'enum\s+(\w+)', stripped)
+        if m:
+            outline["types"].append({
+                "name": m.group(1),
+                "line": i,
+                "kind": "enum",
+            })
+            continue
+
+        # Mixin
+        m = re.match(r'mixin\s+(\w+)', stripped)
+        if m:
+            outline["classes"].append({
+                "name": m.group(1),
+                "line": i,
+                "kind": "mixin",
+            })
+            continue
+
+        # Extension
+        m = re.match(r'extension\s+(\w+)', stripped)
+        if m:
+            outline["classes"].append({
+                "name": m.group(1),
+                "line": i,
+                "kind": "extension",
+            })
+            continue
+
+        # Abstract class
+        m = re.match(r'abstract\s+class\s+(\w+)', stripped)
+        if m:
+            outline["classes"].append({
+                "name": m.group(1),
+                "line": i,
+                "kind": "abstract_class",
+            })
+            continue
+
+        # Class (including Flutter widgets)
+        m = re.match(r'class\s+(\w+)', stripped)
+        if m:
+            name = m.group(1)
+            cls_info = {
+                "name": name,
+                "line": i,
+            }
+
+            # Check for Flutter widget patterns
+            if any(base in stripped for base in
+                   ['StatelessWidget', 'StatefulWidget', 'ConsumerWidget',
+                    'ConsumerStatefulWidget', 'HookConsumerWidget',
+                    'HookWidget', 'StatefulHookWidget']):
+                cls_info["kind"] = "widget"
+                outline["components"].append({
+                    "name": name,
+                    "line": i,
+                })
+            else:
+                cls_info["kind"] = "class"
+
+            # Check for @RoutePage
+            if i > 1:
+                prev_lines = lines[max(0, i-6):i-1]
+                for prev in prev_lines:
+                    if '@RoutePage' in prev:
+                        cls_info["is_route_page"] = True
+                        break
+
+            outline["classes"].append(cls_info)
+            continue
+
+        # Top-level function
+        m = re.match(r'(?:void|Future|Stream|int|double|String|bool|List|Map|Set|dynamic|Widget|BuildContext)\s*<[^>]*>\s+(\w+)\s*\(|(\w+)\s+(\w+)\s*\(', stripped)
+        if m:
+            name = m.group(1) or m.group(3)
+            if name and name[0].islower() and name not in ('if', 'for', 'while', 'switch', 'catch', 'return', 'throw', 'new', 'super', 'this'):
+                outline["functions"].append({
+                    "name": name,
+                    "line": i,
+                })
+                continue
+
+        # Provider declarations (Riverpod)
+        m = re.match(r'final\s+(\w+Provider)\s*=', stripped)
+        if m:
+            outline["variables"].append({
+                "name": m.group(1),
+                "line": i,
+                "kind": "provider",
+            })
+            continue
+
+    return outline

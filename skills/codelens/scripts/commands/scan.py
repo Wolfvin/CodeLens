@@ -29,6 +29,7 @@ from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
+from parsers.fallback_dart import parse_dart_fallback
 
 from commands import register_command
 
@@ -571,8 +572,26 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read C# file: {path}")
 
+    # Parse Dart files
+    dart_data = []
+    if files["dart"]:
+        for path in files["dart"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_dart_fallback(content, os.path.relpath(path, workspace))
+                dart_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Dart file: {path}")
+
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + dart_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -662,6 +681,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "go": len(files["go"]),
             "lua": len(files["lua"]),
             "csharp": len(files["csharp"]),
+            "dart": len(files["dart"]),
+            "sql": len(files["sql"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -669,6 +690,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
+        "dart_parsed": len(dart_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -725,6 +747,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "go": [],
         "lua": [],
         "csharp": [],
+        "dart": [],
+        "sql": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -788,6 +812,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["lua"].append(file_path)
             elif ext in ('.cs',):
                 files["csharp"].append(file_path)
+            elif ext == '.dart':
+                files["dart"].append(file_path)
+            elif ext in ('.sql',):
+                files["sql"].append(file_path)
 
     return files
 

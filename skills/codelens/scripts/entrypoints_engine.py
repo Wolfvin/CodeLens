@@ -30,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go",
+    ".go", ".dart",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -100,6 +100,14 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "go_main_fn",
+            },
+            # Dart/Flutter
+            {
+                "regex": r'(?:void|Future<void>)\s+main\s*\(',
+                "language": {".dart"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "dart_main_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -292,6 +300,24 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
+            },
+            # NestJS @Controller + @Get/@Post/etc
+            {
+                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*["\']([^"\']*)["\']\s*\)',
+                "language": {".ts", ".js", ".tsx"},
+                "extract": "nestjs_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "nestjs_http_handler",
+            },
+            # NestJS @Controller with no method path
+            {
+                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*\)',
+                "language": {".ts", ".js", ".tsx"},
+                "extract": "nestjs_route",
+                "method_group": 1,
+                "path_group": None,
+                "label": "nestjs_http_handler_no_path",
             },
         ],
     },

@@ -5,6 +5,67 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] — 2026-06-12
+
+### Tested against immich-app/immich (2,760 source files: 1,242 Dart + 995 TS + 413 Svelte + 31 Python, self-hosted photo/video backup with NestJS server + Flutter mobile + SvelteKit web + ML)
+
+Real-world test on a polyglot desktop+mobile+web+ML application with 41 NestJS controllers, 52 services, Flutter/Dart mobile app, SvelteKit web frontend, and Python ML pipeline.
+
+### Added
+
+- **Dart/Flutter fallback parser** (`fallback_dart.py`): Full regex-based Dart parser extracting:
+  - Classes (with methods, fields, constructors) including abstract classes
+  - Flutter widgets (StatelessWidget, StatefulWidget, ConsumerWidget, HookConsumerWidget, etc.)
+  - Enums (with values), Mixins, Extensions, Typedefs
+  - Top-level functions with type-annotated return types
+  - Riverpod providers (Provider, StateNotifierProvider, FutureProvider, etc.)
+  - AutoRoute/GoRoute route declarations
+  - Dart import statements (package:, dart:, relative)
+  - @RoutePage annotation detection for Flutter route pages
+  - All nodes include `fn` key for edge_resolver compatibility
+
+- **Dart file discovery**: `discover_files()` now includes `.dart` files in the `dart` category. Scan output includes `dart` file count and `dart_parsed` count.
+
+- **SQL file discovery**: `discover_files()` now includes `.sql` files in the `sql` category. SQL files are tracked for database analysis awareness.
+
+- **NestJS framework detection**: `detect_frameworks()` now detects NestJS from `@nestjs/core`/`@nestjs/common` in package.json dependencies and `nest-cli.json` config file. Adds `has_nestjs: true` to detected dict. Auto-configures backend paths for `server/src/`, `src/controllers/`, `src/services/`, `src/modules/`, etc.
+
+- **Express.js framework detection**: `detect_frameworks()` now detects Express from `express` in package.json. Adds `has_express: true`.
+
+- **Fastify framework detection**: `detect_frameworks()` now detects Fastify from `fastify` in package.json. Adds `has_fastify: true`.
+
+- **Flutter framework detection**: `detect_frameworks()` now detects Flutter/Dart from `pubspec.yaml` files. Scans root and common subdirectories (`mobile/`, `app/`, `flutter/`, `client/`, `packages/*`). Checks for Flutter SDK constraints and common Flutter dependencies. Adds `has_flutter: true` and `has_dart: true`. Auto-configures frontend/backend paths for Flutter project structure.
+
+- **Docker/containerization detection**: `detect_frameworks()` now detects Docker deployment from Dockerfile, docker-compose.yml, .dockerignore files (including subdirectories like `docker/`, `deployment/`). Adds `has_docker: true`.
+
+- **CI/CD pipeline detection**: `detect_frameworks()` now detects CI/CD pipelines from GitHub Actions (`.github/workflows/`), GitLab CI (`.gitlab-ci.yml`), Jenkins (`Jenkinsfile`), CircleCI, Travis CI, Bitbucket Pipelines, Buildkite, Azure DevOps. Adds `has_cicd: true`.
+
+- **NestJS route extraction** (api-map): `_extract_nestjs_routes()` extracts HTTP routes from NestJS controller decorators:
+  - `@Controller('prefix')` for route group prefix
+  - `@Get('path')`, `@Post('path')`, `@Put('path')`, `@Delete('path')`, `@Patch('path')` for method handlers
+  - Combines controller prefix + method path for full endpoint path
+  - Detects auth-related decorators (`@Authenticated`, `@UseGuards(AuthGuard)`, `@Auth()`, etc.)
+  - Extracts handler method names from lines following the decorator
+
+- **NestJS HTTP handler entrypoints**: Entrypoints engine now detects NestJS `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch` decorators as HTTP handler entrypoints.
+
+- **Dart main() entrypoints**: Entrypoints engine now detects `void main()` and `Future<void> main()` as application entry points for Dart/Flutter projects.
+
+- **Dart outline engine**: `_outline_dart()` extracts file outlines from Dart source including imports, classes, enums, mixins, extensions, typedefs, functions, Flutter widget components, and Riverpod provider declarations.
+
+- **Dart extension in apimap**: `.dart` added to SOURCE_EXTENSIONS in apimap_engine for future Dart API route extraction.
+
+- **Additional unsupported language markers**: Elixir (`mix.exs`), Haskell (`stack.yaml`), Scala (`build.sbt`) are now detected as unsupported languages.
+
+### Changed
+
+- Version bumped from 5.8.0 → 5.10.0 (skipped 5.9 to avoid confusion with the PHP branch version)
+- `discover_files()` now returns 16 categories (was 14), adding `dart` and `sql`
+- Framework detection now returns 6 additional flags: `has_nestjs`, `has_express`, `has_fastify`, `has_flutter`, `has_dart`, `has_docker`, `has_cicd`
+- `get_recommended_config()` now suggests NestJS and Flutter-specific paths
+- `skill.json` description updated with v5.10 features and immich test results
+- 27 new tags added to `skill.json` for Dart, Flutter, NestJS, Docker, CI/CD, SQL
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

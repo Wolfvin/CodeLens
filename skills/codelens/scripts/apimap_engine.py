@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql",
+    ".graphql", ".gql", ".dart",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -203,6 +203,13 @@ def map_api_routes(
                 if orpc_routes:
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
+
+            # ─── NestJS decorator routes ───────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                nestjs_routes = _extract_nestjs_routes(content, rel_path)
+                if nestjs_routes:
+                    frameworks_detected.add("nestjs")
+                    routes.extend(nestjs_routes)
 
             # ─── Tauri IPC (frontend invoke calls) ────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
@@ -2037,7 +2044,7 @@ def _normalize_path(path: str) -> str:
 
 def _is_deprecated_route(route: Dict[str, Any]) -> bool:
     """Check if a route is marked as deprecated."""
-    handler = route.get("handler_name", "")
+    handler = route.get("handler_name") or ""
     # Common deprecation patterns
     if "deprecated" in handler.lower():
         return True
@@ -2353,5 +2360,125 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
                     "request_type": "path_filter",
                     "response_type": None,
                 })
+
+    return routes
+
+
+# ─── NestJS Route Extraction ────────────────────────────────────
+
+# NestJS decorator patterns
+_RE_NESTJS_CONTROLLER = re.compile(
+    r"@Controller\s*\(\s*['\"]([^'\"]*)['\"]\s*\)"
+)
+_RE_NESTJS_HTTP_METHOD = re.compile(
+    r"@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*['\"]([^'\"]*)['\"]\s*\)"
+)
+_RE_NESTJS_HTTP_METHOD_NO_PATH = re.compile(
+    r"@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*\)"
+)
+
+
+def _extract_nestjs_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract routes from NestJS controllers using decorator patterns.
+
+    NestJS uses decorators like:
+      @Controller('users')
+      @Get('profile')
+      @Post()
+      @Put(':id')
+      @Delete(':id')
+
+    These map to HTTP endpoints:
+      GET /users/profile
+      POST /users
+      PUT /users/:id
+      DELETE /users/:id
+    """
+    routes = []
+
+    # Check if this file contains NestJS patterns
+    if '@Controller' not in content and '@Get(' not in content and '@Post(' not in content:
+        return routes
+
+    # Only process files that look like controllers
+    if '.controller.' not in rel_path and '.controller.' not in rel_path.lower():
+        # Also check for @Controller decorator in the content
+        if '@Controller' not in content:
+            return routes
+
+    # Find controller prefix
+    controller_prefix = ""
+    ctrl_match = _RE_NESTJS_CONTROLLER.search(content)
+    if ctrl_match:
+        controller_prefix = ctrl_match.group(1).strip('/')
+        if controller_prefix:
+            controller_prefix = '/' + controller_prefix
+
+    # Find HTTP method decorators
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Match @Get('path'), @Post('path'), etc.
+        m = _RE_NESTJS_HTTP_METHOD.match(stripped)
+        if not m:
+            # Match @Get(), @Post() without path
+            m = _RE_NESTJS_HTTP_METHOD_NO_PATH.match(stripped)
+
+        if m:
+            http_method = m.group(1).upper()
+            path = m.group(2) if len(m.groups()) > 1 and m.lastindex >= 2 else ""
+
+            # Build full path
+            if path:
+                full_path = controller_prefix + '/' + path.strip('/')
+            else:
+                full_path = controller_prefix or '/'
+
+            # Clean up path (remove double slashes)
+            full_path = re.sub(r'/+', '/', full_path)
+            if not full_path.startswith('/'):
+                full_path = '/' + full_path
+
+            # Find the method name on the next line(s)
+            handler_name = None
+            for j in range(i + 1, min(i + 15, len(lines))):
+                method_match = re.match(r'\s+(?:async\s+)?(\w+)\s*\(', lines[j])
+                if method_match:
+                    name = method_match.group(1)
+                    if name not in ('constructor', 'ngOnInit', 'ngOnDestroy', 'async',
+                                    'if', 'for', 'while', 'switch', 'catch', 'return',
+                                    'throw', 'new', 'super', 'this', 'class', 'export',
+                                    'import', 'const', 'let', 'var', 'function', 'type'):
+                        handler_name = name
+                        break
+
+            # Detect auth decorators on the same method
+            auth_protected = False
+            context_start = max(0, i - 3)
+            context_end = min(len(lines), i + 5)
+            for j in range(context_start, context_end):
+                ctx_line = lines[j].strip()
+                if any(auth_kw in ctx_line for auth_kw in
+                       ['@Authenticated', '@UseGuards(AuthGuard)', '@Auth()',
+                        '@Public()', '@Require', '@Protected', 'JwtAuthGuard',
+                        'AuthGuard', 'Permissions']):
+                    if '@Public()' not in ctx_line:
+                        auth_protected = True
+                    break
+
+            routes.append({
+                "method": http_method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "nestjs",
+                "middleware": [],
+                "auth_required": auth_protected,
+                "request_type": None,
+                "response_type": None,
+            })
 
     return routes
