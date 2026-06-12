@@ -168,6 +168,14 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "none",
                 "label": "php_cli_entry",
             },
+            # Lua — function main()
+            {
+                "regex": r'function\s+main\s*\(',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "lua_main_fn",
+            },
         ],
     },
 
@@ -496,6 +504,79 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "svelte_onmount",
             },
+            # C/C++ — signal() handler registration
+            {
+                "regex": r'\bsignal\s*\(\s*(SIG\w+)\s*,\s*(\w+)',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "c_signal_handler",
+                "signal_group": 1,
+                "handler_group": 2,
+                "label": "c_signal_handler",
+            },
+            # C/C++ — sigaction() handler registration
+            {
+                "regex": r'\bsigaction\s*\(\s*(SIG\w+)\s*,',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "c_sigaction_handler",
+                "signal_group": 1,
+                "label": "c_sigaction_handler",
+            },
+            # C/C++ — atexit() callback registration
+            {
+                "regex": r'\batexit\s*\(\s*(\w+)',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "c_atexit_handler",
+            },
+            # Go — signal.Notify
+            {
+                "regex": r'signal\.Notify\s*\(',
+                "language": {".go"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "go_signal_notify",
+            },
+            # Go — os/signal import (signal handling setup)
+            {
+                "regex": r'"os/signal"',
+                "language": {".go"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "go_os_signal_import",
+            },
+            # Lua — luv/uv signal handler (uv.signal_start / uv.new_signal)
+            {
+                "regex": r'uv\.signal_start\s*\(',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_uv_signal_handler",
+            },
+            # Lua — :on() event binding (luvit/emitter pattern)
+            {
+                "regex": r':on\s*\(\s*["\']([\w_]+)["\']\s*',
+                "language": {".lua"},
+                "extract": "event_name",
+                "event_group": 1,
+                "label": "lua_on_event",
+            },
+            # Lua — ngx.timer.at (OpenResty timer callback)
+            {
+                "regex": r'ngx\.timer\.at\s*\(',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_ngx_timer_at",
+            },
+            # Lua — ngx.req.socket (OpenResty socket callback)
+            {
+                "regex": r'ngx\.req\.socket\s*\(',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_ngx_req_socket",
+            },
         ],
     },
 
@@ -567,6 +648,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "structopt_parser",
+            },
+            # C/C++ — getopt_long
+            {
+                "regex": r'getopt_long\s*\(\s*argc\s*,\s*argv\s*,\s*"([^"]+)"',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "cli_command",
+                "command_group": 1,
+                "label": "c_getopt_long",
+            },
+            # C/C++ — getopt short
+            {
+                "regex": r'\bgetopt\s*\(\s*argc\s*,\s*argv\s*,\s*"([^"]+)"',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "cli_command",
+                "command_group": 1,
+                "label": "c_getopt",
             },
         ],
     },
@@ -760,6 +857,30 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "elixir_supervisor_child",
             },
+            # C/C++ — pthread_create thread entry point
+            {
+                "regex": r'pthread_create\s*\([^,]+,\s*[^,]+,\s*(\w+)',
+                "language": {".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "c_pthread_create",
+            },
+            # Go — goroutine launch with named function call: go namedFunc()
+            {
+                "regex": r'\bgo\s+(?!func\b)(\w+)\s*\(',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_goroutine_named",
+            },
+            # Lua — ngx.thread.spawn (OpenResty worker thread)
+            {
+                "regex": r'ngx\.thread\.spawn\s*\(',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_ngx_thread_spawn",
+            },
         ],
     },
 
@@ -815,6 +936,30 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 1,
                 "label": "elixir_public_def",
+            },
+            # Lua — return M / return varName (module export)
+            {
+                "regex": r'return\s+(\w+)\s*$',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_module_return",
+            },
+            # Lua — return { ... } (module export as table literal)
+            {
+                "regex": r'return\s*\{',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_module_return_table",
+            },
+            # Lua — module(...) declaration
+            {
+                "regex": r'module\s*\(\s*[\'"]([\w._-]+)[\'"]',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_module_decl",
             },
         ],
     },
@@ -921,6 +1066,38 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 1,
                 "label": "phpunit_test",
+            },
+            # Lua — busted test framework describe()
+            {
+                "regex": r'\bdescribe\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_describe",
+            },
+            # Lua — busted test framework it()
+            {
+                "regex": r'\bit\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_it",
+            },
+            # Lua — tap test framework: require('tap')
+            {
+                "regex": r"require\s*\(\s*['\"]tap['\"]\s*\)",
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lua_tap_test",
+            },
+            # Lua — test() function call (luvit tap-style)
+            {
+                "regex": r'\btest\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_test_fn",
             },
         ],
     },
@@ -1162,6 +1339,17 @@ def _extract_entrypoints(
             elif extract_type == "event_name":
                 event_group = pattern_def.get("event_group")
                 entrypoint["event"] = match.group(event_group) if event_group and match.lastindex is not None and match.lastindex >= event_group else "unknown"
+                entrypoint["handler"] = _find_handler_name(content, line_num, ext)
+
+            elif extract_type == "c_signal_handler":
+                signal_group = pattern_def.get("signal_group")
+                handler_group = pattern_def.get("handler_group")
+                entrypoint["event"] = match.group(signal_group) if signal_group and match.lastindex is not None and match.lastindex >= signal_group else "unknown"
+                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex is not None and match.lastindex >= handler_group else "unknown"
+
+            elif extract_type == "c_sigaction_handler":
+                signal_group = pattern_def.get("signal_group")
+                entrypoint["event"] = match.group(signal_group) if signal_group and match.lastindex is not None and match.lastindex >= signal_group else "unknown"
                 entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "cli_command":

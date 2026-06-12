@@ -383,22 +383,31 @@ def detect_smells(
             if smell.get("severity") == "warning" and len(top_smells) < 20:
                 top_smells.append({**smell, "category": cat})
 
+    # Build by_category with only non-empty categories
+    by_category = {
+        cat: smells for cat, smells in all_smells.items() if smells
+    }
+
+    # total_findings: correct sum of all findings across all categories
+    total_findings = sum(len(v) for v in by_category.values())
+
     return {
         "status": "ok",
         "workspace": workspace,
         "health_score": health_score,  # v5.8: Also at top-level for easy access
+        "total_findings": total_findings,
         "stats": {
             "files_scanned": files_scanned,
             "total_smells": total_smells,
+            "total_findings": total_findings,
             "critical": critical_count,
             "warning": warning_count,
             "info": info_count,
-            "health_score": health_score
+            "health_score": health_score,
+            "by_category": {cat: len(smells) for cat, smells in by_category.items()},
         },
         "files_truncated": files_truncated,
-        "by_category": {
-            cat: smells for cat, smells in all_smells.items() if smells
-        },
+        "by_category": by_category,
         "top_priority": top_smells[:20],
         "categories_checked": list(categories)
     }

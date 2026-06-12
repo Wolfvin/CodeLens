@@ -287,6 +287,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         "description": "",
         "version": "0.0.0",
         "type": "unknown",
+        "languages": [],
+        "frameworks": [],
         # v6: monorepo & sub-dir info
         "is_monorepo": False,
         "monorepo_tools": [],
@@ -299,6 +301,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
+    elixir_type = None  # v6.5: track Elixir-derived type separately
+    detected_languages = []  # v6.5: track all detected languages
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -510,15 +514,42 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["version"] = go_ver_match.group(1)
             # Classify Go project type based on dependencies and module name
             mod_name_lower = mod_name.lower() if module_match else ""
-            if any(kw in mod_name_lower for kw in ('cockroachdb', 'postgres', 'mysql', 'sqlite', 'mongodb', 'redis', 'etcd', 'database', 'sql', 'db/')):
+            # v6.5: Extract direct deps (exclude // indirect) for more accurate classification
+            direct_deps_lines = []
+            in_require = False
+            for line in go_mod_content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith('require ('):
+                    in_require = True
+                    continue
+                if in_require:
+                    if stripped == ')':
+                        in_require = False
+                        continue
+                    if '//' in stripped and 'indirect' in stripped:
+                        continue
+                    direct_deps_lines.append(stripped)
+                elif stripped.startswith('require '):
+                    # Single-line require: require "pkg" v1.0
+                    if '//' in stripped and 'indirect' in stripped:
+                        continue
+                    direct_deps_lines.append(stripped)
+            direct_deps_str = ' '.join(direct_deps_lines)
+
+            # v6.5: Check for well-known Go project types by module name first
+            if any(kw in mod_name_lower for kw in ('hugo', 'jekyll', 'gatsby', 'zola', 'hugoio')):
+                go_type = "go-static-site-generator"
+            elif any(kw in mod_name_lower for kw in ('cockroachdb', 'postgres', 'mysql', 'sqlite', 'mongodb', 'redis', 'etcd', 'database', 'db/')):
                 go_type = "go-database"
-            elif 'database/sql' in go_mod_content:
+            elif 'database/sql' in direct_deps_str:
                 go_type = "go-database"
-            elif 'gin-gonic' in go_mod_content or 'labstack/echo' in go_mod_content:
+            elif 'gin-gonic' in go_mod_content or 'labstack/echo' in go_mod_content or 'gofiber/fiber' in go_mod_content:
                 go_type = "go-web-service"
+            elif any(kw in mod_name_lower for kw in ('cobra', 'urfave/cli', 'alecthomas/kong')) or 'spf13/cobra' in go_mod_content or 'urfave/cli' in go_mod_content:
+                go_type = "go-cli-tool"
             elif 'k8s.io/' in go_mod_content or 'kubernetes' in go_mod_content:
                 go_type = "go-infrastructure"
-            elif 'google.golang.org/grpc' in go_mod_content:
+            elif 'google.golang.org/grpc' in direct_deps_str:
                 go_type = "go-grpc-service"
             elif 'net/http' in go_mod_content:
                 go_type = "go-web-service"
@@ -597,7 +628,24 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = ac_init.group(1)
             if ver_init:
                 identity["version"] = ver_init.group(1)
-            c_cpp_type = "autotools-project"
+            # v6.5: Determine if C or C++ based on source files
+            c_only_count = 0
+            cpp_count = 0
+            for root, dirs, walk_files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+                for wf in walk_files:
+                    if wf.endswith(('.c', '.h')):
+                        c_only_count += 1
+                    elif wf.endswith(('.cpp', '.cc', '.cxx', '.hpp')):
+                        cpp_count += 1
+            # Check configure.ac for project description clues
+            configure_lower = configure_content.lower()
+            if cpp_count > 0:
+                c_cpp_type = "cpp-project"
+            elif c_only_count > 0:
+                c_cpp_type = "c-project"
+            else:
+                c_cpp_type = "c-project"
         except Exception:
             pass
 
@@ -615,7 +663,15 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if c_files >= 3:
                 break
         if c_files >= 3:
-            c_cpp_type = "c-cpp-project"
+            # v6.5: Distinguish C from C++
+            _c_cnt = sum(1 for root, dirs, fns in os.walk(workspace)
+                        for fn in fns if fn.endswith(('.c', '.h')))
+            _cpp_cnt = sum(1 for root, dirs, fns in os.walk(workspace)
+                          for fn in fns if fn.endswith(('.cpp', '.cc', '.cxx', '.hpp')))
+            if _cpp_cnt > 0:
+                c_cpp_type = "cpp-project"
+            else:
+                c_cpp_type = "c-project"
 
     # Check for C/C++ project with many source files but no build system file
     if not c_cpp_type:
@@ -626,7 +682,15 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 if f.endswith(('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')):
                     c_file_count += 1
         if c_file_count >= 10:
-            c_cpp_type = "c-cpp-project"
+            # v6.5: Distinguish C from C++
+            _c_cnt2 = sum(1 for root, dirs, fns in os.walk(workspace)
+                         for fn in fns if fn.endswith(('.c', '.h')))
+            _cpp_cnt2 = sum(1 for root, dirs, fns in os.walk(workspace)
+                           for fn in fns if fn.endswith(('.cpp', '.cc', '.cxx', '.hpp')))
+            if _cpp_cnt2 > 0:
+                c_cpp_type = "cpp-project"
+            else:
+                c_cpp_type = "c-project"
 
     # v6.4: Detect Lua projects
     lua_type = None
@@ -641,27 +705,113 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
-    # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    # v6.5: Detect Elixir projects via mix.exs
+    mix_exs_path = os.path.join(workspace, 'mix.exs')
+    if os.path.isfile(mix_exs_path):
+        try:
+            with open(mix_exs_path, 'r', encoding='utf-8') as f:
+                mix_content = f.read()
+            # Extract project name from defmodule or app:
+            app_match = re.search(r'app:\s*:(\w+)', mix_content)
+            if app_match:
+                identity["name"] = app_match.group(1)
+            # Extract version
+            ver_match = re.search(r'@version\s+["\']([^"\']+)["\']', mix_content)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            else:
+                ver_match2 = re.search(r'version:\s*["\']([^"\']+)["\']', mix_content)
+                if ver_match2:
+                    identity["version"] = ver_match2.group(1)
+            # Detect Elixir framework from deps
+            mix_lower = mix_content.lower()
+            if 'phoenix' in mix_content:
+                elixir_type = "phoenix-web-framework"
+                identity["frameworks"].append("phoenix")
+                if 'ecto' in mix_content:
+                    identity["frameworks"].append("ecto")
+                if 'plug' in mix_content:
+                    identity["frameworks"].append("plug")
+                if 'live_view' in mix_content or 'phoenix_live_view' in mix_content:
+                    identity["frameworks"].append("phoenix-live-view")
+            elif 'ecto' in mix_content:
+                elixir_type = "elixir-data-app"
+                identity["frameworks"].append("ecto")
+            elif 'nerves' in mix_content:
+                elixir_type = "nerves-embedded-app"
+                identity["frameworks"].append("nerves")
+            elif 'oban' in mix_content:
+                elixir_type = "elixir-background-job-app"
+                identity["frameworks"].append("oban")
+            else:
+                elixir_type = "elixir-project"
+        except Exception:
+            logger.warning("mix.exs parsing failed", exc_info=True)
+
+    # v6.5: Also detect Ruby projects via Gemfile
+    ruby_type = None
+    gemfile_path = os.path.join(workspace, 'Gemfile')
+    if os.path.isfile(gemfile_path):
+        try:
+            with open(gemfile_path, 'r', encoding='utf-8') as f:
+                gemfile_content = f.read()
+            if 'rails' in gemfile_content:
+                ruby_type = "rails-app"
+                identity["frameworks"].append("rails")
+            elif 'sinatra' in gemfile_content:
+                ruby_type = "sinatra-app"
+                identity["frameworks"].append("sinatra")
+            else:
+                ruby_type = "ruby-project"
+        except Exception:
+            logger.warning("Gemfile parsing failed", exc_info=True)
+
+    # v6.5: Combined type detection — handle polyglot projects with primary-language awareness
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, elixir_type, ruby_type] if t is not None]
+
+    # v6.5: Determine "specific" types (framework-level like phoenix-web-framework, laravel-app)
+    # vs "generic" types (like elixir-project, php-project, node-project).
+    # Specific types should take priority over polyglot combination.
+    _SPECIFIC_TYPES = {
+        'phoenix-web-framework', 'elixir-data-app', 'nerves-embedded-app', 'elixir-background-job-app',
+        'laravel-app', 'symfony-app', 'slim-app', 'lumen-app', 'cakephp-app', 'drupal-app', 'wordpress-app',
+        'rails-app', 'sinatra-app',
+        'go-static-site-generator', 'go-web-service', 'go-grpc-service', 'go-cli-tool', 'go-database', 'go-infrastructure',
+        'fullstack-web-app', 'backend-api', 'frontend-app', 'frontend-library',
+    }
 
     if len(active_types) >= 2:
-        # Polyglot project — build a combined type string
-        type_parts = []
-        if rust_type:
-            type_parts.append("rust")
-        if go_type:
-            type_parts.append("go")
-        if js_type:
-            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type:
-            type_parts.append("python")
-        if php_type:
-            type_parts.append("php")
-        if c_cpp_type:
-            type_parts.append("c-cpp")
-        if lua_type:
-            type_parts.append("lua")
-        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
+        # v6.5: If there's a specific framework type, use it as the primary type
+        # and note the secondary language in the type string
+        specific_type = None
+        for t in [elixir_type, ruby_type, go_type, php_type, python_type, rust_type, js_type, c_cpp_type, lua_type]:
+            if t and t in _SPECIFIC_TYPES:
+                specific_type = t
+                break
+        if specific_type:
+            identity["type"] = specific_type
+        else:
+            # Polyglot project — build a combined type string
+            type_parts = []
+            if rust_type:
+                type_parts.append("rust")
+            if go_type:
+                type_parts.append("go")
+            if js_type:
+                type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
+            if python_type:
+                type_parts.append("python")
+            if php_type:
+                type_parts.append("php")
+            if c_cpp_type:
+                type_parts.append("c-cpp")
+            if lua_type:
+                type_parts.append("lua")
+            if elixir_type:
+                type_parts.append("elixir")
+            if ruby_type:
+                type_parts.append("ruby")
+            identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
         # v6: If monorepo indicators found, append -monorepo suffix
@@ -681,6 +831,125 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["type"] = "frontend-app"
         if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
             identity["type"] += "-monorepo"
+
+    # v6.5: Build languages list from detected types
+    if go_type is not None and 'go' not in detected_languages:
+        detected_languages.append('go')
+    if rust_type is not None and 'rust' not in detected_languages:
+        detected_languages.append('rust')
+    if python_type is not None and 'python' not in detected_languages:
+        detected_languages.append('python')
+    if php_type is not None and 'php' not in detected_languages:
+        detected_languages.append('php')
+    if lua_type is not None and 'lua' not in detected_languages:
+        detected_languages.append('lua')
+    if elixir_type is not None and 'elixir' not in detected_languages:
+        detected_languages.append('elixir')
+    if ruby_type is not None and 'ruby' not in detected_languages:
+        detected_languages.append('ruby')
+
+    # C/C++ language detection — distinguish C from C++
+    if c_cpp_type is not None:
+        c_count = 0
+        cpp_count = 0
+        for root, dirs, walk_files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for wf in walk_files:
+                if wf.endswith(('.c', '.h')):
+                    c_count += 1
+                elif wf.endswith(('.cpp', '.cc', '.cxx', '.hpp')):
+                    cpp_count += 1
+        if cpp_count > 0 and 'c++' not in detected_languages:
+            detected_languages.append('c++')
+        if c_count > 0 and 'c' not in detected_languages:
+            detected_languages.append('c')
+        # If only headers and no .c or .cpp files, add both
+        if c_count == 0 and cpp_count == 0 and 'c' not in detected_languages:
+            detected_languages.append('c')
+
+    # JS/TS language detection
+    if has_package_json:
+        # Check for TypeScript
+        tsconfig_path = os.path.join(workspace, 'tsconfig.json')
+        has_ts_files = False
+        for root, dirs, walk_files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for wf in walk_files:
+                if wf.endswith(('.ts', '.tsx')):
+                    has_ts_files = True
+                    break
+            if has_ts_files:
+                break
+        if os.path.isfile(tsconfig_path) or has_ts_files:
+            if 'typescript' not in detected_languages:
+                detected_languages.append('typescript')
+        if 'javascript' not in detected_languages:
+            detected_languages.append('javascript')
+
+    # v6.5: Quick file-extension scan for languages not detected by config files
+    _LANG_EXTENSIONS = {
+        '.ex': 'elixir', '.exs': 'elixir',
+        '.erl': 'erlang',
+        '.swift': 'swift',
+        '.kt': 'kotlin', '.kts': 'kotlin',
+        '.scala': 'scala',
+        '.java': 'java',
+        '.dart': 'dart',
+        '.cs': 'c#',
+        '.rb': 'ruby',
+        '.rs': 'rust',
+        '.go': 'go',
+        '.py': 'python',
+        '.lua': 'lua',
+        '.php': 'php',
+        '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell',
+        '.r': 'r', '.R': 'r',
+        '.m': 'objective-c',
+        '.zig': 'zig',
+        '.nim': 'nim',
+        '.gd': 'gdscript',
+    }
+    _ext_lang_count = {}
+    for root, dirs, walk_files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+        for wf in walk_files:
+            ext = os.path.splitext(wf)[1].lower()
+            lang = _LANG_EXTENSIONS.get(ext)
+            if lang:
+                _ext_lang_count[lang] = _ext_lang_count.get(lang, 0) + 1
+    # Add languages with 5+ files that weren't already detected
+    for lang, count in sorted(_ext_lang_count.items(), key=lambda x: -x[1]):
+        if count >= 5 and lang not in detected_languages:
+            detected_languages.append(lang)
+        # Also add secondary languages with 2+ files if they're not already there
+        elif count >= 2 and lang not in detected_languages and len(detected_languages) < 6:
+            detected_languages.append(lang)
+
+    identity["languages"] = detected_languages
+
+    # v6.5: Add framework info from detected types
+    if go_type == "go-static-site-generator" and "hugo" not in identity["frameworks"]:
+        identity["frameworks"].append("hugo")
+    if go_type == "go-web-service" and os.path.isfile(go_mod_path):
+        try:
+            go_mod_check = go_mod_content  # already loaded above
+            if 'gin-gonic' in go_mod_check:
+                identity["frameworks"].append("gin")
+            elif 'labstack/echo' in go_mod_check:
+                identity["frameworks"].append("echo")
+            elif 'gofiber/fiber' in go_mod_check:
+                identity["frameworks"].append("fiber")
+        except Exception:
+            pass
+    if go_type == "go-cli-tool" and "cobra" not in identity["frameworks"]:
+        identity["frameworks"].append("cobra")
+    if php_type and php_type != "php-project":
+        fw_name = php_type.replace('-app', '')
+        if fw_name not in identity["frameworks"]:
+            identity["frameworks"].append(fw_name)
+
+    # Deduplicate frameworks
+    identity["frameworks"] = list(dict.fromkeys(identity["frameworks"]))
 
     return identity
 
