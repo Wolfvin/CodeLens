@@ -43,6 +43,7 @@ Usage:
     python3 codelens.py css-deep <workspace]           # Deep CSS analysis (vars, keyframes, specificity)
     python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
+    python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)
@@ -323,7 +324,7 @@ _LIST_COMMANDS = {
     "secrets", "a11y", "css-deep", "regex-audit", "vuln-scan",
     "side-effect", "missing-refs", "circular", "list", "env-check",
     "test-map", "ownership", "entrypoints", "api-map", "state-map",
-    "dataflow", "search", "symbols", "summary",
+    "dataflow", "search", "symbols", "summary", "taint",
 }
 
 # Sort strategies per command for --top (sort by relevance before truncating)
@@ -338,6 +339,7 @@ _SORT_STRATEGIES = {
     "css-deep": ("severity", True),           # sort by severity desc
     "regex-audit": ("severity", True),        # sort by severity desc
     "side-effect": ("effect_count", True),    # sort by effect_count desc
+    "taint": ("severity", True),               # sort by severity desc
 }
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "warning": 2, "medium": 3, "low": 4, "info": 5}

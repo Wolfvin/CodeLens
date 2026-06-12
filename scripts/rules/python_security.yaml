@@ -1,0 +1,198 @@
+# Python Security Rules for CodeLens Semantic Engine
+# Taint analysis rules: source → sink, checked against sanitizers
+
+rules:
+  - id: py/sql-injection
+    name: SQL Injection
+    language: python
+    severity: critical
+    cwe: CWE-89
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - flask.request.data
+      - django.http.request.GET
+      - django.http.request.POST
+      - input
+      - sys.stdin
+    sinks:
+      - cursor.execute
+      - db.execute
+      - connection.execute
+      - session.execute
+      - engine.execute
+    sanitizers:
+      - parameterized_query
+      - escape_string
+      - mysql.escape_string
+      - psycopg2.sql.SQL
+      - text
+
+  - id: py/command-injection
+    name: Command Injection
+    language: python
+    severity: critical
+    cwe: CWE-78
+    message: "User input flows into OS command without sanitization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+      - os.environ
+    sinks:
+      - os.system
+      - os.popen
+      - subprocess.call
+      - subprocess.run
+      - subprocess.Popen
+      - subprocess.check_output
+    sanitizers:
+      - shlex.quote
+      - shlex.split
+      - validate_command
+      - whitelist_command
+
+  - id: py/path-traversal
+    name: Path Traversal
+    language: python
+    severity: high
+    cwe: CWE-22
+    message: "User input flows into file path without validation"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+    sinks:
+      - open
+      - os.path.join
+      - pathlib.Path
+      - shutil.copy
+      - shutil.move
+    sanitizers:
+      - os.path.realpath
+      - os.path.abspath
+      - validate_path
+      - secure_filename
+
+  - id: py/ssrf
+    name: Server-Side Request Forgery
+    language: python
+    severity: high
+    cwe: CWE-918
+    message: "User-controlled URL flows into HTTP request"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+    sinks:
+      - requests.get
+      - requests.post
+      - requests.put
+      - requests.delete
+      - urllib.request.urlopen
+      - http.client.HTTPConnection
+    sanitizers:
+      - validate_url
+      - url_allowed
+      - is_internal_url
+
+  - id: py/xss-template
+    name: Cross-Site Scripting (Template)
+    language: python
+    severity: high
+    cwe: CWE-79
+    message: "User input rendered in template without escaping"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - django.http.request.GET
+      - django.http.request.POST
+    sinks:
+      - render_template_string
+      - mark_safe
+      - Markup
+      - dangerously_set_innerhtml
+    sanitizers:
+      - escape
+      - bleach.clean
+      - markupsafe.escape
+
+  - id: py/insecure-deserialization
+    name: Insecure Deserialization
+    language: python
+    severity: critical
+    cwe: CWE-502
+    message: "Potentially unsafe deserialization of untrusted data"
+    sources:
+      - flask.request.data
+      - flask.request.json
+      - input
+      - sys.stdin
+      - os.environ
+    sinks:
+      - pickle.loads
+      - pickle.load
+      - yaml.load
+      - yaml.unsafe_load
+      - marshal.loads
+      - shelve.open
+    sanitizers:
+      - yaml.safe_load
+      - json.loads
+      - deserialize_safe
+
+  - id: py/secret-logging
+    name: Secret Logged to Output
+    language: python
+    severity: high
+    cwe: CWE-532
+    message: "Secret or credential flows into logging output"
+    sources:
+      - os.environ
+      - config.SECRET_KEY
+      - settings.SECRET_KEY
+      - settings.DATABASE_URL
+      - API_KEY
+      - api_key
+      - secret
+      - password
+      - token
+    sinks:
+      - logger.info
+      - logger.debug
+      - logger.warning
+      - logger.error
+      - print
+      - logging.info
+    sanitizers:
+      - mask_secret
+      - redact
+      - obfuscate
+
+  - id: py/eval-usage
+    name: Dangerous eval/exec Usage
+    language: python
+    severity: critical
+    cwe: CWE-95
+    message: "User input flows into eval() or exec() — arbitrary code execution risk"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+    sinks:
+      - eval
+      - exec
+      - compile
+    sanitizers:
+      - ast.literal_eval
+      - validate_expression
