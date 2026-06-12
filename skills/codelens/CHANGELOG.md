@@ -131,6 +131,33 @@ architecturally diverse repo tested to date.
   Previously, capitalized paths like `LibJS/Tests/` were not caught. 52 false positives eliminated
   on SerenityOS (critical smells: 1,037 → 985).
 
+## [5.9.3] — 2026-06-12
+
+### Tested against 4 real-world repos: sveltejs/svelte (7,888 files), vitejs/vite (1,445 files), withastro/astro (3,909 files), vercel/swr (252 files)
+
+Multi-repo real-world testing revealed that test file exclusion patterns were incomplete across multiple engines.
+The v5.9.2 fix only covered filename patterns (`.test.`, `.spec.`) but missed directory-based test paths
+(`/tests/`, `/test/`, `/e2e/`, `/samples/`) which caused massive false positive inflation on repos like Svelte
+and Astro that organize tests in directory hierarchies rather than filename conventions.
+
+### Fixed
+
+- **A11y engine still scans test directories** (94% reduction on Svelte: 500 → 29 issues): v5.9.2 skip keywords only included `.test.`, `.spec.`, `__tests__` but not `/tests/`, `/test/`, `/e2e/`, `/samples/` directory paths. Svelte's `packages/svelte/tests/validator/samples/` test fixtures generated 477 false a11y violations. Added directory patterns: `/tests/`, `/test/`, `/__tests__/`, `/e2e/`, `/spec/`, `/fixtures/`, `/fixture/`, `/mocks/`, `/samples/`.
+- **Secrets engine reports test fixture URLs** (95% reduction on Astro: 21 → 1 secret): Test files containing example URLs like `redis://localhost:6379`, `mongodb://localhost:27017`, `ssh://user@host.com` were reported as hardcoded secrets. The engine previously reduced severity for test files but didn't skip them — these are never actionable. Changed to skip test files entirely in secrets scanning.
+- **Smell `magic_values` scans test fixture directories** (8% reduction on Svelte: 2219 → 2047): `_detect_magic_values` used filename patterns but not directory patterns. Test fixture directories like `/tests/validator/samples/` contain intentional magic numbers for validation testing. Added `/tests/`, `/test/`, `/e2e/` etc. to `config_file_keywords` skip list. Also expanded skip keywords for `_detect_deep_nesting` and `_detect_long_functions`.
+- **Monorepo handbook shows "root"/"0.0.0"** (fixed for Astro and Vite): Monorepos like Astro and Vite have root `package.json` with `name: "root"`, `version: "0.0.0"` — the actual package identity lives in `packages/astro/package.json` or `packages/vite/package.json`. Added fallback that scans sub-packages (`packages/`, `apps/`, `services/`) for real name and version when root has placeholder values. Astro now shows `astro/6.4.6`, Vite shows `@vitejs/vite-monorepo/9.0.7`.
+- **Dataflow `eval` matches Playwright `$$eval`** (Vite: 2 false positives removed): `eval\s*\(` regex matched `page.$$eval()` which is a Playwright test utility, not `eval()`. Added word boundary `(?:^|[^\w.$])eval\s*\(` to prevent matching method calls containing "eval".
+- **`pyproject.toml` license/requires-python concatenation**: Recurring formatting issue where `license = {text = "MIT"}` and `requires-python = ">=3.8"` were merged on one line. Fixed line break again.
+
+### Test Coverage
+
+| Repo | Files | Type | Key Findings |
+|------|-------|------|-------------|
+| sveltejs/svelte | 7,888 | Compiler+Runtime (Svelte+TS) | 5,060 source files, 506 nodes, a11y 500→29, smells 2219→2047 |
+| vitejs/vite | 1,445 | Build tool (TS+Vue) | 1,462 nodes, secrets 5→5 (correct), dataflow 135→133 |
+| withastro/astro | 3,909 | Hybrid SSG (TS+Vue+Svelte) | 3,017 nodes, secrets 21→1, identity root→astro/6.4.6 |
+| vercel/swr | 252 | React hooks (TSX) | 807 nodes, dataflow 19→4, a11y 122→18 |
+
 ## [5.9.2] — 2026-06-12
 
 ### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)

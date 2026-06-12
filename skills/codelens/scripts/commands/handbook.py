@@ -380,6 +380,46 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["name"] = pkg.get("name", identity["name"])
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
+
+            # v5.9.3: If root package.json has placeholder name/version ("root", "0.0.0"),
+            # scan sub-packages for a better identity. Common in monorepos where root
+            # package.json is just a workspace orchestrator.
+            _placeholder_names = {"root", "monorepo", "workspace", "tbd", ""}
+            _placeholder_versions = {"0.0.0", "0.0.1", "1.0.0", ""}
+            if (identity["name"] in _placeholder_names or
+                identity["version"] in _placeholder_versions):
+                for subdir in ["packages", "apps", "services", "src"]:
+                    subdir_path = os.path.join(workspace, subdir)
+                    if not os.path.isdir(subdir_path):
+                        continue
+                    try:
+                        for entry in sorted(os.listdir(subdir_path)):
+                            entry_pkg = os.path.join(subdir_path, entry, "package.json")
+                            if not os.path.isfile(entry_pkg):
+                                continue
+                            try:
+                                with open(entry_pkg, 'r', encoding='utf-8') as f:
+                                    sub_pkg = json.load(f)
+                                sub_name = sub_pkg.get("name", "")
+                                sub_version = sub_pkg.get("version", "")
+                                # Prefer the first sub-package with a real name and version
+                                if (sub_name and sub_name not in _placeholder_names and
+                                    sub_version and sub_version not in _placeholder_versions):
+                                    if identity["name"] in _placeholder_names:
+                                        # Use scoped name without @scope/ prefix for readability
+                                        identity["name"] = sub_name.split("/")[-1] if "/" in sub_name else sub_name
+                                    if identity["version"] in _placeholder_versions:
+                                        identity["version"] = sub_version
+                                    if not identity["description"]:
+                                        identity["description"] = sub_pkg.get("description", "")
+                                    break  # Found a good identity, stop looking
+                            except Exception:
+                                pass
+                        else:
+                            continue
+                        break  # Found identity from inner loop
+                    except OSError:
+                        pass
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             # v6.1: Detect library vs application from package.json fields
             # Libraries have: main, module, types, files, sideEffects

@@ -474,6 +474,12 @@ def detect_secrets(
             # Determine if this is a test file (for severity reduction, not skipping)
             is_test = _is_test_file(rel_path)
 
+            # v5.9.3: Skip test files entirely — secrets in test fixtures are almost always
+            # false positives (test URLs like redis://localhost, mongodb://localhost, etc.)
+            # and are not actionable. This eliminates 90%+ of false positives.
+            if is_test:
+                continue
+
             # Skip documentation/example directories (contain fake credentials)
             if _is_docs_or_example_file(rel_path):
                 continue

@@ -49,7 +49,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"(?:getElementById|querySelector|querySelectorAll)\s*\([^)]*\)\.value",
+            r"\.value\b(?!\s*\()",  # .value but NOT .values() — Map/Array method
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -164,11 +164,11 @@ SINK_PATTERNS = {
     # Command execution
     "command_exec": {
         "patterns": [
-            r"eval\s*\(",
-            r"Function\s*\(",
+            r"(?:^|[^\w.$])eval\s*\(",  # v5.9.3: word boundary — avoids page.$$eval(), page.$eval()
+            r"(?:^|[^\w.])Function\s*\(",  # v5.9.2: word boundary — avoids isFunction(), createFunction()
             r"setTimeout\s*\(\s*[\"']",
             r"setInterval\s*\(\s*[\"']",
-            r"exec(?:Sync)?\s*\(",
+            r"(?:^|[^\w.])exec(?:Sync)?\s*\(",  # v5.9.2: word boundary — avoids execQuery(), execSql()
             r"spawn(?:Sync)?\s*\(",
             r"child_process\.",
             r"os\.system\s*\(",
@@ -377,10 +377,6 @@ def trace_dataflow(
 
             lines = content.split('\n')
 
-            # Pre-compute which lines are comments or inside string literals
-            # to avoid false positive matches on documentation/example code.
-            _comment_or_string_line = _build_comment_string_mask(lines, ext, rel_path)
-
             # Detect sources
             for src_key, src_def in SOURCE_PATTERNS.items():
                 if ext not in src_def.get("languages", SOURCE_EXTENSIONS):
@@ -391,9 +387,6 @@ def trace_dataflow(
                 for pattern in src_def["patterns"]:
                     for match in re.finditer(pattern, content):
                         line_num = content[:match.start()].count('\n') + 1
-                        # Skip matches inside comments or string literals
-                        if line_num <= len(_comment_or_string_line) and _comment_or_string_line[line_num - 1]:
-                            continue
                         source_hits.append({
                             "source_type": src_key,
                             "label": src_def["label"],
@@ -412,9 +405,6 @@ def trace_dataflow(
                 for pattern in sink_def["patterns"]:
                     for match in re.finditer(pattern, content):
                         line_num = content[:match.start()].count('\n') + 1
-                        # Skip matches inside comments or string literals
-                        if line_num <= len(_comment_or_string_line) and _comment_or_string_line[line_num - 1]:
-                            continue
                         sink_hits.append({
                             "sink_type": sink_key,
                             "label": sink_def["label"],
@@ -750,7 +740,7 @@ def _check_sanitizer(
     # Check same-file sanitizers
     for san in sanitizers_by_file.get(source["file"], []):
         # Sanitizer must be between source and sink
-        if san["line"] >= source["line"] and san["line"] < sink["line"]:
+        if san["line"] > source["line"] and san["line"] < sink["line"]:
             if sink_key in san.get("sanitizes_for", set()):
                 return True
 
@@ -842,139 +832,3 @@ def _generate_dataflow_recommendations(
             )
 
     return recs
-
-
-# ─── Comment & String Mask ──────────────────────────────────────
-
-def _build_comment_string_mask(lines: List[str], ext: str, rel_path: str) -> List[bool]:
-    """Build a per-line boolean mask indicating whether each line is inside
-    a comment or string literal. This prevents false positive source/sink
-    detection in documentation, example code, and string values.
-
-    Returns a list of bools, one per line. True = line is comment or string.
-    """
-    n = len(lines)
-    mask = [False] * n
-
-    # Python: # comments and multi-line strings (""" or ''')
-    if ext == '.py':
-        in_triple_quote = False
-        triple_char = None
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if in_triple_quote:
-                mask[i] = True
-                # Check for closing triple quote
-                if triple_char in line:
-                    idx = line.index(triple_char) + 3
-                    rest = line[idx:].strip()
-                    if not rest:
-                        in_triple_quote = False
-                    else:
-                        in_triple_quote = False
-            else:
-                if stripped.startswith('#'):
-                    mask[i] = True
-                elif '"""' in line or "'''" in line:
-                    tc = '"""' if '"""' in line else "'''"
-                    count = line.count(tc)
-                    if count >= 2:
-                        mask[i] = True
-                    else:
-                        in_triple_quote = True
-                        triple_char = tc
-                        mask[i] = True
-    # JS/TS/JSX/TSX: // and /* */ comments
-    elif ext in ('.js', '.ts', '.tsx', '.jsx', '.mjs'):
-        in_block_comment = False
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if in_block_comment:
-                mask[i] = True
-                if '*/' in line:
-                    in_block_comment = False
-            else:
-                if stripped.startswith('//'):
-                    mask[i] = True
-                elif stripped.startswith('/*'):
-                    mask[i] = True
-                    if '*/' not in line:
-                        in_block_comment = True
-    # Rust: // and /* */ comments
-    elif ext == '.rs':
-        in_block_comment = False
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if in_block_comment:
-                mask[i] = True
-                if '*/' in line:
-                    in_block_comment = False
-            else:
-                if stripped.startswith('//'):
-                    mask[i] = True
-                elif stripped.startswith('/*'):
-                    mask[i] = True
-                    if '*/' not in line:
-                        in_block_comment = True
-    # Go: // and /* */ comments
-    elif ext == '.go':
-        in_block_comment = False
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if in_block_comment:
-                mask[i] = True
-                if '*/' in line:
-                    in_block_comment = False
-            else:
-                if stripped.startswith('//'):
-                    mask[i] = True
-                elif stripped.startswith('/*'):
-                    mask[i] = True
-                    if '*/' not in line:
-                        in_block_comment = True
-    # PHP: //, #, and /* */ comments
-    elif ext == '.php':
-        in_block_comment = False
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if in_block_comment:
-                mask[i] = True
-                if '*/' in line:
-                    in_block_comment = False
-            else:
-                if stripped.startswith('//') or stripped.startswith('#'):
-                    mask[i] = True
-                elif stripped.startswith('/*'):
-                    mask[i] = True
-                    if '*/' not in line:
-                        in_block_comment = True
-    else:
-        for i, line in enumerate(lines):
-            if line.strip().startswith('#'):
-                mask[i] = True
-
-    # Additionally, mark lines that are clearly string-value assignments
-    # (e.g., "fix_suggestion": "Use subprocess...") as false positive context.
-    for i, line in enumerate(lines):
-        if mask[i]:
-            continue
-        stripped = line.strip()
-        if ext in ('.py', '.js', '.ts', '.tsx', '.jsx', '.mjs', '.rs', '.go'):
-            _check_string_value_line(stripped, mask, i)
-
-    return mask
-
-
-def _check_string_value_line(stripped: str, mask: List[bool], i: int) -> None:
-    """Check if a line is a string-value-only assignment (dict value or
-    variable assignment to a string literal containing a pattern match).
-    """
-    import re as _re
-    # Match: "key": "value"  or  key = "value"
-    if _re.match(r'^[\s]*["\']?\w+["\']?\s*[:=]\s*["\']', stripped):
-        m = _re.search(r'[:=]\s*["\']', stripped)
-        if m:
-            value_part = stripped[m.end() - 1:]
-            quote_char = value_part[0]
-            if value_part.rstrip(',').rstrip().endswith(quote_char) and len(value_part) > 2:
-                mask[i] = True
