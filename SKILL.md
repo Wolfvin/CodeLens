@@ -30,10 +30,31 @@ $CLI query "myFunction" --lite
 
 | Flag | Effect | When to use |
 |------|--------|-------------|
-| `--top N` | Limit list results to top N items | Large repos, token budget concerns |
+| `--top N` | Limit list results to top N items (sorts by relevance first) | Large repos, token budget concerns |
 | `--max-tokens N` | Truncate output to fit ~N tokens | Strict context window limits |
-| `--lite` | Minimal output for decision-making | Quick yes/no checks |
+| `--lite` | Minimal output: command-specific tailored response | Quick checks, decision-making |
 | `--format ai` | Normalized schema: `{stats, items[], truncated, recommendations}` | Consistent parsing across commands |
+
+### Smart Defaults (Zero-Config Token Savings)
+
+- **Auto `--top 20`**: List commands (smell, complexity, dead-code, secrets, etc.) auto-apply `--top 20`. No more 1000+ item responses by default.
+- **Sort-aware `--top`**: Items are sorted by relevance BEFORE truncating — severity for quality commands, cyclomatic score for complexity, effect_count for side-effect.
+- **Command-specific `--lite`**: 10+ commands have tailored lite output, not just query. Each lite mode returns the most actionable subset.
+- **Override**: Use `--top 0` for unlimited results, or `--top N` for any custom limit.
+
+### Lite Mode Per Command
+
+| Command | `--lite` returns |
+|---------|------------------|
+| `query` | `{status, found, action, action_reason}` |
+| `impact` / `refactor-safe` | `{status, risk, action}` |
+| `smell` | `{status, health_score, total_findings, action, top_findings[], stats}` |
+| `complexity` | `{status, stats, top_complex[], high_complexity_count}` |
+| `dead-code` | `{status, removal_safety, recommended_action, stats, top_items[], total_dead}` |
+| `debug-leak` | `{status, stats, top_leaks[], leaks_total}` |
+| `perf-hint` | `{status, risk, stats, top_hints[], hints_total}` |
+| `secrets` | `{status, risk, action, stats, top_findings[]}` |
+| Other | `{status, stats, top 5 items, recommendations}` |
 
 ### The One Command You Need
 
@@ -251,17 +272,17 @@ def cl_query(name, workspace):
 
 ### Token Budget Strategy
 
-CodeLens output can be large. Use these AI-optimized flags to stay within token budgets:
+CodeLens has **smart defaults** that prevent token overflow without any flags:
 
-1. **`--lite`** for `query` — returns just `{found, action}` instead of full node details + callers + callees
-2. **`--top 10`** for any command — limits list results to 10 items (universal flag)
-3. **`--max-tokens 500`** for any command — automatically truncates output to fit within ~500 tokens
-4. **`--format ai`** for any command — normalizes output to consistent `{stats, items[], truncated, recommendations}` schema
-5. **`--severity critical`** for `smell`, `secrets`, `perf-hint`, `vuln-scan` — filters noise
-6. **`--category`** filters on `dead-code`, `smell`, `perf-hint`, `debug-leak` — narrow scope
-7. Use `query --lite` before `context` — if `found:false`, no need for context
-8. Use `list --filter dead --top 20` instead of full registry dump
-9. Avoid `analyze` for large repos — it runs all engines. Use specific commands instead.
+1. **Auto `--top 20`** — List commands automatically limit to 20 items. No configuration needed.
+2. **Sort-aware truncation** — `--top N` sorts by relevance first (severity, complexity, etc.), so you always get the most important items.
+3. **`--lite`** for `query` — returns just `{found, action}` instead of full node details + callers + callees
+4. **`--max-tokens 500`** for strict budgets — automatically truncates largest lists to fit
+5. **`--format ai`** — normalizes output to consistent `{stats, items[], truncated, recommendations}` schema
+6. **`--severity critical`** for `smell`, `secrets`, `perf-hint`, `vuln-scan` — filters noise
+7. **`--category`** filters on `dead-code`, `smell`, `perf-hint`, `debug-leak` — narrow scope
+8. Use `query --lite` before `context` — if `found:false`, no need for context
+9. Use `--top 0` to override smart defaults and get unlimited results
 
 ### Reference Files
 

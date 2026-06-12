@@ -45,10 +45,16 @@ Usage:
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
 
 AI-Optimized Flags (work with any command):
-    --top N          Limit list/array results to top N items
+    --top N          Limit list/array results to top N items (smart default: 20 for list commands)
     --max-tokens N   Truncate output to fit within N tokens (~4 chars/token)
-    --lite           Minimal output mode (query returns just {found, action})
+    --lite           Minimal output mode (command-specific: query={found,action}, smell={health_score,action}, etc.)
     --format ai      Normalized schema: {stats, items[], truncated}
+
+Smart Defaults:
+    - List commands auto-apply --top 20 (smell, complexity, dead-code, etc.)
+    - --top sorts by relevance before truncating (severity for quality, cyclomatic for complexity)
+    - --lite has tailored output for 10+ commands, not just query
+    - Override smart --top with --top 0 for unlimited results
 """
 
 import sys
@@ -260,6 +266,9 @@ _LIST_KEYS = [
     "violations", "entrypoints", "routes", "stores", "callers", "callees",
     "chains", "recommendations", "dependencies", "variables", "ownership",
     "cycles", "by_category",  # smell uses this
+    "top_priority", "actionable_items",  # smell adds these
+    "affected_direct", "affected_indirect",  # impact
+    "risks", "drift",  # refactor-safe, config-drift
 ]
 
 # Nested containers that may contain category-keyed lists
@@ -269,23 +278,86 @@ _NESTED_LIST_KEYS = [
     "cycles",   # circular: cycles{type:[]}
 ]
 
+# Commands that return large lists — get smart default --top
+_LIST_COMMANDS = {
+    "smell", "complexity", "dead-code", "debug-leak", "perf-hint",
+    "secrets", "a11y", "css-deep", "regex-audit", "vuln-scan",
+    "side-effect", "missing-refs", "circular", "list", "env-check",
+    "test-map", "ownership", "entrypoints", "api-map", "state-map",
+    "dataflow", "search", "symbols", "summary",
+}
 
-def _apply_top_n(result: Dict[str, Any], top_n: int) -> Dict[str, Any]:
-    """Limit all list/array results to top N items. Adds truncated flags."""
+# Sort strategies per command for --top (sort by relevance before truncating)
+_SORT_STRATEGIES = {
+    "complexity": ("cyclomatic", True),      # sort by cyclomatic desc
+    "smell": ("severity", True),              # sort by severity desc
+    "debug-leak": ("severity", True),         # sort by severity desc
+    "perf-hint": ("severity", True),          # sort by severity desc
+    "secrets": ("severity", True),            # sort by severity desc
+    "vuln-scan": ("severity", True),          # sort by severity desc
+    "a11y": ("severity", True),               # sort by severity desc
+    "css-deep": ("severity", True),           # sort by severity desc
+    "regex-audit": ("severity", True),        # sort by severity desc
+    "side-effect": ("effect_count", True),    # sort by effect_count desc
+}
+
+_SEVERITY_ORDER = {"critical": 0, "high": 1, "warning": 2, "medium": 3, "low": 4, "info": 5}
+
+
+def _sort_items(items: list, sort_key: str, descending: bool) -> list:
+    """Sort items by a given key before truncation. Returns sorted list."""
+    if not items or not isinstance(items[0], dict):
+        return items
+
+    def _item_sort_key(item):
+        val = item.get(sort_key, 0)
+        if sort_key == "severity" and isinstance(val, str):
+            # Map severity strings to numeric order for sorting
+            return _SEVERITY_ORDER.get(val.lower(), 99)
+        if isinstance(val, (int, float)):
+            return val
+        if isinstance(val, str):
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0
+        return 0
+
+    try:
+        return sorted(items, key=_item_sort_key, reverse=descending)
+    except (TypeError, KeyError):
+        return items
+
+
+def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[str, Any]:
+    """Limit all list/array results to top N items. Sort by relevance first. Adds truncated flags."""
     if not isinstance(result, dict) or top_n <= 0:
         return result
+
+    # Get sort strategy for this command
+    sort_key, sort_desc = _SORT_STRATEGIES.get(command, (None, False))
 
     for key in _LIST_KEYS:
         val = result.get(key)
         if isinstance(val, list) and len(val) > top_n:
-            result[key] = val[:top_n]
+            # Sort by relevance before truncating
+            if sort_key:
+                val = _sort_items(val, sort_key, sort_desc)
+                result[key] = val[:top_n]
+            else:
+                result[key] = val[:top_n]
             result[f"{key}_truncated"] = True
             result[f"{key}_total"] = len(val)
         elif isinstance(val, dict):
             # Handle category-keyed dicts like by_category{cat: [...]}
             for sub_key, sub_val in val.items():
                 if isinstance(sub_val, list) and len(sub_val) > top_n:
-                    val[sub_key] = sub_val[:top_n]
+                    # Sort items within each category
+                    if sort_key:
+                        sub_val = _sort_items(sub_val, sort_key, sort_desc)
+                        val[sub_key] = sub_val[:top_n]
+                    else:
+                        val[sub_key] = sub_val[:top_n]
                     if "_truncated_categories" not in result:
                         result["_truncated_categories"] = {}
                     result["_truncated_categories"][sub_key] = len(sub_val)
@@ -296,7 +368,11 @@ def _apply_top_n(result: Dict[str, Any], top_n: int) -> Dict[str, Any]:
         if isinstance(val, dict):
             for sub_key, sub_val in val.items():
                 if isinstance(sub_val, list) and len(sub_val) > top_n:
-                    val[sub_key] = sub_val[:top_n]
+                    if sort_key:
+                        sub_val = _sort_items(sub_val, sort_key, sort_desc)
+                        val[sub_key] = sub_val[:top_n]
+                    else:
+                        val[sub_key] = sub_val[:top_n]
                     if "_truncated_categories" not in result:
                         result["_truncated_categories"] = {}
                     result["_truncated_categories"][sub_key] = len(sub_val)
@@ -406,6 +482,8 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return result
 
+    # ─── Command-specific lite modes ────────────────────
+
     if command == "query":
         # Query lite: just the decision
         return {
@@ -422,7 +500,128 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
             "action": result.get("recommended_action") or result.get("action"),
         }
 
-    # Generic lite: status + stats + top 5 items from the main list
+    if command == "smell":
+        # Smell lite: health score + top 5 actionable items + action
+        lite = {
+            "status": result.get("status", "ok"),
+            "health_score": result.get("health_score"),
+            "total_findings": result.get("total_findings", 0),
+            "action": "REVIEW" if result.get("health_score", 100) < 70 else "MONITOR",
+        }
+        # Include top actionable items (already sorted by severity)
+        actionable = result.get("actionable_items", result.get("top_priority", []))
+        if actionable:
+            lite["top_findings"] = actionable[:5]
+            if len(actionable) > 5:
+                lite["top_findings_total"] = len(actionable)
+        if result.get("stats"):
+            lite["stats"] = result["stats"]
+        return lite
+
+    if command == "complexity":
+        # Complexity lite: stats + top 5 most complex functions
+        lite = {
+            "status": result.get("status", "ok"),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        funcs = result.get("functions", [])
+        if funcs:
+            # Sort by cyclomatic complexity desc, take top 5
+            sorted_funcs = sorted(funcs, key=lambda f: f.get("cyclomatic", 0), reverse=True)
+            lite["top_complex"] = sorted_funcs[:5]
+            lite["high_complexity_count"] = result["stats"].get("high_complexity", 0) if "stats" in result else 0
+            if len(funcs) > 5:
+                lite["functions_total"] = len(funcs)
+        return lite
+
+    if command == "dead-code":
+        # Dead-code lite: totals + removal safety + top items
+        lite = {
+            "status": result.get("status", "ok"),
+            "removal_safety": result.get("removal_safety", "unknown"),
+            "recommended_action": result.get("recommended_action", ""),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        # Flatten all categories and take top 5
+        all_items = []
+        for cat_items in result.get("results", {}).values():
+            if isinstance(cat_items, list):
+                all_items.extend(cat_items)
+        if all_items:
+            lite["top_items"] = all_items[:5]
+            lite["total_dead"] = len(all_items)
+        return lite
+
+    if command == "debug-leak":
+        # Debug-leak lite: total + top 5 leaks by severity
+        lite = {
+            "status": result.get("status", "ok"),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        leaks = result.get("leaks", [])
+        if leaks:
+            sorted_leaks = sorted(leaks, key=lambda l: _SEVERITY_ORDER.get(l.get("severity", "info").lower(), 99))
+            lite["top_leaks"] = sorted_leaks[:5]
+            if len(leaks) > 5:
+                lite["leaks_total"] = len(leaks)
+        return lite
+
+    if command == "perf-hint":
+        # Perf-hint lite: risk + top 5 hints
+        lite = {
+            "status": result.get("status", "ok"),
+            "risk": result.get("risk", "unknown"),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        hints = result.get("hints", [])
+        if hints:
+            sorted_hints = sorted(hints, key=lambda h: _SEVERITY_ORDER.get(h.get("severity", "info").lower(), 99))
+            lite["top_hints"] = sorted_hints[:5]
+            if len(hints) > 5:
+                lite["hints_total"] = len(hints)
+        return lite
+
+    if command == "secrets":
+        # Secrets lite: risk + top 5 findings
+        lite = {
+            "status": result.get("status", "ok"),
+            "risk": result.get("risk", "unknown"),
+            "action": "FIX_IMMEDIATELY" if result.get("risk") == "critical" else "REVIEW",
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        findings = result.get("findings", [])
+        if findings:
+            sorted_f = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "info").lower(), 99))
+            lite["top_findings"] = sorted_f[:5]
+        return lite
+
+    if command in ("a11y", "css-deep", "regex-audit", "vuln-scan"):
+        # Generic quality lite: stats + top 5 findings
+        lite = {
+            "status": result.get("status", "ok"),
+            "risk": result.get("risk"),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        # Try findings, issues, hints in order
+        for key in ("findings", "issues", "hints"):
+            items = result.get(key, [])
+            if items:
+                sorted_items = sorted(items, key=lambda i: _SEVERITY_ORDER.get(i.get("severity", "info").lower(), 99))
+                lite[f"top_{key}"] = sorted_items[:5]
+                if len(items) > 5:
+                    lite[f"{key}_total"] = len(items)
+                break
+        if result.get("recommendations"):
+            lite["recommendations"] = result["recommendations"][:3]
+        return lite
+
+    # ─── Generic lite fallback ──────────────────────────
     lite = {
         "status": result.get("status", "ok"),
     }
@@ -436,15 +635,40 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
     if "stats" in result:
         lite["stats"] = result["stats"]
 
+    # Carry recommendations (most actionable field)
+    if result.get("recommendations"):
+        lite["recommendations"] = result["recommendations"][:3]
+
     # Carry first 5 items from the primary result list
     for key in _LIST_KEYS:
         val = result.get(key)
         if isinstance(val, list) and len(val) > 0:
+            # Sort by severity/relevance if applicable
+            sort_key, sort_desc = _SORT_STRATEGIES.get(command, (None, False))
+            if sort_key:
+                val = _sort_items(val, sort_key, sort_desc)
             lite[key] = val[:5]
             if len(val) > 5:
                 lite[f"{key}_total"] = len(val)
                 lite[f"{key}_truncated"] = True
             break  # Only take the first matching list
+        elif isinstance(val, dict):
+            # Handle category-keyed dicts (smell's by_category, etc.)
+            all_items = []
+            for sub_key, sub_val in val.items():
+                if isinstance(sub_val, list):
+                    for item in sub_val:
+                        if isinstance(item, dict) and "_category" not in item:
+                            item["_category"] = sub_key
+                    all_items.extend(sub_val)
+            if all_items:
+                sort_key, sort_desc = _SORT_STRATEGIES.get(command, (None, False))
+                if sort_key:
+                    all_items = _sort_items(all_items, sort_key, sort_desc)
+                lite[f"{key}_flat"] = all_items[:5]
+                if len(all_items) > 5:
+                    lite[f"{key}_total"] = len(all_items)
+                break
 
     return lite
 
@@ -617,10 +841,13 @@ def main():
         if args.command == "watch":
             return
 
-        # ─── Post-processing: --top N ──
+        # ─── Post-processing: --top N (with smart default) ──
         top_n = getattr(args, 'top', None)
+        # Smart default: auto-apply --top 20 for list-heavy commands if no explicit --top
+        if top_n is None and args.command in _LIST_COMMANDS:
+            top_n = 20
         if top_n and isinstance(result, dict):
-            result = _apply_top_n(result, top_n)
+            result = _apply_top_n(result, top_n, command=args.command)
 
         # ─── Post-processing: --lite ──
         if getattr(args, 'lite', False) and isinstance(result, dict):

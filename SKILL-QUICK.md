@@ -31,15 +31,39 @@ $CLI query "myFunction"    # Check before writing
 
 | Flag | Effect | Example |
 |------|--------|---------|
-| `--top N` | Limit all list results to N items | `$CLI smell --top 5` |
+| `--top N` | Limit list results to N items (sorts by relevance first) | `$CLI smell --top 5` |
 | `--max-tokens N` | Truncate output to fit within ~N tokens | `$CLI complexity --max-tokens 500` |
-| `--lite` | Minimal output for AI decision-making | `$CLI query "fn" --lite` |
+| `--lite` | Minimal output: command-specific tailored response | `$CLI smell --lite` |
 | `--format ai` | Normalized schema: `{stats, items[], truncated}` | `$CLI dead-code --format ai` |
+
+### Smart Defaults (Zero-Config Token Savings)
+
+- **Auto `--top 20`**: List commands (smell, complexity, dead-code, etc.) auto-apply `--top 20`. No more 1000+ item responses.
+- **Sort-aware `--top`**: `--top 10` sorts by relevance BEFORE truncating — severity for quality commands, cyclomatic for complexity.
+- **Command-specific `--lite`**: 10+ commands have tailored lite output (not just query).
+- **Override**: Use `--top 0` for unlimited results, or `--top N` for any custom limit.
+
+### Lite Mode Output Per Command
+
+| Command | `--lite` returns |
+|---------|------------------|
+| `query` | `{status, found, action, action_reason}` |
+| `impact` / `refactor-safe` | `{status, risk, action}` |
+| `smell` | `{status, health_score, total_findings, action, top_findings[], stats}` |
+| `complexity` | `{status, stats, top_complex[], high_complexity_count}` |
+| `dead-code` | `{status, removal_safety, recommended_action, stats, top_items[], total_dead}` |
+| `debug-leak` | `{status, stats, top_leaks[], leaks_total}` |
+| `perf-hint` | `{status, risk, stats, top_hints[], hints_total}` |
+| `secrets` | `{status, risk, action, stats, top_findings[]}` |
+| `a11y` / `css-deep` / `regex-audit` / `vuln-scan` | `{status, risk, stats, top_{findings/issues/hints}[], recommendations[]}` |
+| Other | `{status, stats, first 5 items, recommendations}` |
 
 **Zero-config AI usage:** Just run any command — if no registry exists, CodeLens auto-runs `init` + `scan`.
 
 ```bash
 $CLI query "myFunction" --lite    # Auto-init+scan if needed, returns {found, action}
+$CLI smell                        # Auto --top 20, sorted by severity
+$CLI complexity --top 5 --lite    # Top 5 most complex functions, minimal output
 ```
 
 ## State Prerequisites
