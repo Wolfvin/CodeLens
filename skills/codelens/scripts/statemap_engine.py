@@ -15,14 +15,6 @@ State Management Frameworks Detected:
  9. XState        — createMachine, StateMachine
 10. Svelte Stores — writable(), readable(), derived() from svelte/store
 11. Module-level  — global variables, singletons, module.exports of stateful objects
-12. SharedPreferences — getSharedPreferences(), SharedPreferences, PreferenceManager
-13. DataStore     — dataStore, DataStore, preferencesDataStore, dataStoreFile
-14. Room Database — @Database, @Entity, @Dao, RoomDatabase, @Query, @Insert, @Update, @Delete
-15. ViewModel     — ViewModel, AndroidViewModel, ViewModelProvider, by viewModels(), by activityViewModels()
-16. SavedStateHandle — SavedStateHandle
-17. Compose State — mutableStateOf, remember, StateFlow, MutableStateFlow, SharedFlow
-18. LiveData      — LiveData, MutableLiveData, Transformations
-19. Jetpack Compose — @Composable, rememberSaveable
 
 Per-state-slice extraction: name, type (store/context/atom/global),
     defined_in, consumers, actions/mutations that modify it
@@ -39,10 +31,10 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".kt",
+    ".py", ".rs", ".vue", ".svelte",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant", "android_store"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant"}
 
 # ─── JS/TS Keywords & Built-ins (false-positive filter) ────────
 
@@ -297,9 +289,6 @@ def map_state(
             elif ext == ".py":
                 _collect_py_imports(content, rel_path, all_imports_by_file)
 
-            elif ext == ".kt":
-                _collect_kotlin_imports(content, rel_path, all_imports_by_file)
-
             # ─── Redux ────────────────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 redux_results = _extract_redux_state(content, rel_path)
@@ -390,15 +379,6 @@ def map_state(
                     frameworks_detected.add("rust_state")
                     stores.extend(rust_state_results["stores"])
                     state_flow.extend(rust_state_results["flow"])
-
-            # ─── Android State Management ────────────────────────
-            if ext == ".kt":
-                android_state_results = _extract_android_state(content, rel_path)
-                if android_state_results["stores"]:
-                    for fw in android_state_results.get("frameworks", []):
-                        frameworks_detected.add(fw)
-                    stores.extend(android_state_results["stores"])
-                    state_flow.extend(android_state_results["flow"])
 
     # ─── Svelte Stores (workspace-level detection) ───────────
     if _is_svelte_workspace(workspace):
@@ -495,19 +475,24 @@ def map_state(
     # v5.8.1: Also filter stores where the name is ALL_CAPS with no underscore
     # and looks like a simple constant (3+ uppercase letters only = config constant).
     # e.g., "ROOT", "CLI", "LOG" — not state, just module-level constants.
-    def _is_likely_constant(name: str) -> bool:
+    # IMPORTANT: Do NOT filter Rust state stores — Rust convention is SCREAMING_SNAKE_CASE
+    # for statics with interior mutability (AtomicBool, OnceLock, etc.), which ARE state.
+    def _is_likely_constant(name: str, framework: str = "") -> bool:
         """Check if a name looks like a simple constant, not state."""
         if not name:
+            return False
+        # Rust state stores use SCREAMING_SNAKE_CASE by convention — never filter them
+        if framework.startswith('rust_'):
             return False
         # Pure uppercase with no underscore and length >= 3 → likely constant
         if name == name.upper() and len(name) >= 3 and name.isalpha():
             return True
-        # ALL_CAPS with underscores → definitely a constant
+        # ALL_CAPS with underscores → definitely a constant (for JS/TS)
         if name == name.upper() and '_' in name:
             return True
         return False
 
-    stores = [s for s in stores if not _is_likely_constant(s.get("name", ""))]
+    stores = [s for s in stores if not _is_likely_constant(s.get("name", ""), s.get("framework", ""))]
 
     # v5.8.1: Filter likely React components — PascalCase names that end with
     # common component suffixes. These are UI components, not state stores.
@@ -532,10 +517,8 @@ def map_state(
         """Check if a name looks like a React component, not a state store."""
         if not name:
             return False
-        # Skip if this came from a known state management framework
-        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate',
-                          'shared_preferences', 'datastore', 'room', 'room_entity', 'room_dao',
-                          'viewmodel', 'saved_state_handle', 'compose_state', 'livedata', 'jetpack_compose'):
+        # Skip if this came from a known state management framework (including Rust)
+        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate') or framework.startswith('rust_'):
             return False
         # PascalCase name that ends with a common component suffix
         if name[0].isupper() and any(name.endswith(s) for s in _COMPONENT_SUFFIXES):
@@ -557,8 +540,11 @@ def map_state(
     # ─── Post-processing: Reclassify global stores without mutations ──
     # A "global" store with no actions/mutations is not really mutable state —
     # it's a module-level constant. Reclassify as module_constant.
+    # IMPORTANT: Skip Rust state stores — Rust statics with interior mutability
+    # (AtomicBool, OnceLock, etc.) ARE mutable state even without tracked actions,
+    # because Rust's interior mutability pattern allows mutation through &self.
     for store in stores:
-        if store.get("type") == "global":
+        if store.get("type") == "global" and not store.get("framework", "").startswith("rust_"):
             actions = store.get("actions", [])
             has_mutations = len(actions) > 0
             if not has_mutations:
@@ -566,9 +552,13 @@ def map_state(
 
     # ─── Post-processing: Filter module_constant without consumers ──
     # Module-level constants that nobody imports are dead code, not interesting state.
+    # IMPORTANT: Skip Rust frameworks — Rust uses `use` statements, not JS imports,
+    # so cross-file consumer resolution doesn't work for Rust state yet.
     stores = [
         s for s in stores
-        if s.get("type") != "module_constant" or s.get("consumers")
+        if s.get("type") != "module_constant"
+        or s.get("consumers")
+        or s.get("framework", "").startswith("rust_")
     ]
 
     # ─── Post-processing: Validate file paths ────────────────────
@@ -1901,8 +1891,9 @@ def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
     # ─── Static items with interior mutability ────────────────
     # pub static COUNTER: AtomicUsize = AtomicUsize::new(0);
     # static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
+    # Also matches statics inside fn bodies (with leading whitespace)
     for m in re.finditer(
-        r'(?:pub\s+)?static\s+(\w+)\s*:\s*([^=;]+)',
+        r'(?:pub\s+)?static\s+(\w+)\s*:\s*([^=;{]+)',
         content
     ):
         var_name = m.group(1)
@@ -1911,15 +1902,14 @@ def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
 
         if var_name in RUST_SKIP or len(var_name) <= 2:
             continue
-        if var_name == var_name.upper() and '_' not in var_name:
-            # Single-word ALL_CAPS likely just a constant
-            continue
+        # Only skip ALL_CAPS single-word if the type is clearly immutable
+        # (AtomicBool, AtomicUsize, OnceLock, etc. are ALWAYS stateful regardless of name)
 
         # Check for interior mutability or shared state patterns
         is_stateful = any(pattern in type_expr for pattern in [
             'Atomic', 'Mutex', 'RwLock', 'OnceCell', 'OnceLock',
-            'Lazy', 'lazy_static', 'Arc', 'RefCell', 'Cell',
-            'Data<', 'State<',
+            'Lazy', 'LazyLock', 'lazy_static', 'Arc', 'RefCell', 'Cell',
+            'Data<', 'State<', 'Jemalloc',
         ])
 
         if is_stateful:
@@ -2414,705 +2404,6 @@ def _collect_py_imports(
                     imports[rel_path].add(name)
 
 
-def _collect_kotlin_imports(
-    content: str, rel_path: str, imports: Dict[str, Set[str]]
-):
-    """Collect Kotlin import statements for cross-file analysis."""
-    for m in re.finditer(
-        r'import\s+([\w.]+)(?:\s+as\s+(\w+))?',
-        content
-    ):
-        # import android.content.SharedPreferences
-        # import androidx.lifecycle.ViewModel
-        # import androidx.lifecycle.ViewModelProvider
-        import_path = m.group(1)
-        alias = m.group(2)
-
-        # Add the simple name (last component of the import path)
-        simple_name = import_path.split('.')[-1]
-        if simple_name and simple_name[0].isupper():
-            imports[rel_path].add(simple_name)
-
-        # If there's an alias, add that too
-        if alias:
-            imports[rel_path].add(alias)
-
-    # Also collect aliased imports: import androidx.lifecycle.ViewModel as VM
-    # (handled above via group(2))
-
-    # Collect typealiases: typealias VM = ViewModel
-    for m in re.finditer(r'typealias\s+(\w+)\s*=\s*(\w+)', content):
-        imports[rel_path].add(m.group(1))
-
-
-# ─── Android State Management ─────────────────────────────────
-
-# Android-specific state management pattern definitions
-_ANDROID_SHARED_PREFS_PATTERNS = [
-    r'getSharedPreferences\s*\(',
-    r'\bSharedPreferences\b',
-    r'\bPreferenceManager\b',
-]
-
-_ANDROID_DATASTORE_PATTERNS = [
-    r'\bdataStore\b',
-    r'\bDataStore\b',
-    r'\bpreferencesDataStore\s*\(',
-    r'\bdataStoreFile\s*\(',
-]
-
-_ANDROID_ROOM_PATTERNS = [
-    r'@Database\s*\(',
-    r'@Entity\s*\(',
-    r'@Dao\s*\(',
-    r'\bRoomDatabase\b',
-    r'@Query\s*\(',
-    r'@Insert\s*\(',
-    r'@Update\s*\(',
-    r'@Delete\s*\(',
-]
-
-_ANDROID_VIEWMODEL_PATTERNS = [
-    r'\bViewModel\b',
-    r'\bAndroidViewModel\b',
-    r'\bViewModelProvider\b',
-    r'\bby\s+viewModels\s*\(\s*\)',
-    r'\bby\s+activityViewModels\s*\(\s*\)',
-]
-
-_ANDROID_SAVEDSTATE_PATTERNS = [
-    r'\bSavedStateHandle\b',
-]
-
-_ANDROID_COMPOSE_STATE_PATTERNS = [
-    r'\bmutableStateOf\s*\(',
-    r'\bremember\s*\(',
-    r'\bStateFlow\b',
-    r'\bMutableStateFlow\b',
-    r'\bSharedFlow\b',
-]
-
-_ANDROID_LIVEDATA_PATTERNS = [
-    r'\bLiveData\b',
-    r'\bMutableLiveData\b',
-    r'\bTransformations\b',
-]
-
-_ANDROID_JETPACK_COMPOSE_PATTERNS = [
-    r'@Composable\b',
-    r'\brememberSaveable\s*\(',
-]
-
-
-def _extract_android_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract Android state management patterns from Kotlin files.
-
-    Detects:
-    - SharedPreferences: getSharedPreferences(), SharedPreferences, PreferenceManager
-    - DataStore: dataStore, DataStore, preferencesDataStore, dataStoreFile
-    - Room Database: @Database, @Entity, @Dao, RoomDatabase, @Query, @Insert, @Update, @Delete
-    - ViewModel: ViewModel, AndroidViewModel, ViewModelProvider, by viewModels(), by activityViewModels()
-    - SavedStateHandle: SavedStateHandle
-    - Compose State: mutableStateOf, remember, StateFlow, MutableStateFlow, SharedFlow
-    - LiveData: LiveData, MutableLiveData, Transformations
-    - Jetpack Compose: @Composable, rememberSaveable
-    """
-    stores = []
-    flow = []
-    frameworks = set()
-
-    # ─── SharedPreferences ─────────────────────────────────────
-    for pattern in _ANDROID_SHARED_PREFS_PATTERNS:
-        for m in re.finditer(pattern, content):
-            line_num = content[:m.start()].count('\n') + 1
-
-            # Try to extract the variable name holding SharedPreferences
-            # val prefs = getSharedPreferences("name", Context.MODE_PRIVATE)
-            line_start = content.rfind('\n', 0, m.start()) + 1
-            line_end = content.find('\n', m.start())
-            line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-            var_match = re.match(r'\s*(?:val|var)\s+(\w+)\s*=', line_text)
-            var_name = var_match.group(1) if var_match else "sharedPreferences"
-
-            # Avoid duplicate entries for the same variable
-            if any(s.get("name") == var_name and s.get("framework") == "shared_preferences" for s in stores):
-                continue
-
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "shared_preferences",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": ["edit", "commit", "apply"],
-                "consumers": [],
-                "state_managers": ["SharedPreferences"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"getSharedPreferences({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-            frameworks.add("shared_preferences")
-            break  # One match per pattern group is enough per file
-
-    # ─── DataStore ─────────────────────────────────────────────
-    for pattern in _ANDROID_DATASTORE_PATTERNS:
-        for m in re.finditer(pattern, content):
-            line_num = content[:m.start()].count('\n') + 1
-
-            # Try to extract the DataStore variable name
-            # val Context.dataStore: DataStore<Preferences> by preferencesDataStore(...)
-            # val dataStore: DataStore<SomeData> = ...
-            line_start = content.rfind('\n', 0, m.start()) + 1
-            line_end = content.find('\n', m.start())
-            line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-            # Match: val name by preferencesDataStore or val name: DataStore or val name = dataStore
-            var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-            var_name = var_match.group(1) if var_match else "dataStore"
-
-            # Determine DataStore type
-            datastore_type = "preferences"
-            if 'Proto' in line_text or 'proto' in line_text:
-                datastore_type = "proto"
-
-            if any(s.get("name") == var_name and s.get("framework") == "datastore" for s in stores):
-                continue
-
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "datastore",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": ["update", "edit"],
-                "consumers": [],
-                "datastore_type": datastore_type,
-                "state_managers": ["DataStore"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"dataStore({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-            frameworks.add("datastore")
-            break
-
-    # ─── Room Database ─────────────────────────────────────────
-    # @Database(entities = [...], version = N)
-    # abstract class AppDatabase : RoomDatabase()
-    for m in re.finditer(r'@Database\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Find the class definition following the annotation
-        after = content[m.start():m.start() + 500]
-        class_match = re.search(r'(?:abstract\s+)?class\s+(\w+)\s*(?::\s*RoomDatabase)?', after)
-        class_name = class_match.group(1) if class_match else "AppDatabase"
-
-        # Extract entity names from @Database annotation
-        entities = []
-        entity_match = re.search(r'entities\s*=\s*\[([^\]]+)\]', after)
-        if entity_match:
-            for em in re.finditer(r'(\w+)::class', entity_match.group(1)):
-                entities.append(em.group(1))
-
-        stores.append({
-            "name": class_name,
-            "type": "android_store",
-            "framework": "room",
-            "defined_in": rel_path,
-            "line": line_num,
-            "slices": [{"name": e, "type": "entity"} for e in entities],
-            "actions": [],
-            "consumers": [],
-            "state_managers": ["Room"],
-        })
-        flow.append({
-            "from": rel_path,
-            "action": f"@Database({class_name})",
-            "to": class_name,
-            "file": rel_path,
-            "type": "define",
-        })
-        frameworks.add("room")
-
-    # @Entity(tableName = "...")
-    for m in re.finditer(r'@Entity\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        after = content[m.start():m.start() + 300]
-        class_match = re.search(r'(?:data\s+)?class\s+(\w+)', after)
-        entity_name = class_match.group(1) if class_match else None
-
-        if entity_name:
-            table_name = entity_name
-            tn_match = re.search(r'tableName\s*=\s*["\'](\w+)["\']', after)
-            if tn_match:
-                table_name = tn_match.group(1)
-
-            if not any(s.get("name") == entity_name and s.get("framework") == "room_entity" for s in stores):
-                stores.append({
-                    "name": entity_name,
-                    "type": "android_store",
-                    "framework": "room_entity",
-                    "defined_in": rel_path,
-                    "line": line_num,
-                    "table_name": table_name,
-                    "slices": [],
-                    "actions": [],
-                    "consumers": [],
-                    "state_managers": ["Room"],
-                })
-                flow.append({
-                    "from": rel_path,
-                    "action": f"@Entity({entity_name})",
-                    "to": entity_name,
-                    "file": rel_path,
-                    "type": "define",
-                })
-                frameworks.add("room")
-
-    # @Dao interface/class
-    for m in re.finditer(r'@Dao\s*', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        after = content[m.start():m.start() + 300]
-        dao_match = re.search(r'(?:interface|abstract\s+class)\s+(\w+)', after)
-        dao_name = dao_match.group(1) if dao_match else "Dao"
-
-        # Extract DAO method names with their annotations
-        dao_body = after[after.find('{') if '{' in after else 0:]
-        dao_actions = []
-        for query_m in re.finditer(r'@Query\s*\([^)]*\)\s*(?:suspend\s+)?fun\s+(\w+)', dao_body):
-            dao_actions.append({"name": query_m.group(1), "type": "query"})
-        for insert_m in re.finditer(r'@Insert\s*(?:\([^)]*\))?\s*(?:suspend\s+)?fun\s+(\w+)', dao_body):
-            dao_actions.append({"name": insert_m.group(1), "type": "insert"})
-        for update_m in re.finditer(r'@Update\s*(?:\([^)]*\))?\s*(?:suspend\s+)?fun\s+(\w+)', dao_body):
-            dao_actions.append({"name": update_m.group(1), "type": "update"})
-        for delete_m in re.finditer(r'@Delete\s*(?:\([^)]*\))?\s*(?:suspend\s+)?fun\s+(\w+)', dao_body):
-            dao_actions.append({"name": delete_m.group(1), "type": "delete"})
-
-        if not any(s.get("name") == dao_name and s.get("framework") == "room_dao" for s in stores):
-            stores.append({
-                "name": dao_name,
-                "type": "android_store",
-                "framework": "room_dao",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": dao_actions,
-                "consumers": [],
-                "state_managers": ["Room"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"@Dao({dao_name})",
-                "to": dao_name,
-                "file": rel_path,
-                "type": "define",
-            })
-            for act in dao_actions:
-                flow.append({
-                    "from": rel_path,
-                    "action": f"{dao_name}.{act['name']}()",
-                    "to": dao_name,
-                    "file": rel_path,
-                    "type": "write" if act["type"] in ("insert", "update", "delete") else "read",
-                })
-            frameworks.add("room")
-
-    # ─── ViewModel ─────────────────────────────────────────────
-    # class MyViewModel : ViewModel() or class MyViewModel : AndroidViewModel(app)
-    for m in re.finditer(
-        r'class\s+(\w+ViewModel)\s*(?::\s*(?:ViewModel|AndroidViewModel)\s*\([^)]*\)|:\s*ViewModel\s*\(\))',
-        content
-    ):
-        vm_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Extract ViewModel state properties
-        vm_body = content[m.start():m.start() + 5000]
-        vm_slices = []
-
-        # Detect StateFlow/MutableStateFlow properties in ViewModel
-        for sf_m in re.finditer(
-            r'(?:val|var)\s+(\w+)\s*:\s*(?:MutableStateFlow|StateFlow|MutableLiveData|LiveData)',
-            vm_body
-        ):
-            vm_slices.append({"name": sf_m.group(1), "type": "state_property"})
-
-        # Detect SavedStateHandle
-        has_saved_state = bool(re.search(r'\bSavedStateHandle\b', vm_body))
-
-        state_managers_list = ["ViewModel"]
-        if has_saved_state:
-            state_managers_list.append("SavedStateHandle")
-
-        stores.append({
-            "name": vm_name,
-            "type": "android_store",
-            "framework": "viewmodel",
-            "defined_in": rel_path,
-            "line": line_num,
-            "slices": vm_slices,
-            "actions": [],
-            "consumers": [],
-            "has_saved_state_handle": has_saved_state,
-            "state_managers": state_managers_list,
-        })
-        flow.append({
-            "from": rel_path,
-            "action": f"ViewModel({vm_name})",
-            "to": vm_name,
-            "file": rel_path,
-            "type": "define",
-        })
-        frameworks.add("viewmodel")
-
-    # by viewModels() / by activityViewModels()
-    for m in re.finditer(r'by\s+(activityViewModels|viewModels)\s*\(\s*\)', content):
-        delegate_type = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Extract the variable name: val viewModel: MyViewModel by viewModels()
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-        vm_var = var_match.group(1) if var_match else "viewModel"
-
-        flow.append({
-            "from": rel_path,
-            "action": f"by {delegate_type}()",
-            "to": vm_var,
-            "file": rel_path,
-            "type": "read",
-        })
-        frameworks.add("viewmodel")
-
-    # ViewModelProvider
-    for m in re.finditer(r'ViewModelProvider\s*\(\s*\)', content):
-        line_num = content[:m.start()].count('\n') + 1
-        flow.append({
-            "from": rel_path,
-            "action": "ViewModelProvider()",
-            "to": "viewModel",
-            "file": rel_path,
-            "type": "read",
-        })
-        frameworks.add("viewmodel")
-
-    # ─── SavedStateHandle ──────────────────────────────────────
-    for m in re.finditer(r'\bSavedStateHandle\b', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Only add as a standalone store if not already inside a ViewModel store
-        # (ViewModel detection already captures SavedStateHandle)
-        is_in_viewmodel = any(
-            s.get("framework") == "viewmodel" and s.get("has_saved_state_handle")
-            for s in stores
-        )
-        if not is_in_viewmodel:
-            # Try to extract the variable name
-            line_start = content.rfind('\n', 0, m.start()) + 1
-            line_end = content.find('\n', m.start())
-            line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-            var_match = re.search(r'(?:val|var)\s+(\w+)\s*:\s*SavedStateHandle', line_text)
-            var_name = var_match.group(1) if var_match else "savedStateHandle"
-
-            if not any(s.get("name") == var_name and s.get("framework") == "saved_state_handle" for s in stores):
-                stores.append({
-                    "name": var_name,
-                    "type": "android_store",
-                    "framework": "saved_state_handle",
-                    "defined_in": rel_path,
-                    "line": line_num,
-                    "slices": [],
-                    "actions": ["get", "set", "remove"],
-                    "consumers": [],
-                    "state_managers": ["SavedStateHandle"],
-                })
-                flow.append({
-                    "from": rel_path,
-                    "action": f"SavedStateHandle({var_name})",
-                    "to": var_name,
-                    "file": rel_path,
-                    "type": "define",
-                })
-        frameworks.add("saved_state_handle")
-
-    # ─── Compose State ─────────────────────────────────────────
-    # mutableStateOf(...)
-    for m in re.finditer(r'\bmutableStateOf\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        # Extract variable name: val count = mutableStateOf(0)
-        # or: var count by mutableStateOf(0)
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-        var_name = var_match.group(1) if var_match else "mutableState"
-
-        if not any(s.get("name") == var_name and s.get("framework") == "compose_state" for s in stores):
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "compose_state",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-                "state_managers": ["ComposeState"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"mutableStateOf({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-        frameworks.add("compose_state")
-
-    # StateFlow / MutableStateFlow
-    for m in re.finditer(r'\bMutableStateFlow\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var|private\s+val|private\s+var)\s+(\w+)', line_text)
-        var_name = var_match.group(1) if var_match else "stateFlow"
-
-        if not any(s.get("name") == var_name and s.get("framework") == "compose_state" for s in stores):
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "compose_state",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": ["emit", "update", "tryEmit", "value"],
-                "consumers": [],
-                "state_managers": ["ComposeState"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"MutableStateFlow({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-        frameworks.add("compose_state")
-
-    # StateFlow (read-only, usually from a ViewModel)
-    for m in re.finditer(r'\bStateFlow\b', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        # Only match val declarations (read access), not MutableStateFlow
-        if 'MutableStateFlow' in line_text:
-            continue
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)\s*:\s*StateFlow', line_text)
-        if var_match:
-            var_name = var_match.group(1)
-            if not any(s.get("name") == var_name and s.get("framework") == "compose_state" for s in stores):
-                flow.append({
-                    "from": rel_path,
-                    "action": f"StateFlow.collect({var_name})",
-                    "to": var_name,
-                    "file": rel_path,
-                    "type": "read",
-                })
-        frameworks.add("compose_state")
-
-    # SharedFlow
-    for m in re.finditer(r'\bSharedFlow\b', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-        if var_match:
-            var_name = var_match.group(1)
-            if not any(s.get("name") == var_name and s.get("framework") == "compose_state" for s in stores):
-                flow.append({
-                    "from": rel_path,
-                    "action": f"SharedFlow({var_name})",
-                    "to": var_name,
-                    "file": rel_path,
-                    "type": "read",
-                })
-        frameworks.add("compose_state")
-
-    # remember() in Composable functions
-    for m in re.finditer(r'\bremember\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-        var_name = var_match.group(1) if var_match else "rememberedState"
-
-        # Don't create a store for every remember() call — too many false positives.
-        # Only track flow entries.
-        flow.append({
-            "from": rel_path,
-            "action": f"remember({var_name})",
-            "to": var_name,
-            "file": rel_path,
-            "type": "define",
-        })
-        frameworks.add("compose_state")
-
-    # ─── LiveData ──────────────────────────────────────────────
-    # MutableLiveData / LiveData
-    for m in re.finditer(r'\bMutableLiveData\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var|private\s+val|private\s+var)\s+(\w+)', line_text)
-        var_name = var_match.group(1) if var_match else "liveData"
-
-        if not any(s.get("name") == var_name and s.get("framework") == "livedata" for s in stores):
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "livedata",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": ["setValue", "postValue"],
-                "consumers": [],
-                "state_managers": ["LiveData"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"MutableLiveData({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-        frameworks.add("livedata")
-
-    # LiveData (read-only, usually observed)
-    for m in re.finditer(r'\bLiveData\b', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        # Skip MutableLiveData declarations (already handled above)
-        if 'MutableLiveData' in line_text:
-            continue
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)\s*:\s*LiveData', line_text)
-        if var_match:
-            var_name = var_match.group(1)
-            flow.append({
-                "from": rel_path,
-                "action": f"LiveData.observe({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "read",
-            })
-        frameworks.add("livedata")
-
-    # Transformations.map/switchMap
-    for m in re.finditer(r'Transformations\.(map|switchMap|distinctUntilChanged)\s*\(', content):
-        method = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        flow.append({
-            "from": rel_path,
-            "action": f"Transformations.{method}()",
-            "to": "livedata_transform",
-            "file": rel_path,
-            "type": "read",
-        })
-        frameworks.add("livedata")
-
-    # ─── Jetpack Compose ───────────────────────────────────────
-    # @Composable annotation (track usage, not stores)
-    composable_count = len(re.findall(r'@Composable\b', content))
-    if composable_count > 0:
-        frameworks.add("jetpack_compose")
-        # Don't create a store per @Composable — just note the presence
-        for m in re.finditer(r'@Composable\b', content):
-            line_num = content[:m.start()].count('\n') + 1
-
-            # Find the function name after @Composable
-            after = content[m.start():m.start() + 200]
-            fn_match = re.search(r'fun\s+(\w+)', after)
-            if fn_match:
-                fn_name = fn_match.group(1)
-                flow.append({
-                    "from": rel_path,
-                    "action": f"@Composable {fn_name}()",
-                    "to": fn_name,
-                    "file": rel_path,
-                    "type": "compose",
-                })
-
-    # rememberSaveable
-    for m in re.finditer(r'\brememberSaveable\s*\(', content):
-        line_num = content[:m.start()].count('\n') + 1
-
-        line_start = content.rfind('\n', 0, m.start()) + 1
-        line_end = content.find('\n', m.start())
-        line_text = content[line_start:line_end] if line_end != -1 else content[line_start:]
-
-        var_match = re.search(r'(?:val|var)\s+(\w+)', line_text)
-        var_name = var_match.group(1) if var_match else "saveableState"
-
-        if not any(s.get("name") == var_name and s.get("framework") == "jetpack_compose" for s in stores):
-            stores.append({
-                "name": var_name,
-                "type": "android_store",
-                "framework": "jetpack_compose",
-                "defined_in": rel_path,
-                "line": line_num,
-                "slices": [],
-                "actions": [],
-                "consumers": [],
-                "state_managers": ["JetpackCompose"],
-            })
-            flow.append({
-                "from": rel_path,
-                "action": f"rememberSaveable({var_name})",
-                "to": var_name,
-                "file": rel_path,
-                "type": "define",
-            })
-        frameworks.add("jetpack_compose")
-
-    return {"stores": stores, "flow": flow, "frameworks": list(frameworks)}
-
-
 # ─── Recommendations ──────────────────────────────────────────
 
 def _generate_state_recommendations(
@@ -3124,12 +2415,7 @@ def _generate_state_recommendations(
     recommendations = []
 
     # Too many state management frameworks
-    state_frameworks = {f for f in frameworks if f not in {
-        "module_level_js", "module_level_py",
-        # Android sub-frameworks are part of the same ecosystem; don't count separately
-        "shared_preferences", "datastore", "room_entity", "room_dao",
-        "saved_state_handle", "compose_state", "livedata", "jetpack_compose",
-    }}
+    state_frameworks = {f for f in frameworks if f not in {"module_level_js", "module_level_py"}}
     if len(state_frameworks) > 2:
         recommendations.append({
             "type": "architecture",
@@ -3208,39 +2494,6 @@ def _generate_state_recommendations(
             "severity": "info",
             "message": "Both Recoil and Jotai detected — choose one atomic state library",
             "suggestion": "Standardize on one atomic state management library for consistency.",
-        })
-
-    # Android: SharedPreferences usage without DataStore migration
-    shared_prefs_stores = [s for s in stores if s.get("framework") == "shared_preferences"]
-    datastore_stores = [s for s in stores if s.get("framework") == "datastore"]
-    if shared_prefs_stores and not datastore_stores:
-        recommendations.append({
-            "type": "modernization",
-            "severity": "info",
-            "message": "SharedPreferences detected without DataStore",
-            "suggestion": "Consider migrating to Jetpack DataStore for asynchronous, consistent data access with better error handling.",
-        })
-
-    # Android: ViewModel without SavedStateHandle (process-death risk)
-    viewmodel_stores = [s for s in stores if s.get("framework") == "viewmodel"]
-    savedstate_stores = [s for s in stores if s.get("framework") == "saved_state_handle"]
-    if viewmodel_stores and not savedstate_stores:
-        recommendations.append({
-            "type": "correctness",
-            "severity": "info",
-            "message": "ViewModels detected without SavedStateHandle",
-            "suggestion": "Use SavedStateHandle in ViewModels to survive process death and preserve UI state across configuration changes.",
-        })
-
-    # Android: Mixed LiveData and StateFlow
-    livedata_stores = [s for s in stores if s.get("framework") == "livedata"]
-    stateflow_stores = [s for s in stores if s.get("framework") == "compose_state"]
-    if livedata_stores and stateflow_stores:
-        recommendations.append({
-            "type": "architecture",
-            "severity": "info",
-            "message": "Both LiveData and StateFlow/SharedFlow detected — mixing reactive stream approaches",
-            "suggestion": "Consider standardizing on StateFlow/SharedFlow for Kotlin-first codebases, reserving LiveData only for Java interop.",
         })
 
     # Svelte stores with no $-prefix consumers
