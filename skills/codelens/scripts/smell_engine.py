@@ -293,6 +293,7 @@ def detect_smells(
     return {
         "status": "ok",
         "workspace": workspace,
+        "health_score": health_score,  # v5.8: Also at top-level for easy access
         "stats": {
             "files_scanned": files_scanned,
             "total_smells": total_smells,

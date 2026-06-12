@@ -17,6 +17,7 @@ Framework Detection & Route Extraction:
 11. gRPC      — service definitions in .proto files
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
+14. SvelteKit — file-based routes (+page, +server, +layout, +error)
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -41,39 +42,6 @@ SOURCE_EXTENSIONS = {
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
-
-# Test file patterns to exclude from route scanning
-TEST_FILE_PATTERNS = {
-    '__tests__', '__test__', '__mocks__',
-    '.test.ts', '.test.js', '.test.tsx', '.test.jsx',
-    '.spec.ts', '.spec.js', '.spec.tsx', '.spec.jsx',
-    '.mock.ts', '.mock.js',
-    '/test/', '/tests/', '\\test\\', '\\tests\\',
-}
-
-# Vue context indicators — app.use() in these contexts is NOT Express middleware
-VUE_CONTEXT_INDICATORS = {
-    'createApp', 'createVueApp', 'app.mount',
-    'from \'vue\'', 'from "vue"',
-}
-
-# Vue plugin patterns — NOT Express middleware
-VUE_PLUGIN_PATTERNS = {
-    'Plugin', 'Directive', 'Component', 'Mixin', 'Store',
-    'Provider', 'Installer', 'Guard',
-}
-
-# Auth middleware keyword patterns for detection
-AUTH_KEYWORDS = {
-    'auth', 'authenticate', 'jwt', 'passport', 'session',
-    'csrf', 'verifytoken', 'requireauth', 'checkauth',
-    'isauthenticated', 'ensureauthenticated', 'login_required',
-    'permission_required', 'auth_required', 'basic_auth',
-    'bearer', 'oauth', 'token_verify', 'api_key',
-}
-
-# Maximum number of routes to return (performance cap)
-MAX_ROUTES = 500
 
 # Valid HTTP methods in uppercase (for validation of extracted method names)
 VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
@@ -154,10 +122,6 @@ def map_api_routes(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip test files — they are not real routes
-            if _is_test_file(rel_path):
-                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -240,13 +204,37 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
-    # ─── Post-processing ──────────────────────────────────────
+            # ─── Tauri IPC (frontend invoke calls) ────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
+                tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
+                if tauri_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_routes)
 
-    # Cap routes at MAX_ROUTES for performance
-    truncated = False
-    if len(routes) > MAX_ROUTES:
-        truncated = True
-        routes = routes[:MAX_ROUTES]
+            # ─── Tauri IPC (backend Rust commands) ────────────
+            if ext == ".rs":
+                tauri_cmd_routes = _extract_tauri_rust_commands(content, rel_path)
+                if tauri_cmd_routes:
+                    frameworks_detected.add("tauri")
+                    routes.extend(tauri_cmd_routes)
+
+                # v5.8: Rust HTTP handler detection (actix-web, axum, warp, rocket)
+                rust_http_routes = _extract_rust_http_routes(content, rel_path)
+                if rust_http_routes:
+                    routes.extend(rust_http_routes)
+                    # Track which Rust framework was detected
+                    for r in rust_http_routes:
+                        fw = r.get("framework", "")
+                        if fw:
+                            frameworks_detected.add(fw)
+
+    # ─── SvelteKit file-based routes ─────────────────────────
+    sveltekit_routes = _detect_sveltekit_routes(workspace, config)
+    if sveltekit_routes:
+        frameworks_detected.add("sveltekit")
+        routes.extend(sveltekit_routes)
+
+    # ─── Post-processing ──────────────────────────────────────
 
     # Attach middleware to routes
     for mw in global_middleware:
@@ -274,25 +262,6 @@ def map_api_routes(
             mw.get("type") == "auth"
             for mw in route.get("middleware_chain", [])
         )
-        # Also check route path and handler for auth keywords
-        if not has_auth:
-            route_path_lower = route.get("path", "").lower()
-            handler_lower = route.get("handler_name", "").lower()
-            for kw in AUTH_KEYWORDS:
-                if kw in route_path_lower or kw in handler_lower:
-                    has_auth = True
-                    break
-            # Check if any middleware name contains auth keywords (even if not classified as "auth" type)
-            if not has_auth:
-                for mw in route.get("middleware_chain", []):
-                    mw_name_lower = mw.get("name", "").lower()
-                    for kw in AUTH_KEYWORDS:
-                        if kw in mw_name_lower:
-                            has_auth = True
-                            mw["type"] = "auth"  # Re-classify as auth
-                            break
-                    if has_auth:
-                        break
         route["auth_protected"] = has_auth
         if has_auth:
             auth_protected_routes.add(f"{route['method']} {route['path']}")
@@ -329,7 +298,6 @@ def map_api_routes(
         "status": "ok",
         "workspace": workspace,
         "frameworks_detected": sorted(frameworks_detected),
-        "truncated": truncated,
         "stats": {
             "total_routes": len(routes),
             "by_method": dict(by_method),
@@ -342,54 +310,6 @@ def map_api_routes(
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
     }
-
-
-def _is_test_file(rel_path: str) -> bool:
-    """Check if a file path is a test file that should be excluded from route scanning."""
-    # Normalize path separators for consistent matching
-    normalized = rel_path.replace('\\', '/')
-    lower = normalized.lower()
-
-    for pattern in TEST_FILE_PATTERNS:
-        if pattern in lower or pattern in normalized:
-            return True
-
-    # Also check filename patterns
-    filename = os.path.basename(rel_path).lower()
-    if any(filename.endswith(s) for s in ('.test.ts', '.test.js', '.test.tsx', '.test.jsx',
-                                           '.spec.ts', '.spec.js', '.spec.tsx', '.spec.jsx',
-                                           '.mock.ts', '.mock.js')):
-        return True
-
-    # Check directory-based patterns
-    parts = normalized.split('/')
-    for part in parts:
-        if part in ('__tests__', '__test__', '__mocks__', 'test', 'tests', 'fixtures'):
-            return True
-
-    return False
-
-
-def _is_vue_context(content: str) -> bool:
-    """Check if a file is a Vue context (not Express/Fastify/Koa middleware)."""
-    # .vue files are always Vue context
-    if content.strip().startswith('<template') or content.strip().startswith('<script'):
-        return True
-    # Imports from 'vue'
-    if re.search(r"(?:from\s+['\"]vue['\"]|import\s+.*['\"]vue['\"])", content):
-        return True
-    # Uses createApp
-    if re.search(r'\bcreateApp\b', content):
-        return True
-    return False
-
-
-def _is_vue_plugin(name: str) -> bool:
-    """Check if a name looks like a Vue plugin (not Express middleware)."""
-    for pattern in VUE_PLUGIN_PATTERNS:
-        if name.endswith(pattern):
-            return True
-    return False
 
 
 # ─── JS Route Extraction ───────────────────────────────────────
@@ -681,9 +601,6 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
     middleware = []
     lines = content.split('\n')
 
-    # Detect Vue context — Vue plugins are NOT Express middleware
-    is_vue = _is_vue_context(content)
-
     for i, line in enumerate(lines):
         stripped = line.strip()
 
@@ -694,11 +611,6 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
         )
         if m:
             mw_name = m.group(1)
-
-            # Skip Vue plugins — they are NOT Express middleware
-            if is_vue and _is_vue_plugin(mw_name):
-                continue
-
             mw_type = _classify_middleware(mw_name)
             middleware.append({
                 "name": mw_name,
@@ -715,12 +627,6 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
         )
         if m:
             mw_path = m.group(1)
-            mw_name = m.group(2)
-
-            # Skip Vue plugins
-            if is_vue and _is_vue_plugin(mw_name):
-                continue
-
             # Only treat as route-scoped middleware if the path looks like a real route
             # (starts with /) — filter out cookie names, variable names, etc.
             if not mw_path.startswith('/'):
@@ -760,7 +666,9 @@ def _extract_nextjs_routes(
     # pages/api/* pattern
     if 'pages/api/' in rel_path or 'pages\\api\\' in rel_path:
         # Convert file path to API route
-        api_path = re.sub(r'^pages[/\\]api', '/api', rel_path)
+        # In monorepos, the path might be "apps/readest-app/src/pages/api/..."
+        # We need to find "pages/api" anywhere in the path, not just at the start
+        api_path = re.sub(r'^.*?pages[/\\]api', '/api', rel_path)
         api_path = re.sub(r'\.(js|ts|mjs|cjs)$', '', api_path)
         api_path = api_path.replace('\\', '/')
         # Handle [param] → :param
@@ -929,6 +837,292 @@ def _extract_nuxt_routes(
                 "response_type": None,
                 "framework": "nuxt",
             })
+
+    return routes
+
+
+# ─── SvelteKit Routes ─────────────────────────────────────────
+
+def _detect_sveltekit_routes(
+    workspace: str, config: Optional[Dict] = None
+) -> List[Dict[str, Any]]:
+    """Detect SvelteKit file-based routes from the src/routes/ directory.
+
+    SvelteKit uses file-system routing:
+      +page.svelte        → page route (GET)
+      +page.ts            → page load function
+      +page.server.ts     → page server-side load / actions
+      +server.ts / +server.js → API endpoint (exports GET, POST, etc.)
+      +layout.svelte      → layout component
+      +layout.ts          → layout load function
+      +layout.server.ts   → layout server-side load
+      +error.svelte       → error page
+
+    Dynamic segments use [param] syntax, e.g.:
+      src/routes/blog/[slug]/+page.svelte → /blog/:slug
+    """
+    routes: List[Dict[str, Any]] = []
+    routes_dir = os.path.join(workspace, "src", "routes")
+
+    # Quick check: SvelteKit must have src/routes/ directory
+    if not os.path.isdir(routes_dir):
+        return routes
+
+    # Also check for svelte.config.js or vite.config with SvelteKit
+    has_sveltekit_config = os.path.isfile(os.path.join(workspace, "svelte.config.js")) \
+                        or os.path.isfile(os.path.join(workspace, "svelte.config.ts"))
+    # If no svelte.config but src/routes exists with SvelteKit files, still detect
+
+    # SvelteKit special filenames and their route types
+    SERVER_FILES = {"+server.ts", "+server.js", "+server.mjs", "+server.cjs"}
+    PAGE_FILES = {"+page.svelte", "+page.ts", "+page.js", "+page.server.ts", "+page.server.js"}
+    LAYOUT_FILES = {"+layout.svelte", "+layout.ts", "+layout.js", "+layout.server.ts", "+layout.server.js"}
+    ERROR_FILES = {"+error.svelte", "+error.ts", "+error.js"}
+
+    all_special_files = SERVER_FILES | PAGE_FILES | LAYOUT_FILES | ERROR_FILES
+    found_sveltekit_file = False
+
+    for root, dirs, filenames in os.walk(routes_dir):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+
+        for filename in filenames:
+            if filename not in all_special_files:
+                continue
+
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+
+            # Convert directory path to route path
+            # e.g. src/routes/api/users/+server.ts → /api/users
+            route_dir = os.path.relpath(root, routes_dir)
+            if route_dir == '.':
+                route_path = '/'
+            else:
+                route_path = '/' + route_dir.replace(os.sep, '/')
+
+            # Handle SvelteKit dynamic segments: [param] → :param, [...param] → :param*
+            route_path = re.sub(r'\[\.\.\.(\w+)\]', r':\1*', route_path)
+            route_path = re.sub(r'\[([^\]]+)\]', r':\1', route_path)
+
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                content = ""
+
+            # ─── +server.ts/js — API endpoints with HTTP method exports ───
+            if filename in SERVER_FILES:
+                found_sveltekit_file = True
+                methods_found = []
+
+                # Pattern 1: export async function GET / POST / etc.
+                for m in re.finditer(
+                    r'export\s+(?:async\s+)?function\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)',
+                    content
+                ):
+                    http_method = m.group(1).upper()
+                    line_num = content[:m.start()].count('\n') + 1
+                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
+
+                # Pattern 2: export const GET = ... / export const POST = ...
+                for m in re.finditer(
+                    r'export\s+const\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*=',
+                    content
+                ):
+                    http_method = m.group(1).upper()
+                    line_num = content[:m.start()].count('\n') + 1
+                    methods_found.append({"method": http_method, "handler": m.group(1), "line": line_num})
+
+                # Pattern 3: export { GET, POST } (re-exports)
+                for m in re.finditer(
+                    r'export\s+\{\s*([^\}]+)\}\s*',
+                    content
+                ):
+                    for method_name in re.findall(
+                        r'\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
+                        m.group(1)
+                    ):
+                        http_method = method_name.upper()
+                        line_num = content[:m.start()].count('\n') + 1
+                        methods_found.append({"method": http_method, "handler": method_name, "line": line_num})
+
+                if methods_found:
+                    for mf in methods_found:
+                        routes.append({
+                            "method": mf["method"],
+                            "path": _normalize_path(route_path),
+                            "handler_name": mf["handler"],
+                            "file": rel_path,
+                            "line": mf["line"],
+                            "middleware_chain": [],
+                            "request_type": None,
+                            "response_type": None,
+                            "framework": "sveltekit",
+                            "type": "api_endpoint",
+                        })
+                else:
+                    # No method exports found — still register as a generic endpoint
+                    routes.append({
+                        "method": "ALL",
+                        "path": _normalize_path(route_path),
+                        "handler_name": "+server",
+                        "file": rel_path,
+                        "line": 1,
+                        "middleware_chain": [],
+                        "request_type": None,
+                        "response_type": None,
+                        "framework": "sveltekit",
+                        "type": "api_endpoint",
+                    })
+
+            # ─── +page.svelte / +page.ts / +page.server.ts — page routes ───
+            elif filename in PAGE_FILES:
+                found_sveltekit_file = True
+
+                # Determine handler name from content
+                handler_name = "+page"
+                line_num = 1
+                if ".server." in filename:
+                    # Look for load function or actions export
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    actions_match = re.search(
+                        r'export\s+const\s+actions\s*=',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+                    elif actions_match:
+                        handler_name = "actions"
+                        line_num = content[:actions_match.start()].count('\n') + 1
+                elif filename.endswith(".ts") or filename.endswith(".js"):
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+
+                # +page.server.ts with actions → also emit POST for form actions
+                if ".server." in filename:
+                    actions_match = re.search(
+                        r'export\s+const\s+actions\s*=',
+                        content
+                    )
+                    if actions_match:
+                        actions_line = content[:actions_match.start()].count('\n') + 1
+                        # Find named actions (e.g. actions: { create, delete })
+                        named_actions = re.findall(
+                            r'actions\s*:\s*\{([^}]+)\}',
+                            content
+                        )
+                        action_names = []
+                        for block in named_actions:
+                            action_names.extend(re.findall(r'(\w+)\s*:', block))
+
+                        # Emit POST for default action
+                        routes.append({
+                            "method": "POST",
+                            "path": _normalize_path(route_path),
+                            "handler_name": "actions",
+                            "file": rel_path,
+                            "line": actions_line,
+                            "middleware_chain": [],
+                            "request_type": None,
+                            "response_type": None,
+                            "framework": "sveltekit",
+                            "type": "page",
+                        })
+
+                        # Emit POST for each named action
+                        for action_name in action_names:
+                            routes.append({
+                                "method": "POST",
+                                "path": _normalize_path(route_path),
+                                "handler_name": action_name,
+                                "file": rel_path,
+                                "line": actions_line,
+                                "middleware_chain": [],
+                                "request_type": None,
+                                "response_type": None,
+                                "framework": "sveltekit",
+                                "type": "page",
+                            })
+
+                routes.append({
+                    "method": "GET",
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "page",
+                })
+
+            # ─── +layout.svelte / +layout.ts / +layout.server.ts — layouts ───
+            elif filename in LAYOUT_FILES:
+                found_sveltekit_file = True
+
+                handler_name = "+layout"
+                line_num = 1
+                if ".server." in filename:
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+                elif filename.endswith(".ts") or filename.endswith(".js"):
+                    load_match = re.search(
+                        r'export\s+(?:async\s+)?function\s+load\b',
+                        content
+                    )
+                    if load_match:
+                        handler_name = "load"
+                        line_num = content[:load_match.start()].count('\n') + 1
+
+                routes.append({
+                    "method": "ALL",
+                    "path": _normalize_path(route_path),
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "layout",
+                })
+
+            # ─── +error.svelte / +error.ts — error pages ───
+            elif filename in ERROR_FILES:
+                found_sveltekit_file = True
+
+                routes.append({
+                    "method": "ALL",
+                    "path": _normalize_path(route_path),
+                    "handler_name": "+error",
+                    "file": rel_path,
+                    "line": 1,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "sveltekit",
+                    "type": "error",
+                })
+
+    # Only return routes if we actually found SvelteKit files
+    # (a bare src/routes/ dir without +files is not a SvelteKit project)
+    if not found_sveltekit_file:
+        return []
 
     return routes
 
@@ -1974,3 +2168,190 @@ def _generate_recommendations(
         })
 
     return recommendations
+
+
+# ─── Tauri IPC ────────────────────────────────────────────────
+
+def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract Tauri IPC invoke() calls from frontend JS/TS/Svelte/Vue files.
+
+    Pattern: invoke('command_name', { args }) or invoke("command_name")
+    These map to Rust backend handlers decorated with #[tauri::command].
+    """
+    routes = []
+
+    # Check if this file imports from @tauri-apps/api
+    has_tauri_import = bool(re.search(
+        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api|invoke\s*\()',
+        content
+    ))
+    if not has_tauri_import:
+        return routes
+
+    # Match invoke('commandName') or invoke("commandName") with optional second arg
+    for m in re.finditer(
+        r'invoke\s*\(\s*[\'"](\w+)[\'"]\s*(?:,\s*\{[^}]*\})?\s*\)',
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "IPC",
+            "path": f"invoke://{command_name}",
+            "handler_name": command_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "tauri",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "ipc_call",
+            "response_type": None,
+        })
+
+    return routes
+
+
+def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict]:
+    """Extract Tauri command handlers from Rust backend files.
+
+    Pattern: #[tauri::command] followed by fn command_name(...)
+    These are the Rust-side handlers that receive IPC calls from the frontend.
+    """
+    routes = []
+
+    # Check if this file has tauri::command
+    if 'tauri::command' not in content and 'tauri::command' not in content:
+        return routes
+
+    # Match #[tauri::command] followed by fn name(
+    # Allow attributes between #[tauri::command] and fn
+    for m in re.finditer(
+        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?fn\s+(\w+)\s*\(',
+        content
+    ):
+        command_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": "IPC_HANDLER",
+            "path": f"invoke://{command_name}",
+            "handler_name": command_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "tauri",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "ipc_handler",
+            "response_type": None,
+        })
+
+    return routes
+
+
+def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract HTTP route handlers from Rust web framework code.
+
+    Supports:
+    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route()
+    - axum: .route("/path", get(handler)), Router::new().route()
+    - warp: warp::path("segment"), warp::get()/post()
+    - rocket: #[get("/path")], #[post("/path")]
+    """
+    routes = []
+
+    # ─── actix-web / rocket: attribute-style routes ─────────────
+    ACTIX_METHOD_MAP = {
+        'get': 'GET', 'post': 'POST', 'put': 'PUT', 'delete': 'DELETE',
+        'patch': 'PATCH', 'head': 'HEAD', 'options': 'OPTIONS',
+    }
+    for m in re.finditer(
+        r'#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"\s*\)\s*\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
+        content
+    ):
+        method_raw = m.group(1).lower()
+        path = m.group(2)
+        handler = m.group(3)
+        line_num = content[:m.start()].count('\n') + 1
+
+        fw = "actix-web"
+        if 'rocket' in content and 'actix' not in content:
+            fw = "rocket"
+
+        routes.append({
+            "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
+            "path": path,
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": fw,
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "http_handler",
+            "response_type": None,
+        })
+
+    # ─── actix-web: web::resource().route().method() ─────────────
+    for m in re.finditer(
+        r'\.resource\s*\(\s*"([^"]+)"\s*\)',
+        content
+    ):
+        path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "RESOURCE",
+            "path": path,
+            "handler_name": None,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "actix-web",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "resource_route",
+            "response_type": None,
+        })
+
+    # ─── axum: .route("/path", get(handler)) ─────────────
+    for m in re.finditer(
+        r'\.route\s*\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options|any)\s*\(\s*(\w+)\s*\)',
+        content
+    ):
+        path = m.group(1)
+        method_raw = m.group(2).lower()
+        handler = m.group(3)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": method_raw.upper(),
+            "path": path,
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "axum",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "http_handler",
+            "response_type": None,
+        })
+
+    # ─── warp: warp::path("segment") ─────────────
+    if 'warp::' in content:
+        warp_paths = re.findall(r'warp::path\s*\(\s*"([^"]+)"\s*\)', content)
+        if warp_paths:
+            for segment in warp_paths[:20]:
+                idx = content.find(f'warp::path("{segment}")')
+                line_num = content[:idx].count('\n') + 1 if idx >= 0 else 0
+                routes.append({
+                    "method": "FILTER",
+                    "path": f"/{segment}",
+                    "handler_name": None,
+                    "file": rel_path,
+                    "line": line_num,
+                    "framework": "warp",
+                    "middleware": [],
+                    "auth_required": False,
+                    "request_type": "path_filter",
+                    "response_type": None,
+                })
+
+    return routes

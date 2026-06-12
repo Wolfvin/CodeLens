@@ -3,7 +3,6 @@
 import os
 import json
 import re
-import time
 from datetime import datetime, timezone
 from typing import Dict, Any
 
@@ -22,43 +21,30 @@ from commands import register_command
 from commands.scan import cmd_scan
 from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT_IGNORE_DIRS, logger
 
-# Safety: maximum time for entire handbook generation (seconds)
-HANDBOOK_TIMEOUT_SEC = 30
-
 
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
-    return cmd_handbook(workspace)
+    max_files = getattr(args, 'max_files', 5000)
+    return cmd_handbook(workspace, max_files=max_files)
 
 
-def cmd_handbook(workspace: str) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
+    max_files caps the scan file count to prevent timeout on huge repos.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
-    start_time = time.monotonic()
-    timed_out = False
-
-    # Estimate workspace size for adaptive behavior
-    _file_count = 0
-    for root, dirs, files in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        _file_count += len(files)
-        if _file_count > 10000:
-            break
-    is_large_workspace = _file_count > 5000
-
-    def _check_timeout():
-        """Check if we've exceeded the handbook timeout."""
-        return time.monotonic() - start_time > HANDBOOK_TIMEOUT_SEC
 
     # 1. Identity — extract from package.json / pyproject.toml / README
     identity = _extract_project_identity(workspace)
@@ -68,6 +54,7 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     registry_path = os.path.join(workspace, '.codelens', 'backend.json')
     if os.path.exists(registry_path):
         try:
+            import time
             mtime = os.path.getmtime(registry_path)
             if time.time() - mtime < 300:  # 5 minutes freshness
                 from registry import load_backend_registry, load_frontend_registry
@@ -103,116 +90,91 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
         logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
 
-    # 5. Health (from smell engine) — skip on large workspaces to avoid timeout
-    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            smell_result = detect_smells(workspace)
-            health = {
-                "score": smell_result.get("stats", {}).get("health_score", 0),
-                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-                "critical": smell_result.get("stats", {}).get("critical", 0),
-                "warning": smell_result.get("stats", {}).get("warning", 0),
-            }
-        except Exception:
-            logger.warning("Health detection failed", exc_info=True)
-    elif is_large_workspace:
-        health["note"] = "Skipped full smell detection on large workspace (>5000 files). Run 'smell' command separately."
+    # 5. Health (from smell engine)
+    try:
+        smell_result = detect_smells(workspace)
+        health = {
+            "score": smell_result.get("stats", {}).get("health_score", 0),
+            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+            "critical": smell_result.get("stats", {}).get("critical", 0),
+            "warning": smell_result.get("stats", {}).get("warning", 0),
+        }
+    except Exception:
+        logger.warning("Health detection failed", exc_info=True)
+        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
     # 6. Entrypoints
-    entrypoints = []
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            ep_result = map_entrypoints(workspace)
-            entrypoints = [
-                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-                for e in ep_result.get("entrypoints", [])[:30]
-            ]
-        except Exception:
-            logger.warning("Entrypoint mapping failed", exc_info=True)
+    try:
+        ep_result = map_entrypoints(workspace)
+        entrypoints = [
+            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+            for e in ep_result.get("entrypoints", [])[:30]
+        ]
+    except Exception:
+        logger.warning("Entrypoint mapping failed", exc_info=True)
+        entrypoints = []
 
     # 7. API Routes
-    api_routes = []
-    if not _check_timeout():
-        try:
-            api_result = map_api_routes(workspace)
-            api_routes = [
-                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-                for r in api_result.get("routes", [])[:50]
-            ]
-        except Exception:
-            logger.warning("API route mapping failed", exc_info=True)
+    try:
+        api_result = map_api_routes(workspace)
+        api_routes = [
+            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+            for r in api_result.get("routes", [])[:50]
+        ]
+    except Exception:
+        logger.warning("API route mapping failed", exc_info=True)
+        api_routes = []
 
     # 8. State management
-    state_stores = []
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            state_result = map_state(workspace)
-            state_stores = [
-                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-                for s in state_result.get("stores", [])[:20]
-            ]
-        except Exception:
-            logger.warning("State management mapping failed", exc_info=True)
+    try:
+        state_result = map_state(workspace)
+        state_stores = [
+            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+            for s in state_result.get("stores", [])[:20]
+        ]
+    except Exception:
+        logger.warning("State management mapping failed", exc_info=True)
+        state_stores = []
 
-    # 9. Risks (circular deps, dead code, secrets) — skip heavy checks on large workspaces
+    # 9. Risks (circular deps, dead code, secrets)
     risks = []
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            circ_result = detect_circular(workspace)
-            for chain in circ_result.get("chains", [])[:5]:
-                risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
-        except Exception:
-            logger.warning("Circular dependency detection failed", exc_info=True)
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            dead_result = detect_dead_code(workspace)
-            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-            if dead_count > 0:
-                risks.append({"type": "dead_code", "count": dead_count})
-        except Exception:
-            logger.warning("Dead code detection failed", exc_info=True)
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            secrets_result = detect_secrets(workspace)
-            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-            if secrets_count > 0:
-                risks.append({"type": "secrets", "count": secrets_count})
-        except Exception:
-            logger.warning("Secrets detection failed", exc_info=True)
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            vuln_result = scan_vulnerabilities(workspace)
-            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-            if vuln_count > 0:
-                risks.append({"type": "vulnerabilities", "count": vuln_count})
-        except Exception:
-            logger.warning("Vulnerability scan failed", exc_info=True)
+    try:
+        circ_result = detect_circular(workspace)
+        for chain in circ_result.get("chains", [])[:5]:
+            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+    except Exception:
+        logger.warning("Circular dependency detection failed", exc_info=True)
+    try:
+        dead_result = detect_dead_code(workspace)
+        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+        if dead_count > 0:
+            risks.append({"type": "dead_code", "count": dead_count})
+    except Exception:
+        logger.warning("Dead code detection failed", exc_info=True)
+    try:
+        secrets_result = detect_secrets(workspace)
+        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+        if secrets_count > 0:
+            risks.append({"type": "secrets", "count": secrets_count})
+    except Exception:
+        logger.warning("Secrets detection failed", exc_info=True)
+    try:
+        vuln_result = scan_vulnerabilities(workspace)
+        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+        if vuln_count > 0:
+            risks.append({"type": "vulnerabilities", "count": vuln_count})
+    except Exception:
+        logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
-    directory_map = {}
-    if not _check_timeout():
-        directory_map = _build_directory_map(workspace, config, max_depth=1 if is_large_workspace else 3)
+    directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
-    summary = {}
-    if not _check_timeout() and not is_large_workspace:
-        try:
-            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
-        except Exception:
-            logger.warning("Summary computation failed", exc_info=True)
-    elif is_large_workspace:
-        # Use scan_result directly for basic stats on large workspaces
-        try:
-            summary = {
-                "files": scan_result.get("frontend", {}).get("classes", 0) + scan_result.get("backend", {}).get("nodes", 0),
-                "backend_nodes": scan_result.get("backend", {}).get("nodes", 0),
-                "backend_edges": scan_result.get("backend", {}).get("edges", 0),
-                "frontend_classes": scan_result.get("frontend", {}).get("classes", 0),
-                "frontend_ids": scan_result.get("frontend", {}).get("ids", 0),
-            }
-        except Exception:
-            pass
+    try:
+        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+    except Exception:
+        logger.warning("Summary computation failed", exc_info=True)
+        summary = {}
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -220,7 +182,6 @@ def cmd_handbook(workspace: str) -> Dict[str, Any]:
     # Build handbook
     handbook = {
         "status": "ok",
-        "timed_out": _check_timeout(),
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -300,32 +261,36 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if tool_name not in identity["monorepo_tools"]:
                 identity["monorepo_tools"].append(tool_name)
 
-    # v6.1: Check Cargo workspace as monorepo indicator
-    cargo_toml_path = os.path.join(workspace, "Cargo.toml")
+    # v5.8: Check for Rust/Cargo workspace monorepo
+    cargo_toml_path = os.path.join(workspace, 'Cargo.toml')
     if os.path.isfile(cargo_toml_path):
         try:
             with open(cargo_toml_path, 'r', encoding='utf-8') as f:
                 cargo_content = f.read()
-            if 'workspace' in cargo_content and 'members' in cargo_content:
+            # Check for [workspace] section with members
+            if '[workspace]' in cargo_content:
                 identity["is_monorepo"] = True
                 if "cargo-workspace" not in identity["monorepo_tools"]:
                     identity["monorepo_tools"].append("cargo-workspace")
-            # Also check if crates/ directory has multiple sub-directories with Cargo.toml
-            crates_dir = os.path.join(workspace, "crates")
-            if os.path.isdir(crates_dir):
-                crate_count = 0
-                try:
-                    for entry in os.listdir(crates_dir):
-                        if os.path.isfile(os.path.join(crates_dir, entry, "Cargo.toml")):
-                            crate_count += 1
-                except OSError:
-                    pass
-                if crate_count >= 2:
-                    identity["is_monorepo"] = True
-                    if "cargo-workspace" not in identity["monorepo_tools"]:
-                        identity["monorepo_tools"].append("cargo-workspace")
-        except (IOError, OSError):
+        except Exception:
             pass
+
+    # v5.8: Check for crates/ or ext/ directories with Cargo.toml (Rust monorepo pattern)
+    for crate_dir_name in ('crates', 'ext'):
+        crate_dir = os.path.join(workspace, crate_dir_name)
+        if os.path.isdir(crate_dir):
+            sub_crates = 0
+            try:
+                for entry in os.listdir(crate_dir):
+                    sub_cargo = os.path.join(crate_dir, entry, 'Cargo.toml')
+                    if os.path.isfile(sub_cargo):
+                        sub_crates += 1
+            except OSError:
+                pass
+            if sub_crates >= 2:
+                identity["is_monorepo"] = True
+                if "cargo-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cargo-workspace")
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
@@ -469,7 +434,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     return identity
 
 
-def _build_directory_map(workspace: str, config: Dict[str, Any], max_depth: int = 3) -> Dict[str, str]:
+def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
     """Build a one-level-deep directory map with descriptions."""
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
     dir_hints = {
@@ -515,7 +480,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any], max_depth: int 
                 try:
                     for root, dirs, filenames in os.walk(full):
                         depth = root.replace(full, '').count(os.sep)
-                        if depth > max_depth:
+                        if depth > 3:
                             dirs[:] = []
                             continue
                         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]

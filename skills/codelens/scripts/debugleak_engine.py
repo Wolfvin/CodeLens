@@ -29,7 +29,6 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
-    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hxx",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -40,7 +39,7 @@ TEST_FILE_PATTERNS = {
 }
 
 # Performance limits for large codebases
-MAX_FILES_PER_RUN = 1500
+MAX_FILES_PER_RUN = 5000  # v5.8: Increased from 3000 to handle large repos
 
 
 # ─── Category-specific Patterns ────────────────────────────────
@@ -105,43 +104,23 @@ TEST_SKIP_PATTERNS = [
 ]
 
 MOCK_DATA_PATTERNS = [
-    # Exact compound words (high confidence — these are almost always mock/test data)
     (r'\bfakeData\b', "fakeData"),
+    (r'\bfake[A-Z]\w+', "fakeCamelCase"),
     (r'\bmockData\b', "mockData"),
+    (r'\bmock[A-Z]\w+', "mockCamelCase"),
     (r'\btestData\b', "testData"),
+    (r'\btest[A-Z]\w+', "testCamelCase"),
     (r'\bstubData\b', "stubData"),
+    (r'\bstub[A-Z]\w+', "stubCamelCase"),
     (r'\bfixtureData\b', "fixtureData"),
     (r'\bdummyData\b', "dummyData"),
+    (r'\bdummy[A-Z]\w+', "dummyCamelCase"),
     (r'\bplaceholderData\b', "placeholderData"),
     (r'\bsampleData\b', "sampleData"),
     (r'\bMOCK_\w+', "MOCK_CONSTANT"),
     (r'\bFAKE_\w+', "FAKE_CONSTANT"),
     (r'\bTEST_\w+', "TEST_CONSTANT"),
-    # CamelCase prefix patterns — these need context filtering because
-    # terms like "fakeIp", "testUrl", "testAll" can be legitimate
-    # domain terms (DNS settings, connectivity tests, etc.).
-    # The _detect_mock_data function applies additional context checks.
-    (r'\bfake[A-Z]\w+', "fakeCamelCase"),
-    (r'\bmock[A-Z]\w+', "mockCamelCase"),
-    (r'\btest[A-Z]\w+', "testCamelCase"),
-    (r'\bstub[A-Z]\w+', "stubCamelCase"),
-    (r'\bdummy[A-Z]\w+', "dummyCamelCase"),
 ]
-
-# Known domain-specific terms that use "fake"/"test"/"mock" prefixes
-# but are NOT mock data — they are legitimate business/technical terms.
-# These are typically used in DNS/proxy/networking contexts.
-_KNOWN_LEGITIMATE_PREFIX_TERMS = frozenset({
-    # DNS/networking: "fake" is a technical term (fake IP, fake DNS)
-    'fakeIp', 'fakeIP', 'fakeIpRange', 'fakeIpFilter', 'fakeIpFilterMode',
-    'fakeDns', 'fakeDNS',
-    # Connectivity testing: "test" is an action, not mock data
-    'testUrl', 'testAll', 'testDelay', 'testConnection', 'testProxy',
-    'testConnectivity', 'testLatency', 'testSpeed', 'testEndpoint',
-    'testServer', 'testHost', 'testPort', 'testApi',
-    # Tauri/IPC commands: "test" prefix is for user-facing test features
-    'testDelayUrl',
-})
 
 DEV_ONLY_PATTERNS = [
     (r'\bif\s*\(\s*DEBUG\s*\)', "if (DEBUG)"),
@@ -326,25 +305,16 @@ def _detect_console_logs(
                 # Also skip if it's in a dedicated error-handling utility
                 if re.search(r'(logError|handleError|reportError|onError)', context):
                     continue
-                # console.error is typically legitimate error logging, not a debug leak
-                # Only flag as info severity and don't suggest removal
-                severity = "info"
-                should_remove = False
 
             # console.warn in catch blocks is also somewhat legitimate
-            elif label == "console.warn":
+            if label == "console.warn":
                 context_start = max(0, i - 2)
                 context = '\n'.join(lines[context_start:i + 1])
                 if re.search(r'\bcatch\s*\(', context):
                     continue
-                # console.warn is typically legitimate warning logging, not a debug leak
-                # Only flag as info severity
-                severity = "info"
-                should_remove = False
 
-            else:
-                severity = "medium"
-                should_remove = True
+            severity = "medium"
+            should_remove = True
 
             # In test files, console.log is less severe
             if is_test_file:
@@ -380,9 +350,6 @@ def _detect_print_statements(
             if label in ("fmt.Println()", "fmt.Printf()") and ext not in {".go"}:
                 continue
             if label in ("println!()", "eprintln!()") and ext not in {".rs"}:
-                continue
-            # Rust build.rs scripts use println!() to emit cargo directives — not a leak
-            if label in ("println!()",) and rel_path.endswith("build.rs"):
                 continue
             if label in ("print()", "pprint()", "pprint.pprint()") and ext not in {".py", ".rs"}:
                 continue
@@ -636,12 +603,7 @@ def _detect_test_skips(
 def _detect_mock_data(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
-    """Detect hardcoded test data in non-test files.
-
-    Applies a domain-specific allowlist to avoid false positives for
-    legitimate business terms that happen to start with "fake", "test",
-    or "mock" (e.g., fakeIp in DNS config, testUrl for connectivity tests).
-    """
+    """Detect hardcoded test data in non-test files."""
     if is_test_file:
         return  # Mock data is expected in test files
 
@@ -660,15 +622,6 @@ def _detect_mock_data(
             m = re.search(pattern, stripped)
             if not m:
                 continue
-
-            matched_text = m.group(0)
-
-            # Filter: skip known legitimate domain terms
-            # e.g., "fakeIp", "testUrl", "testAll" are real DNS/proxy terms
-            if label in ("fakeCamelCase", "testCamelCase", "mockCamelCase",
-                         "stubCamelCase", "dummyCamelCase"):
-                if matched_text in _KNOWN_LEGITIMATE_PREFIX_TERMS:
-                    continue
 
             # Additional check: is this actually an assignment/declaration?
             # We want to avoid flagging function parameters like `mockData` in tests

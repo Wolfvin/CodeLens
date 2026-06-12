@@ -387,53 +387,46 @@ def _identify_signature(sig: bytes) -> Optional[str]:
     return None
 
 
+# ─── Version ────────────────────────────────────────────────
+
+CODELENS_VERSION = "5.8.0"
+
+
 # ─── Generated File Detection ───────────────────────────────
 
 GENERATED_FILE_PATTERNS = frozenset({
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb',
+    # Lock files
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock',
     'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'uv.lock',
-    'go.sum', 'composer.lock', 'mix.lock',
-    '.tsbuildinfo',
-})
-
-GENERATED_FILE_PREFIXES = (
-    '.min.',          # minified JS/CSS
-    '.bundle.',       # bundled files
-    '.chunk.',        # webpack chunks
-)
-
-GENERATED_DIR_NAMES = frozenset({
-    '__pycache__', '.pytest_cache', '.tox', '.mypy_cache',
-    'node_modules', '.next', '.nuxt', '.cache',
-    'dist', 'build', 'target', 'out',
+    'composer.lock', 'mix.lock', 'Podfile.lock',
+    # Generated/build output
+    '.d.ts',  # TypeScript declaration files (auto-generated)
 })
 
 
 def is_generated_file(filename: str) -> bool:
-    """Check if a file is auto-generated and should be skipped during analysis.
+    """Check if a filename looks like a generated or lock file that should be skipped.
 
-    Detects:
-    1. Lock files (package-lock.json, Cargo.lock, etc.)
-    2. Minified/bundled files (.min.js, .bundle.css, etc.)
-    3. Build info files (.tsbuildinfo)
-    4. Declaration files (.d.ts) — these are auto-generated type definitions
+    Matches lock files, declaration files, and other auto-generated artifacts
+    that are not meaningful for code analysis.
 
     Args:
-        filename: Just the filename (not the full path).
+        filename: Just the filename (not the full path), e.g. 'Cargo.lock'
 
     Returns:
-        True if the file should be treated as generated.
+        True if the file appears to be generated/lock file.
     """
-    if filename in GENERATED_FILE_PATTERNS:
+    lower = filename.lower()
+    # Check exact filename matches (lock files)
+    if lower in GENERATED_FILE_PATTERNS:
         return True
-    for prefix in GENERATED_FILE_PREFIXES:
-        if prefix in filename:
-            return True
-    if filename.endswith('.d.ts'):
+    # Check extension-based patterns
+    if lower.endswith('.d.ts') or lower.endswith('.d.ts.map'):
+        return True
+    if lower.endswith('.min.js') or lower.endswith('.min.css'):
+        return True
+    if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
+        return True
+    if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
-
-
-# ─── Version ────────────────────────────────────────────────
-
-CODELENS_VERSION = "5.8.0"

@@ -7,27 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.8.0] — 2026-06-12
 
-### Fixed
-- **is_generated_file missing from utils.py**: `refactor_safe_engine.py` imported `is_generated_file` from `utils`, but the function did not exist. This caused the entire `refactor-safe` command to fail with ImportError. Now implemented with proper detection of lock files, minified files, build artifacts, and declaration files.
-- **Rust parser only extracted functions**: Both tree-sitter and fallback Rust parsers only extracted `fn` declarations, missing structs, traits, enums, modules, consts, statics, type aliases, macros, and impl blocks. This meant queries for Rust struct/trait/enum names always returned "not found". Now both parsers extract all Rust symbol types.
-- **Framework detection missed Rust and Python projects**: `detect_frameworks()` only detected JS frameworks, specific Python frameworks (Django/Flask/FastAPI), and Tauri. It completely missed generic Rust (Cargo.toml) and Python (pyproject.toml/setup.py) projects. Now detects: rust, actix, axum, tokio, serde, clap, wasm, and generic python projects.
-- **Monorepo detection missed Cargo workspaces**: `_extract_project_identity()` only checked for turborepo/pnpm/lerna/nx monorepo indicators. Cargo workspace with `[workspace] members` was not detected. Now properly identifies Cargo workspace monorepos.
-- **Rust test entrypoint regex too strict**: `#[test]` and `#[tokio::test]` patterns required exact single newline between attribute and function, failing when additional attributes like `#[should_panic]` were present. Now handles arbitrary intermediate attributes.
+### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)
+
+Real-world test on a Rust+TypeScript runtime with 36,186 backend nodes and 269,678 edges.
+Confirmed: 19,994 smells (health score 50), 676 dead items, 775 circular deps,
+1,959 functions analyzed, 3,709 debug leaks, 1,010 entrypoints, 283 state stores,
+302 regex patterns, 164 a11y issues, 313 perf hints, 50 env vars.
 
 ### Added
-- **Rust full symbol extraction (tree-sitter)**: `rust_parser.py` now extracts struct_item, enum_item, trait_item, impl_item, mod_item, const_item, static_item, type_item, macro_definition, and use_declaration nodes in addition to function_item. Each node has both `name` and `fn` fields for backward compatibility.
-- **Rust full symbol extraction (fallback)**: `fallback_rust.py` now extracts structs, enums, traits, impl blocks, modules, consts, statics, type aliases, and macros in addition to functions. Also tracks type usage and method call chains.
-- **Use statement tracking**: Both Rust parsers now return `use_statements` data for dependency/import analysis.
-- **Cargo workspace monorepo detection**: Handbook command now identifies Cargo workspace projects as monorepos with `cargo-workspace` tool. Also detects multi-crate repos via `crates/*/Cargo.toml`.
-- **Rust framework auto-detection**: Detects actix-web, axum, tokio, serde, clap, and wasm from Cargo.toml content.
-- **Generic Python project detection**: Detects Python projects via pyproject.toml, setup.py, setup.cfg, requirements.txt, or .py file presence.
-- **Rust/Python backend path configuration**: `get_recommended_config()` now adds appropriate backend paths for Rust (src/, crates/) and Python (src/, lib/, python/) projects.
-- **is_generated_file() utility**: New utility function with comprehensive detection of lock files (Cargo.lock, package-lock.json, etc.), minified/bundled files, and declaration files.
-- **Rust cfg(test) module detection**: Entrypoints engine now detects `#[cfg(test)] mod tests` blocks as test entry points.
+
+- **Rust framework detection**: `detect_frameworks()` now parses `Cargo.toml` for dependencies and detects `rust`, `tokio`, `actix-web`, `axum`, `warp`, `rocket`, `deno_core` from Cargo dependencies. Also scans workspace members' `Cargo.toml` in `crates/`, `ext/`, `libs/`, `packages/` directories.
+- **Rust HTTP route extraction**: `api-map` command now detects routes from Rust web frameworks:
+  - actix-web / rocket: `#[get("/path")]`, `#[post("/path")]` attribute macros
+  - actix-web: `web::resource("/path")` programmatic routes
+  - axum: `.route("/path", get(handler))` method chaining
+  - warp: `warp::path("segment")` filter chains
+- **Cargo workspace monorepo detection**: `handbook` now detects `[workspace]` sections in `Cargo.toml` and sub-directory crate patterns (`crates/*/Cargo.toml`, `ext/*/Cargo.toml`). Reports `is_monorepo: true` with `monorepo_tools: ["cargo-workspace"]`.
+- **`is_generated_file()` utility**: Added to `utils.py` for detecting lock files, declaration files, minified files, and other generated artifacts. Fixes `refactor_safe_engine.py` import crash (was importing non-existent function). Total commands: 42 → 43.
+- **`has_rust` field in framework detection**: `detect_frameworks()` now includes `has_rust: true` when `Cargo.toml` is found, and adds Rust-specific backend paths to recommended config.
+
+### Fixed
+
+- **`refactor_safe` command crash**: `refactor_safe_engine.py` imported `is_generated_file` from `utils` but the function did not exist, causing the entire command module to fail loading (42/43 commands loaded). Now all 43 commands load successfully.
+- **State-map `__dunder` false positives**: Runtime binding helpers (`__default`, `__createBinding`, `__exportStar`, `importDefault`, `__reexport`, `__buffer`, `__default_export__`, `__telemetry`, `__esModule`, etc.) were classified as state stores. Added 15+ JS/TS runtime helper names to post-filter skip set, plus a general `__dunder` runtime helper detection pattern. Result: 0 `__dunder` false positives (was 8 in deno test).
+- **`handbook` crash on `cmd_scan()` call**: Handbook called `cmd_scan(workspace, max_files=max_files)` but `cmd_scan()` doesn't accept `max_files` parameter. Removed the invalid keyword argument.
+- **Smell `health_score` not at top level**: `health_score` was only available inside `stats` dict, making it harder to access programmatically. Now also returned as a top-level key in the response dict.
+- **Markdown formatter for smell**: Now reads `health_score` from top-level first, then falls back to `stats.health_score` for backward compatibility.
+- **Version mismatch**: `skill.json` version was `5.7.1` but description referenced v5.10/v6.1. Updated to `5.8.0` with accurate description.
 
 ### Changed
-- **Version bumped**: 5.7.1 → 5.8.0
-- **Backend node schema**: Rust nodes now include `type` field (function, struct, enum, trait, impl, module, const, static, type_alias, macro) and `name` field (in addition to backward-compatible `fn`).
+
+- **Complexity engine file cap**: Increased from 3,000 → 5,000 files. Function cap increased from 5,000 → 8,000. Prevents missing analysis on large repos.
+- **Debug-leak engine file cap**: Increased from 3,000 → 5,000 files per run for better coverage on large repos.
+- **Rust framework config paths**: When Rust is detected, recommended config now includes `crates/*/src/` and `ext/*/src/` as backend paths.
 
 ## [5.7.2] — 2026-06-12
 
