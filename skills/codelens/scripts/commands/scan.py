@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
-from utils import logger
+from utils import logger, is_generated_file, DEFAULT_IGNORE_FILES
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -749,6 +749,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
             # Skip TypeScript declaration files (auto-generated, no runtime code)
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
+
+            # Skip generated/lock files (Yarn PNP, lock files, etc.)
+            if is_generated_file(filename) or filename in DEFAULT_IGNORE_FILES:
                 continue
 
             if ext in ('.html', '.htm'):

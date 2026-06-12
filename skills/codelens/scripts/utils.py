@@ -32,11 +32,18 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
+    '.yarn',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
+})
+
+DEFAULT_IGNORE_FILES = frozenset({
+    '.pnp.cjs', '.pnp.loader.mjs',  # Yarn PNP generated files
+    'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'bun.lock',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock',
 })
 
 # ─── Output File Generation ─────────────────────────────────
@@ -48,7 +55,7 @@ def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> di
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace, max_files=max_files)
+        outline_data = get_workspace_outline(workspace)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -389,7 +396,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.8.0"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -401,6 +408,8 @@ GENERATED_FILE_PATTERNS = frozenset({
     'composer.lock', 'mix.lock', 'Podfile.lock',
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
+    # Yarn PNP generated files
+    '.pnp.cjs', '.pnp.loader.mjs',
 })
 
 
