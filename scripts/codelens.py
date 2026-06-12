@@ -55,6 +55,8 @@ Smart Defaults:
     - --top sorts by relevance before truncating (severity for quality, cyclomatic for complexity)
     - --lite has tailored output for 10+ commands, not just query
     - Override smart --top with --top 0 for unlimited results
+    - Auto-setup caps at 3000 files to prevent timeout (run 'scan' manually for full)
+    - Set CODELENS_AI_MODE=1 to make --format ai the default output
 """
 
 import sys
@@ -233,9 +235,20 @@ def _registry_exists(workspace: str) -> bool:
 
 
 def _auto_setup(workspace: str) -> Dict[str, Any]:
-    """Auto-run init + scan when no registry exists. Returns scan result or error info."""
+    """Auto-run init + scan when no registry exists. Returns scan result or error info.
+    
+    Includes timeout protection: if the workspace has many source files,
+    limits scan to --max-files 3000 to prevent long auto-setup times.
+    """
     from commands.init import cmd_init
     from commands.scan import cmd_scan
+
+    # Cap to prevent 5+ minute auto-setup on large repos
+    _AUTO_SETUP_MAX_FILES = 3000
+    _AUTO_SETUP_TIMEOUT_MSG = (
+        "Auto-setup running with --max-files 3000 to prevent timeout. "
+        "For full analysis, run: $CLI scan"
+    )
 
     print("[CodeLens] No registry found. Auto-running init + scan...", file=sys.stderr)
 
@@ -247,13 +260,39 @@ def _auto_setup(workspace: str) -> Dict[str, Any]:
     except Exception as e:
         return {"auto_setup": "failed", "stage": "init", "error": str(e)}
 
-    # Step 2: Scan
+    # Step 2: Scan (with max-files cap for auto-setup)
     try:
-        scan_result = cmd_scan(workspace, incremental=False)
-        if scan_result.get("status") != "ok":
-            return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
-        print("[CodeLens] Auto-setup complete. Registry built.", file=sys.stderr)
-        return {"auto_setup": "ok", "scan_result": scan_result}
+        print(f"[CodeLens] {_AUTO_SETUP_TIMEOUT_MSG}", file=sys.stderr)
+        # Use subprocess to run scan with --max-files flag
+        # This avoids coupling to cmd_scan's internal signature
+        scan_cmd = [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+                     "scan", workspace, "--max-files", str(_AUTO_SETUP_MAX_FILES)]
+        scan_proc = __import__("subprocess").run(
+            scan_cmd, capture_output=True, text=True, timeout=120
+        )
+        if scan_proc.returncode != 0:
+            # Fallback: try without max-files
+            try:
+                scan_result = cmd_scan(workspace, incremental=False)
+                if scan_result.get("status") != "ok":
+                    return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
+            except Exception as e2:
+                return {"auto_setup": "failed", "stage": "scan", "error": str(e2)}
+        else:
+            scan_result = json.loads(scan_proc.stdout) if scan_proc.stdout.strip() else {"status": "ok"}
+
+        files_scanned = scan_result.get("files_scanned", {})
+        total_files = sum(v for v in files_scanned.values() if isinstance(v, int)) if isinstance(files_scanned, dict) else 0
+        print(f"[CodeLens] Auto-setup complete. {total_files} files scanned. Registry built.", file=sys.stderr)
+        
+        result_info = {
+            "auto_setup": "ok",
+            "files_scanned": total_files,
+            "capped": total_files >= _AUTO_SETUP_MAX_FILES,
+        }
+        if total_files >= _AUTO_SETUP_MAX_FILES:
+            result_info["hint"] = "Auto-setup capped at 3000 files. Run 'scan' manually for full analysis."
+        return result_info
     except Exception as e:
         return {"auto_setup": "failed", "stage": "scan", "error": str(e)}
 
@@ -714,8 +753,10 @@ def main():
                              help="Minimal output mode for AI decision-making")
 
     # Global format option (works before subcommand)
-    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai"], default="json",
-                        help="Output format (default: json)")
+    # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
+    _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
+    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai"], default=_default_format,
+                        help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default)")
 
     # ─── Parse and dispatch ─────────────────────────────
 
@@ -763,11 +804,16 @@ def main():
     args = parser.parse_args()
 
     # Resolve format: subparser --format overrides global --format
+    # If neither is set, use the parser's default (which may be "ai" if CODELENS_AI_MODE=1)
     subparser_format = getattr(args, 'format', None)
     if subparser_format is not None:
         args.format = subparser_format
     elif global_format is not None:
         args.format = global_format
+    else:
+        # Neither subparser nor global pre-parse captured a format.
+        # Use the parser's default (respects CODELENS_AI_MODE)
+        args.format = _default_format
 
     # Resolve --top: subparser overrides global
     if getattr(args, 'top', None) is None and global_top is not None:

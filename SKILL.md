@@ -59,6 +59,7 @@ $CLI query "myFunction" --lite
 ### The One Command You Need
 
 ```bash
+export CODELENS_AI_MODE=1   # Optional: makes --format ai the default
 $CLI query "name" --lite    # Auto-setup + minimal response = {found, action}
 ```
 
@@ -283,6 +284,35 @@ CodeLens has **smart defaults** that prevent token overflow without any flags:
 7. **`--category`** filters on `dead-code`, `smell`, `perf-hint`, `debug-leak` — narrow scope
 8. Use `query --lite` before `context` — if `found:false`, no need for context
 9. Use `--top 0` to override smart defaults and get unlimited results
+10. Set `CODELENS_AI_MODE=1` env var to make `--format ai` the default output format
+11. Auto-setup caps at 3000 files — run `scan` manually for full analysis on large repos
+
+### Auto-Setup Behavior
+
+When no `.codelens/` registry exists, any analysis command auto-runs `init` + `scan`. This is transparent — you don't need to think about setup.
+
+**Timeout protection**: Auto-setup caps scanning at **3000 files** to prevent long waits. If your repo has more files, the auto-setup will be fast but partial. For full analysis, run `scan` manually:
+
+```bash
+$CLI scan    # Full scan (no file limit)
+```
+
+The `_auto_setup` field in the response tells you if it was capped:
+```json
+{"auto_setup": true, "capped": true, "hint": "Auto-setup capped at 3000 files. Run 'scan' manually for full analysis."}
+```
+
+### CODELENS_AI_MODE
+
+Set the `CODELENS_AI_MODE` environment variable to `1`, `true`, or `yes` to make `--format ai` the **default** output format. This eliminates the need to add `--format ai` to every command.
+
+```bash
+export CODELENS_AI_MODE=1
+$CLI smell          # Now outputs in --format ai by default
+$CLI complexity     # Same
+```
+
+Without this env var, the default format is `json` (backward compatible).
 
 ### Reference Files
 
