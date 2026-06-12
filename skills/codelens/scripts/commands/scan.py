@@ -30,6 +30,7 @@ from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
 from parsers.fallback_php import parse_php_fallback
+from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
 
@@ -40,28 +41,23 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
-    parser.add_argument("--max-files", type=int, default=5000,
-                        help="Maximum number of files to scan (default: 5000). "
-                             "Use 0 for unlimited.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
-    max_files = getattr(args, 'max_files', 5000)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, max_files=max_files)
+    return cmd_scan(workspace, incremental)
 
 
-def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
-    max_files caps the number of files scanned per category.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -352,6 +348,28 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
             except IOError:
                 logger.debug(f"Failed to read Svelte file: {path}")
 
+    # Parse Blade templates (Laravel .blade.php files)
+    # Blade templates contain HTML classes/IDs that belong in the frontend registry
+    blade_data = []
+    if files["blade"]:
+        for path in files["blade"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_blade_template(content, os.path.relpath(path, workspace))
+                # Merge Blade frontend data into html_data format
+                fe = refs.get("frontend", {})
+                if fe.get("classes") or fe.get("ids"):
+                    blade_data.append({
+                        "path": os.path.relpath(path, workspace),
+                        "classes": fe.get("classes", []),
+                        "ids": fe.get("ids", [])
+                    })
+            except IOError:
+                logger.debug(f"Failed to read Blade file: {path}")
+
     # Tailwind analysis
     # In incremental mode, skip tailwind re-analysis since we only have
     # classes from changed files — the merge will preserve existing tailwind info
@@ -375,18 +393,21 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
                 logger.debug("Tailwind analysis failed", exc_info=True)
 
     # Build frontend registry
+    # Merge Blade template data into html_data (same format: path, classes, ids)
+    html_data_with_blade = html_data + blade_data
+
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_frontend = load_frontend_registry(workspace)
         frontend_registry = merge_frontend_data(
-            existing_frontend, html_data, css_data, js_frontend_data,
+            existing_frontend, html_data_with_blade, css_data, js_frontend_data,
             tsx_data, vue_data, svelte_data, tailwind_info,
             changed_files, workspace, config.get("frameworks", [])
         )
     else:
         # Full scan: build from scratch
         frontend_registry = build_frontend_registry(
-            workspace, html_data, css_data, js_frontend_data,
+            workspace, html_data_with_blade, css_data, js_frontend_data,
             tsx_data, vue_data, svelte_data,
             tailwind_info, config.get("frameworks", [])
         )
@@ -595,6 +616,7 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
             except IOError:
                 logger.debug(f"Failed to read PHP file: {path}")
 
+
     # All new language data combined
     _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data
 
@@ -687,6 +709,7 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
             "lua": len(files["lua"]),
             "csharp": len(files["csharp"]),
             "php": len(files["php"]),
+            "blade": len(files["blade"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -695,6 +718,7 @@ def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
         "php_parsed": len(php_data),
+        "blade_parsed": len(blade_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -716,11 +740,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    # Languages that have fallback parsers (parsed, but no tree-sitter)
-    has_fallback = {"go", "c", "cpp", "java", "php", "csharp", "lua"}
-    truly_unsupported = [l for l in unsupported if l not in has_fallback]
-    fallback_only = [l for l in unsupported if l in has_fallback]
-
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -730,21 +750,9 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "csharp": "C#",
         "swift": "Swift",
         "ruby": "Ruby",
-        "php": "PHP",
-        "lua": "Lua",
     }
-
-    parts = []
-    if fallback_only:
-        parts.append(", ".join(lang_names.get(l, l) for l in fallback_only) +
-                     " (parsed via regex fallback, limited accuracy)")
-    if truly_unsupported:
-        parts.append(", ".join(lang_names.get(l, l) for l in truly_unsupported) +
-                     " (not yet supported)")
-
-    if not parts:
-        return None
-    return "Detected " + " and ".join(parts) + "."
+    parts = [lang_names.get(l, l) for l in unsupported]
+    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -768,6 +776,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "lua": [],
         "csharp": [],
         "php": [],
+        "blade": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -832,9 +841,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
             elif ext in ('.cs',):
                 files["csharp"].append(file_path)
             elif ext == '.php':
-                files["php"].append(file_path)
-            elif filename.endswith('.blade.php'):
-                files["php"].append(file_path)
+                if filename.endswith('.blade.php'):
+                    files["blade"].append(file_path)
+                else:
+                    files["php"].append(file_path)
 
     return files
 

@@ -98,19 +98,12 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None,
-    max_files: int = 5000
+    config: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
 
     Returns a summary-level outline (not per-function detail).
-
-    Args:
-        workspace: Absolute path to workspace
-        file_filter: Optional filter string for file paths
-        config: Optional configuration dict
-        max_files: Maximum number of files to outline (default: 5000)
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -120,8 +113,7 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
-        '.php', '.java', '.c', '.cpp', '.h', '.hpp', '.cc', '.cs', '.lua'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.php'
     }
 
     outlines = []
@@ -142,10 +134,6 @@ def get_workspace_outline(
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
-            # Enforce max_files cap
-            if len(outlines) >= max_files:
-                break
-
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
@@ -157,10 +145,6 @@ def get_workspace_outline(
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
-
-        # Enforce max_files cap at directory level too
-        if len(outlines) >= max_files:
-            break
 
     return {
         "status": "ok",
@@ -527,9 +511,10 @@ def _outline_php(content: str, detail: str) -> Dict:
         "classes": [],
         "interfaces": [],
         "traits": [],
+        "enums": [],
         "imports": [],
-        "exports": [],
         "variables": [],
+        "constants": [],
     }
 
     # Namespace detection
@@ -541,8 +526,7 @@ def _outline_php(content: str, detail: str) -> Dict:
     for m in re.finditer(r'use\s+(?:function\s+|const\s+)?([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
         import_path = m.group(1)
         alias = m.group(2) or import_path.rsplit('\\', 1)[-1]
-        line = content[:m.start()].count('\n') + 1
-        outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+        outline["imports"].append({"text": import_path, "alias": alias})
 
     # Group use statements (PHP 7+)
     for m in re.finditer(r'use\s+([\w\\]+)\\{([^}]+)}\s*;', content):
@@ -550,63 +534,72 @@ def _outline_php(content: str, detail: str) -> Dict:
         for item in re.finditer(r'([\w\\]+)(?:\s+as\s+(\w+))?', m.group(2)):
             import_path = base_ns + '\\' + item.group(1)
             alias = item.group(2) or item.group(1).rsplit('\\', 1)[-1]
-            line = content[:m.start()].count('\n') + 1
-            outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+            outline["imports"].append({"text": import_path, "alias": alias})
 
     lines = content.split('\n')
-    in_class = False
-    class_depth = 0
-
     for line_num, line in enumerate(lines, 1):
         stripped = line.strip()
 
-        # Interface declarations
-        m = re.match(r'(?:^|\s)interface\s+(\w+)', stripped)
+        # Class declarations
+        m = re.match(r'(?:abstract\s+|final\s+)*class\s+(\w+)', stripped)
         if m:
-            outline["interfaces"].append({"name": m.group(1), "line": line_num})
+            class_name = m.group(1)
+            entry = {"name": class_name, "line": line_num}
+            # Detect class modifiers
+            prefix = stripped[:stripped.index('class')].strip()
+            if 'abstract' in prefix:
+                entry["abstract"] = True
+            if 'final' in prefix:
+                entry["final"] = True
+            # Detect extends/implements on same line
+            ext_match = re.search(r'extends\s+([\w\\]+)', stripped)
+            if ext_match:
+                entry["extends"] = ext_match.group(1).strip('\\')
+            impl_match = re.search(r'implements\s+([\w\\,\s]+)', stripped)
+            if impl_match:
+                entry["implements"] = [i.strip().strip('\\') for i in impl_match.group(1).split(',')]
+            outline["classes"].append(entry)
+            continue
+
+        # Interface declarations
+        m = re.match(r'interface\s+(\w+)', stripped)
+        if m:
+            iface_name = m.group(1)
+            entry = {"name": iface_name, "line": line_num}
+            ext_match = re.search(r'extends\s+([\w\\,\s]+)', stripped)
+            if ext_match:
+                entry["extends"] = [i.strip().strip('\\') for i in ext_match.group(1).split(',')]
+            outline["interfaces"].append(entry)
             continue
 
         # Trait declarations
-        m = re.match(r'(?:^|\s)trait\s+(\w+)', stripped)
+        m = re.match(r'trait\s+(\w+)', stripped)
         if m:
             outline["traits"].append({"name": m.group(1), "line": line_num})
             continue
 
-        # Class declarations
-        m = re.match(r'(?:^|\s)(?:abstract\s+|final\s+)?class\s+(\w+)', stripped)
+        # Enum declarations (PHP 8.1+)
+        m = re.match(r'enum\s+(\w+)(?::\s*(\w+))?', stripped)
         if m:
-            outline["classes"].append({"name": m.group(1), "line": line_num, "methods": []})
-            in_class = True
+            entry = {"name": m.group(1), "line": line_num}
+            if m.group(2):
+                entry["backing_type"] = m.group(2)
+            outline["enums"].append(entry)
             continue
 
-        # Function declarations
-        m = re.match(r'(?:public\s+|private\s+|protected\s+)?(?:static\s+)?function\s+(\w+)', stripped)
+        # Standalone functions (not methods — methods are inside class bodies)
+        m = re.match(r'function\s+(\w+)\s*\(', stripped)
         if m:
-            fn_name = m.group(1)
-            is_method = in_class or stripped.startswith(('public ', 'private ', 'protected '))
-            entry = {"name": fn_name, "line": line_num, "method": is_method}
-            outline["functions"].append(entry)
-            # Add method to last class
-            if in_class and outline["classes"]:
-                outline["classes"][-1].setdefault("methods", []).append({"name": fn_name, "line": line_num})
-            continue
+            # Skip if indented (likely a method inside a class)
+            indent = len(line) - len(line.lstrip())
+            if indent == 0:
+                outline["functions"].append({"name": m.group(1), "line": line_num})
+                continue
 
-        # Track class depth for method detection
-        if in_class:
-            class_depth += stripped.count('{') - stripped.count('}')
-            if class_depth < 0:
-                in_class = False
-                class_depth = 0
-
-        # Constants
-        m = re.match(r'(?:public\s+|private\s+|protected\s+)?const\s+(\w+)', stripped)
+        # Class constants
+        m = re.match(r'const\s+(\w+)\s*=', stripped)
         if m:
-            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
-
-        # Define constants
-        m = re.match(r"define\s*\(\s*['\"](\w+)['\"]", stripped)
-        if m:
-            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
+            outline["constants"].append({"name": m.group(1), "line": line_num})
 
     return outline
 
@@ -998,7 +991,7 @@ def _detect_language(ext: str) -> str:
     mapping = {
         '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
         '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'tsx',
-        '.rs': 'rust', '.py': 'python', '.go': 'go',
+        '.rs': 'rust', '.py': 'python', '.go': 'go', '.php': 'php',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
         '.vue': 'vue', '.svelte': 'svelte'

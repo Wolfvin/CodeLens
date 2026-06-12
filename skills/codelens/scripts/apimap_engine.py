@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql",
+    ".graphql", ".gql", ".php",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -104,7 +104,6 @@ def map_api_routes(
     middleware_map: Dict[str, List[Dict]] = defaultdict(list)
     route_groups: List[Dict[str, Any]] = []
     files_scanned = 0
-    gql_schema_routes: List[Dict[str, Any]] = []  # Schema-only routes (no resolvers)
 
     # Global middleware collectors
     global_middleware: List[Dict] = []
@@ -163,22 +162,20 @@ def map_api_routes(
                 py_mw = _extract_python_middleware(content, rel_path)
                 global_middleware.extend(py_mw)
 
+            # ─── PHP: Laravel / Symfony / Slim ─────────────────
+            elif ext == ".php":
+                php_routes = _extract_php_routes(content, rel_path, frameworks_detected)
+                routes.extend(php_routes)
+
+                php_mw = _extract_php_middleware(content, rel_path)
+                global_middleware.extend(php_mw)
+
             # ─── GraphQL ──────────────────────────────────────
-            # Only extract GraphQL schema routes if the project actually uses
-            # GraphQL (has resolver implementations, not just schema definition files).
-            # Schema-only files in non-GraphQL projects (e.g., a WASM runtime with
-            # a backend-api/ directory) should NOT be treated as active API routes.
             elif ext in {".graphql", ".gql"}:
                 gql_routes = _extract_graphql_schema(content, rel_path)
-                if gql_routes and _is_graphql_project(workspace):
+                if gql_routes:
                     frameworks_detected.add("graphql")
                     routes.extend(gql_routes)
-                elif gql_routes:
-                    # Schema file found but no resolvers — mark as documentation only
-                    for route in gql_routes:
-                        route["is_schema_only"] = True
-                        route["note"] = "GraphQL schema definition (no resolvers found in project)"
-                    gql_schema_routes.extend(gql_routes)
 
             # Also detect GraphQL in JS/TS files
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -238,12 +235,6 @@ def map_api_routes(
                         fw = r.get("framework", "")
                         if fw:
                             frameworks_detected.add(fw)
-
-                # v6.1: Custom proc-macro route detection (routes::routes, etc.)
-                rust_macro_routes = _extract_rust_custom_macro_routes(content, rel_path)
-                if rust_macro_routes:
-                    routes.extend(rust_macro_routes)
-                    frameworks_detected.add("actix-web")
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -323,7 +314,6 @@ def map_api_routes(
             "files_scanned": files_scanned,
         },
         "routes": routes,
-        "gql_schema_only": gql_schema_routes,
         "route_groups": route_groups,
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
@@ -1409,46 +1399,6 @@ def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
 
 # ─── GraphQL ───────────────────────────────────────────────────
 
-def _is_graphql_project(workspace: str) -> bool:
-    """Check if the workspace is actually a GraphQL project with resolvers.
-
-    A project with .graphql schema files but no resolver implementations
-    is NOT a GraphQL project — the schema files may just be API documentation
-    or reference specs (common in WASM runtime repos that include a backend-api
-    directory for a separate cloud service).
-
-    Returns True only if resolver implementations are found.
-    """
-    resolver_indicators = 0
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.rs'}:
-                continue
-            file_path = os.path.join(root, filename)
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
-                continue
-            # Check for resolver implementation patterns
-            if re.search(r'(?:Query|Mutation|Subscription)\s*:\s*\{', content):
-                resolver_indicators += 1
-            if re.search(r'(?:createGraphQLSchema|makeExecutableSchema|ApolloServer|buildSchema)', content):
-                resolver_indicators += 2
-            if re.search(r'(?:@resolver|@Query|@Mutation|@FieldResolver)', content):
-                resolver_indicators += 1
-            if re.search(r'(?:graphql_resolver|resolve[=:]\s*(?:async\s+)?\()', content):
-                resolver_indicators += 1
-            if resolver_indicators >= 2:
-                return True
-    return False
-
-
 def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract routes from GraphQL schema files (.graphql/.gql)."""
     routes = []
@@ -2095,7 +2045,7 @@ def _normalize_path(path: str) -> str:
 
 def _is_deprecated_route(route: Dict[str, Any]) -> bool:
     """Check if a route is marked as deprecated."""
-    handler = route.get("handler_name", "")
+    handler = route.get("handler_name") or ""
     # Common deprecation patterns
     if "deprecated" in handler.lower():
         return True
@@ -2311,11 +2261,10 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
     """Extract HTTP route handlers from Rust web framework code.
 
     Supports:
-    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route(), web::scope()
+    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route()
     - axum: .route("/path", get(handler)), Router::new().route()
     - warp: warp::path("segment"), warp::get()/post()
     - rocket: #[get("/path")], #[post("/path")]
-    - Custom proc-macros: #[routes::routes(...)], #[route("/path", method = "GET")]
     """
     routes = []
 
@@ -2350,92 +2299,23 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
             "response_type": None,
         })
 
-    # ─── actix-web: web::resource().route(web::method().to(handler)) ─
-    # Enhanced: now extracts method and handler from .route(web::get().to(handler))
-    # First find resource path, then scan forward for .route() chains
+    # ─── actix-web: web::resource().route().method() ─────────────
     for m in re.finditer(
         r'\.resource\s*\(\s*"([^"]+)"\s*\)',
         content
     ):
-        resource_path = m.group(1)
-        resource_line = content[:m.start()].count('\n') + 1
-
-        # Scan forward from resource declaration for .route() calls (up to 500 chars)
-        after_resource = content[m.end():m.end() + 500]
-        route_chains = list(re.finditer(
-            r'\.route\s*\(\s*web::(get|post|put|delete|patch|head|options)\s*\(\s*\)\s*\.to\s*\(\s*(?:\w+::)*(\w+)\s*\)',
-            after_resource
-        ))
-
-        if route_chains:
-            for rc in route_chains:
-                method_raw = rc.group(1).lower()
-                handler = rc.group(2)
-                route_line = resource_line + after_resource[:rc.start()].count('\n')
-                routes.append({
-                    "method": method_raw.upper(),
-                    "path": resource_path,
-                    "handler_name": handler,
-                    "file": rel_path,
-                    "line": route_line,
-                    "framework": "actix-web",
-                    "middleware": [],
-                    "auth_required": False,
-                    "request_type": "http_handler",
-                    "response_type": None,
-                })
-        else:
-            # Fallback: resource without method resolution
-            routes.append({
-                "method": "RESOURCE",
-                "path": resource_path,
-                "handler_name": None,
-                "file": rel_path,
-                "line": resource_line,
-                "framework": "actix-web",
-                "middleware": [],
-                "auth_required": False,
-                "request_type": "resource_route",
-                "response_type": None,
-            })
-
-    # ─── actix-web: web::scope("/prefix") ─────────────
-    for m in re.finditer(
-        r'\.scope\s*\(\s*"([^"]+)"\s*\)',
-        content
-    ):
-        scope_path = m.group(1)
+        path = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         routes.append({
-            "method": "SCOPE",
-            "path": scope_path,
+            "method": "RESOURCE",
+            "path": path,
             "handler_name": None,
             "file": rel_path,
             "line": line_num,
             "framework": "actix-web",
             "middleware": [],
             "auth_required": False,
-            "request_type": "route_scope",
-            "response_type": None,
-        })
-
-    # ─── actix-web: configure(<Module as Routes>::configure) ─────
-    for m in re.finditer(
-        r'\.configure\s*\(\s*<\s*(\w+)\s+as\s+\w+\s*>\s*::\s*configure\s*\)',
-        content
-    ):
-        module_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "CONFIGURE",
-            "path": None,
-            "handler_name": module_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "actix-web",
-            "middleware": [],
-            "auth_required": False,
-            "request_type": "configure",
+            "request_type": "resource_route",
             "response_type": None,
         })
 
@@ -2485,127 +2365,256 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
     return routes
 
 
-def _extract_rust_custom_macro_routes(content: str, rel_path: str) -> List[Dict]:
-    """Extract routes from Rust custom proc-macro attributes.
+# ─── PHP / Laravel Route Extraction ──────────────────────────
 
-    Supports:
-    - #[routes::routes(routes("/path" => get(handler), ...), tag = "...")]
-    - #[route("/path", method = "GET")]
-    - Other project-specific route macros with similar patterns
+def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract API routes from PHP source files (Laravel, Symfony, Slim)."""
+    routes: List[Dict[str, Any]] = []
 
-    This function handles frameworks that use custom proc-macros to declare
-    routes, which is common in larger Rust projects (e.g., MeiliSearch's
-    routes::routes macro).
-    """
-    routes = []
+    # ─── Laravel Route Definitions ────────────────────────────
+    # Route::get('/path', [Controller::class, 'method'])
+    # Route::post('/path', 'Controller@method')
+    # Route::put('/path', 'Controller@method')
+    # Route::delete('/path', 'Controller@method')
+    # Route::patch('/path', 'Controller@method')
+    # Route::options('/path', 'Controller@method')
+    # Route::any('/path', ...)
+    # Route::resource('/path', 'Controller')
+    # Route::apiResource('/path', 'Controller')
+    # Route::group([...], function() { ... })
 
-    # ─── #[routes::routes(...)] or #[routes(...)] macro ─────────────
-    # Pattern: routes( "/path" => get(handler), "/path2" => post(handler2), "/prefix" => sub(module::Api) )
-    # The macro attribute can span multiple lines, so we need a more robust parser.
-
-    # Find the #[routes::routes(...)] or #[routes(...)] attribute
-    for macro_match in re.finditer(
-        r'#\[routes(?:::routes)?\s*\(',
-        content
-    ):
-        # Find the matching closing bracket by tracking nesting depth
-        start_pos = macro_match.start()
-        paren_start = content.index('(', start_pos)
-        depth = 0
-        end_pos = paren_start
-        for i in range(paren_start, min(paren_start + 10000, len(content))):
-            if content[i] == '(':
-                depth += 1
-            elif content[i] == ')':
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
-
-        macro_body = content[start_pos:end_pos]
-        macro_line = content[:start_pos].count('\n') + 1
-
-        # Find the struct name after the macro attribute
-        # Look for "pub struct Name;" or "pub struct Name {"
-        after_macro = content[end_pos:end_pos + 200]
-        struct_match = re.search(r'(?:pub\s+)?struct\s+(\w+)', after_macro)
-        struct_name = struct_match.group(1) if struct_match else None
-
-        # Extract route declarations from the routes(...) sub-section
-        # Pattern: "/path" => get(handler), "/path" => post(handler), "/path" => sub(module::Api)
-        for route_m in re.finditer(
-            r'"([^"]+)"\s*=>\s*(get|post|put|delete|patch|head|options)\s*\(\s*([\w:]+)\s*\)',
-            macro_body
-        ):
-            path = route_m.group(1)
-            method_raw = route_m.group(2).lower()
-            handler = route_m.group(3).split('::')[-1]  # Take last part of path
-            route_line = macro_line + macro_body[:route_m.start()].count('\n')
-
-            ACTIX_METHOD_MAP = {
-                'get': 'GET', 'post': 'POST', 'put': 'PUT', 'delete': 'DELETE',
-                'patch': 'PATCH', 'head': 'HEAD', 'options': 'OPTIONS',
-            }
-
-            routes.append({
-                "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
-                "path": path,
-                "handler_name": handler,
-                "file": rel_path,
-                "line": route_line,
-                "framework": "actix-web",
-                "middleware": [],
-                "auth_required": False,
-                "request_type": "http_handler",
-                "response_type": None,
-                "macro_source": struct_name or "routes::routes",
-            })
-
-        # Extract sub-module routes: "/prefix" => sub(module::Api)
-        for sub_m in re.finditer(
-            r'"([^"]+)"\s*=>\s*sub\s*\(\s*([\w:]+)\s*\)',
-            macro_body
-        ):
-            scope_path = sub_m.group(1)
-            sub_module = sub_m.group(2).split('::')[-1]
-            route_line = macro_line + macro_body[:sub_m.start()].count('\n')
-
-            routes.append({
-                "method": "SCOPE",
-                "path": scope_path,
-                "handler_name": sub_module,
-                "file": rel_path,
-                "line": route_line,
-                "framework": "actix-web",
-                "middleware": [],
-                "auth_required": False,
-                "request_type": "route_scope",
-                "response_type": None,
-                "macro_source": struct_name or "routes::routes",
-            })
-
-    # ─── #[route("/path", method = "GET")] generic attribute ─────
-    for m in re.finditer(
-        r'#\[route\s*\(\s*"([^"]+)"\s*,\s*method\s*=\s*"?(\w+)"?\s*\)\s*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
-        content
-    ):
-        path = m.group(1)
-        method_raw = m.group(2).lower()
-        handler = m.group(3)
-        line_num = content[:m.start()].count('\n') + 1
-
+    # Pattern 1: Route::method('/path', [ControllerClass::class, 'methodName'])
+    laravel_array_pattern = re.compile(
+        r"Route::(get|post|put|patch|delete|options|any)\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"\s*,\s*\[?\s*([\w\\]+)::class\s*,\s*['\"](\w+)['\"]"
+    )
+    for m in laravel_array_pattern.finditer(content):
+        method = m.group(1).upper()
+        path = m.group(2)
+        controller = m.group(3).rsplit('\\', 1)[-1]
+        handler = m.group(4)
+        line = content[:m.start()].count('\n') + 1
         routes.append({
-            "method": method_raw.upper(),
+            "method": method,
             "path": path,
-            "handler_name": handler,
+            "handler_name": f"{controller}@{handler}",
             "file": rel_path,
-            "line": line_num,
-            "framework": "rust-web",
+            "line": line,
+            "framework": "laravel",
             "middleware": [],
             "auth_required": False,
-            "request_type": "http_handler",
+            "request_type": None,
             "response_type": None,
-            "macro_source": "route",
         })
+        frameworks_detected.add("laravel")
+
+    # Pattern 2: Route::method('/path', 'Controller@method')
+    laravel_at_pattern = re.compile(
+        r"Route::(get|post|put|patch|delete|options|any)\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"\s*,\s*['\"]([\w\\]+)@(\w+)['\"]"
+    )
+    for m in laravel_at_pattern.finditer(content):
+        # Skip if already matched by array pattern (which is more specific)
+        if any(r.get("file") == rel_path and r.get("path") == m.group(2) and r.get("method") == m.group(1).upper() for r in routes):
+            continue
+        method = m.group(1).upper()
+        path = m.group(2)
+        controller = m.group(3).rsplit('\\', 1)[-1]
+        handler = m.group(4)
+        line = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": method,
+            "path": path,
+            "handler_name": f"{controller}@{handler}",
+            "file": rel_path,
+            "line": line,
+            "framework": "laravel",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": None,
+            "response_type": None,
+        })
+        frameworks_detected.add("laravel")
+
+    # Pattern 3: Route::resource and Route::apiResource
+    laravel_resource_pattern = re.compile(
+        r"Route::(resource|apiResource)\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"\s*,\s*['\"]?([\w\\]+)['\"]?"
+    )
+    resource_methods_map = {
+        "resource": ["GET", "GET", "GET", "POST", "PUT", "PATCH", "DELETE"],
+        "apiResource": ["GET", "POST", "GET", "PUT", "PATCH", "DELETE"],
+    }
+    resource_paths_map = {
+        "resource": ["", "/create", "/{id}", "", "/{id}/edit", "/{id}"],
+        "apiResource": ["", "", "/{id}", "/{id}", "/{id}"],
+    }
+    for m in laravel_resource_pattern.finditer(content):
+        resource_type = m.group(1)
+        base_path = m.group(2)
+        controller = m.group(3).rsplit('\\', 1)[-1]
+        line = content[:m.start()].count('\n') + 1
+
+        methods = resource_methods_map.get(resource_type, ["GET"])
+        paths = resource_paths_map.get(resource_type, [""])
+        handlers = ["index", "create", "show", "store", "edit", "update", "destroy"] if resource_type == "resource" else ["index", "store", "show", "update", "destroy"]
+
+        for i, (http_method, sub_path, handler) in enumerate(zip(methods, paths, handlers)):
+            full_path = base_path + sub_path
+            routes.append({
+                "method": http_method,
+                "path": full_path,
+                "handler_name": f"{controller}@{handler}",
+                "file": rel_path,
+                "line": line,
+                "framework": "laravel",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "resource",
+                "response_type": None,
+            })
+        frameworks_detected.add("laravel")
+
+    # Pattern 4: Route::group(['prefix' => '...', 'middleware' => '...'], function() { })
+    laravel_group_pattern = re.compile(
+        r"Route::group\s*\(\s*\[([^\]]+)\]\s*,\s*function"
+    )
+    for m in laravel_group_pattern.finditer(content):
+        group_body = m.group(1)
+        line = content[:m.start()].count('\n') + 1
+        prefix = ""
+        middleware_names = []
+
+        # Extract prefix
+        prefix_match = re.search(r"'prefix'\s*=>\s*'([^']+)'", group_body)
+        if prefix_match:
+            prefix = prefix_match.group(1)
+        else:
+            prefix_match = re.search(r'"prefix"\s*=>\s*"([^"]+)"', group_body)
+            if prefix_match:
+                prefix = prefix_match.group(1)
+
+        # Extract middleware
+        mw_match = re.search(r"'middleware'\s*=>\s*'([^']+)'", group_body)
+        if mw_match:
+            middleware_names = [mw_match.group(1)]
+        else:
+            mw_match = re.search(r'"middleware"\s*=>\s*"([^"]+)"', group_body)
+            if mw_match:
+                middleware_names = [mw_match.group(1)]
+
+        routes.append({
+            "method": "GROUP",
+            "path": f"/{prefix}" if prefix else "/",
+            "handler_name": None,
+            "file": rel_path,
+            "line": line,
+            "framework": "laravel",
+            "middleware": middleware_names,
+            "auth_required": any(mw in AUTH_MIDDLEWARE_PATTERNS for mw in middleware_names),
+            "request_type": "route_group",
+            "response_type": None,
+        })
+        frameworks_detected.add("laravel")
+
+    # ─── Symfony Route Definitions ─────────────────────────────
+    # Attributes: #[Route('/path', name: 'route_name', methods: ['GET'])]
+    symfony_attr_pattern = re.compile(
+        r"#\[Route\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"(?:\s*,\s*name:\s*['\"]([^'\"]*)['\"])?"
+        r"(?:\s*,\s*methods:\s*\[([^\]]+)\])?"
+    )
+    for m in symfony_attr_pattern.finditer(content):
+        path = m.group(1)
+        methods_str = m.group(3) or "'GET'"
+        line = content[:m.start()].count('\n') + 1
+
+        # Parse methods
+        methods = [mth.strip().strip("'\"") for mth in methods_str.split(',')]
+        methods = [mth for mth in methods if mth in VALID_HTTP_METHODS_UPPER or mth.upper() in VALID_HTTP_METHODS_UPPER]
+        if not methods:
+            methods = ["GET"]
+
+        # Find the function this attribute is attached to
+        fn_match = re.search(r'function\s+(\w+)\s*\(', content[m.end():m.end() + 200])
+        handler_name = fn_match.group(1) if fn_match else None
+
+        for http_method in methods:
+            routes.append({
+                "method": http_method.upper(),
+                "path": path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line,
+                "framework": "symfony",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": None,
+                "response_type": None,
+            })
+        frameworks_detected.add("symfony")
+
+    # ─── Slim Framework Routes ────────────────────────────────
+    # $app->get('/path', function ($request, $response) { ... })
+    # $app->get('/path', ClassName::class . ':methodName')
+    slim_pattern = re.compile(
+        r"\$app->(get|post|put|delete|patch|options)\s*\(\s*['\"]([^'\"]+)['\"]"
+    )
+    for m in slim_pattern.finditer(content):
+        # Skip if already matched as Laravel
+        if any(r.get("file") == rel_path and r.get("path") == m.group(2) and r.get("method") == m.group(1).upper() for r in routes):
+            continue
+        method = m.group(1).upper()
+        path = m.group(2)
+        line = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": method,
+            "path": path,
+            "handler_name": None,
+            "file": rel_path,
+            "line": line,
+            "framework": "slim",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": None,
+            "response_type": None,
+        })
+        frameworks_detected.add("slim")
 
     return routes
+
+
+def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
+    """Extract middleware from PHP source files (Laravel)."""
+    middleware: List[Dict] = []
+
+    # Laravel middleware registration
+    # ->middleware('auth')
+    # ->middleware(['auth', 'throttle'])
+    for m in re.finditer(r"->middleware\s*\(\s*['\"]([\w.]+)['\"]", content):
+        line = content[:m.start()].count('\n') + 1
+        mw_name = m.group(1)
+        middleware.append({
+            "name": mw_name,
+            "type": "laravel_middleware",
+            "file": rel_path,
+            "line": line,
+            "is_auth": mw_name in AUTH_MIDDLEWARE_PATTERNS,
+            "is_cors": mw_name in CORS_MIDDLEWARE_PATTERNS,
+            "is_rate_limit": mw_name in RATE_LIMIT_PATTERNS,
+        })
+
+    # Laravel $middleware / $middlewareGroups / $routeMiddleware in Kernel.php
+    for m in re.finditer(r"'(\w+)'\s*=>\s*[\w\\]+Middleware", content):
+        line = content[:m.start()].count('\n') + 1
+        middleware.append({
+            "name": m.group(1),
+            "type": "laravel_middleware_alias",
+            "file": rel_path,
+            "line": line,
+            "is_auth": m.group(1) in AUTH_MIDDLEWARE_PATTERNS,
+            "is_cors": False,
+            "is_rate_limit": False,
+        })
+
+    return middleware

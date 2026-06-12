@@ -28,9 +28,9 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go", ".dart",
+    ".go",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -101,13 +101,29 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "go_main_fn",
             },
-            # Dart/Flutter
+            # PHP — artisan command signatures
             {
-                "regex": r'(?:void|Future<void>)\s+main\s*\(',
-                "language": {".dart"},
+                "regex": r'protected\s+\$signature\s*=\s*[\'"]([^\'"]+)[\'"]',
+                "language": {".php"},
                 "extract": "handler",
-                "handler_group": 0,
-                "label": "dart_main_fn",
+                "handler_group": 1,
+                "label": "laravel_artisan_command",
+            },
+            # PHP — Laravel service provider register/boot
+            {
+                "regex": r'class\s+(\w+ServiceProvider)\s+extends\s+ServiceProvider',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_service_provider",
+            },
+            # PHP — console kernel / http kernel
+            {
+                "regex": r'class\s+(\w+Kernel)\s+extends\s+\w+Kernel',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_kernel",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -247,6 +263,23 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "nitro_event_handler",
             },
+            # Laravel Route::get/post/etc
+            {
+                "regex": r'Route::(get|post|put|patch|delete|options|any)\s*\(\s*[\'"]([^\'"]+)[\'"]',
+                "language": {".php"},
+                "extract": "http_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "laravel_route",
+            },
+            # Laravel controller action methods
+            {
+                "regex": r'public\s+function\s+(\w+)\s*\([^)]*Request',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_controller_method",
+            },
             # tRPC routers
             {
                 "regex": r'\.mutation\s*\(\s*["\']([^"\']+)["\']',
@@ -300,24 +333,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
-            },
-            # NestJS @Controller + @Get/@Post/etc
-            {
-                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*["\']([^"\']*)["\']\s*\)',
-                "language": {".ts", ".js", ".tsx"},
-                "extract": "nestjs_route",
-                "method_group": 1,
-                "path_group": 2,
-                "label": "nestjs_http_handler",
-            },
-            # NestJS @Controller with no method path
-            {
-                "regex": r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*\)',
-                "language": {".ts", ".js", ".tsx"},
-                "extract": "nestjs_route",
-                "method_group": 1,
-                "path_group": None,
-                "label": "nestjs_http_handler_no_path",
             },
         ],
     },
@@ -775,8 +790,7 @@ ENTRYPOINT_PATTERNS = {
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
-    config: Optional[Dict] = None,
-    max_files: int = 5000
+    config: Optional[Dict] = None
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -789,7 +803,6 @@ def map_entrypoints(
         entry_type: Optional filter: "main", "http_handler", "event_handler",
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
-        max_files: Maximum number of files to scan (default: 5000)
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -817,9 +830,6 @@ def map_entrypoints(
             continue
 
         for filename in filenames:
-            if files_scanned >= max_files:
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
