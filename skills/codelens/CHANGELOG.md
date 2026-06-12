@@ -7,49 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.1] — 2026-06-12
 
-### Tested against nushell/nushell (1,749 Rust files, 26,432 nodes, 1,103,749 edges, Rust+Tokio shell)
+### Tested against clash-verge-rev/clash-verge-rev (645 files: 115 Rust + 221 TSX + 107 TS, Tauri 2.0 desktop app with React frontend, Tokio runtime, and Cargo workspace monorepo)
 
-Real-world test on a large Rust monorepo with 45+ crates. Previously crashed on scan
-due to Python/JS regex syntax mismatch. Now scans successfully.
+Real-world test on a large Tauri application with 2,049 backend nodes, 62,466 edges, 739 entrypoints,
+134 circular dependencies, 1923 code smells (health score 55), 265 debug leaks, 163 perf hints,
+1,482 functions analyzed for complexity, 43 regex patterns, 210 a11y issues, 6 React context stores,
+33 data flow violations, and 15 environment variables.
 
-### Fixed (22 bugs)
+### Fixed
 
-**CRITICAL (6 bugs):**
-- `fallback_rust.py`: JS named groups `(?<trait>...)` → Python `(?P<trait>...)` — **broke ALL Rust scanning**
-- `fallback_cpp.py`: Class scope tracking completely broken — `continue` statements skipped brace tracking, causing all methods to be misclassified as standalone functions instead of class methods
-- `dataflow_engine.py`: Sanitizer check compared sink labels against `sanitizes_for` keys — SQL injection and command execution sanitizers were never matched, producing false positive taint violations
-- `secrets_engine.py`: Double-escaped `\\s` in `LINE_EXCLUSION_PATTERNS` — raw string `\\s` matched literal backslash+`s` instead of whitespace, causing false positive secret reports for property definition lines
-- `incremental.py`: `rsplit(':',1)[0]` extracted `file:line` instead of `file` for Rust/C++ node IDs with format `path:line:name` — broke incremental scan edge handling for Rust and C++ codebases
-- `impact_engine.py`: `node_by_fn` undefined when `domain="frontend"` — caused NameError crash
+- **CRITICAL: PCRE named group regex crash** — `fallback_rust.py` used `(?<name>...)` (PCRE syntax) instead of `(?P<name>...)` (Python syntax), causing `scan` to crash with "unknown extension ?<t at position 13" on any workspace containing Rust files. Fixed by converting to Python regex syntax.
+- **CRITICAL: `max_files` TypeError in 5 commands** — `perf-hint`, `smell`, `complexity`, `secrets`, and `entrypoints` commands passed `max_files` keyword argument to engine functions that don't accept it, causing `TypeError: detect_perf_hints() got an unexpected keyword argument 'max_files'`. Fixed by removing the mismatched parameter from command wrappers.
+- **CRITICAL: `write_output_files()` TypeError** — `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`. Fixed by removing the invalid parameter.
+- **Secrets false positives on i18n/locale files** — Translation files in `locales/`, `i18n/`, `lang/`, `translations/`, `intl/`, `localization/` directories were incorrectly flagged as containing hardcoded passwords (e.g., translated word "Password" in `src/locales/id/shared.json`). Added these directories to the `_is_docs_or_example_file()` skip list.
+- **`impact` command NameError on frontend-only domain** — `impact_engine.py` referenced `node_by_fn` in the result dict, but `node_by_fn` was only defined inside the backend block, causing `NameError` when `domain="frontend"`. Fixed by initializing `node_by_fn = None` before the conditional block and using `is not None` check.
+- **Dead code: unused `fn_stack` variables** — `js_backend_parser.py` and `ts_backend_parser.py` declared `fn_stack = []` that was never used. Removed.
+- **Inline `import re` in function bodies** — `js_backend_parser.py`, `ts_backend_parser.py`, and `outline_engine.py` (12 occurrences) had `import re` inside function bodies, which is both a performance anti-pattern (re-importing on every call) and PEP 8 violation. Moved to module-level imports.
 
-**HIGH (7 bugs):**
-- `fallback_rust.py`: Impl block exit detection checked for `{` instead of `}` in recent lines — impl scope never exited for certain patterns
-- `fallback_rust.py`: `impl_brace_start` never set when `{` on different line than `impl` — multi-line impl declarations permanently leaked scope
-- `fallback_php.py`: `trait_name[0].isupper()` IndexError crash when trait_name is empty
-- `smell_engine.py`: Arrow function parameters never detected — regex required double `(`
-- `complexity_engine.py`: Unreachable `else if` branch — `\bif\s*\(` matched before `\belse\s+if\s*\(` in both JS and Rust cognitive complexity
-- `framework_detect.py`: `logger` undefined (should be `_logger`) — NameError crash on IOError paths
-- `sideeffect_engine.py`: Duplicate closing-brace line appended to function body
+### Added
 
-**MEDIUM (6 bugs):**
-- `fallback_rust.py`: Dead code on line 101 — math error `count('{') - count('{')` cancels out
-- `fallback_php.py`: Method regex required visibility keyword — methods without visibility were silently dropped
-- `fallback_python.py`: Nested class scope not tracked — inner class overwrote outer, never restored
-- `smell_engine.py`: Third regex alternative matched function calls, not definitions
-- `query.py`: `fuzzy` parameter never used — `--fuzzy` flag had no effect
-- `utils.py`: `.tar.gz` unreachable in `BINARY_EXTENSIONS`; `.gz` missing from set
+- **`BaseEngine` class** (`base_engine.py`) — Extracted the common workspace-walking boilerplate (`os.walk` + `should_ignore_dir` + `safe_read_file` + time budget checking) into a reusable base class. Every engine previously duplicated ~50 lines of this pattern. New engines can now subclass `BaseEngine`, define `FILE_EXTENSIONS` and `_analyze_file()`, and get the walking, filtering, and timing for free.
 
-**LOW (3 bugs):**
-- `fallback_java.py`: Unused `import os`
-- `perfhint_engine.py`: Unused `import signal`
-- `query.py`: Fragile `'backend' not in dir()` replaced with explicit initialization
+### Changed
 
-**Bonus fixes:**
-- `edge_resolver.py`: Same `rsplit(':',1)[0]` bug — replaced with `_extract_file_from_id()` helper
-- `utils.py`: `get_workspace_outline()` called with unsupported `max_files` keyword
-- `perf_hint.py`: `detect_perf_hints()` called with unsupported `max_files` keyword
-- `perfhint_engine.py`: Added `"findings"` key as alias for `"hints"` for test backward compatibility
-- `pyproject.toml`: TOML syntax error — missing newlines between `description`/`readme`/`license`/`requires-python`
+- Version bumped from 5.8.0 to 5.9.1 to reflect the multiple critical fixes.
 
 ## [5.8.0] — 2026-06-12
 

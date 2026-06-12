@@ -30,6 +30,7 @@ def analyze_impact(
         Dict with affected items, risk assessment, and recommendations
     """
     workspace = os.path.abspath(workspace)
+    node_by_fn = None  # Will be set in backend block
     affected = {
         "direct": [],       # Direct dependents (1 hop)
         "indirect": [],     # Indirect dependents (2+ hops)
@@ -376,7 +377,7 @@ def analyze_impact(
         "action": action,
         "risk": risk,
         "affected": affected,
-        "fuzzy_match": name not in node_by_fn if node_by_fn else False,
+        "fuzzy_match": name not in node_by_fn if node_by_fn is not None else False,
         "stats": {
             "direct_dependents": direct_count,
             "indirect_dependents": indirect_count,

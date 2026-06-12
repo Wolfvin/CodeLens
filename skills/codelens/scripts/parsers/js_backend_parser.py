@@ -14,6 +14,7 @@ Handles:
 """
 
 from typing import Dict, List, Any, Optional, Tuple
+import re
 from tree_sitter import Node
 
 from base_parser import BaseParser, JS_TS_SKIP_NAMES_BASE, JS_TS_BACKEND_SKIP_NAMES_EXTRA
@@ -53,7 +54,6 @@ class JSBackendParser(BaseParser):
 
         nodes = []
         edges = []
-        fn_stack = []  # Stack of (fn_name, node_id) for nested functions
 
         # First pass: find all function declarations
         fn_declarations = self._find_function_declarations(tree, source, file_path)
@@ -339,7 +339,6 @@ class JSBackendParser(BaseParser):
                 if (text.startswith("'") and text.endswith("'")) or \
                    (text.startswith('"') and text.endswith('"')):
                     value = text[1:-1]
-                    import re
                     if value and re.match(r'^[a-zA-Z_][\\w]*$', value):
                         return value
         return None

@@ -1,6 +1,6 @@
 """Smell command — Detect code smells across workspace."""
 
-from smell_engine import detect_smells, MAX_SMELL_FILES
+from smell_engine import detect_smells
 from commands import register_command
 
 
@@ -11,17 +11,10 @@ def add_args(parser):
                         help="Categories: long_fn, deep_nesting, many_params, large_file, callback_hell, magic_values, god_object, complex_conditional, duplicate_pattern, inconsistent")
     parser.add_argument("--severity", choices=["info", "warning", "critical"], default=None,
                         help="Filter by severity level")
-    parser.add_argument("--max-files", type=int, default=MAX_SMELL_FILES,
-                        help=f"Max files to scan (default: {MAX_SMELL_FILES})")
 
 
 def execute(args, workspace):
-    result = detect_smells(
-        workspace,
-        categories=args.categories,
-        severity_filter=args.severity,
-        max_files=args.max_files
-    )
+    result = detect_smells(workspace, categories=args.categories, severity_filter=args.severity)
     # Add actionable priority list
     if result.get("status") == "ok":
         top = result.get("top_priority", [])

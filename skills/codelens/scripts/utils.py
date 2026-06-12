@@ -223,7 +223,7 @@ BINARY_EXTENSIONS = frozenset({
     '.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
     '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
     '.dylib', '.bundle', '.ko', '.msi', '.dmg', '.pkg', '.deb', '.rpm',
-    '.nupkg', '.whl', '.egg', '.gz', '.zip', '.7z',
+    '.nupkg', '.whl', '.egg', '.tar.gz', '.zip', '.7z',
 })
 
 BINARY_MIME_SIGNATURES = {
@@ -272,11 +272,7 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
 
         for filename in filenames:
             file_path = os.path.join(root, filename)
-            # Handle double extensions like .tar.gz before falling back to splitext
-            if filename.lower().endswith('.tar.gz'):
-                ext = '.tar.gz'
-            else:
-                ext = os.path.splitext(filename)[1].lower()
+            ext = os.path.splitext(filename)[1].lower()
             files_scanned += 1
 
             finding = None
@@ -393,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.10.0"
+CODELENS_VERSION = "5.9.1"
 
 
 # ─── Generated File Detection ───────────────────────────────

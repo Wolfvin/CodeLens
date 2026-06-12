@@ -5,6 +5,7 @@ using tree-sitter for accurate AST-based extraction.
 """
 
 import os
+import re
 from typing import Dict, List, Any, Optional
 from utils import DEFAULT_IGNORE_DIRS, logger, safe_read_file
 
@@ -284,7 +285,6 @@ def _outline_python(content: str, detail: str) -> Dict:
 
 def _outline_html(content: str, detail: str) -> Dict:
     """Outline for HTML files."""
-    import re
     outline = {"ids": [], "classes": [], "scripts": [], "links": []}
 
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -310,7 +310,6 @@ def _outline_html(content: str, detail: str) -> Dict:
 
 def _outline_css(content: str, detail: str) -> Dict:
     """Outline for CSS/SCSS/Less files."""
-    import re
     outline = {"selectors": [], "variables": [], "mixins": [], "keyframes": []}
 
     # Remove comments
@@ -346,7 +345,6 @@ def _outline_css(content: str, detail: str) -> Dict:
 
 def _outline_vue(content: str, detail: str) -> Dict:
     """Outline for Vue SFC files."""
-    import re
     outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     # Split sections
@@ -378,7 +376,6 @@ def _outline_vue(content: str, detail: str) -> Dict:
 
 def _outline_svelte(content: str, detail: str) -> Dict:
     """Outline for Svelte component files."""
-    import re
     outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
@@ -411,7 +408,6 @@ def _outline_svelte(content: str, detail: str) -> Dict:
 
 def _outline_go(content: str, detail: str) -> Dict:
     """Outline for Go source files."""
-    import re
     outline = {
         "functions": [],
         "classes": [],
@@ -519,7 +515,6 @@ def _outline_go(content: str, detail: str) -> Dict:
 
 def _outline_generic(content: str, detail: str) -> Dict:
     """Generic outline for unsupported file types."""
-    import re
     outline = {"functions": [], "variables": []}
     # Basic function-like pattern detection
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -533,7 +528,6 @@ def _outline_generic(content: str, detail: str) -> Dict:
 
 def _extract_js_outline(parser, tree, source, outline, detail):
     """Extract JS outline using tree-sitter AST."""
-    import re
 
     def visitor(node, src, depth):
         nt = node.type
@@ -733,7 +727,6 @@ def _extract_python_outline(parser, tree, source, outline, detail):
 
 def _extract_js_outline_regex(content, outline, detail):
     """Regex-based JS outline fallback."""
-    import re
     content_clean = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
     content_clean = re.sub(r'(?<!:)//.*$', '', content_clean, flags=re.MULTILINE)
 
@@ -771,7 +764,6 @@ def _extract_js_outline_regex(content, outline, detail):
 
 def _extract_ts_outline_regex(content, outline, detail):
     """Regex-based TypeScript outline fallback."""
-    import re
     _extract_js_outline_regex(content, outline, detail)
 
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -787,7 +779,6 @@ def _extract_ts_outline_regex(content, outline, detail):
 
 def _extract_tsx_outline_regex(content, outline, detail):
     """Regex-based TSX outline fallback."""
-    import re
     _extract_ts_outline_regex(content, outline, detail)
 
     # Component detection (PascalCase functions)
@@ -799,7 +790,6 @@ def _extract_tsx_outline_regex(content, outline, detail):
 
 def _extract_rust_outline_regex(content, outline, detail):
     """Regex-based Rust outline fallback."""
-    import re
 
     for line_num, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()
@@ -851,7 +841,6 @@ def _extract_rust_outline_regex(content, outline, detail):
 
 def _extract_python_outline_regex(content, outline, detail):
     """Regex-based Python outline fallback."""
-    import re
 
     for line_num, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()
