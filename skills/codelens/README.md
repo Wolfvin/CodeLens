@@ -1,4 +1,4 @@
-# CodeLens v6.3 — Live Codebase Reference Intelligence
+# CodeLens v7.0 — Live Codebase Reference Intelligence
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 

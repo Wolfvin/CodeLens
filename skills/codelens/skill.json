@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint) due to missing is_bundled_file. apimap_engine NoneType crash on path=None fixed. Tested on meilisearch/meilisearch (Rust search engine, 21 crates, 490K edges). v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes, false positive fixes, analyze/handbook timeout flags.",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "7.0.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v7.0: C/C++ no longer listed as unsupported (fallback parser works). CUDA (.cu/.cuh) file support. API-exported function declarations (GGML_API, LLAMA_API, etc.) now extracted from headers. Framework detection deprioritizes minor web UI in C/C++-dominant repos. Adaptive timeout budgets for large repos. Tested on ggerganov/llama.cpp (2966 files, C/C++/CUDA/Python AI inference engine).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",
@@ -170,4 +170,9 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection"  ]}
+    "timeout-protection",
+    "cuda",
+    "gpu-computing",
+    "ml-inference",
+    "c-cpp-headers",
+    "api-export-macros"  ]}

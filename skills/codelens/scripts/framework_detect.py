@@ -924,14 +924,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # 7. Detect unsupported languages (Java, Kotlin, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # Note: C/C++ were previously listed here but now have fallback parser support
+    # (fallback_c.py handles both C and C++ with regex extraction).
+    # They are no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
+        # kotlin: only mark as unsupported if NOT detected as parsed
+        # (fallback_kotlin.py exists, so only mark if parser clearly fails)
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
@@ -942,6 +943,60 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 7b. Detect C/C++ as primary language (with fallback parser support)
+    # C/C++ have fallback parsers (fallback_c.py) but are not tree-sitter supported.
+    # We detect them for project identity but do NOT add to unsupported_langs
+    # since the parsers produce meaningful results.
+    c_cpp_source_count = 0
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            if f.endswith(('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx', '.cu', '.cuh')):
+                c_cpp_source_count += 1
+    detected["has_cpp"] = c_cpp_source_count > 0
+    detected["c_cpp_file_count"] = c_cpp_source_count
+
+    # 7c. Determine primary vs secondary language for framework prioritization
+    # If C/C++ files outnumber JS/TS files significantly, don't let minor
+    # web UI frameworks dominate the framework detection.
+    js_ts_source_count = 0
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            if f.endswith(('.js', '.ts', '.tsx', '.jsx', '.svelte', '.vue')):
+                js_ts_source_count += 1
+    detected["js_ts_file_count"] = js_ts_source_count
+
+    # If C/C++ is the primary language, de-prioritize web UI frameworks
+    if c_cpp_source_count > js_ts_source_count * 2 and c_cpp_source_count > 50:
+        # Remove web UI frameworks that are likely from minor UI components
+        # but keep cmake as it's the primary build system
+        _web_ui_frameworks = {'svelte', 'tailwind', 'react', 'vue', 'next.js',
+                               'nuxt', 'angular', 'sveltekit', 'remix', 'astro'}
+        detected["frameworks"] = [fw for fw in detected["frameworks"]
+                                  if fw not in _web_ui_frameworks]
+        # Re-add cmake if it was removed (it shouldn't be, but just in case)
+        cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+        if os.path.isfile(cmake_path) and 'cmake' not in detected["frameworks"]:
+            detected["frameworks"].insert(0, 'cmake')
+        # Reset web UI flags since they're not primary
+        if c_cpp_source_count > js_ts_source_count * 5:
+            detected["has_svelte"] = False
+            detected["has_tailwind"] = False
+            detected["has_vue"] = False
 
     return detected
 

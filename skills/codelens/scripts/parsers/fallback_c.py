@@ -2,10 +2,27 @@
 Fallback C/C++ Parser for CodeLens — regex-based extraction.
 Extracts functions, structs, classes, includes, macros, typedefs,
 and function call relationships for edge resolution.
+
+v7: Improved header file parsing — API-exported function declarations
+(e.g., GGML_API, LLAMA_API, __declspec(dllexport), __attribute__((visibility("default"))))
+are now properly extracted from .h/.hpp files.
 """
 
 import re
 from typing import Dict, List, Any
+
+
+# Common API export macros found in C/C++ libraries
+_API_EXPORT_MACROS = re.compile(
+    r'^(?:GGML_API|LLAMA_API|SDL_API|SDL_DECLSPEC|__declspec\s*\(\s*dllexport\s*\)|'
+    r'__attribute__\s*\(\s*\(\s*visibility\s*\(\s*"default"\s*\)\s*\)\s*\)|'
+    r'API_EXPORT|EXPORT|PLUGIN_EXPORT|EXTERN|CV_EXPORT|PUB_FUNC|'
+    r'V8_EXPORT|NODE_EXPORT|SCM_API|ZLIB_API|CURL_EXTERN|OPENSSL_EXPORT|'
+    r'FT_EXPORT|PNG_EXPORT|JPEG_EXPORT|WEBP_EXPORT|AV_EXPORT|'
+    r'SQLITE_API|SQLITE_EXTERN|LIB_EXPORT|SHARED_EXPORT|Q_CORE_EXPORT|Q_GUI_EXPORT|Q_WIDGETS_EXPORT|'
+    r'GLEWAPI|GLAPI|GLFWAPI|SDLAPI|VULKAN_API|VKAPI_ATTR|VKAPI_CALL|'
+    r'R_API|R_API_DECL|PYTHON_API|PyAPI_FUNC|PyAPI_DATA|PY_EXPORT)\s*'
+)
 
 
 def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
@@ -43,10 +60,59 @@ def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
     # Collect function definitions for call resolution
     fn_defs: Dict[str, str] = {}  # fn_name → node_id
 
-    # Functions
+    # ─── v7: API-exported function declarations in headers ────────────
+    # Many C/C++ libraries use export macros before function declarations:
+    #   GGML_API void ggml_init(...)
+    #   LLAMA_API struct llama_context * llama_init_from_file(...)
+    #   __declspec(dllexport) int foo(...)
+    # These are common in .h files and were previously missed.
+    _C_KEYWORDS_SET = frozenset({
+        'if', 'else', 'while', 'for', 'switch', 'case', 'return', 'break',
+        'continue', 'goto', 'do', 'sizeof', 'typeof', 'typedef', 'struct',
+        'enum', 'class', 'union', 'namespace', 'void', 'int', 'char', 'float',
+        'double', 'long', 'short', 'unsigned', 'signed', 'const', 'static',
+        'extern', 'inline', 'virtual', 'operator',
+    })
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
         if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('#'):
+            continue
+
+        # Check for API export macro prefix
+        api_match = _API_EXPORT_MACROS.match(stripped)
+        if api_match:
+            # Remove the API macro prefix and parse the remaining declaration
+            remaining = stripped[api_match.end():].strip()
+            # Simple approach: find the last identifier before '(' that ends with ';'
+            # Pattern: everything_before funcname(params);
+            # We look for: word( ... );
+            if '(' in remaining and remaining.rstrip().endswith(';'):
+                # Find the identifier immediately before the opening paren
+                paren_idx = remaining.index('(')
+                before_paren = remaining[:paren_idx].rstrip()
+                # The function name is the last word/token before '('
+                # Handle cases like: "struct llama_context * llama_init_from_file"
+                last_word_match = re.search(r'(\w+)\s*$', before_paren)
+                if last_word_match:
+                    fn_name = last_word_match.group(1)
+                    if fn_name not in _C_KEYWORDS_SET:
+                        node_id = f"{rel_path}:{i}:{fn_name}"
+                        # Only add if not already registered (avoid duplicates)
+                        existing_ids = {n["id"] for n in nodes}
+                        if node_id not in existing_ids:
+                            nodes.append({
+                                "id": node_id, "type": "function", "name": fn_name, "fn": fn_name,
+                                "file": rel_path, "line": i, "domain": "backend",
+                            })
+                            fn_defs[fn_name] = node_id
+
+    # ─── Regular function definitions ─────────────────────────────────
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('#'):
+            continue
+        # Skip lines that start with API export macros (already handled above)
+        if _API_EXPORT_MACROS.match(stripped):
             continue
         # Skip lines inside block comments
         m = re.search(r'(?:static\s+|inline\s+|extern\s+)*'

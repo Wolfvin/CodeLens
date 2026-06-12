@@ -934,7 +934,19 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "gdscript": "GDScript",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
+    # v7: Also note C/C++ fallback status if detected
+    has_cpp = fw.get("has_cpp", False)
+    if not unsupported and not has_cpp:
+        return None
+    note = ""
+    if unsupported:
+        note = f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
+    if has_cpp:
+        cpp_count = fw.get("c_cpp_file_count", 0)
+        if note:
+            note += " "
+        note += f"C/C++ files detected ({cpp_count} files) — parsed with regex-based fallback extractor. Provides function, struct, class, and call-edge extraction but may miss some patterns (e.g., template metaprogramming, complex macros)."
+    return note if note else None
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -1024,7 +1036,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["java"].append(file_path)
             elif ext == '.kt':
                 files["kotlin"].append(file_path)
-            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
+            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx', '.cu', '.cuh'):
+                # .cu/.cuh = CUDA source, treated as C/C++ for parsing
                 files["c_cpp"].append(file_path)
             elif ext == '.go':
                 files["go"].append(file_path)
