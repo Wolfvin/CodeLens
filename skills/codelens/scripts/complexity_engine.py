@@ -223,13 +223,33 @@ def compute_complexity(
     for f in function_results:
         by_level[f["complexity_level"]] += 1
 
-    # ─── Sort results if requested ────────────────────────
+    # ─── Sort results ──────────────────────────────────────
+    # v6.2: Default sort is by complexity level (untamable → very_complex →
+    # complex → moderate → simple), then by cyclomatic complexity (descending).
+    # This replaces the old file-order default so users see the most complex
+    # functions first in large repos.
+    COMPLEXITY_LEVEL_ORDER = {
+        "untamable": 0,
+        "very_complex": 1,
+        "complex": 2,
+        "moderate": 3,
+        "simple": 4,
+    }
     if sort_by == "complexity":
         function_results.sort(key=lambda x: (-x["cyclomatic"], -x["cognitive"]))
     elif sort_by == "cognitive":
         function_results.sort(key=lambda x: (-x["cognitive"], -x["cyclomatic"]))
     elif sort_by == "loc":
         function_results.sort(key=lambda x: -x["loc"])
+    else:
+        # v6.2: Default sort by complexity level, then cyclomatic descending
+        function_results.sort(
+            key=lambda x: (
+                COMPLEXITY_LEVEL_ORDER.get(x["complexity_level"], 5),
+                -x["cyclomatic"],
+                -x["cognitive"],
+            )
+        )
 
     # ─── Apply limit ─────────────────────────────────────
     displayed_functions = function_results[:limit] if limit else function_results

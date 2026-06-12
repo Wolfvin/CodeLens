@@ -130,6 +130,16 @@ def resolve_edges(
         # Try to resolve the target
         target_node = None
 
+        # 0. Skip std-lib / built-in methods — they are never project nodes
+        if to_fn in _STD_LIB_METHODS:
+            resolved_edge = {
+                "from": from_id,
+                "to_fn": to_fn,
+                "resolved": False
+            }
+            resolved_edges.append(resolved_edge)
+            continue
+
         # 1. Direct match: to_fn matches a function name
         if to_fn in fn_name_to_nodes:
             candidates = fn_name_to_nodes[to_fn]
@@ -368,6 +378,26 @@ _STD_LIB_METHODS = frozenset({
     'assign', 'freeze', 'keys', 'values', 'entries',
     'then', 'catch', 'finally', 'resolve', 'reject', 'all', 'race',
     'JSON', 'Math', 'Date', 'RegExp', 'Error', 'Promise',
+    # Map/Set methods
+    'add', 'delete', 'has', 'get', 'set', 'clear', 'forEach',
+    # Timer functions
+    'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
+    # child_process
+    'execSync', 'execFileSync', 'spawn', 'fork',
+    # DOM events
+    'addEventListener', 'removeEventListener', 'dispatchEvent',
+    # Promise methods
+    'allSettled', 'any',
+    # Array static
+    'isArray', 'from', 'of',
+    # Object static
+    'create', 'defineProperty', 'getOwnPropertyNames',
+    # Fetch API
+    'fetch', 'Request', 'Response', 'Headers',
+    # Module systems
+    'require', 'define',
+    # RxJS / observables
+    'pipe', 'subscribe', 'observe',
 })
 
 

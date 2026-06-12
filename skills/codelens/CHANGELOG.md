@@ -2,8 +2,35 @@
 
 All notable changes to CodeLens will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [5.10.0] — 2026-06-12
+
+### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)
+
+Real-world test on a massive TypeScript/Vue/Express monorepo (pnpm-workspace + Turborepo).
+This is the largest repo tested to date, exposing critical scalability and accuracy issues
+that were invisible on smaller projects.
+
+### Fixed
+
+- **Frontend registry CSS class name validation** (2,853 false positives removed, 7,792 → 4,687 classes): Vue `:class` binding expressions like `!!hint,`, `!!item.disabled`, `!==`, `!action.completed,` were stored as CSS class names. Added `_is_valid_css_class_name()` validation in `registry.py` that rejects names starting with `!`, containing operators (`()?.<>=+*/`), longer than 80 chars, or not matching `^[a-zA-Z_-][\w-]*$`.
+- **Framework detection for monorepo sub-directory packages**: `detect_frameworks()` only checked root `package.json`, missing React/Vue/Express in workspace packages. Now scans `apps/*/package.json`, `packages/*/package.json`, and `packages/@scope/name/package.json`. Correctly detects `has_vue: true`, `has_express: true` for n8n.
+- **Edge resolver built-in JS method filtering**: `resolve_edges()` created resolved edges to `add`, `then`, `setTimeout`, `race`, `clearTimeout`, `includes`, `indexOf`, `substring`, `trim`, `reject`, etc. — treating JS built-in methods as project-defined functions. Now checks `_STD_LIB_METHODS` before resolution (expanded from 80 to 110+ entries). Impact analysis no longer shows these as dependents.
+- **API map false positives** (2,922 → 0 test routes with `--production-only`): Added `--production-only` flag. Vue plugins (ChatPlugin, SentryPlugin, PiniaVuePlugin) no longer detected as Express middleware. Tauri detection now requires `src-tauri/Cargo.toml` (not just `invoke()` calls). Auth-protected routes now detected by middleware name patterns (`jwt`, `passport`, `authenticate`, `verifyToken`).
+- **Entrypoints garbage test names**: Test names like `:`, `,`, `=` from malformed `it()` parsing. Fixed with word boundary regex and punctuation-only name filtering.
+- **Dead code numeric literal false positives**: Numeric literals like `300_000` and `10000` detected as "unused variables". Added `^\d[\d_]*$` pattern check to skip numeric literals.
+- **Debug leak config file false positives**: `testEnvironment: 'node'` and `testRegex` in `jest.config.js` flagged as "mock data". Config files (`*.config.js/ts`, `jest.config.*`, `vite.config.*`, etc.) now get severity downgraded to "info" with note "in config file — not production code".
+- **Complexity output not sorted by complexity**: Functions listed in file order. Now sorted by complexity level (untamable → very_complex → complex → moderate → simple), then cyclomatic descending.
+- **`analyze` command timeout on large repos**: No `--max-files` or per-engine timeout. Added `--max-files` argument (default 5000) and per-engine 30s timeout using `signal.SIGALRM`. Timed-out engines report gracefully instead of blocking.
+
+### Added
+
+- **`api-map --production-only` flag**: Filter out test routes for a clearer picture of production endpoints.
+- **`has_express` field** in framework detection output.
+- **Auth detection** in API map: middleware names containing auth patterns are flagged.
+- **Config file awareness** in debug-leak engine: config files get `severity: "info"` and `should_remove: false`.
 
 ## [5.9.2] — 2026-06-12
 

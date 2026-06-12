@@ -39,6 +39,20 @@ TEST_FILE_PATTERNS = {
     "test_", "spec_", "_test.py", "_test.rs",
 }
 
+# v6.2: Config file patterns — findings in these files are downgraded to "info"
+# severity and should_remove is set to False. Config files like jest.config.js
+# contain test-related patterns (testEnvironment, testRegex, etc.) that are
+# perfectly legitimate in their context.
+CONFIG_FILE_PATTERNS = {
+    ".config.js", ".config.ts", ".config.mjs", ".config.cjs",
+    "jest.config.", "vite.config.", "webpack.config.",
+    "tsconfig.", ".eslintrc.", "babel.config.",
+    "rollup.config.", "karma.conf.", "protractor.conf.",
+    "nyc.config.", ".babelrc", ".prettierrc",
+    "postcss.config.", "tailwind.config.", "next.config.",
+    "nuxt.config.", "vue.config.",
+}
+
 # Performance limits for large codebases
 MAX_FILES_PER_RUN = 5000  # v5.8: Increased from 3000 to handle large repos
 
@@ -263,39 +277,41 @@ def detect_debug_leaks(
 
             files_scanned += 1
             is_test_file = any(p in rel_path for p in TEST_FILE_PATTERNS)
+            # v6.2: Check if this is a config file
+            is_config_file = any(p in rel_path for p in CONFIG_FILE_PATTERNS)
             lines = content.split('\n')
 
             # ─── console_log ──────────────────────────────
             if "console_log" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
-                _detect_console_logs(lines, rel_path, is_test_file, leaks)
+                _detect_console_logs(lines, rel_path, is_test_file, is_config_file, leaks)
 
             # ─── print_statement ──────────────────────────
             if "print_statement" in categories:
-                _detect_print_statements(lines, rel_path, ext, is_test_file, leaks)
+                _detect_print_statements(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── debugger ─────────────────────────────────
             if "debugger" in categories:
-                _detect_debugger_statements(lines, rel_path, ext, is_test_file, leaks)
+                _detect_debugger_statements(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── todo_fixme ───────────────────────────────
             if "todo_fixme" in categories:
-                _detect_todo_fixme(lines, rel_path, is_test_file, leaks)
+                _detect_todo_fixme(lines, rel_path, is_test_file, is_config_file, leaks)
 
             # ─── commented_code ───────────────────────────
             if "commented_code" in categories:
-                _detect_commented_code(lines, rel_path, ext, is_test_file, leaks)
+                _detect_commented_code(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── test_skip ────────────────────────────────
             if "test_skip" in categories:
-                _detect_test_skips(lines, rel_path, ext, is_test_file, leaks)
+                _detect_test_skips(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── mock_data ────────────────────────────────
             if "mock_data" in categories:
-                _detect_mock_data(lines, rel_path, ext, is_test_file, leaks)
+                _detect_mock_data(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── dev_only ─────────────────────────────────
             if "dev_only" in categories:
-                _detect_dev_only(lines, rel_path, ext, is_test_file, leaks)
+                _detect_dev_only(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
         if truncated:
             break
@@ -336,7 +352,7 @@ def detect_debug_leaks(
 # ─── Category Detectors ────────────────────────────────────────
 
 def _detect_console_logs(
-    lines: List[str], rel_path: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect console.log/warn/error/debug/info statements."""
     for i, line in enumerate(lines):
@@ -407,12 +423,21 @@ def _detect_console_logs(
                 severity = "low"
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Debug console statement: {label}()"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "console_log",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Debug console statement: {label}()",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -422,7 +447,7 @@ def _detect_console_logs(
 
 
 def _detect_print_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect print(), pprint(), echo, fmt.Println, println! statements."""
     for i, line in enumerate(lines):
@@ -486,12 +511,21 @@ def _detect_print_statements(
                 severity = "low"
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Debug print statement: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "print_statement",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Debug print statement: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -501,7 +535,7 @@ def _detect_print_statements(
 
 
 def _detect_debugger_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect debugger; breakpoint(); pdb.set_trace(); dbg! macro.
 
@@ -532,12 +566,21 @@ def _detect_debugger_statements(
             severity = "high"
             should_remove = True
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Debugger/breakpoint statement: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "debugger",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Debugger/breakpoint statement: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -579,7 +622,7 @@ def _detect_debugger_statements(
 
 
 def _detect_todo_fixme(
-    lines: List[str], rel_path: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect TODO, FIXME, HACK, XXX, TEMP, BODGE comments."""
     for i, line in enumerate(lines):
@@ -635,12 +678,21 @@ def _detect_todo_fixme(
             if is_test_file:
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Code marker: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "todo_fixme",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Code marker: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -650,7 +702,7 @@ def _detect_todo_fixme(
 
 
 def _detect_commented_code(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect 3+ consecutive commented lines that look like code."""
     comment_prefix = _get_comment_prefix(ext)
@@ -696,12 +748,21 @@ def _detect_commented_code(
             if is_test_file:
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"{block_end - block_start} commented lines (code score: {code_score})"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "commented_code",
                 "file": rel_path,
                 "line": block_start + 1,
                 "pattern": "commented_block",
-                "message": f"{block_end - block_start} commented lines (code score: {code_score})",
+                "message": message,
                 "content": f"Block of {block_end - block_start} commented lines",
                 "match": f"{block_end - block_start} commented lines (code score: {code_score})",
                 "severity": severity,
@@ -710,7 +771,7 @@ def _detect_commented_code(
 
 
 def _detect_test_skips(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect test skip markers (.skip, xit, @pytest.mark.skip, #[ignore])."""
     for i, line in enumerate(lines):
@@ -738,12 +799,21 @@ def _detect_test_skips(
             severity = "high" if not is_test_file else "medium"
             should_remove = not is_test_file
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Skipped test marker: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "test_skip",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Skipped test marker: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -753,7 +823,7 @@ def _detect_test_skips(
 
 
 def _detect_mock_data(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect hardcoded test data in non-test files."""
     if is_test_file:
@@ -790,12 +860,21 @@ def _detect_mock_data(
             severity = "medium" if is_assignment else "low"
             should_remove = is_assignment
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Mock/test data in production code: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "mock_data",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Mock/test data in production code: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -805,7 +884,7 @@ def _detect_mock_data(
 
 
 def _detect_dev_only(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect dev-only guards and debug conditionals."""
     for i, line in enumerate(lines):
@@ -829,12 +908,21 @@ def _detect_dev_only(
                 should_remove = True
                 severity = "medium"
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Dev-only guard: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "dev_only",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Dev-only guard: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,

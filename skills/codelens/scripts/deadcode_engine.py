@@ -382,6 +382,11 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
         for var_name, start_pos in declared_vars:
             line_num = clean_content[:start_pos].count('\n') + 1
 
+            # Skip numeric literals that regex falsely captured as variable names
+            # (e.g., 300_000, 10000 from patterns like const 300_000 = ...)
+            if re.match(r'^\d[\d_]*$', var_name):
+                continue
+
             # Skip common patterns that are used indirectly
             skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module',
                           'result', 'data', 'value', 'options', 'args', 'params', 'callback', 'next', 'dispatch', 'action', 'payload'}

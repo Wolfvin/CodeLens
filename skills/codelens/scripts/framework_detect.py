@@ -202,6 +202,27 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    # Node.js server frameworks
+    "express": {
+        "packages": ["express"],
+        "config_files": [],
+        "indicators": []
+    },
+    "koa": {
+        "packages": ["koa"],
+        "config_files": [],
+        "indicators": []
+    },
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
+        "indicators": []
+    },
+    "nest": {
+        "packages": ["@nestjs/core"],
+        "config_files": ["nest-cli.json"],
+        "indicators": []
+    },
     # Build tools
     "vite": {
         "packages": ["vite"],
@@ -334,6 +355,7 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
     """
     Find all package.json files in the workspace, including monorepo sub-packages.
     Limits depth to avoid scanning deeply nested node_modules.
+    Also handles scoped packages like packages/@scope/name/package.json.
     """
     pkg_files = []
     root_pkg = os.path.join(workspace, "package.json")
@@ -349,9 +371,22 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
         try:
             for entry in os.listdir(subdir_path):
                 entry_path = os.path.join(subdir_path, entry)
+                if not os.path.isdir(entry_path):
+                    continue
                 pkg_path = os.path.join(entry_path, "package.json")
                 if os.path.isfile(pkg_path):
                     pkg_files.append(pkg_path)
+                # Also check one level deeper for scoped packages
+                # (e.g., packages/@n8n/editor-ui/package.json)
+                if entry.startswith('@') and os.path.isdir(entry_path):
+                    try:
+                        for sub_entry in os.listdir(entry_path):
+                            sub_entry_path = os.path.join(entry_path, sub_entry)
+                            sub_pkg_path = os.path.join(sub_entry_path, "package.json")
+                            if os.path.isfile(sub_pkg_path):
+                                pkg_files.append(sub_pkg_path)
+                    except OSError:
+                        pass
         except OSError:
             pass
 
@@ -383,6 +418,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_express": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -485,6 +521,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tauri"] = True
                     elif fw_name == "electron":
                         detected["has_electron"] = True
+                    elif fw_name == "express":
+                        detected["has_express"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
                     break

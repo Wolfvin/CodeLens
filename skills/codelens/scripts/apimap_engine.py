@@ -81,7 +81,8 @@ def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -92,6 +93,7 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
+        production_only: If True, filter out routes from test files
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -108,6 +110,9 @@ def map_api_routes(
     # Global middleware collectors
     global_middleware: List[Dict] = []
     auth_protected_routes: Set[str] = set()
+
+    # v6.2: Pre-check whether this is a Tauri project (requires src-tauri/Cargo.toml)
+    is_tauri_project = os.path.isfile(os.path.join(workspace, "src-tauri", "Cargo.toml"))
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -129,6 +134,10 @@ def map_api_routes(
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
             ])
+
+            # v6.2: Skip test files entirely when production_only is set
+            if production_only and is_test_file:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -220,14 +229,16 @@ def map_api_routes(
                     routes.extend(orpc_routes)
 
             # ─── Tauri IPC (frontend invoke calls) ────────────
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
+            # v6.2: Only detect Tauri if workspace has src-tauri/Cargo.toml
+            if is_tauri_project and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
                 tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
                 if tauri_routes:
                     frameworks_detected.add("tauri")
                     routes.extend(tauri_routes)
 
             # ─── Tauri IPC (backend Rust commands) ────────────
-            if ext == ".rs":
+            # v6.2: Only detect Tauri if workspace has src-tauri/Cargo.toml
+            if is_tauri_project and ext == ".rs":
                 tauri_cmd_routes = _extract_tauri_rust_commands(content, rel_path)
                 if tauri_cmd_routes:
                     frameworks_detected.add("tauri")
@@ -267,6 +278,9 @@ def map_api_routes(
                 '/examples/', '/example/',
             ]) else "production"
 
+    # v6.2: Sort production routes first in the default output
+    routes.sort(key=lambda r: (0 if r.get("source") == "production" else 1, r.get("file", ""), r.get("line", 0)))
+
     # Attach middleware to routes
     for mw in global_middleware:
         scope = mw.get("scope", "global")
@@ -288,11 +302,25 @@ def map_api_routes(
             })
 
     # Detect auth-protected vs public
+    # v6.2: Enhanced auth detection — check middleware names for auth/jwt/passport
+    # patterns, not just the classified type.
+    AUTH_NAME_INDICATORS = {"auth", "jwt", "passport", "authenticate", "verifytoken",
+                            "checkauth", "ensureauth", "requireauth", "login_required",
+                            "auth_required", "permission_required", "isauthenticated"}
     for route in routes:
         has_auth = any(
             mw.get("type") == "auth"
             for mw in route.get("middleware_chain", [])
         )
+        # v6.2: Also check middleware names for auth-like patterns
+        if not has_auth:
+            for mw in route.get("middleware_chain", []):
+                mw_name_lower = mw.get("name", "").lower()
+                if any(indicator in mw_name_lower for indicator in AUTH_NAME_INDICATORS):
+                    has_auth = True
+                    # Fix the type classification retroactively
+                    mw["type"] = "auth"
+                    break
         route["auth_protected"] = has_auth
         if has_auth:
             auth_protected_routes.add(f"{route['method']} {route['path']}")
@@ -328,6 +356,11 @@ def map_api_routes(
         routes, frameworks_detected, auth_protected_routes
     )
 
+    # v6.2: Add note about test routes being excluded from main listing
+    test_route_note = None
+    if test_count > 0 and not production_only:
+        test_route_note = f"{test_count} test routes detected — use --production-only to exclude them from the listing"
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -341,6 +374,7 @@ def map_api_routes(
             "public": public_count,
             "files_scanned": files_scanned,
         },
+        "test_route_note": test_route_note,
         "routes": routes,
         "route_groups": route_groups,
         "middleware_map": dict(middleware_map),
@@ -632,8 +666,67 @@ def _detect_request_response_types(
 
 # ─── JS Middleware Extraction ──────────────────────────────────
 
+# v6.2: Frontend entry-point filenames that indicate Vue/React app setup, NOT Express
+_FRONTEND_ENTRY_FILENAMES = {
+    "main.ts", "main.js", "main.tsx", "main.jsx",
+    "app.ts", "app.js", "app.tsx", "app.jsx",
+    "index.ts", "index.js", "index.tsx", "index.jsx",
+}
+
+
+def _is_frontend_plugin_file(content: str, rel_path: str) -> bool:
+    """v6.2: Check if this file is a Vue/React frontend file where app.use()
+    registers frontend plugins, NOT Express middleware.
+
+    Detects:
+    - File path is src/main.ts, src/main.js, src/app.ts, src/app.js, etc.
+    - File imports from 'vue', '@vue/*', or 'react'
+    """
+    # Check if the file is in a frontend entry-point location
+    normalized = rel_path.replace('\\', '/')
+    basename = os.path.basename(normalized)
+    is_entry_file = basename in _FRONTEND_ENTRY_FILENAMES and (
+        '/src/' in normalized or normalized.startswith('src/')
+    )
+
+    # Check for Vue/React imports in the file content
+    has_vue_import = bool(re.search(
+        r"(?:from\s+['\"]vue['\"]|import\s+.*['\"]vue['\"]|from\s+['\"]@vue/|import\s+.*['\"]@vue/)",
+        content
+    ))
+    has_react_import = bool(re.search(
+        r"(?:from\s+['\"]react['\"]|import\s+.*['\"]react['\"]|from\s+['\"]react-dom|import\s+.*['\"]react-dom)",
+        content
+    ))
+    has_create_app = bool(re.search(
+        r'createApp\s*\(', content
+    ))
+
+    # If it's a frontend entry file AND has Vue/React imports, it's a frontend plugin file
+    if is_entry_file and (has_vue_import or has_react_import or has_create_app):
+        return True
+
+    # If the file has Vue createApp imports but NOT express imports, it's frontend
+    if (has_create_app or has_vue_import) and not re.search(
+        r"(?:from\s+['\"]express['\"]|import\s+.*['\"]express['\"]|require\s*\(\s*['\"]express['\"]\s*\))",
+        content
+    ):
+        return True
+
+    return False
+
+
 def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
-    """Extract global/app-level middleware from JS files."""
+    """Extract global/app-level middleware from JS files.
+
+    v6.2: Skips Vue/React frontend plugin registrations (app.use in
+    createApp / Vue / React context is NOT Express middleware).
+    """
+    # v6.2: Check if this is a Vue/React frontend file — skip middleware detection
+    is_frontend_file = _is_frontend_plugin_file(content, rel_path)
+    if is_frontend_file:
+        return []
+
     middleware = []
     lines = content.split('\n')
 
@@ -2213,12 +2306,17 @@ def _extract_tauri_ipc_routes(content: str, rel_path: str) -> List[Dict]:
 
     Pattern: invoke('command_name', { args }) or invoke("command_name")
     These map to Rust backend handlers decorated with #[tauri::command].
+
+    v6.2: Requires @tauri-apps/api import — bare invoke() is too common
+    a function name to match reliably. Also requires src-tauri/ directory
+    to confirm this is actually a Tauri project.
     """
     routes = []
 
-    # Check if this file imports from @tauri-apps/api
+    # v6.2: Require @tauri-apps/api import — bare invoke() is too common
+    # a function name to match reliably. Just having invoke() calls is not enough.
     has_tauri_import = bool(re.search(
-        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api|invoke\s*\()',
+        r'(?:from\s+[\'"]@tauri-apps/api[\'"]|import\s+.*@tauri-apps/api)',
         content
     ))
     if not has_tauri_import:
