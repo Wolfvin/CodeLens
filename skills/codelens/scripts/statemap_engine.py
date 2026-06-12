@@ -701,6 +701,14 @@ def map_state(
         if s.get("type") != "module_constant" or s.get("consumers")
     ]
 
+    # v6.5: Filter out Stencil wrapper components (Ion-prefixed React wrappers)
+    # These are React components that wrap Stencil web components, not state stores
+    stencil_wrapper_pattern = re.compile(r'^Ion[A-Z]')
+    stores = [
+        s for s in stores
+        if not (s.get("type") == "module_constant" and stencil_wrapper_pattern.match(s.get("name", "")))
+    ]
+
     # ─── Post-processing: Validate file paths ────────────────────
     # Ensure all store entries have proper defined_in paths (not empty, ?, or malformed)
     stores = [

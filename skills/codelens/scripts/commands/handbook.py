@@ -382,6 +382,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 js_type = "frontend-library"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
                 js_type = "frontend-app"
+            elif "@stencil/core" in deps:
+                js_type = "frontend-library"
             else:
                 js_type = "node-project"
         except Exception:
@@ -427,12 +429,40 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                         subdir_fws.append("express")
                         if js_type is None:
                             js_type = "backend-api"
+                    if "@stencil/core" in sub_deps:
+                        subdir_fws.append("stencil")
+                        if js_type is None:
+                            js_type = "frontend-library"
                     if subdir_fws:
                         identity["subdir_frameworks"][rel_subdir] = subdir_fws
                 except Exception:
                     pass
         except OSError:
             pass
+
+    # v6.5: For monorepos where root package.json has no meaningful name/version,
+    # try to find a "core" or main sub-package with a real name
+    if identity["is_monorepo"] and identity["name"] == os.path.basename(workspace):
+        for core_dir in ["core", "packages/core", "lib", "src"]:
+            core_pkg = os.path.join(workspace, core_dir, "package.json")
+            if os.path.isfile(core_pkg):
+                try:
+                    with open(core_pkg, 'r', encoding='utf-8') as f:
+                        core_data = json.load(f)
+                    core_name = core_data.get("name", "")
+                    core_version = core_data.get("version", "")
+                    if core_name and not core_name.startswith("@"):
+                        identity["name"] = core_name
+                    elif core_name:
+                        # Scoped package — use the scope name (e.g., @ionic/core → ionic)
+                        # This gives better identity than just "core"
+                        scope = core_name.split("/")[0].lstrip("@")
+                        identity["name"] = scope
+                    if core_version and identity["version"] == "0.0.0":
+                        identity["version"] = core_version
+                    break
+                except Exception:
+                    pass
 
     # v6.3: If we found 2+ sub-packages in apps/packages/services, mark as monorepo
     if _monorepo_subdir_count >= 2 and not identity["is_monorepo"]:

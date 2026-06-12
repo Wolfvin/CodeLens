@@ -539,6 +539,14 @@ def _detect_specificity_wars(content: str, rel_path: str) -> List[Dict[str, Any]
                 if not selector_part:
                     continue
 
+                # v6.5: Skip SCSS/Sass control flow directives that look like selectors
+                # @if, @else, @else if, @each, @for, @while, @mixin, @include, @function
+                # Also handle: "} } @else if ..." (closing braces before directive on same line)
+                _scss_directive_re = r'(?:^|[}\s])@(if|else|each|for|while|mixin|include|function|at-root)\b'
+                if re.search(_scss_directive_re, selector_part):
+                    # Still track braces for depth, but don't treat as a selector
+                    continue
+
                 # v6: Validate that this is actually a selector, not a property value.
                 # Real CSS selectors should:
                 # 1. Not start with a digit (property values often start with 0, 1px, etc.)

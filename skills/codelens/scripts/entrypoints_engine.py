@@ -1059,6 +1059,10 @@ def map_entrypoints(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # v6.5: Skip .d.ts files — they're TypeScript declarations, not real entry points
+            if file_path.endswith('.d.ts'):
+                continue
+
             # v6: Skip config/build files that are NOT real entry points.
             # Files like playwright.config.ts, vitest.config.ts, turbo.json,
             # etc. contain "export default" but are not app entry points.

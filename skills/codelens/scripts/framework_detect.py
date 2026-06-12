@@ -72,6 +72,11 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["angular.json"],
         "indicators": [".component.ts"]
     },
+    "stencil": {
+        "packages": ["@stencil/core"],
+        "config_files": ["stencil.config.ts", "stencil.config.js"],
+        "indicators": ["@Component", "@Prop", "@State", "@Method", "@Listen", "@Element", "@Watch", "h('", "Host("]
+    },
     "sveltekit": {
         "packages": ["@sveltejs/kit"],
         "config_files": ["svelte.config.js"],
@@ -383,6 +388,14 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
     if os.path.exists(root_pkg):
         pkg_files.append(root_pkg)
 
+    # v6.5: Also check top-level directories that ARE packages (core/, lib/, src/)
+    # Some monorepos like Ionic put the main package in core/ not packages/
+    top_level_pkg_dirs = ('core', 'lib', 'src')
+    for tld in top_level_pkg_dirs:
+        tld_pkg = os.path.join(workspace, tld, "package.json")
+        if os.path.isfile(tld_pkg) and tld_pkg not in pkg_files:
+            pkg_files.append(tld_pkg)
+
     # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
     monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
     for subdir in monorepo_dirs:
@@ -428,6 +441,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tailwind": False,
         "has_nextjs": False,
         "has_angular": False,
+        "has_stencil": False,
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
@@ -540,6 +554,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
+                    elif fw_name == "stencil":
+                        detected["has_stencil"] = True
                     elif fw_name == "tauri":
                         detected["has_tauri"] = True
                     elif fw_name == "electron":
