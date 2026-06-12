@@ -5,6 +5,32 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [7.0.0] — 2026-06-12
+
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
+
+Real-world test on a pure Python exercise platform with no web frameworks, no pyproject.toml,
+and no package.json — exposed identity detection gaps, framework detection blind spots,
+and multiple false positive patterns in smell/dead-code/debug-leak engines.
+
+### Added
+
+- **Identity detection for Python projects without pyproject.toml**: Projects with only `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now correctly identify as `python-project` instead of `unknown`. Requires at least 1 Python project file + 5 `.py` files.
+- **Exercism-style project detection**: Projects with `config.json` containing `exercises` + `language` fields detected as `exercise-platform` type.
+- **README.md description extraction**: `_extract_readme_description()` function extracts the first paragraph from `README.md`, `README.rst`, or `README.txt`. Cleans markdown links, bold, and italic formatting. Falls back to `config.json` `blurb` field for exercism tracks.
+- **config.json identity extraction**: Exercism-style projects using `config.json` with `slug`, `language`, `version`, and `blurb` fields now correctly populate project identity.
+- **setup.py name/version extraction**: Python projects using `setup.py` instead of `pyproject.toml` now have their name and version correctly detected.
+- **pytest framework detection from config files**: `pytest.ini` and `conftest.py` at workspace root now trigger `pytest` framework detection (added to `FRAMEWORK_SIGNATURES`).
+- **Directory map hints for exercise platforms**: Added descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, and `bin/`.
+
+### Fixed
+
+- **cron_job entrypoint false positive**: Tightened `cron_literal` regex from matching any 5 space-separated fields to requiring fields starting with `*` and at least 5 space-separated tokens. Prevents false positives like matching test assertion strings that happen to contain space-separated words.
+- **Deep nesting false positive for Python subTest**: Files using `with self.subTest()` patterns (2+ occurrences) are now skipped for deep nesting detection, as the context manager nesting is expected test structure, not a code smell.
+- **Dead code false positive for exercise stubs**: Files in `/.meta/`, `/stubs/` directories excluded from dead code detection. Exercise implementation files that are >50% `pass`/`...`/`NotImplementedError` are also excluded.
+- **Debug leak false positive for exercise stubs**: Exercise stub directories (`/.meta/`, `/stubs/`) and test data files (`_test_data.py`, `/fixtures/`) excluded from debug leak detection. Commented code in exercise test files downgraded to `info` severity.
+- **README description extraction returns HTML tags**: Added check to skip descriptions that are just HTML tags (e.g., `<br>`) with length < 20 characters.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

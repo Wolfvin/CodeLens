@@ -36,9 +36,23 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v7
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v7.0 — Tested on exercism/python (516 Python files, exercise platform)
+
+- **Identity detection for Python projects without pyproject.toml**: Projects with only `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now correctly identify as `python-project` instead of `unknown`. Exercism-style projects with `config.json` + `exercises/` directory detected as `exercise-platform`.
+- **README.md description extraction**: Project description is now automatically extracted from the first paragraph of `README.md`, `README.rst`, or `README.txt`. Markdown formatting (links, bold, italic) is cleaned for plain-text output.
+- **config.json identity extraction**: Exercism-style projects that use `config.json` with `slug`/`language`/`version` fields now correctly populate project identity.
+- **setup.py name/version extraction**: Python projects using `setup.py` instead of `pyproject.toml` now have their name and version correctly detected.
+- **pytest framework detection from config files**: `pytest.ini` and `conftest.py` at workspace root now trigger `pytest` framework detection (not just `pip_packages`).
+- **cron_job entrypoint false positive fix**: Tightened the `cron_literal` regex to require at least 5 space-separated fields starting with `*`. Prevents false positives like matching test assertion strings that happen to contain space-separated words.
+- **Deep nesting false positive fix for Python subTest**: Files using `with self.subTest()` patterns (common in Python test suites) are now skipped for deep nesting detection, as the context manager nesting is expected test structure.
+- **Dead code false positive fix for exercise stubs**: Files in `/.meta/`, `/stubs/` directories, and Python exercise files that are >50% `pass`/`...`/`NotImplementedError` are now excluded from dead code detection.
+- **Debug leak false positive fix for exercise stubs**: Exercise stub and `.meta` directories are now excluded from debug leak detection, as their incomplete code is intentional.
+- **Directory map hints for exercise platforms**: Added directory descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, and `bin/`.
+- **Version**: 6.3.1 → 7.0.0.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 

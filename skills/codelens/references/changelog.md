@@ -1,5 +1,26 @@
 # CodeLens Changelog
 
+## v7.0.0 — 2026-06-12
+
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
+
+### Added (7)
+
+- **Identity detection for Python projects without pyproject.toml** — Projects with `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now identified as `python-project`. Exercism-style projects with `config.json` + `exercises/` detected as `exercise-platform`.
+- **README.md description extraction** — `_extract_readme_description()` extracts first paragraph from README files, cleans markdown formatting.
+- **config.json identity extraction** — Exercism-style projects with `slug`, `language`, `version`, `blurb` fields populate identity.
+- **setup.py name/version extraction** — Python projects using `setup.py` detected.
+- **pytest framework detection from config files** — `pytest.ini` and `conftest.py` trigger `pytest` framework detection.
+- **Directory map hints for exercise platforms** — Added descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, `bin/`.
+
+### Fixed (5)
+
+- **cron_job entrypoint false positive** — Tightened `cron_literal` regex to require `*`-prefixed fields.
+- **Deep nesting false positive for Python subTest** — Files with `with self.subTest()` (2+) skipped for nesting detection.
+- **Dead code false positive for exercise stubs** — `/.meta/`, `/stubs/` and stub files (>50% `pass`) excluded.
+- **Debug leak false positive for exercise stubs** — Exercise stub dirs and test data files excluded.
+- **README description extraction returns HTML tags** — Skip `<br>` and other short HTML-only strings.
+
 ## v6.4.0 — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

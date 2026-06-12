@@ -284,7 +284,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     """
     identity = {
         "name": os.path.basename(workspace),
-        "description": "",
+        "description": _extract_readme_description(workspace),
         "version": "0.0.0",
         "type": "unknown",
         # v6: monorepo & sub-dir info
@@ -474,6 +474,54 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 python_type = "python-project"
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
+
+    # v7: Also try config.json for exercism-style projects and other JSON configs
+    if not has_pyproject and not has_package_json:
+        config_json_path = os.path.join(workspace, 'config.json')
+        if os.path.isfile(config_json_path):
+            try:
+                with open(config_json_path, 'r', encoding='utf-8') as f:
+                    config_json = json.load(f)
+                # Exercism track config has 'language' and 'slug' fields
+                slug = config_json.get('slug', '')
+                language = config_json.get('language', '')
+                version = config_json.get('version', '')
+                blurb = config_json.get('blurb', '')
+                if slug:
+                    identity["name"] = slug
+                elif language:
+                    identity["name"] = language
+                if version:
+                    identity["version"] = str(version)
+                # Set description from blurb if available and README didn't provide one
+                if blurb and (not identity["description"] or identity["description"] == "<br>"):
+                    identity["description"] = blurb
+                # If this looks like an exercism track, set description and type
+                if not identity["description"] and language:
+                    identity["description"] = f"{language} programming exercises"
+                # Detect exercism-style exercise platform
+                if 'exercises' in config_json and language:
+                    python_type = "exercise-platform"
+                elif language and language.lower() in ('python',):
+                    python_type = "python-project"
+            except Exception:
+                pass
+
+    # v7: Also try setup.py for name and version
+    if identity["version"] == "0.0.0" and identity["name"] == os.path.basename(workspace):
+        setup_py_path = os.path.join(workspace, 'setup.py')
+        if os.path.isfile(setup_py_path):
+            try:
+                with open(setup_py_path, 'r', encoding='utf-8') as f:
+                    setup_content = f.read()
+                name_match = re.search(r"name\s*=\s*['\"]([^'\"]+)['\"]", setup_content)
+                ver_match = re.search(r"version\s*=\s*['\"]([^'\"]+)['\"]", setup_content)
+                if name_match:
+                    identity["name"] = name_match.group(1)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+            except Exception:
+                pass
 
     # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')
@@ -667,6 +715,45 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         # v6: If monorepo indicators found, append -monorepo suffix
         if identity["is_monorepo"]:
             identity["type"] = active_types[0] + "-monorepo"
+    # v7: Detect Python projects without pyproject.toml
+    # A Python project may only have requirements.txt, pytest.ini, setup.py,
+    # or conftest.py — without pyproject.toml the type stays "unknown".
+    if identity["type"] == "unknown":
+        python_indicators = 0
+        _PYTHON_PROJECT_FILES = {
+            "requirements.txt", "setup.py", "setup.cfg", "pytest.ini",
+            "conftest.py", "tox.ini", "MANIFEST.in", "pylintrc",
+        }
+        for indicator in _PYTHON_PROJECT_FILES:
+            if os.path.isfile(os.path.join(workspace, indicator)):
+                python_indicators += 1
+        # Also check for .py files in the root or exercises/ directory
+        py_file_count = 0
+        for root_check, dirs_check, files_check in os.walk(workspace):
+            dirs_check[:] = [d for d in dirs_check if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root_check:
+                dirs_check.clear()
+                continue
+            for f in files_check:
+                if f.endswith('.py'):
+                    py_file_count += 1
+                    if py_file_count >= 5:
+                        break
+            if py_file_count >= 5:
+                break
+        if python_indicators >= 1 and py_file_count >= 5:
+            # Determine the specific Python project subtype
+            if os.path.isfile(os.path.join(workspace, 'config.json')) and os.path.isdir(os.path.join(workspace, 'exercises')):
+                python_type = "exercise-platform"
+            elif os.path.isfile(os.path.join(workspace, 'setup.py')) or os.path.isfile(os.path.join(workspace, 'setup.cfg')):
+                python_type = "python-library"
+            elif os.path.isfile(os.path.join(workspace, 'conftest.py')) or os.path.isfile(os.path.join(workspace, 'pytest.ini')):
+                python_type = "python-project"
+            elif python_indicators >= 2:
+                python_type = "python-project"
+            else:
+                python_type = "python-project"
+
     # If no type detected, remains "unknown"
 
     # v6: When frameworks are found in subdirectory package.json files,
@@ -683,6 +770,59 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["type"] += "-monorepo"
 
     return identity
+
+
+def _extract_readme_description(workspace: str) -> str:
+    """Extract a short description from README.md.
+
+    Looks for the first non-heading, non-empty paragraph after the title.
+    Returns at most 200 characters.
+    """
+    for readme_name in ('README.md', 'Readme.md', 'readme.md', 'README.rst', 'README.txt', 'README'):
+        readme_path = os.path.join(workspace, readme_name)
+        if not os.path.isfile(readme_path):
+            continue
+        try:
+            with open(readme_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(8192)  # Read first 8KB
+            lines = content.split('\n')
+            # Skip title line (first # heading) and find first non-empty, non-heading paragraph
+            past_title = False
+            desc_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    if desc_lines:
+                        break  # End of first paragraph
+                    continue
+                if stripped.startswith('#'):
+                    if past_title:
+                        break  # Next heading — stop
+                    past_title = True
+                    continue
+                if stripped.startswith('```') or stripped.startswith('.. '):
+                    if desc_lines:
+                        break
+                    continue
+                # This is a content line
+                # Clean markdown links: [text](url) → text
+                cleaned = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', stripped)
+                # Clean bold/italic: **text** → text, *text* → text
+                cleaned = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', cleaned)
+                desc_lines.append(cleaned)
+                if len(' '.join(desc_lines)) > 200:
+                    break
+            if desc_lines:
+                desc = ' '.join(desc_lines)
+                # Skip if description is just HTML tags or very short
+                if desc.startswith('<') and '>' in desc and len(desc) < 20:
+                    return ""
+                if len(desc) > 200:
+                    desc = desc[:197] + '...'
+                return desc
+        except Exception:
+            pass
+    return ""
 
 
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
@@ -721,6 +861,15 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
+        # v7: Exercise/learning platform directories
+        'exercises': 'Programming exercises',
+        'concepts': 'Learning concepts',
+        'reference': 'Reference implementations',
+        'practice': 'Practice exercises',
+        'solutions': 'Exercise solutions',
+        'stubs': 'Stub implementations',
+        '.meta': 'Exercise metadata',
+        'bin': 'Executable scripts',
     }
     dir_map = {}
     try:

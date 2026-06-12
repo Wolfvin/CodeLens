@@ -1,11 +1,11 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 Quick Reference — concise trigger map, core commands, and decision rules
+  CodeLens v7 Quick Reference — concise trigger map, core commands, and decision rules
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v6.4.0 — Quick Reference
+# CodeLens v7.0.0 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 

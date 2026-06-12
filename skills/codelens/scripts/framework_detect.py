@@ -108,6 +108,13 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    # v7: Python testing frameworks
+    "pytest": {
+        "packages": ["pytest"],
+        "pip_packages": ["pytest"],
+        "config_files": ["pytest.ini", "conftest.py"],
+        "indicators": []
+    },
     # Desktop app frameworks
     "tauri": {
         "packages": ["@tauri-apps/api", "@tauri-apps/cli"],

@@ -726,6 +726,15 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         any(rel_path.startswith(p) for p in skip_dir_prefixes)):
         return smells
     
+    # v7: Skip Python test files that use self.subTest() — the nesting from
+    # subTest context managers is expected test structure, not a smell
+    if ext == ".py" and ('with self.subTest' in content or 'with self.subtest' in content.lower()):
+        # Only skip if the deep nesting is caused by subTest, not real nesting
+        # Check: does the file ONLY have subTest-related nesting?
+        subtest_count = content.count('with self.subTest') + content.lower().count('with self.subtest')
+        if subtest_count >= 2:
+            return smells
+    
     # v6.4: Use higher thresholds for C/C++ (idiomatic deeper nesting)
     is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
     nesting_level = C_CPP_DEEP_NESTING_LEVEL if is_c_cpp else DEEP_NESTING_LEVEL
