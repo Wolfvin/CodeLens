@@ -8,6 +8,9 @@ complexity:
   expected: 0
   locations: []
   threshold: 15
+smells:
+  expected: 0
+  locations: []
 debug_leaks:
   expected: 0
   locations: []

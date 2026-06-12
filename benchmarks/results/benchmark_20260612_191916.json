@@ -1,0 +1,332 @@
+{
+  "timestamp": "2026-06-12T19:19:07.665934+00:00",
+  "version": "1.0.0",
+  "quick_mode": false,
+  "fixtures": {
+    "clean_app": {
+      "commands": {
+        "dead-code": {
+          "description": "Dead code detection",
+          "expected_count": 0,
+          "found_count": 28,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.9333,
+            "tp": 0,
+            "fp": 28,
+            "fn": 0,
+            "tn": 2
+          },
+          "elapsed_seconds": 0.829,
+          "target_f1": 0.85,
+          "competitor_f1": 0.82,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "secrets": {
+          "description": "Hardcoded secrets",
+          "expected_count": 0,
+          "found_count": 0,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 8
+          },
+          "elapsed_seconds": 0.41,
+          "target_f1": 0.95,
+          "competitor_f1": 0.9,
+          "meets_target": true,
+          "beats_competitor": false
+        },
+        "complexity": {
+          "description": "High complexity",
+          "expected_count": 0,
+          "found_count": 31,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.9688,
+            "tp": 0,
+            "fp": 31,
+            "fn": 0,
+            "tn": 1
+          },
+          "elapsed_seconds": 0.406,
+          "target_f1": 0.98,
+          "competitor_f1": 0.95,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "smell": {
+          "description": "Code smells",
+          "expected_count": 0,
+          "found_count": 2,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.2222,
+            "tp": 0,
+            "fp": 2,
+            "fn": 0,
+            "tn": 7
+          },
+          "elapsed_seconds": 0.415,
+          "target_f1": 0.8,
+          "competitor_f1": 0.78,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "debug-leak": {
+          "description": "Debug leaks",
+          "expected_count": 0,
+          "found_count": 0,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 8
+          },
+          "elapsed_seconds": 0.399,
+          "target_f1": 0.85,
+          "competitor_f1": 0.75,
+          "meets_target": true,
+          "beats_competitor": false
+        },
+        "perf-hint": {
+          "description": "Performance hints",
+          "expected_count": 0,
+          "found_count": 0,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 8
+          },
+          "elapsed_seconds": 0.397,
+          "target_f1": 0.75,
+          "competitor_f1": 0.7,
+          "meets_target": true,
+          "beats_competitor": false
+        },
+        "circular": {
+          "description": "Circular deps",
+          "expected_count": 0,
+          "found_count": 0,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "tn": 8
+          },
+          "elapsed_seconds": 0.39,
+          "target_f1": 0.9,
+          "competitor_f1": 0.85,
+          "meets_target": true,
+          "beats_competitor": false
+        }
+      }
+    },
+    "vulnerable_app": {
+      "commands": {
+        "dead-code": {
+          "description": "Dead code detection",
+          "expected_count": 10,
+          "found_count": 67,
+          "metrics": {
+            "precision": 0.5385,
+            "recall": 0.7,
+            "f1": 0.6087,
+            "fpr": 1.0,
+            "tp": 7,
+            "fp": 6,
+            "fn": 3,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.816,
+          "target_f1": 0.85,
+          "competitor_f1": 0.82,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "secrets": {
+          "description": "Hardcoded secrets",
+          "expected_count": 5,
+          "found_count": 5,
+          "metrics": {
+            "precision": 0.6667,
+            "recall": 0.4,
+            "f1": 0.5,
+            "fpr": 1.0,
+            "tp": 2,
+            "fp": 1,
+            "fn": 3,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.429,
+          "target_f1": 0.95,
+          "competitor_f1": 0.9,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "complexity": {
+          "description": "High complexity",
+          "expected_count": 5,
+          "found_count": 39,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 0.8,
+            "f1": 0.8889,
+            "fpr": 0.0,
+            "tp": 4,
+            "fp": 0,
+            "fn": 1,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.412,
+          "target_f1": 0.98,
+          "competitor_f1": 0.95,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "smell": {
+          "description": "Code smells",
+          "expected_count": 10,
+          "found_count": 19,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 10,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.426,
+          "target_f1": 0.8,
+          "competitor_f1": 0.78,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "debug-leak": {
+          "description": "Debug leaks",
+          "expected_count": 4,
+          "found_count": 12,
+          "metrics": {
+            "precision": 0.5714,
+            "recall": 1.0,
+            "f1": 0.7273,
+            "fpr": 1.0,
+            "tp": 4,
+            "fp": 3,
+            "fn": 0,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.418,
+          "target_f1": 0.85,
+          "competitor_f1": 0.75,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "perf-hint": {
+          "description": "Performance hints",
+          "expected_count": 3,
+          "found_count": 1,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 3,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.403,
+          "target_f1": 0.75,
+          "competitor_f1": 0.7,
+          "meets_target": false,
+          "beats_competitor": false
+        },
+        "circular": {
+          "description": "Circular deps",
+          "expected_count": 2,
+          "found_count": 0,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "fpr": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 2,
+            "tn": 0
+          },
+          "elapsed_seconds": 0.389,
+          "target_f1": 0.9,
+          "competitor_f1": 0.85,
+          "meets_target": false,
+          "beats_competitor": false
+        }
+      }
+    }
+  },
+  "summary": {
+    "avg_f1": 0.6812,
+    "avg_precision": 0.6942,
+    "avg_recall": 0.725,
+    "avg_fpr_clean": 0.3035,
+    "meets_target_pct": 28.6,
+    "beats_competitor_pct": 0.0,
+    "total_commands_run": 14
+  },
+  "token_efficiency": {
+    "dead-code": {
+      "json": {
+        "estimated_tokens": 4177
+      },
+      "ai": {
+        "estimated_tokens": 2360
+      },
+      "ai_lite": {
+        "estimated_tokens": 120
+      },
+      "ai_savings_pct": 43.5,
+      "ai_lite_savings_pct": 97.1
+    },
+    "secrets": {
+      "json": {
+        "estimated_tokens": 104
+      },
+      "ai": {
+        "estimated_tokens": 86
+      },
+      "ai_lite": {
+        "estimated_tokens": 59
+      },
+      "ai_savings_pct": 17.3,
+      "ai_lite_savings_pct": 43.3
+    }
+  }
+}

@@ -1,0 +1,72 @@
+# GitLab CI configuration for CodeLens
+
+stages:
+  - test
+  - lint
+  - benchmark
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+test:3.10:
+  stage: test
+  image: python:3.10
+  before_script:
+    - pip install pyyaml tree-sitter pytest
+  script:
+    - python -m pytest tests/ -v --tb=short
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+test:3.11:
+  stage: test
+  image: python:3.11
+  before_script:
+    - pip install pyyaml tree-sitter pytest
+  script:
+    - python -m pytest tests/ -v --tb=short
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+test:3.12:
+  stage: test
+  image: python:3.12
+  before_script:
+    - pip install pyyaml tree-sitter pytest
+  script:
+    - python -m pytest tests/ -v --tb=short
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+lint:
+  stage: lint
+  image: python:3.12
+  before_script:
+    - pip install ruff
+  script:
+    - ruff check scripts/ tests/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+benchmark:
+  stage: benchmark
+  image: python:3.12
+  before_script:
+    - pip install pyyaml tree-sitter
+  script:
+    - python3 benchmarks/run_benchmarks.py --quick
+    - python3 benchmarks/check_regression.py
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  artifacts:
+    paths:
+      - benchmarks/results/
+    expire_in: 30 days

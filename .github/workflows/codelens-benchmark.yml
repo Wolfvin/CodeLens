@@ -1,0 +1,27 @@
+name: CodeLens Weekly Benchmarks
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Every Monday at 2 AM UTC
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install pyyaml tree-sitter pytest
+      - name: Run full benchmarks
+        run: python3 benchmarks/run_benchmarks.py
+      - name: Check regression
+        run: python3 benchmarks/check_regression.py
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/

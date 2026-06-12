@@ -4,23 +4,23 @@ secrets:
   - config/settings.py
   locations:
   - file: config/settings.py
-    line: 8
+    line: 5
     type: aws_access_key
     name: AWS_ACCESS_KEY_ID
   - file: config/settings.py
-    line: 11
+    line: 7
     type: aws_secret_key
     name: AWS_SECRET_ACCESS_KEY
   - file: config/settings.py
-    line: 14
+    line: 9
     type: database_password
     name: DATABASE_URL
   - file: config/settings.py
-    line: 17
+    line: 11
     type: api_key
     name: STRIPE_API_KEY
   - file: config/settings.py
-    line: 20
+    line: 13
     type: jwt_secret
     name: JWT_SECRET
 dead_code:
@@ -29,31 +29,31 @@ dead_code:
   - src/dead_code_examples.py
   locations:
   - file: src/dead_code_examples.py
-    line: 8
+    line: 7
     name: json
     category: unused_vars
   - file: src/dead_code_examples.py
-    line: 11
+    line: 10
     name: UNUSED_GLOBAL_CONFIG
     category: unused_vars
   - file: src/dead_code_examples.py
-    line: 22
+    line: 19
     name: unreachable after return
     category: unreachable
   - file: src/dead_code_examples.py
-    line: 27
+    line: 24
     name: old_formatter
     category: unused_exports
   - file: src/dead_code_examples.py
-    line: 39
+    line: 36
     name: deprecated_api_call
     category: unused_exports
   - file: src/dead_code_examples.py
-    line: 48
+    line: 44
     name: OldDataProcessor
     category: unused_exports
   - file: src/dead_code_examples.py
-    line: 66
+    line: 67
     name: UNUSED_CACHE
     category: unused_vars
   - file: src/dead_code_examples.py
@@ -65,7 +65,7 @@ dead_code:
     name: OrderedDict
     category: unused_vars
   - file: src/dead_code_examples.py
-    line: 85
+    line: 88
     name: unreachable after return
     category: unreachable
 complexity:
@@ -89,25 +89,70 @@ complexity:
   - file: src/complex_processor.py
     name: transform_record
     cyclomatic_min: 20
+smells:
+  expected: 10
+  scope_files:
+  - src/complex_processor.py
+  locations:
+  - file: src/complex_processor.py
+    line: 4
+    name: process_order
+    category: long_fn
+  - file: src/complex_processor.py
+    line: 111
+    name: validate_registration
+    category: long_fn
+  - file: src/complex_processor.py
+    line: 211
+    name: transform_record
+    category: long_fn
+  - file: src/complex_processor.py
+    line: 4
+    name: process_order
+    category: deep_nesting
+  - file: src/complex_processor.py
+    line: 72
+    name: evaluate_feature_flags
+    category: deep_nesting
+  - file: src/complex_processor.py
+    line: 111
+    name: validate_registration
+    category: deep_nesting
+  - file: src/complex_processor.py
+    line: 169
+    name: handle_http_response
+    category: deep_nesting
+  - file: src/complex_processor.py
+    line: 211
+    name: transform_record
+    category: deep_nesting
+  - file: src/complex_processor.py
+    line: 49
+    name: magic number 75
+    category: magic_values
+  - file: src/complex_processor.py
+    line: 159
+    name: magic number 13
+    category: magic_values
 debug_leaks:
   expected: 4
   scope_files:
   - src/routes.py
   locations:
   - file: src/routes.py
-    line: 9
+    line: 7
     category: print_statement
     name: print
   - file: src/routes.py
-    line: 18
+    line: 13
     category: print_statement
     name: print
   - file: src/routes.py
-    line: 32
+    line: 28
     category: debugger
     name: pdb.set_trace
   - file: src/routes.py
-    line: 38
+    line: 34
     category: todo_fixme
     name: TODO
 perf_antipatterns:
@@ -120,11 +165,11 @@ perf_antipatterns:
     category: n_plus_one
     name: query inside loop
   - file: src/perf_antipatterns.py
-    line: 28
+    line: 23
     category: sync_blocking
     name: blocking urllib
   - file: src/perf_antipatterns.py
-    line: 35
+    line: 30
     category: inefficient_iteration
     name: string concat
 circular_dependencies:

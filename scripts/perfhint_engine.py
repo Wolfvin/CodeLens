@@ -101,6 +101,18 @@ PERF_HINT_CATEGORIES = {
                 "hint": "ORM query inside loop — potential N+1 query problem",
                 "fix_suggestion": "Use .filter(id__in=ids) or prefetch_related() / select_related() for batch loading.",
             },
+            # Python: cursor.execute / DB query inside loop body (multi-line)
+            # Catches cases where the loop header and the query are on different lines
+            {
+                "regex": (
+                    r'for\s+\w+\s+in\s+[^:]+:'
+                    r'[^\x00]{0,200}?'
+                    r'cursor\.(?:execute|fetchone|fetchall)\s*\('
+                ),
+                "multiline": True,
+                "hint": "DB query inside loop — potential N+1 query problem",
+                "fix_suggestion": "Use batch queries with WHERE IN clause or prefetch_related() / select_related() for batch loading.",
+            },
             # v5.9: Python generic _fetch_* / _get_* helper calls inside loops
             # This catches patterns like: for uid in ids: user = _fetch_user(uid)
             {
@@ -273,6 +285,13 @@ PERF_HINT_CATEGORIES = {
                 "hint": "Blocking subprocess call inside async function — stalls the event loop",
                 "fix_suggestion": "Use asyncio.create_subprocess_exec() for non-blocking subprocess calls in async functions.",
             },
+            # Python: urllib.request.urlopen — synchronous blocking HTTP call
+            # This is blocking regardless of context (standalone function, route handler, etc.)
+            {
+                "regex": r'urllib\.request\.urlopen\s*\(',
+                "hint": "Blocking urllib.request.urlopen call — stalls the thread during network I/O",
+                "fix_suggestion": "Use urllib.request with asyncio, or switch to httpx.AsyncClient / aiohttp for non-blocking HTTP.",
+            },
         ],
     },
 
@@ -350,10 +369,23 @@ PERF_HINT_CATEGORIES = {
                 "hint": "Recursive function without memoization — may recompute identical sub-problems",
                 "fix_suggestion": "Add memoization (functools.lru_cache, or a custom cache Map) to avoid redundant computation.",
             },
-            # v5.9: Python string concatenation in loop (result += ...) — O(n²) pattern
+            # v5.9: Python string concatenation in loop (var += ...) — O(n²) pattern
+            # Generalized: matches any variable name, not just 'result'
             {
-                "regex": r'(?:for\s+\w+\s+in\s+|while\s+)[^\n]{0,80}?result\s*\+=\s*(?:str\s*\()?[\w.\[\]]+',
+                "regex": r'(?:for\s+\w+\s+in\s+|while\s+)[^\n]{0,80}?\w+\s*\+=\s*(?:str\s*\()?[\w.\[\]{}]+',
                 "hint": "String concatenation inside loop using += — O(n²) time complexity",
+                "fix_suggestion": "Use list.append() + ''.join() for O(n) string building instead of repeated concatenation.",
+            },
+            # Python: string concatenation in loop body (multi-line)
+            # Catches cases where the loop header and += are on different lines
+            {
+                "regex": (
+                    r'for\s+\w+\s+in\s+[^:]+:'
+                    r'[^\x00]{0,200}?'
+                    r'\w+\s*\+=\s*f["\']'
+                ),
+                "multiline": True,
+                "hint": "String concatenation inside loop using += with f-string — O(n²) time complexity",
                 "fix_suggestion": "Use list.append() + ''.join() for O(n) string building instead of repeated concatenation.",
             },
             # v5.9: Python list.append in loop (suggest list comprehension)
@@ -698,6 +730,7 @@ def _scan_file_hints(
 
             regex = pattern_def["regex"]
             negative_regex = pattern_def.get("negative_regex")
+            is_multiline = pattern_def.get("multiline", False)
 
             # Truncate content for regex patterns with wide quantifiers
             # to prevent catastrophic backtracking on large files.
@@ -708,7 +741,9 @@ def _scan_file_hints(
 
             try:
                 # Use a timeout to prevent catastrophic backtracking
-                matches = _timed_finditer(regex, scan_content)
+                # For multiline patterns, use re.DOTALL so . matches newlines
+                regex_flags = re.DOTALL if is_multiline else 0
+                matches = _timed_finditer(regex, scan_content, flags=regex_flags)
                 if matches is None:
                     # Timed out — skip this pattern for this file
                     continue
@@ -1325,7 +1360,7 @@ class _RegexTimeout(Exception):
     pass
 
 
-def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEOUT_SEC):
+def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEOUT_SEC, flags: int = 0):
     """
     Run re.finditer with a time limit to prevent catastrophic backtracking.
     Returns list of matches (capped at MAX_MATCHES_PER_PATTERN), or None if timed out.
@@ -1337,7 +1372,8 @@ def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEO
     while still catching catastrophic backtracking.
     """
     try:
-        compiled = re.compile(pattern, re.DOTALL)
+        compile_flags = re.DOTALL | flags
+        compiled = re.compile(pattern, compile_flags)
     except re.error:
         return None
 

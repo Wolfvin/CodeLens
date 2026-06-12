@@ -78,6 +78,7 @@ def detect_dead_code(
     # Collect all exports and imports for cross-file analysis
     all_exports: Dict[str, List[Dict]] = defaultdict(list)   # file → exports
     all_imports: Dict[str, Set[str]] = defaultdict(set)      # file → imported names
+    same_file_usages: Dict[str, Set[str]] = defaultdict(set) # file → names used within the file
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -130,6 +131,8 @@ def detect_dead_code(
 
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
+                # Track same-file usage: find all names referenced in the file
+                _collect_py_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext == ".go":
                 _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
@@ -190,7 +193,7 @@ def detect_dead_code(
 
     # ─── Unused Exports ──────────────────────────────────
     if "unused_exports" in categories:
-        unused_exps = _detect_unused_exports(all_exports, all_imports, workspace)
+        unused_exps = _detect_unused_exports(all_exports, all_imports, workspace, same_file_usages)
         results["unused_exports"] = unused_exps[:max_results]
 
     # ─── Zombie CSS ──────────────────────────────────────
@@ -602,9 +605,6 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'self', 'cls', 'main', 'logger'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
-            # Skip ALL_CAPS names — they are module-level constants often imported elsewhere
-            if var_name.isupper():
-                continue
 
             # Skip Python type aliases: names ending in "Types" or "Type" that are
             # type alias definitions (e.g., URLTypes = ..., HeaderTypes = ...).
@@ -635,6 +635,48 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
                     "severity": "info",
                     "message": f"Variable '{var_name}' assigned but never used",
                     "suggestion": f"Remove or use the variable."
+                })
+
+        # Detect unused Python imports
+        # Collect all import names and check if they're used in the file
+        import_names = []  # (name, line_num)
+        for m in re.finditer(r'^import\s+(\w+)', clean_content, re.MULTILINE):
+            name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            import_names.append((name, line_num))
+        for m in re.finditer(r'^from\s+[\w.]+\s+import\s+(.+)', clean_content, re.MULTILINE):
+            names_str = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            for name_match in re.finditer(r'(\w+)', names_str):
+                name = name_match.group(1)
+                if name == 'as':
+                    continue
+                import_names.append((name, line_num))
+
+        _import_skip = {'os', 'sys', 'logging'}  # Commonly imported for side effects or implicit usage
+        _typing_imports = {'List', 'Dict', 'Tuple', 'Set', 'Optional', 'Union', 'Any',
+                           'Callable', 'Iterable', 'Iterator', 'Sequence', 'Mapping',
+                           'Type', 'TypeVar', 'Generic', 'Protocol', 'Awaitable',
+                           'AsyncIterator', 'AsyncIterable', 'Coroutine', 'Final',
+                           'ClassVar', 'Literal', ' overload', 'NamedTuple', 'TypedDict'}
+        for name, line_num in import_names:
+            if name in _import_skip:
+                continue
+            if name in _typing_imports:
+                continue  # Typing imports are used in annotations, hard to detect via regex
+            if name.startswith('_'):
+                continue
+            # Check if the import is used in the file (not just the import line)
+            usage_pattern = r'\b' + re.escape(name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": name,
+                    "severity": "info",
+                    "message": f"Import '{name}' is never used",
+                    "suggestion": f"Remove unused import '{name}'."
                 })
 
     elif ext == ".go":
@@ -860,7 +902,7 @@ def _collect_py_exports_imports(
         stripped = line.strip()
 
         # Imports
-        m = re.match(r'from\s+(\w+)\s+import\s+(.+)', stripped)
+        m = re.match(r'from\s+([\w.]+)\s+import\s+(.+)', stripped)
         if m:
             names = [n.strip() for n in m.group(2).split(',')]
             for name in names:
@@ -881,6 +923,39 @@ def _collect_py_exports_imports(
             "type": "python_definition",
             "line": line_num
         })
+
+
+def _collect_py_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names that are referenced (used) within a Python file.
+
+    This includes function calls, variable references, and attribute accesses.
+    Used to determine if an export is used within its own file.
+    """
+    # Find all identifiers used in the file (excluding definitions)
+    # Focus on names that appear as function calls or references
+    used_names = set()
+
+    # Find function/method calls: name( or obj.name(
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\s*\(', content):
+        used_names.add(m.group(1))
+
+    # Find name references in expressions (variable access)
+    # This is a broad match - we'll filter against exports later
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        # Skip Python keywords
+        if name in {'def', 'class', 'if', 'elif', 'else', 'for', 'while', 'return',
+                    'import', 'from', 'as', 'with', 'try', 'except', 'finally',
+                    'raise', 'yield', 'lambda', 'and', 'or', 'not', 'in', 'is',
+                    'True', 'False', 'None', 'pass', 'break', 'continue', 'del',
+                    'global', 'nonlocal', 'assert', 'async', 'await'}:
+            continue
+        used_names.add(name)
+
+    usages[rel_path] = used_names
 
 def _collect_go_exports_imports(
     content: str, rel_path: str,
@@ -1599,7 +1674,8 @@ def _collect_name_references(
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
     all_imports: Dict[str, Set[str]],
-    workspace: str
+    workspace: str,
+    same_file_usages: Dict[str, Set[str]] = None
 ) -> List[Dict]:
     """Detect exports that are never imported anywhere."""
     # Build set of all imported names
@@ -1630,6 +1706,24 @@ def _detect_unused_exports(
             continue
         # Go: skip magefile.go — mage targets are called by the build tool
         if file_path.endswith('magefile.go'):
+            continue
+
+        # ─── Config/settings file heuristic ───
+        # Functions in config/settings files are typically called at runtime
+        # by the application framework, not via explicit imports. Skip them
+        # from unused_exports detection entirely.
+        _config_patterns = ['/config/', '/settings', '/conf/', 'config/', 'settings.py', 'conf/']
+        _is_config_file = any(p in file_path for p in _config_patterns)
+        if _is_config_file:
+            continue
+
+        # ─── Web handler / routes heuristic ───
+        # Functions in routes/views/api files are typically called by the web
+        # framework at runtime. Skip them from unused_exports detection entirely.
+        _route_patterns = ['/routes', '/views', '/api/', '/endpoints/', '/controllers/',
+                           'routes.py', 'views.py', 'api.py', 'controllers.py']
+        _is_route_file = any(p in file_path for p in _route_patterns)
+        if _is_route_file:
             continue
 
         for export in exports:
@@ -1674,8 +1768,39 @@ def _detect_unused_exports(
                 # Capitalized names in library code are likely public API
                 continue
 
+            # ─── Config/settings file heuristic ───
+            # Functions in config/settings files are typically called at runtime
+            # by the application framework, not via explicit imports.
+            _config_patterns = ['/config/', '/settings', '/conf/', 'config/', 'settings.py', 'conf/']
+            _is_config_file = any(p in file_path for p in _config_patterns)
+
+            # ─── Web handler / routes heuristic ───
+            # Functions in routes/views/api files are typically called by the web
+            # framework at runtime (e.g., Flask routes, Django views, FastAPI endpoints).
+            _route_patterns = ['/routes', '/views', '/api/', '/endpoints/', '/controllers/',
+                               'routes.py', 'views.py', 'api.py', 'controllers.py']
+            _is_route_file = any(p in file_path for p in _route_patterns)
+
+            # Check if function signature suggests a web handler (has 'request' parameter)
+            _is_handler = export.get("is_handler", False)
+
             if name not in all_imported_names:
-                severity = "info" if _is_library else "warning"
+                # Check if the export is used within its own file
+                _used_in_same_file = (same_file_usages or {}).get(file_path, set())
+                if name in _used_in_same_file:
+                    continue  # Used within the same file, not dead
+                # Determine severity with heuristic adjustments
+                if _is_config_file or _is_route_file or _is_handler:
+                    # Config and route functions are likely runtime-called — reduce severity
+                    severity = "info"
+                elif _is_library:
+                    severity = "info"
+                else:
+                    severity = "warning"
+
+                # Determine if this is "possibly used" rather than definitively dead
+                possibly_used = _is_config_file or _is_route_file or _is_handler
+
                 unused.append({
                     "file": file_path,
                     "line": export["line"],
@@ -1684,7 +1809,8 @@ def _detect_unused_exports(
                     "severity": severity,
                     "source": "library_api" if _is_library else "core",
                     "message": f"Export '{name}' is never imported by any file" +
-                               (" (library public API — may be used by consumers)" if _is_library else ""),
+                               (" (library public API — may be used by consumers)" if _is_library else "") +
+                               (" — possibly used at runtime" if possibly_used else ""),
                     "suggestion": f"Remove unused export '{name}' or add import where needed." +
                                   (" Consider adding __all__ if this is intentional public API." if _is_library else "")
                 })
@@ -1756,6 +1882,16 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                 '/documentation/', '/snippets/',
             ]
             if any(p in file_path for p in _test_example_patterns):
+                continue
+
+            # Skip config/settings and routes/views files — functions in these
+            # files are typically called at runtime by the framework
+            _config_route_patterns = [
+                '/config/', '/settings', '/conf/', 'config/', 'settings.py', 'conf/',
+                '/routes', '/views', '/api/', '/endpoints/', '/controllers/',
+                'routes.py', 'views.py', 'api.py', 'controllers.py',
+            ]
+            if any(p in file_path for p in _config_route_patterns):
                 continue
 
             # v6.3: Skip known C/C++ entry point function patterns

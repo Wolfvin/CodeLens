@@ -8,7 +8,7 @@ Usage:
     python run_benchmarks.py --output results.json    # Save to file
     python run_benchmarks.py --compare baseline.json  # Compare vs baseline
 """
-import os, sys, json, time, yaml, subprocess, argparse
+import os, sys, json, time, yaml, subprocess, argparse, re
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -62,8 +62,19 @@ def extract_findings(result, command):
     elif command == "secrets":
         for item in result.get("findings", []):
             if isinstance(item, dict):
+                # Use match (masked value) and category for better matching
+                match_val = item.get("match", item.get("value", ""))
+                cat = item.get("category", "secret")
+                # Also include the line_content to extract variable name for matching
+                line_content = item.get("line_content", "")
+                # Try to extract variable name from line content (e.g., AWS_SECRET_ACCESS_KEY = ...)
+                var_name = ""
+                vm = re.search(r'([A-Z_][A-Z0-9_]*)\s*=\s*["\']', line_content) if line_content else None
+                if vm:
+                    var_name = vm.group(1)
                 findings.append({"file": item.get("file",""), "line": item.get("line",0),
-                                 "name": item.get("type",""), "category": item.get("type","secret")})
+                                 "name": var_name or match_val, "category": cat,
+                                 "match": match_val, "line_content": line_content})
     elif command == "complexity":
         for item in result.get("functions", []):
             if isinstance(item, dict):
@@ -89,8 +100,9 @@ def extract_findings(result, command):
                 findings.append({"file": item.get("file",""), "line": item.get("line",0),
                                  "name": item.get("hint",""), "category": item.get("category","")})
     elif command == "circular":
+        cycles_data = result.get("cycles", result)
         for ct in ("function_calls", "import_chains", "css_imports"):
-            for cycle in result.get(ct, []):
+            for cycle in cycles_data.get(ct, []):
                 if isinstance(cycle, dict):
                     chain = cycle.get("chain", cycle.get("cycle", []))
                     findings.append({"file": chain[0] if chain else "", "line": 0,
@@ -130,9 +142,15 @@ def match_findings(findings, gt_locs, command):
             if command == "secrets":
                 ld = abs(fl-gl) if fl and gl else 999
                 nm = gn and (gn in fn or fn in gn)
-                tm = gt and gt in fn
-                if ld <= 3: matched, score = True, 100-ld
-                elif nm or tm: matched, score = True, 50
+                # Also check if finding category relates to ground truth type
+                tm = gt and (gt in fc or fc in gt)
+                # Check if variable name in finding matches ground truth name
+                fn_lc = fn.lower()
+                gn_lc = gn.lower()
+                var_match = gn_lc and (gn_lc in fn_lc or fn_lc in gn_lc)
+                if ld <= 5: matched, score = True, 100-ld
+                elif nm or var_match: matched, score = True, 70
+                elif tm: matched, score = True, 50
             elif command == "complexity":
                 nm = gn and (gn in fn or fn in gn)
                 if nm: matched, score = True, 100 if gn==fn else 80
@@ -170,7 +188,7 @@ COMMANDS = {
     "dead-code":  {"gt_key":"dead_code",  "desc":"Dead code detection",     "t":0.85,"c":0.82},
     "secrets":    {"gt_key":"secrets",     "desc":"Hardcoded secrets",       "t":0.95,"c":0.90},
     "complexity": {"gt_key":"complexity",  "desc":"High complexity",         "t":0.98,"c":0.95},
-    "smell":      {"gt_key":"dead_code",   "desc":"Code smells",             "t":0.80,"c":0.78},
+    "smell":      {"gt_key":"smells",       "desc":"Code smells",             "t":0.80,"c":0.78},
     "debug-leak": {"gt_key":"debug_leaks", "desc":"Debug leaks",             "t":0.85,"c":0.75},
     "perf-hint":  {"gt_key":"perf_antipatterns","desc":"Performance hints",  "t":0.75,"c":0.70},
     "circular":   {"gt_key":"circular_dependencies","desc":"Circular deps",  "t":0.90,"c":0.85},

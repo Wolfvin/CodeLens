@@ -277,7 +277,7 @@ SECRET_PATTERNS = {
 # ─── Known safe / false-positive patterns ──────────────────────
 
 SAFE_VALUE_PATTERNS = [
-    r'(?i)^(example|test|mock|dummy|fake|placeholder|xxx|changeme|your[_-]?key|insert[_-]?key|replace[_-]?me|todo|sample)',
+    r'(?i)^(example|test|mock|dummy|fake|placeholder|xxx|changeme|your[_-]?key|insert[_-]?key|replace[_-]?me|todo|sample)(?:[_\-\s]|$)',
     r'(?i)^(process\.env|os\.environ|os\.getenv|env\()',
     r'(?i)^import\.meta\.env',
     r'^\$\{',  # Template variable ${...}
@@ -610,11 +610,14 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                         raw_value = match.group(0)
 
                     # Skip safe/false-positive values
-                    if _is_safe_value(raw_value):
+                    # BUT: if the line contains a known secret variable name, still report it
+                    # (the variable name is a strong signal this is a real secret, not a placeholder)
+                    line_text = lines[line_num - 1] if line_num <= len(lines) else ""
+                    _known_secret_var_on_line = _is_known_secret_variable(line_text)
+                    if _is_safe_value(raw_value) and not _known_secret_var_on_line:
                         continue
 
                     # Get the full line for context-aware exclusion checks
-                    line_text = lines[line_num - 1] if line_num <= len(lines) else ""
 
                     # Skip lines containing template expressions (not hardcoded secrets)
                     if _is_template_line(line_text):
@@ -987,6 +990,27 @@ def _is_safe_value(value: str) -> bool:
             return True
 
     return False
+
+
+# Known secret variable names that indicate a real secret even if the value looks placeholder-ish
+_KNOWN_SECRET_VAR_PATTERNS = [
+    re.compile(r'(?i)(?:AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID)\s*=', re.IGNORECASE),
+    re.compile(r'(?i)(?:JWT[_\-]?SECRET|JWT[_\-]?KEY)\s*=', re.IGNORECASE),
+    re.compile(r'(?i)(?:DATABASE_URL|DB_PASSWORD|SECRET_KEY)\s*=', re.IGNORECASE),
+    re.compile(r'(?i)(?:STRIPE[_\-]?API[_\-]?KEY|STRIPE[_\-]?SECRET)\s*=', re.IGNORECASE),
+    re.compile(r'(?i)(?:API[_\-]?KEY|API[_\-]?SECRET|PRIVATE[_\-]?KEY)\s*=', re.IGNORECASE),
+    re.compile(r'(?i)(?:ENCRYPTION[_\-]?KEY|SIGNING[_\-]?KEY)\s*=', re.IGNORECASE),
+]
+
+
+def _is_known_secret_variable(line: str) -> bool:
+    """Check if a line contains a known secret variable name assignment.
+
+    When a line assigns to a well-known secret variable name, the value should
+    be reported even if it looks like a placeholder. The variable name is a strong
+    signal that this IS a real secret configuration, not example code.
+    """
+    return any(pat.search(line) for pat in _KNOWN_SECRET_VAR_PATTERNS)
 
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory or has a test file extension.

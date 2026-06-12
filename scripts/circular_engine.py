@@ -465,8 +465,8 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
     import_graph: Dict[str, Set[str]] = defaultdict(set)
     file_map: Dict[str, str] = {}  # module name → file path
 
-    # Scan for import statements
-    extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'}
+    # Scan for import statements (JS/TS and Python)
+    extensions = {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py'}
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
 
     for root, dirs, filenames in os.walk(workspace):
@@ -492,7 +492,10 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
             file_map[rel_path] = file_path
 
             # Parse imports
-            imports = _parse_js_imports(content, rel_path, workspace)
+            if ext == '.py':
+                imports = _parse_py_imports(content, rel_path, workspace)
+            else:
+                imports = _parse_js_imports(content, rel_path, workspace)
             for imp in imports:
                 import_graph[rel_path].add(imp)
                 file_map[imp] = imp
@@ -567,6 +570,58 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
             dfs_import(f, [])
 
     return cycles_found
+
+
+def _parse_py_imports(content: str, file_rel_path: str, workspace: str) -> List[str]:
+    """Parse Python import statements and resolve to relative paths."""
+    imports = []
+    file_dir = os.path.dirname(file_rel_path)
+
+    # from X import Y (dotted module paths)
+    for m in re.finditer(r'from\s+([\w.]+)\s+import\s+', content):
+        module_path = m.group(1)
+        resolved = _resolve_py_import_path(module_path, file_dir, workspace)
+        if resolved:
+            imports.append(resolved)
+
+    # import X (dotted module paths)
+    for m in re.finditer(r'^import\s+([\w.]+)', content, re.MULTILINE):
+        module_path = m.group(1)
+        resolved = _resolve_py_import_path(module_path, file_dir, workspace)
+        if resolved:
+            imports.append(resolved)
+
+    return imports
+
+
+def _resolve_py_import_path(module_path: str, from_dir: str, workspace: str) -> Optional[str]:
+    """Resolve a Python module path to an actual file path."""
+    # Convert dotted path to file path: a.b.c -> a/b/c.py or a/b/c/__init__.py
+    parts = module_path.split('.')
+
+    # Try as a direct file: a/b/c.py
+    rel_path = os.path.join(*parts) + '.py'
+    full_path = os.path.join(workspace, rel_path)
+    if os.path.isfile(full_path):
+        return rel_path
+
+    # Try as a package: a/b/c/__init__.py
+    init_path = os.path.join(workspace, *parts, '__init__.py')
+    if os.path.isfile(init_path):
+        return os.path.join(*parts, '__init__.py')
+
+    # Try relative to the importing file's directory
+    if from_dir:
+        rel_path = os.path.join(from_dir, *parts) + '.py'
+        full_path = os.path.join(workspace, rel_path)
+        if os.path.isfile(full_path):
+            return rel_path
+
+        init_path = os.path.join(workspace, from_dir, *parts, '__init__.py')
+        if os.path.isfile(init_path):
+            return os.path.join(from_dir, *parts, '__init__.py')
+
+    return None
 
 
 def _parse_js_imports(content: str, file_rel_path: str, workspace: str) -> List[str]:
