@@ -899,6 +899,10 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         # Example/sample config directories — contain placeholder credentials
         '/config_examples/', '/config_samples/',
         '/sample_configs/', '/sample_config/',
+        # Package registry mock data — contain fake tokens/keys for testing
+        '/registry/', '/npm_registry/', '/mock_registry/',
+        # Test server mock data
+        '/mock_server/', '/mock_api/',
     ]
     # Also match paths that START with these directory names
     start_indicators = [
@@ -912,6 +916,8 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'intl/', 'localization/',
         'config_examples/', 'config_samples/',
         'sample_configs/', 'sample_config/',
+        'registry/', 'npm_registry/', 'mock_registry/',
+        'mock_server/', 'mock_api/',
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))

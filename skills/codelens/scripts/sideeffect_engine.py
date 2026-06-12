@@ -20,11 +20,17 @@ A function is CONDITIONALLY_PURE if it's pure for some call patterns but not oth
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
+
+# Performance limits for large codebases
+MAX_FILES_PER_RUN = 3000       # Max files to scan (prevents timeout on huge repos)
+MAX_FUNCTIONS_PER_FILE = 100   # Max functions to analyze per file
+GLOBAL_TIMEOUT_SEC = 120       # Hard timeout for the entire analysis
 
 # ─── Side-Effect Signatures ───────────────────────────────────
 
@@ -261,13 +267,28 @@ def analyze_side_effects(
             return result
 
     # Full workspace analysis
+    start_time = time.time()
+    files_scanned = 0
+    truncated = False
+
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
             continue
 
+        # Time budget check
+        if time.time() - start_time > GLOBAL_TIMEOUT_SEC:
+            logger.warning(f"side-effect: time budget exceeded after {files_scanned} files")
+            truncated = True
+            break
+
         for filename in filenames:
+            # File limit check
+            if files_scanned >= MAX_FILES_PER_RUN:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -278,6 +299,13 @@ def analyze_side_effects(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            files_scanned += 1
+
+            # Per-file time check
+            if time.time() - start_time > GLOBAL_TIMEOUT_SEC:
+                truncated = True
+                break
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -286,6 +314,10 @@ def analyze_side_effects(
 
             # Find all functions in this file
             functions = _extract_functions(content, ext, rel_path)
+
+            # Limit functions per file to prevent runaway on huge files
+            if len(functions) > MAX_FUNCTIONS_PER_FILE:
+                functions = functions[:MAX_FUNCTIONS_PER_FILE]
 
             for fn_info in functions:
                 # Get the function body
@@ -325,7 +357,10 @@ def analyze_side_effects(
             "pure": pure_count,
             "impure": impure_count,
             "purity_ratio": round(pure_count / total, 2) if total > 0 else 1.0,
-            "effect_summary": dict(effect_summary)
+            "effect_summary": dict(effect_summary),
+            "files_scanned": files_scanned,
+            "truncated": truncated,
+            "elapsed_sec": round(time.time() - start_time, 1)
         },
         "functions": function_analyses,
         "count": total

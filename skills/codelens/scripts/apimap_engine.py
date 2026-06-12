@@ -274,6 +274,13 @@ def map_api_routes(
                     routes.extend(rust_ecs_routes)
                     frameworks_detected.add("bevy_ecs")
 
+            # ─── Deno.serve routes ──────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                deno_routes = _extract_deno_serve_routes(content, rel_path)
+                if deno_routes:
+                    frameworks_detected.add("deno")
+                    routes.extend(deno_routes)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -3150,5 +3157,190 @@ def _extract_rust_ecs_patterns(content: str, rel_path: str) -> List[Dict[str, An
             "middleware": [],
             "route_type": "ecs_state",
         })
+
+    return routes
+
+
+# ─── Deno.serve Route Extraction ────────────────────────────────
+
+def _extract_deno_serve_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract routes from Deno.serve() calls and URL-based routing patterns.
+
+    Deno.serve() patterns:
+    1. Deno.serve(handler)              — catch-all handler
+    2. Deno.serve({ opts }, handler)    — options + handler
+    3. Deno.serve({ port: N }, () => new Response("..."))  — inline
+
+    Inside handlers, URL-based routing is common:
+      const url = new URL(req.url);
+      if (url.pathname === "/api/foo") { ... }
+      if (url.pathname.startsWith("/api/bar")) { ... }
+      switch (url.pathname) { case "/api/baz": ... }
+    """
+    routes = []
+
+    # Quick check: does this file contain Deno.serve?
+    if "Deno.serve" not in content:
+        return routes
+
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Pattern 1: Deno.serve(handler) or Deno.serve({ ... }, handler)
+        # We detect Deno.serve calls and extract the handler
+        serve_match = re.search(r'Deno\.serve\s*\(', stripped)
+        if not serve_match:
+            continue
+
+        line_num = i + 1
+
+        # Try to extract handler name from the serve call
+        # Pattern: Deno.serve(handlerFn) or const server = Deno.serve(handlerFn)
+        # Pattern: Deno.serve({ ... }, handlerFn)
+        handler_name = None
+
+        # Case A: Deno.serve(handlerName) — single arg, no options
+        simple_match = re.search(
+            r'Deno\.serve\s*\(\s*(\w+)\s*\)',
+            stripped
+        )
+        if simple_match:
+            handler_name = simple_match.group(1)
+
+        # Case B: Deno.serve({ opts }, handlerName)
+        if not handler_name:
+            # Find the closing brace of options, then the handler
+            # This is complex with nested braces, so we look for common patterns
+            opts_handler_match = re.search(
+                r'Deno\.serve\s*\(\s*\{[^}]*\}\s*,\s*(\w+)\s*\)',
+                stripped
+            )
+            if opts_handler_match:
+                handler_name = opts_handler_match.group(1)
+
+        # Case C: Deno.serve({ opts }, () => ...) or Deno.serve({ opts }, async () => ...)
+        # or Deno.serve(() => ...) or Deno.serve(async (req) => { ... })
+        is_inline_handler = False
+        if not handler_name:
+            if re.search(r'Deno\.serve\s*\([^)]*(?:=>|function\s*\()', stripped):
+                is_inline_handler = True
+
+        # Register the Deno.serve endpoint as a catch-all route
+        if handler_name or is_inline_handler:
+            routes.append({
+                "method": "ALL",
+                "path": "/",
+                "handler": handler_name or "<inline>",
+                "file": rel_path,
+                "line": line_num,
+                "framework": "deno",
+                "auth": False,
+                "middleware": [],
+                "route_type": "deno_serve",
+            })
+
+    # ─── URL-based routing inside handlers ──────────────────────
+    # Detect pathname checks inside Deno.serve handlers
+    # Patterns:
+    #   url.pathname === "/path"
+    #   url.pathname.startsWith("/path")
+    #   request.url === "http...path"
+    #   case "/path":
+    #   req.url.endsWith("/path")
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Pattern: url.pathname === "/path" or url.pathname == "/path"
+        pathname_exact = re.search(
+            r'(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']',
+            stripped
+        )
+        if pathname_exact:
+            path = pathname_exact.group(1)
+            routes.append({
+                "method": "GET",  # Default to GET; can be refined
+                "path": path,
+                "handler": "<pathname_route>",
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "deno",
+                "auth": False,
+                "middleware": [],
+                "route_type": "deno_pathname",
+            })
+            continue
+
+        # Pattern: url.pathname.startsWith("/path")
+        pathname_prefix = re.search(
+            r'(?:url|req|request)\.pathname\.startsWith\s*\(\s*["\'](/[^"\']*)["\']\s*\)',
+            stripped
+        )
+        if pathname_prefix:
+            path = pathname_prefix.group(1)
+            # Prefix route — mark with wildcard
+            routes.append({
+                "method": "GET",
+                "path": f"{path}/*",
+                "handler": "<pathname_prefix_route>",
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "deno",
+                "auth": False,
+                "middleware": [],
+                "route_type": "deno_pathname_prefix",
+            })
+            continue
+
+        # Pattern: case "/path": (inside switch on url.pathname)
+        case_path = re.search(
+            r'case\s+["\'](/[^"\']*)["\']\s*:',
+            stripped
+        )
+        if case_path:
+            path = case_path.group(1)
+            # Only if we're in a file that has Deno.serve
+            routes.append({
+                "method": "GET",
+                "path": path,
+                "handler": "<case_route>",
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "deno",
+                "auth": False,
+                "middleware": [],
+                "route_type": "deno_case_route",
+            })
+            continue
+
+        # Pattern: method check + pathname — (req.method === "POST" && url.pathname === "/path")
+        method_pathname = re.search(
+            r'(?:req|request)\.method\s*===?\s*["\'](GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)["\']'
+            r'.*?(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']',
+            stripped
+        )
+        if not method_pathname:
+            # Reverse order: pathname first, then method
+            method_pathname = re.search(
+                r'(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']'
+                r'.*?(?:req|request)\.method\s*===?\s*["\'](GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)["\']',
+                stripped
+            )
+            if method_pathname:
+                path = method_pathname.group(1)
+                method = method_pathname.group(2)
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler": "<method_pathname_route>",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "framework": "deno",
+                    "auth": False,
+                    "middleware": [],
+                    "route_type": "deno_method_route",
+                })
 
     return routes

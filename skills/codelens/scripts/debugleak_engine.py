@@ -65,6 +65,12 @@ PRINT_PATTERNS = [
     (r'\beprintln!\s*\(', "eprintln!()"),
     (r'\blog\.Debug\s*\(', "log.Debug()"),
     (r'\blog\.Info\s*\(', "log.Info()"),
+    # Rust log crate macros — these are logging, not debugger statements
+    (r'\bdebug!\s*\(', "debug!()"),          # log::debug!() — Rust log crate
+    (r'\btrace!\s*\(', "trace!()"),          # log::trace!() — Rust log crate
+    (r'\binfo!\s*\(', "info!()"),            # log::info!() — Rust log crate
+    (r'\bwarn!\s*\(', "warn!()"),            # log::warn!() — Rust log crate
+    (r'\berror!\s*\(', "error!()"),          # log::error!() — Rust log crate
 ]
 
 DEBUGGER_PATTERNS = [
@@ -73,7 +79,7 @@ DEBUGGER_PATTERNS = [
     (r'\bpdb\.set_trace\s*\(\s*\)', "pdb.set_trace()"),
     (r'\bpdb\s*\(\s*\)', "pdb()"),
     (r'\bipdb\s*\(\s*\)', "ipdb()"),
-    (r'\bdebug!\s*\(', "debug!()"),
+    # Note: debug!() moved to PRINT_PATTERNS — it's Rust's log::debug!(), not a debugger
     (r'\bdbg!\s*\(', "dbg!()"),
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
@@ -396,6 +402,9 @@ def _detect_print_statements(
                 continue
             if label == "debugEcho()" and ext not in {".nim", ".nims"}:
                 continue
+            # Rust log crate macros — only match in .rs files
+            if label in ("debug!()", "trace!()", "info!()", "warn!()", "error!()") and ext not in {".rs"}:
+                continue
 
             m = re.search(pattern, stripped)
             if not m:
@@ -424,6 +433,20 @@ def _detect_print_statements(
                 ))
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
+
+            # Rust log crate: debug!/trace!/info!/warn!/error! are standard logging macros,
+            # NOT debugger statements. In production code they're perfectly fine.
+            # Only flag in test files (redundant) or with debug patterns in message.
+            if ext == ".rs" and label in ("debug!()", "trace!()", "info!()", "warn!()", "error!()"):
+                context_start = max(0, i - 15)
+                context = '\n'.join(lines[context_start:i + 1])
+                is_in_test = bool(re.search(r'#\[test\]|#\[tokio::test\]|fn test_|fn it_', context))
+                has_debug_pattern = bool(re.search(
+                    r'\bdbg!\(|TODO|FIXME|HACK|TEMP\b',
+                    stripped, re.IGNORECASE
+                ))
+                if not is_in_test and not has_debug_pattern:
+                    continue  # Standard Rust logging, not a debug leak
 
             # Nim: echo() is the standard print mechanism, similar to println! in Rust.
             # Only flag if in test context or contains debug-specific patterns.
@@ -490,7 +513,7 @@ def _detect_debugger_statements(
 
         for pattern, label in DEBUGGER_PATTERNS:
             # Language filter
-            if label in ("debug!()", "dbg!()") and ext not in {".rs"}:
+            if label in ("dbg!()",) and ext not in {".rs"}:
                 continue
             if label in ("pdb.set_trace()", "pdb()", "ipdb()", "breakpoint()") and ext not in {".py"}:
                 continue
