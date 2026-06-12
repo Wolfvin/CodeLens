@@ -19,7 +19,9 @@ def execute(args, workspace):
         workspace,
         source=args.source,
         sink=args.sink,
-        max_depth=args.depth
+        max_depth=args.depth,
+        max_files=5000,
+        timeout_sec=120.0
     )
 
 

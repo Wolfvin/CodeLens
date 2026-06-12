@@ -479,3 +479,48 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+# ─── Bundled/Compiled File Detection ────────────────────────────
+
+BUNDLED_DIR_PREFIXES = (
+    "dist/", "build/", "out/", "bundle/", "bundled/",
+    "vendor/", ".output/", ".nuxt/", ".next/", ".svelte-kit/",
+)
+
+BUNDLED_FILE_SUFFIXES = (
+    ".min.js", ".min.css", ".bundle.js", ".chunk.js",
+    ".global.js", ".vendor.js", ".pack.js",
+    ".map",  # source maps
+)
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file path looks like a bundled, compiled, or generated output file.
+
+    Skips files in dist/build/out directories, minified/bundled JS/CSS,
+    and source maps — these are not meaningful for code analysis.
+
+    Args:
+        rel_path: Relative file path from workspace root, e.g. 'dist/app.min.js'
+
+    Returns:
+        True if the file appears to be bundled/compiled output.
+    """
+    lower = rel_path.lower()
+
+    # Check directory prefixes (e.g. dist/, build/, out/)
+    for prefix in BUNDLED_DIR_PREFIXES:
+        if lower.startswith(prefix) or f"/{prefix}" in lower:
+            return True
+
+    # Check file suffixes (e.g. .min.js, .bundle.js, .map)
+    for suffix in BUNDLED_FILE_SUFFIXES:
+        if lower.endswith(suffix):
+            return True
+
+    # Check .d.ts declaration files (TypeScript type declarations, not source)
+    if lower.endswith(".d.ts") or lower.endswith(".d.mts") or lower.endswith(".d.cts"):
+        return True
+
+    return False
