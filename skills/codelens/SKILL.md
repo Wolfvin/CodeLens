@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6.1 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -32,27 +32,21 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Lua, C/C++, GLSL.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
-  Fallback parsers for: Java, Kotlin, C/C++, Go, Lua, C#, PHP.
 ---
 
-# CodeLens v6.1
+# CodeLens v6.5
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.1 — The "Analyze Everything, Even Games" Release
+## What's New in v6.5 — Tested on SerenityOS/serenity (18,601 files, C++ OS monorepo)
 
-- **CMake/C++ project identity**: Parses `CMakeLists.txt` for project name/version. Classifies as `cpp-game-engine`, `qt-desktop-app`, `cpp-graphics`, `cpp-mobile-app`, or `cpp-project`.
-- **Lua entry points**: New `lua_entry` type with `dofile()`, `require()`, `core.register_*()` and `minetest.register_*()` patterns for game mod detection.
-- **C++ entry points**: Added `WinMain`, `wmain`, `SDL_main`, `DllMain` patterns for Windows/native applications.
-- **GLSL shader language detection**: `.glsl`, `.fsh`, `.vsh`, `.frag`, `.vert` files recognized.
-- **Removed C/C++/Java/Kotlin from unsupported languages**: All have working fallback parsers.
-- **Fixed `.h` files classified as C instead of C++**: Now correctly counted as C++ headers.
-- **Game engine directory hints**: 18 new directory descriptions for game engine projects.
-- **C++/Lua/GLSL tooling recommendations**: clang-tidy, cppcheck, luacheck, glslangValidator.
-- **Fixed architecture total_files**: Was only counting tree-sitter-supported languages; now counts all source files.
-- **Tested on minetest/minetest** (2,430 files: C++/Lua/GLSL game engine).
+- **C++ project identity detection**: `handbook` now recognizes C++ projects via `CMakeLists.txt`, extracts project name from `project(Name)` and version from `project(Name VERSION x.y.z)`. Detects `cpp-os` (Kernel/ directory), `cpp-monorepo` (AK/, Base/, Meta/, Ports/, Tests/), and `cpp-project` types.
+- **CMake monorepo detection**: Projects with multiple subdirectory `CMakeLists.txt` files are detected as monorepos with `monorepo_tools: ["cmake-workspace"]`. SerenityOS correctly reports `is_monorepo: true`.
+- **C/C++ removed from `unsupported_langs`**: When fallback C/C++ parsers successfully parse files (7,447 in SerenityOS), `c` and `cpp` are removed from the unsupported list. The `lang_note` now says "parsed via fallback parsers" instead of "not yet supported by tree-sitter".
+- **God object test file false positives fixed**: JS/TS test files in `/Tests/`, `/tests/`, `/test/`, `/__tests__/`, `/spec/`, `/specs/` directories are now skipped with case-insensitive matching. Files like `LibJS/Tests/this-value.js` no longer produce false god object reports (52 FPs eliminated on SerenityOS).
+- **Tested on SerenityOS/serenity**: 18,601 files, 7,447 C++ parsed, 49,671 backend nodes, type `cpp-os-monorepo`, health score 50.
 
 ## What's New in v6.0 — The "Analyze Everything" Release
 

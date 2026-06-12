@@ -247,6 +247,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
+    cpp_type = None  # v7: track C++-derived type separately
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -291,6 +292,83 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["is_monorepo"] = True
                 if "cargo-workspace" not in identity["monorepo_tools"]:
                     identity["monorepo_tools"].append("cargo-workspace")
+
+    # v7: Check for C++ project — CMakeLists.txt based detection
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
+                cmake_content = f.read()
+
+            # Extract project name and version from CMakeLists.txt
+            # Matches: project(name VERSION x.y.z) or project(name VERSION x.y.z DESCRIPTION ...)
+            proj_match = re.search(r'project\s*\(\s*(\S+)\s+VERSION\s+([0-9][^\s\)]*)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+                identity["version"] = proj_match.group(2)
+            else:
+                # Fallback: project(Name) without version
+                proj_name_match = re.search(r'project\s*\(\s*(\S+)', cmake_content)
+                if proj_name_match:
+                    identity["name"] = proj_name_match.group(1)
+                # Fallback: set(VERSION x.y.z)
+                ver_match = re.search(r'set\s*\(\s*VERSION\s+([0-9][^\s\)]*)\s*\)', cmake_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+
+            # Detect C++ project type based on directory structure
+            workspace_dirs = set()
+            try:
+                for entry in os.listdir(workspace):
+                    if os.path.isdir(os.path.join(workspace, entry)):
+                        workspace_dirs.add(entry)
+            except OSError:
+                pass
+
+            # Check for OS kernel projects (Kernel/ or kernel/ directory)
+            has_kernel = 'Kernel' in workspace_dirs or 'kernel' in workspace_dirs
+            # Check for SerenityOS-like structure
+            serenity_indicators = {'Userland', 'AK', 'LibJS'}
+            has_serenity = bool(workspace_dirs & serenity_indicators)
+            # Check for large C++ project indicators
+            large_cpp_indicators = {'AK', 'Base', 'Meta', 'Ports', 'Tests'}
+            large_cpp_count = len(workspace_dirs & large_cpp_indicators)
+
+            if has_kernel and has_serenity:
+                cpp_type = "cpp-os"
+            elif has_kernel:
+                cpp_type = "cpp-os"
+            elif large_cpp_count >= 3:
+                cpp_type = "cpp-monorepo"
+            else:
+                cpp_type = "cpp-project"
+
+            # Detect C++ monorepo: multiple CMakeLists.txt in subdirectories
+            sub_cmake_count = 0
+            sub_cmake_dirs = []
+            try:
+                for entry in sorted(os.listdir(workspace)):
+                    sub_cmake = os.path.join(workspace, entry, 'CMakeLists.txt')
+                    if os.path.isfile(sub_cmake):
+                        sub_cmake_count += 1
+                        sub_cmake_dirs.append(entry)
+            except OSError:
+                pass
+
+            if sub_cmake_count >= 2:
+                identity["is_monorepo"] = True
+                if "cmake-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cmake-workspace")
+                if cpp_type == "cpp-project":
+                    cpp_type = "cpp-monorepo"
+
+            # Kernel/ + CMakeLists.txt → cmake-workspace monorepo
+            if has_kernel and "cmake-workspace" not in identity["monorepo_tools"]:
+                identity["is_monorepo"] = True
+                identity["monorepo_tools"].append("cmake-workspace")
+
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
 
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
@@ -475,61 +553,22 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6.1: Try CMakeLists.txt — detect CMake/C++ projects
-    cmake_type = None
-    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    if os.path.isfile(cmake_path):
-        try:
-            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
-                cmake_content = f.read()
-            # Extract project name from cmake: project(Name VERSION X.Y.Z)
-            proj_match = re.search(r'project\s*\(\s*([^\s\)]+)', cmake_content)
-            ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
-            if proj_match:
-                identity["name"] = proj_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            # Classify CMake project type
-            cmake_lower = cmake_content.lower()
-            has_lua = os.path.isdir(os.path.join(workspace, 'builtin')) or os.path.isdir(os.path.join(workspace, 'scripts'))
-            lua_count = 0
-            for root, dirs, files in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                for fname in files:
-                    if fname.endswith('.lua'):
-                        lua_count += 1
-            if lua_count > 10 or has_lua:
-                cmake_type = "cpp-game-engine"  # C++ with Lua scripting = likely game engine
-            elif 'qt' in cmake_lower or 'Qt5' in cmake_content or 'Qt6' in cmake_content:
-                cmake_type = "qt-desktop-app"
-            elif any(kw in cmake_lower for kw in ('opengl', 'vulkan', 'sdl', 'glfw', 'glew')):
-                cmake_type = "cpp-graphics"
-            elif 'android' in cmake_lower or os.path.isdir(os.path.join(workspace, 'android')):
-                cmake_type = "cpp-mobile-app"
-            else:
-                cmake_type = "cpp-project"
-        except Exception:
-            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
-
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, cpp_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if cmake_type:
-            type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
+        if cpp_type:
+            type_parts.append("cpp")
         if go_type:
             type_parts.append("go")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
-        # v6.1: Add Lua indicator for C++ projects with Lua scripting
-        if cmake_type and lua_count > 10:
-            type_parts.append("lua")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -590,23 +629,6 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
-        # v6.1: Game engine / native C++ project directory hints
-        'builtin': 'Built-in Lua/game scripts',
-        'mods': 'Game modifications / plugins',
-        'games': 'Game content packs',
-        'textures': 'Texture assets',
-        'fonts': 'Font assets',
-        'shaders': 'GPU shader programs',
-        'client': 'Client-side code',
-        'clientmods': 'Client-side modifications',
-        'irr': 'Irrlicht engine fork',
-        'android': 'Android platform support',
-        'po': 'Translation/localization files',
-        'worlds': 'Game world data',
-        'include': 'C/C++ header files',
-        'cmake': 'CMake build modules',
-        'fastlane': 'Mobile deployment automation',
-        'misc': 'Miscellaneous files',
     }
     dir_map = {}
     try:
