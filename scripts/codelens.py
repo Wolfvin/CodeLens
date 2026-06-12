@@ -43,6 +43,8 @@ Usage:
     python3 codelens.py css-deep <workspace]           # Deep CSS analysis (vars, keyframes, specificity)
     python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
+    python3 codelens.py migrate <workspace>            # Migrate JSON registry to SQLite
+    python3 codelens.py lsp-status                     # Check LSP server availability
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)
@@ -757,6 +759,8 @@ def main():
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
     parser.add_argument("--format", "-f", choices=["json", "markdown", "ai"], default=_default_format,
                         help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default)")
+    parser.add_argument("--db-path", default=None,
+                        help="Custom path for SQLite database (default: .codelens/codelens.db)")
 
     # ─── Parse and dispatch ─────────────────────────────
 
@@ -882,6 +886,19 @@ def main():
             except Exception:
                 logger.warning("Failed to write output files", exc_info=True)
                 result["outline_generated"] = False
+            # Persist scan results to SQLite if available
+            try:
+                from persistent_registry import PersistentRegistry, is_sqlite_available
+                if is_sqlite_available():
+                    db_path = getattr(args, 'db_path', None)
+                    pr = PersistentRegistry(workspace, db_path=db_path)
+                    pr.store_scan_result(result)
+                    result["sqlite_persisted"] = True
+                    print("[CodeLens] Scan results persisted to SQLite database.", file=sys.stderr)
+            except ImportError:
+                pass
+            except Exception as e:
+                logger.warning(f"Failed to persist to SQLite: {e}", exc_info=True)
 
         # ─── Watch is a long-running command — it already printed output ──
         if args.command == "watch":
