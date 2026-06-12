@@ -5,6 +5,39 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Tested against readest/readest (1,244 source files: 1,177 TSX + 40 Rust + 12 Java, Tauri V2 + Next.js 16 ebook reader)
+
+Real-world test on a cross-platform Tauri V2 desktop app with complex frontend-backend relationship:
+Next.js 16 frontend communicating with Rust backend via 15+ Tauri IPC commands, 26 Tauri plugins,
+WebDAV sync, AI TTS, Discord RPC, and platform-specific code for macOS/Windows/Android/iOS.
+
+### Added
+
+- **Tauri deep analysis in `binary-scan`**: New `scan_tauri_artifacts()` function in `utils.py` that performs comprehensive Tauri project analysis:
+  - IPC command mapping: Scans Rust source for `#[tauri::command]` functions, extracts both Rust name and camelCase IPC name (e.g., `parse_epub_metadata` → `parseEpubMetadata`)
+  - `tauri.conf.json` parsing: Extracts app name, identifier, version, CSP settings, asset protocol config, window count
+  - Capabilities/permissions audit: Scans `src-tauri/capabilities/` JSON files, lists permissions and window access
+  - Plugin detection: Reads `src-tauri/Cargo.toml` for `tauri-plugin-*` dependencies
+  - Sidecar detection: Extracts `externalBin` configuration
+  - Deep-link scheme analysis: Extracts custom URL schemes from plugin config
+  - Security analysis: Checks for missing CSP, enabled asset protocol, dangerous CSP modification flags, unrestricted IPC commands
+  - Monorepo support: Searches for `src-tauri/` in subdirectories (e.g., `apps/app/src-tauri/`)
+  - Plugin subdirectory scanning: Scans `src-tauri/plugins/*/src/` for additional Tauri commands
+
+### Fixed
+
+- **`binary-scan` crash with ImportError**: `commands/binary_scan.py` imported `scan_tauri_artifacts` from `utils` but the function didn't exist, causing every `binary-scan` invocation to fail with `ImportError`. Added the full `scan_tauri_artifacts()` implementation.
+- **`has_rust: false` when Cargo.toml is in `src-tauri/`**: Tauri apps store Rust code in `src-tauri/Cargo.toml`, not the workspace root. `framework_detect.py` only checked the root, so Tauri apps were never detected as having Rust. Now falls back to `src-tauri/Cargo.toml` when root has none.
+- **Missing Tauri plugin dependencies**: Cargo.toml scanning only checked `crates/`, `ext/`, `libs/`, `packages/` subdirectories but not `src-tauri/` or its plugins. Added `src-tauri` to the scan list with recursive plugin subdirectory scanning.
+- **Regex error in `_scan_rust_tauri_commands`**: A malformed regex pattern `[\s\n.*?\]` (character class with unescaped `]`) caused `re.error: unterminated character set`. Removed the unused `cmd_pattern` since the line-by-line approach (`attr_pattern` + `fn_pattern`) is more reliable for multi-line `#[tauri::command]` annotations.
+
+### Changed
+
+- **Refactored Cargo.toml dependency extraction**: Extracted `_extract_cargo_deps()` helper in `framework_detect.py` to eliminate code duplication across root Cargo.toml parsing, workspace member scanning, and src-tauri scanning.
+- **Version bumped to 5.9.0**: Reflects the significant new Tauri analysis capabilities.
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
