@@ -36,20 +36,23 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.1
+# CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.1 — Tested on streamich/react-use (330 files, TS/TSX hooks library)
+## What's New in v6.0 — The "Analyze Everything" Release
 
-- **Library project detection**: `handbook` now distinguishes `frontend-library` from `frontend-app` by checking package.json for `main`/`module`/`files`/`sideEffects` fields and absence of `start`/`dev` scripts. React hooks libraries, component libraries, and utility packages are now correctly identified.
-- **Barrel file entrypoint detection**: `entrypoints` now detects barrel files (src/index.ts) as `module_export` entry points with `is_barrel: true` metadata, including exported name counts and types. Library entry points no longer hidden behind test entries.
-- **Health score critical penalty fix**: Fixed bug where projects with critical code smells could still score 100/100. Now any critical smell guarantees at least 5 points penalty, and the penalty curve is more aggressive (3 points even for single critical in large projects).
-- **Dead code false positive reduction**: Skip Storybook story files, test helper functions (setUp, tearDown, beforeAll, etc.), React component names (PascalCase) in src/ directories. Library public API type exports (AsyncState, Ref types) no longer flagged as unused.
-- **Debug-leak false positive reduction**: `console.error` in guard/argument-validation patterns, if-condition checks, and dev-only guards now correctly skipped. `console.warn` in deprecation/unsupported/fallback patterns skipped. These are intentional runtime warnings, not debug leaks.
-- **Framework detection expansion**: Added Jest, Vitest, Mocha, Cypress, Playwright, Testing Library, Storybook, ESLint, and Prettier detection from package.json dependencies and config files.
-- **Perf-hint large_bundle barrel file skip**: `export * from` in index.ts/index.js (barrel files) no longer flagged as bundle-bloating. This is intentional for library projects. Storybook story files also excluded.
-- **Storybook stories excluded from health score**: Stories directories are now treated like test/doc directories for health score calculation — they don't penalize production code health.
+- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.
+- **PHP support in all engines**: `.php` added to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files now scanned for code smells, complexity, debug leaks, and performance hints.
+- **PHP debug leak detection**: `var_dump()`, `print_r()`, `phpinfo()`, `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()`.
+- **PHP complexity detection**: New `_extract_php_functions()` — detects `public/private/protected function` and standalone `function` declarations.
+- **PHP smell detection**: Long functions, deep nesting, many parameters for PHP methods.
+- **PHP performance hints**: 8 PHP-specific patterns — Doctrine N+1, Eloquent N+1, sleep(), blocking file_get_contents(), exec()/shell_exec(), memory leaks in long-running processes, Redis KEYS command, missing TTL.
+- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines.
+- **Risk assessment**: 0-100 risk score with emoji indicators (🔴🟠🟡🟢) based on finding severity.
+- **Prioritized action plan**: Auto-generates P0-P3 action items with concrete next steps.
+- **Contextual recommendations**: Language/framework-specific recommendations (PHP: phpstan, Go: go vet, Python: mypy+ruff).
+- **Total commands**: 44 → 45.
 
 ## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 
@@ -80,16 +83,6 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Performance: --max-files limit**: Scan and handbook commands now accept `--max-files` (default: 5000) to prevent timeout on very large repos. Proportionally truncates file categories with a warning. Use `--max-files 0` to scan all files.
 - **Debug leak output improvement**: Each leak item now includes `pattern` (the detected pattern name), `message` (human-readable description), and `content` (the matched line content). Markdown formatter shows descriptive messages like "Debug console statement: console.log()" instead of raw category names.
 - **Python global state filtering**: Skips ALL_CAPS constants, dunder attributes (__name__, __file__, __all__), and path/env references (os.path, Path, os.getenv). Reduces false positives in Python projects.
-
-## What's New in v6.4 — Real-World Tested on starship/starship (248 files, Rust CLI)
-
-- **Rust debug-leak false positive fix**: `log::debug!()`, `log::info!()`, `log::warn!()`, `log::error!()`, `log::trace!()`, and `tracing::*!()` macros from the `log`/`tracing` crates are now classified as low-severity `debug_log` instead of high-severity `debugger`. Only `dbg!()` remains flagged as a true debugger statement. Reduced high-severity false positives from 40 → 0 on Rust projects.
-- **Rust dead code false positive fix**: Trait implementation methods (Default::default, From::from, Display::fmt, Clone::clone, etc.) are no longer flagged as dead code. Standard library trait impls with `ref_count == 0` are correctly excluded. `#[cfg(test)]` function patterns and `build.rs` functions also excluded. Known trait methods matched by name even without `impl_for` metadata.
-- **Rust framework detection expansion**: 19 new Rust crates detected from Cargo.toml: `clap`, `structopt`, `serde`, `reqwest`, `hyper`, `sqlx`, `diesel`, `sea-orm`, `tonic`, `prost`, `tracing`, `log`, `slog`, `bevy`, `egui`, `iced`, `tauri`, `rayon`, `gix`, `shadow-rs`. Each has a `category` field (cli, database, grpc, logging, etc.).
-- **Rust entrypoint improvements**: Added `#[tokio::main]` and `#[actix::main]` async main detection. Added `build.rs` as a build script entry point (filtered by filename). Added Rust HTTP route detection: Actix-web (`#[get("/path")]`), Axum (`.route("/path", get(handler))`), Rocket (`#[get = "/path"]`), Warp (`warp::path("segment")`).
-- **XXX in string literal fix**: `XXX` patterns inside string literals (e.g., test paths like `"a/xxx/yyy"`) are no longer flagged as code markers.
-- **Rust `#[cfg(debug_assertions)]` detection**: Added to `dev_only` category in debug-leak engine.
-- **New `debug_log` category**: Separate from `debugger`, captures structured logging statements (Rust `log::debug!()`, `tracing::info!()`, Go `log.Debug()`) that are NOT debugger statements but may indicate debug-level logging in production code.
 
 ## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
 
@@ -176,6 +169,38 @@ python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
 ---
 
 ## Available Tools
+
+### 0. `codelens_analyze` — Full Repository Analysis (NEW v6.0)
+
+**The one-shot command to understand an entire repository.** Automatically runs init + scan + all engines, then produces a comprehensive report with risk assessment and action plan.
+
+This is the recommended first command when you encounter a new repository. It replaces running 10+ individual commands.
+
+```bash
+# Full analysis (runs init + scan + all engines)
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace
+
+# Security-focused analysis only
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --focus security
+
+# Full detail (no severity filtering)
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --detail full
+
+# Skip re-scanning if registry already exists
+python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --skip-scan
+```
+
+**Output includes:**
+- Project identity (name, type, version, description)
+- Frameworks and languages detected
+- Architecture overview (files, lines, directory structure, key modules, entry points)
+- API route map
+- Prioritized findings from all engines (secrets, smells, complexity, debug leaks, dead code, circular deps, perf hints, config drift, binary artifacts, data flow, env issues, vulnerabilities)
+- Risk assessment (0-100 score with 🔴🟠🟡🟢 indicator)
+- Prioritized action plan (P0-P3)
+- Contextual recommendations (language/framework-specific)
+
+**When to use:** Always run `analyze` when you first encounter a repository. Use `summary` for quick checks, `analyze` for deep understanding.
 
 ### 1. `codelens_init` — Initialize Workspace
 

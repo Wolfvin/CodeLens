@@ -5,36 +5,37 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.3] — 2026-06-12
+## [6.0.0] — 2026-06-12
 
-### Tested against excalidraw/excalidraw (702 source files: 602 TS/TSX + 85 CSS/SCSS, 89MB canvas-based drawing monorepo)
+### The "Analyze Everything" Release
 
-Real-world test on a pure TypeScript/React monorepo (packages/common, packages/excalidraw, packages/element, etc.)
-with 2,025 backend nodes, 13,720 edges. Found and fixed 10 runtime bugs through practical execution testing.
+The single biggest improvement for AI agents: **`analyze` command** — one command to understand an entire repository.
 
 ### Added
 
-- **Monorepo detection from sub-directory structure**: Projects with 2+ package.json files in `apps/`, `packages/`, or `services/` directories are now correctly identified as monorepos, even without turbo.json or pnpm-workspace.yaml. Adds `yarn-workspace` to monorepo_tools.
-- **npm/yarn workspaces field detection**: `handbook` now checks root `package.json` for `"workspaces"` field and adds `npm-workspaces` to monorepo_tools.
-- **ESM detection heuristics**: `detect_frameworks()` now checks for `.mts`/`.mjs` files and `"exports"` field in package.json before defaulting to CJS module system. Prevents incorrect `module_system: cjs` for ESM projects.
-- **Ask command timeout protection**: `ask` now applies a 30-second timeout for slow commands (dead-code, smell, complexity, etc.) using SIGALRM. Returns a helpful timeout message instead of hanging.
-- **Ask command duration tracking**: `ask` responses now include `ask_duration_ms` field for performance monitoring.
+- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces a comprehensive report with: project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations. Use: `codelens analyze /path/to/repo`
+- **PHP support in all engines**: Added `.php` to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files are now scanned for code smells, complexity, debug leaks, and performance hints.
+- **PHP debug leak patterns**: Added detection for `var_dump()`, `print_r()`, `phpinfo()` (print_statement), `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()` (debugger).
+- **PHP complexity detection**: Added `_extract_php_functions()` to complexity_engine.py. Detects `public function`, `private function`, `protected function`, and standalone `function` declarations. Computes cyclomatic/cognitive complexity for PHP methods.
+- **PHP smell detection**: Added PHP function/method detection patterns to smell_engine.py for long functions, deep nesting, and many parameters. Detects `(public|private|protected) function name(` and standalone `function name(`.
+- **PHP performance hints**: Added 8 PHP-specific perf patterns:
+  - N+1: Doctrine `$em->find()` / `$repo->find()` inside loops, Eloquent `::find()` / `::where()` inside loops
+  - Sync blocking: `sleep()`, `file_get_contents()` for HTTP URLs, `exec()`/`shell_exec()`/`system()`/`passthru()`
+  - Memory leak: `$this->prop[] = ` without `unset()` in long-running processes
+  - Cache miss: Redis `$redis->keys()` (production danger), `$redis->set()` without TTL
+- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines (smell, complexity, debug-leak).
+- **Risk assessment in analyze**: Computes a 0-100 risk score based on finding severity counts with emoji indicators (🔴🟠🟡🟢).
+- **Prioritized action plan**: Auto-generates P0-P3 action items sorted by severity with concrete next steps.
+- **Contextual recommendations**: Generates language/framework-specific recommendations (e.g., "PHP project — consider phpstan", "Go project — run go vet").
 
-### Fixed
+### Tested against
 
-- **`binary-scan` ImportError crash**: `scan_tauri_artifacts` was imported from `utils.py` but doesn't exist. Changed to try/except import with graceful fallback — Tauri analysis is skipped when the function is unavailable.
-- **Monorepo not detected for packages/ sub-directories**: Excalidraw (packages/common, packages/excalidraw, etc.) was reported as `is_monorepo: false`. Fixed by counting sub-directory package.json files and flagging as monorepo when count >= 2.
-- **`stack-trace` workspace auto-detect break**: When called with a workspace path as first positional arg, it was parsed as function name and workspace fell through to auto-detect (picking up wrong directory). Added path detection: if `name` looks like a path, swap it to workspace.
-- **Module system always CJS**: Projects without `"type": "module"` in package.json but using .mts/.mjs files or `"exports"` field were incorrectly reported as CJS. Added ESM heuristic detection.
-- **`summary --detail minimal` not reducing output**: Minimal detail still returned all findings regardless of severity. Now properly filters by severity and skips categories with no critical items in minimal mode.
-- **Markdown formatter Python dict repr**: Convention fields like `{'convention': 'PascalCase', 'confidence': '53%'}` are now formatted as readable text instead of Python dict representation.
-- **ORM false positive for TypeScript projects**: SQLAlchemy patterns (`Base =`, `Column(`) matched React/TSX code (e.g., `const Base = ...`, UI Column components). Restricted SQLAlchemy detection to `.py` files only and made patterns more specific (`Base = declarative_base`, `Column(Integer|String|...)`).
-- **Dataflow `.values()` false positive**: `.value\s*` pattern matched `elements.values()`, `groups.values()` (Map/Array methods) as DOM input sources. Changed to `\.value\b(?!\s*\()` to exclude `.values()` calls. Reduced violations from 28 to 15 on Excalidraw.
-- **Trace `affected_file_list` included path chains**: The file list contained entries like `packages/excalidraw/renderer/staticSvgScene.ts:719 → packages/excalidraw/scene/export.ts:289`. Now extracts only actual file paths from chain notation.
+- **ChaosServer** (53 PHP files, custom async PHP server with ReactPHP + Doctrine + Redis): Confirmed all engines work with PHP. Found 30 secrets, 141 smells, 25 debug leaks, 10 complexity hotspots, 5 perf hints.
 
 ### Changed
 
-- **Version bump**: 5.9.1 → 6.3
+- **Version bump**: 5.8.1 → 6.0.0
+- **Total commands**: 44 → 45 (added `analyze`)
 
 ## [5.8.1] — 2026-06-12
 

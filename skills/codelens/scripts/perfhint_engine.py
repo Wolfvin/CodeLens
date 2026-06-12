@@ -46,11 +46,12 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".html", ".vue", ".svelte",
+    ".php",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)
 FRONTEND_EXTENSIONS = {".jsx", ".tsx", ".vue", ".svelte", ".html"}
-BACKEND_EXTENSIONS = {".py", ".rs", ".go"}
+BACKEND_EXTENSIONS = {".py", ".rs", ".go", ".php"}
 JS_TS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
 
 # Test directory / file indicators
@@ -106,6 +107,26 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "Query builder call inside loop — potential N+1 query problem",
                 "fix_suggestion": "Move the query builder outside the loop, use IN-clause or a DataLoader pattern.",
+            },
+            # PHP: Doctrine ORM inside loop
+            {
+                "regex": (
+                    r'(?:foreach\s*\(|while\s*\(|for\s*\()'
+                    r'[^}]{0,120}?'
+                    r'(?:\$em->find\s*\(|\$repo->find\s*\(|\$repository->find\s*\()'
+                ),
+                "hint": "Doctrine find() inside loop — potential N+1 query problem",
+                "fix_suggestion": "Use Doctrine's ->findBy(['id' => $ids]) or write a DQL/QueryBuilder batch query outside the loop.",
+            },
+            # PHP: Eloquent inside loop
+            {
+                "regex": (
+                    r'(?:foreach\s*\(|while\s*\(|for\s*\()'
+                    r'[^}]{0,120}?'
+                    r'(?:\w+::find\s*\(|\w+::where\s*\()'
+                ),
+                "hint": "Eloquent query inside loop — potential N+1 query problem",
+                "fix_suggestion": "Use Eloquent's ->findMany($ids) or ->whereIn('id', $ids) for batch loading outside the loop.",
             },
         ],
     },
@@ -239,6 +260,24 @@ PERF_HINT_CATEGORIES = {
                 "hint": "Blocking HTTP request (requests library) in route handler — stalls the worker",
                 "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP, or offload to a background task.",
             },
+            # PHP: sleep() in non-test files
+            {
+                "regex": r'\bsleep\s*\(\s*\d+\s*\)',
+                "hint": "sleep() call blocks the entire PHP process — avoid in web requests",
+                "fix_suggestion": "Use queue dispatch with delay, or ReactPHP/event-loop timers for async waits.",
+            },
+            # PHP: file_get_contents() for remote URLs (blocking HTTP)
+            {
+                "regex": r'\bfile_get_contents\s*\(\s*["\']https?://',
+                "hint": "file_get_contents() with HTTP URL — blocking network call in request handler",
+                "fix_suggestion": "Use Guzzle async or Symfony HttpClient for non-blocking HTTP requests.",
+            },
+            # PHP: exec/shell_exec/system (blocking system calls)
+            {
+                "regex": r'\b(?:exec|shell_exec|system|passthru)\s*\(',
+                "hint": "Blocking system call (exec/shell_exec/system) — stalls the PHP process",
+                "fix_suggestion": "Use Symfony Process component or dispatch to a queue worker for system commands.",
+            },
         ],
     },
 
@@ -281,6 +320,13 @@ PERF_HINT_CATEGORIES = {
                 "negative_regex": r'\.(?:off|removeListener|removeAllListeners)\s*\(\s*["\']\1["\']',
                 "hint": "EventEmitter .on() without matching .off() — listener accumulates over time",
                 "fix_suggestion": "Call .off() or .removeListener() when the subscriber is done (e.g., in cleanup / destructor).",
+            },
+            # PHP: array push without cleanup in long-running process (daemon/worker)
+            {
+                "regex": r'\$this->\w+\[\]\s*=\s*',
+                "negative_regex": r'unset\s*\(',
+                "hint": "Array append on $this in a long-running process without unset() — potential memory leak in daemons",
+                "fix_suggestion": "Use unset() or array_splice() to remove processed items, or use a fixed-size ring buffer.",
             },
         ],
     },
@@ -387,6 +433,19 @@ PERF_HINT_CATEGORIES = {
                 "negative_regex": r'(?:cache_page|@cache|lru_cache|cache\.get|redis\.get)',
                 "hint": "DB query in view without caching — hits the database on every request",
                 "fix_suggestion": "Add @cache_page (Django) or @lru_cache / Redis caching to avoid repeated DB hits.",
+            },
+            # PHP: Redis KEYS command in production
+            {
+                "regex": r'\$redis->keys\s*\(|Redis::keys\s*\(',
+                "hint": "Redis KEYS command in production — O(N) scan that blocks Redis",
+                "fix_suggestion": "Use SCAN instead of KEYS for production Redis to avoid blocking the server.",
+            },
+            # PHP: Redis SET without TTL parameter
+            {
+                "regex": r'\$redis->set\s*\(\s*["\'][^"\']+["\']\s*,\s*[^)]+\)',
+                "negative_regex": r'(?:EX|PX|expire|ttl)',
+                "hint": "Redis SET without TTL — key never expires, potential memory leak",
+                "fix_suggestion": "Add an EX or PX parameter to $redis->set() or call $redis->expire() to set a TTL.",
             },
         ],
     },

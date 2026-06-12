@@ -29,6 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
+    ".php", ".dart", ".lua", ".java", ".cs",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -63,6 +64,10 @@ PRINT_PATTERNS = [
     (r'\beprintln!\s*\(', "eprintln!()"),
     (r'\blog\.Debug\s*\(', "log.Debug()"),
     (r'\blog\.Info\s*\(', "log.Info()"),
+    # PHP debug output
+    (r'\bvar_dump\s*\(', "var_dump()"),
+    (r'\bprint_r\s*\(', "print_r()"),
+    (r'\bphpinfo\s*\(', "phpinfo()"),
 ]
 
 DEBUGGER_PATTERNS = [
@@ -75,6 +80,15 @@ DEBUGGER_PATTERNS = [
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
     (r'\bnode\s+--inspect\b', "node --inspect"),
+    # PHP debug/die statements
+    (r'\bdd\s*\(', "dd()"),               # dump and die (Laravel)
+    (r'\bdump\s*\(', "dump()"),           # Symfony VarDumper
+    (r'\bray\s*\(', "ray()"),             # Spatie Ray
+    (r'\bdpm\s*\(', "dpm()"),             # Drupal debug
+    (r'\bkint\s*\(', "kint()"),           # Kint debugger
+    (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
+    (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
+    (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
 ]
 
 # Rust logging macros from the `log` crate — these are NOT debugger statements.
