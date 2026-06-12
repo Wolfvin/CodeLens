@@ -141,6 +141,10 @@ def analyze_css_deep(
             if ext not in ALL_STYLE_EXTENSIONS:
                 continue
 
+            # Skip minified CSS files
+            if '.min.' in filename:
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 

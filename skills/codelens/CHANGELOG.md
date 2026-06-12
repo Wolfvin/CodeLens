@@ -5,88 +5,73 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.2.0] — 2026-06-12
+## [6.1.0] — 2026-06-12
 
 ### Added
-
-- **NEW: `summary` command (42nd command)** — Anti-overload condensed view for AI agents. Instead of running 10+ commands and getting flooded with data, this single command auto-detects what matters most and returns prioritized, actionable findings only. Supports `--focus` (security/quality/architecture/all), `--detail` (minimal/standard/full), and `--max-items` per category. Routes from `ask` via keywords like "tldr", "quick summary", "what matters", "auto detect".
-- **`resolve_tauri_ipc_from_apimap()` in edge_resolver.py** — Implements Tauri IPC cross-language edge resolution that was referenced in scan.py but never defined. Creates synthetic edges between TypeScript `invoke('commandName')` calls and Rust `#[tauri::command]` handlers using snake_case ↔ camelCase matching.
-- **Shared constants in utils.py** — `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (3000), and `time_budget_expired()` function. Centralized from individual engine copies to prevent drift and fix broken imports.
-- **Handbook markdown comprehensive output** — Expanded from ~20 lines to full sections: Key Entry Points (test-filtered), API Surface, State Management, expanded Quick Reference (each stat on own line), Languages, and severity markers on risks.
-- **Summary markdown formatter** — `_md_summary()` for the new summary command.
-
-### Fixed
-
-- **CRITICAL: 5 commands broken by missing imports** — `scan`, `ask`, `handbook`, `watch`, `env-check` all failed to load at startup. `envcheck_engine.py` imported `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` from `utils` but none existed. `scan.py` imported `resolve_tauri_ipc_from_apimap` from `edge_resolver` but it was never defined. This meant 12% of all commands (5/41) were silently broken.
-- **CRITICAL: Trace engine returns 0 callers for case-mismatched names** — `trace "renderElement"` returned 0 callers while `query` showed ref_count=9. Root cause: trace used exact+case-sensitive lookup while query supports fuzzy/case-insensitive matching. Fixed by adding case-insensitive exact match and case-insensitive substring fallback to trace_engine.py.
-- **HIGH: Entrypoints still showing config files** — Despite v6.0 claiming config file filtering, `.lintstagedrc.js`, `babel.config.js`, etc. still appeared. Two issues: (1) incomplete pattern list missing `.lintstagedrc`, `.babelrc`, `.stylelintrc`, `commitlint.`, `husky.`, `jest.config.`, etc.; (2) filter only applied to `module_export` type, not all entrypoint types. Added 25+ patterns and applied filter to ALL types.
-- **HIGH: State-map classifying math constants as "global" state** — `LegendreGaussN24TValues` (immutable math lookup table) was classified as "global" state because its PascalCase name passed the `value_is_stateful` check (array literal `= [...]`). Added data-constant suffix detection (`Values`, `Data`, `Entries`, `Table`, etc.) and math-pattern detection (Gauss, Legendre, Fibonacci, etc.). Reduced from 33 to 31 stores on excalidraw.
-- **MEDIUM: Perf-hint output key mismatch** — `stats.total_hints` was 360 but `hints` array was `[]`. Data was stored under `findings` key while stat said `hints`. Renamed `findings` → `hints` for consistency. Updated markdown formatter to check both keys for backward compat.
-- **MEDIUM: Handbook state management `defined_in` empty** — Markdown formatter read `store.get("defined_in")` but handbook data used `store.get("file")`. Fixed formatter to check both keys.
-- **LOW: Version mismatch** — `utils.py` had 5.7.1, `pyproject.toml` had duplicate version lines. Unified to 6.2.0.
-
-### Test Target Documentation
-
-- **excalidraw/excalidraw** (GitHub): Used as a test target for v6.2 — a canvas-based virtual whiteboard monorepo with 725 source files (312 TS, 290 TSX, 85 CSS, 25 JS). Frameworks: React, Next.js, Vite. Monorepo with yarn workspaces. Unique architecture: canvas rendering engine, gesture handling, element system, custom state management (Jotai atoms). Key findings that drove fixes: 5 broken commands from missing imports, trace returning 0 callers, 159 CSS missing-refs false positives, math constants as state, config files as entrypoints.
-
-## [5.9.0] — 2026-06-12
+- **Reverse Engineering mode for scan**: New `--reverse-engineering` / `--re` flag on `scan` command. Includes dist/, build/, out/ directories and .min.js/.min.css files that are normally ignored. Also detects binary artifacts (.wasm, .so, .dll, etc.) in RE mode.
+- **WASM deep analysis**: `artifact-scan --deep` now extracts export names and import entries from WASM binaries. Shows function/table/memory/global exports with their types, and module.field import references.
+- **Source map JSON parsing**: `artifact-scan --deep` now parses source map files and extracts original source file references, name counts, version, source root, and x_google_ignoreList.
+- **sourceMappingURL detection**: Minified files are now scanned for `//# sourceMappingURL=` comments in deep mode.
+- **`is_generated_file()` utility**: New utility function to detect auto-generated files (lock files, OS files, minified files). Used by refactor-safe engine.
+- **`scan_tauri_artifacts()` utility**: Full Tauri application analysis — detects tauri.conf.json, extracts IPC commands from Rust source, capabilities/permissions, CSP headers, sidecar binaries, and security configuration.
+- **WASM framework detection**: Framework detection now identifies wasm-bindgen, wasm-pack, and emscripten projects. Also detects .wasm files in workspace.
+- **`.mjs`/`.cjs` support**: `discover_files()` in scan command now handles .mjs and .cjs file extensions.
+- **Minified CSS skip**: cssdeep_engine now skips .min.css files to avoid false positives on minified stylesheets.
 
 ### Fixed
+- **refactor_safe ImportError**: `is_generated_file` was missing from `utils.py`, causing refactor-safe command to crash on import. Now properly implemented.
+- **binary-scan ImportError**: `scan_tauri_artifacts` was missing from `utils.py`, causing binary-scan command to crash. Now fully implemented with comprehensive Tauri analysis.
+- **WASM section parsing robustness**: Custom section name length is now read as LEB128 (not single byte), matching the WASM spec. Section end positions are computed as absolute offsets instead of relative seeks, preventing position drift on malformed files.
 
-- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
-- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
-- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
-- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
-- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
-- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
-- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
-- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
+## [5.7.2] — 2026-06-12
 
-### Test Target Documentation
-
-- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
-
-## [5.8.0] — 2026-06-12
+### Fixed
+- **state-map markdown crash**: `_md_state_map()` called `.get('name')` on action/slice entries, but entries are strings in Pinia/Vuex/Redux/Zustand stores. Now handles both dict and string formats gracefully.
+- **binary-scan ImportError**: `scan_binary_artifacts` function was missing from `utils.py`. Now fully implemented with extension-based detection and binary signature scanning (ELF, PE, Mach-O, WASM, etc.).
+- **Pinia/Vuex/Redux false positive actions**: JS/TS keywords (`if`, `for`, `while`, etc.) and built-in methods (`push`, `includes`, `toUpperCase`, etc.) were being extracted as store actions. Added `_is_js_keyword_or_builtin()` filter with 80+ entries. Also improved section extraction using `_extract_section()` with proper brace-matching instead of fragile regex.
 
 ### Added
+- **binary-scan command fully functional**: New `_md_binary_scan` markdown formatter. Scans for compiled binaries, archives, images, and Python bytecode with size reporting and recommendations.
+- **Tauri IPC route mapping in api-map**: Frontend `invoke('command')` calls and backend `#[tauri::command]` Rust handlers are now extracted as IPC routes. Shows full invoke:// endpoint paths.
+- **Unsupported language detection**: Framework detection now identifies Go, Java, Kotlin, C/C++, C#, Swift, and Ruby projects. Scan output shows a `lang_note` warning when unsupported languages are detected.
+- **Go framework signatures**: Added `golang`, `gin`, `echo` to framework detection signatures.
+- **`_extract_section()` helper**: New brace-matching helper for state management extractors that properly handles nested braces and string literals, replacing fragile regex patterns.
 
-- **Monorepo support** (`scripts/framework_detect.py`): Full monorepo workspace detection — scans all `package.json` files in sub-packages (pnpm workspaces, npm/yarn workspaces, Turborepo). This fixes a critical bug where React was not detected in monorepo projects like Tauri apps with `apps/` structure. New functions: `_discover_workspace_package_jsons()`, `_glob_package_jsons()`, `_collect_deps_from_package_jsons()`. Detects `is_monorepo` flag and `lockfile` type (bun/pnpm/yarn/npm).
-- **Deep Tauri config scan** (`scripts/framework_detect.py`): Tauri config (`tauri.conf.json`) is now detected anywhere in the workspace tree, not just at `src-tauri/tauri.conf.json`. This fixes detection in monorepo structures like `apps/<name>/src-tauri/tauri.conf.json`.
-- **Monorepo-aware init config** (`scripts/framework_detect.py`): `get_recommended_config()` now generates correct `frontend_paths` and `backend_paths` for monorepo Tauri projects (e.g., `apps/readest-app/src/` for frontend, `apps/readest-app/src-tauri/src/` for backend).
-- **Lockfile detection** (`scripts/framework_detect.py`): Added automatic detection of package managers from lock files: `bun.lock`/`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm. Exposed as `lockfile` in framework detection output.
-- **New framework signatures** (`scripts/framework_detect.py`): Added detection for `trpc`, `orpc`, `zustand`, `redux`, and `vite` frameworks/packages.
-- **SearchConfig dataclass** (`scripts/search_engine.py`): Introduced `SearchConfig` dataclass to replace the 11-parameter `search_workspace()` function. The old function is preserved for backward compatibility and now delegates to `search_with_config(cfg)`. This eliminates the `many_params` code smell (11 → 2 parameters) and makes call sites self-documenting.
-- **FrontendRegistryInput dataclass** (`scripts/registry.py`): Introduced `FrontendRegistryInput` dataclass to replace the 9-parameter `build_frontend_registry()` function. Legacy function preserved for backward compatibility, delegates to `build_frontend_registry_from_input(inp)`. Eliminates the `many_params` code smell (9 → 1 parameter).
-- **normalizeGeneric normalizer** (`src/lib/normalizer.ts`): Added a generic normalizer method that produces a simple GraphEvent from any CLI output. Used for `handbook` and `ask` commands which previously fell through to the "unknown command" fallback.
-- **Expanded WebSocket normalizer coverage** (`mini-services/codelens-ws/index.ts`): Added explicit animation routing for 17 previously-unhandled commands (test-map, config-drift, type-infer, ownership, entrypoints, api-map, state-map, handbook, stack-trace, diff, validate, outline, dependents, list, context, detect, init). Previously these all fell through to the default generic handler.
-- **Missing logger import fix** (`scripts/framework_detect.py`): Added `logger` import from `utils` — the module was referencing `logger.debug()` without importing it, causing `NameError` at runtime when parsing requirements.txt/pyproject.toml failed.
+## [6.0.0] — 2026-06-12
+
+### Added
+- **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find frameworks in workspace packages. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).
+- **Polyglot project identity**: Handbook detects combined types (e.g., `rust-js-monorepo`) when both package.json and Cargo.toml exist.
+- **Dead code from registry cross-reference**: Uses backend registry's `ref_count` data to find functions with zero references.
+- **Monorepo-aware config defaults**: `init` now adds `apps/*/`, `packages/*/`, `crates/*/` paths when monorepo detected.
+- **`should_ignore_dir()` utility**: New shared utility in `utils.py` for path-segment-aware directory ignore checking. Replaces inline implementations across multiple engines.
+- **`safe_read_file()` utility**: New shared utility for safe file reading with size limits and encoding handling. Prevents out-of-memory on large files.
+- **`time_budget_expired()` utility**: New shared utility for checking global timeout budgets in engines. Prevents runaway scans on massive codebases.
+- **Performance safeguards in `utils.py`**: `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (5000), `GLOBAL_TIMEOUT_SEC` (120s) constants for all engines.
+- **`handbook --quick` mode**: New flag to skip expensive engines (secrets, vuln-scan, circular, dead-code) for faster results on large codebases.
+- **Engine status tracking in handbook**: Handbook now reports `engines_ok` and `engines_failed` lists in `meta`. Overall status is `ok`, `degraded`, or `error` based on engine results.
+- **Lazy imports in `ask` command**: All 17 engine imports moved from module-level to inside `_execute_ask_command()`. Reduces CLI startup time significantly.
+- **Thread-safe grammar loader**: `GrammarLoader` singleton now uses `threading.Lock()` for thread safety in watch command.
+- **Modern tree-sitter API support**: `GrammarLoader.get_parser()` now handles both legacy (`Parser(lang)`) and modern (`parser.language = lang`) tree-sitter APIs.
+- **Graceful command import**: `commands/__init__.py` now wraps each command module import in try/except, so one failing module doesn't prevent others from registering.
+- **`truncated` field in env-check output**: Indicates when file count or timeout limits were hit, so users know results are partial.
 
 ### Fixed
-
-- **CRITICAL: `should_ignore_dir` missing from utils.py** — The function was imported by `framework_detect.py`, `tailwind_detector.py`, and 40 command modules via the import chain, but never defined in `utils.py`. This caused ALL 41 CLI commands to fail with `ImportError` on startup. Added the function with path-segment-aware matching consistent with `should_ignore()` in scan.py.
-- **CRITICAL: Frontend registry deletion cleanup used nonexistent field** — Incremental scan tried to clean deleted-file entries using `c.get("defined_in")`, but frontend classes use `css`/`js` arrays with `path` fields, and IDs use `defined_in_html`. This meant deleted files' frontend data was NEVER removed from the registry. Rewrote cleanup to properly strip refs by path and recalculate ref_count/status.
-- **CRITICAL: `ask` command missing handlers for 8 commands** — Side-effect, dataflow, missing-refs, ownership, config-drift, stack-trace, and type-infer queries all returned "Unknown command" because `_execute_ask_command` had no handler branches. Added all missing handlers.
-- **HIGH: Rust parser `impl_for` context leaked to sibling functions** — When tree-sitter walked past an `impl_item` to a sibling `function_item` outside the impl block, `current_impl_for` still held the previous impl's type name. Fixed by checking parent ancestry before assigning impl context.
-- **HIGH: Circular dependency detection missed `../` imports** — The import regex only matched `./` relative imports, silently ignoring all parent-directory imports (`import X from '../utils'`). Fixed regex to match `\.{1,2}/` for both `./` and `../`.
-- **HIGH: `vulnscan_engine.py` created its own logger** — Bypassed the shared `utils.get_logger()` which configures handlers and log level, causing all vulnscan debug/warning messages to be silently dropped. Changed to import `logger` from utils.
-- **HIGH: Version mismatch** — `utils.py` had version 5.7.0, `skill.json` and `pyproject.toml` had 5.7.1. Unified to 5.8.0 across all three.
-- **MEDIUM: `scan.py` imported unused `compute_frontend_status`** — Removed dead import.
-- **MEDIUM: `context_engine.py` used raw `open()` instead of `safe_read_file()`** — Could crash on minified/large files. Switched to the safe utility.
-- **MEDIUM: `search_engine.py` used simple set membership for directory ignoring** — Didn't benefit from path-segment-aware matching. Added `should_ignore_dir()` call.
-- **MEDIUM: Dead code branch in `incremental.py`** — `if not is_resolved and from_is_changed` was unreachable because `from_is_changed` was already checked earlier. Removed the dead branch.
-- **MEDIUM: `context_engine.py` auto-domain silently dropped backend matches** — When a name matched in both frontend and backend, only the frontend result was returned. Now adds `also_matched_in` note to indicate the overlap.
-- **MEDIUM: `convention_engine.py` had no file count limits** — Could be extremely slow on large codebases (10K+ files). Added `MAX_FILES_PER_CATEGORY = 500` sampling limit.
-- **LOW: 12 engine files imported `DEFAULT_IGNORE_DIRS` but not `logger`** — Added `logger` to imports in: smell_engine, debugleak_engine, apimap_engine, envcheck_engine, dependents_engine, dataflow_engine, regexaudit_engine, statemap_engine, complexity_engine, typeinfer_engine, cssdeep_engine, entrypoints_engine.
-
-### Changed
-
-- **Gini coefficient optimization** (`src/lib/healthScore.ts`): Replaced O(n²) double-nested-loop implementation with O(n log n) sorted-sum method: `G = (2 * Σ(i * x_i)) / (n * Σ x_i) - (n + 1) / n`. This dramatically improves performance for large codebases with many owners.
-- **Version bump**: Updated from 5.7.1 to 5.8.0 across `utils.py`, `skill.json`, and `CHANGELOG.md`.
-- **Tauri+React monorepo JSX mode** (`scripts/framework_detect.py`): JSX mode is now correctly enabled when both React and Tauri are detected in a monorepo.
-
-### Test Target Documentation
-
-- **readest/readest** (GitHub): Used as a test target for monorepo support — a large Tauri ebook reader app with React frontend and Rust backend. Monorepo structure: 40 Rust files, 1167 TSX files, 1 CSS file. Previously, `detect` returned `has_react: false` because React was only in `apps/readest-app/package.json`. After fix, all 6 frameworks detected: react, next.js, tailwind, zustand, vite, tauri. Also validated: smell (6389 issues, health 75), secrets (72 findings), complexity (3494 functions), circular deps (111 cycles), dead code (450 items), vuln scan (1 CVE), perf hints (952), a11y (584 issues).
+- **God object detection**: Class method counting now scoped to actual class/impl body via brace-depth tracking. Was counting ALL function calls in the file as methods (10-30x inflation).
+- **API route false positives**: Routes must start with `/` for non-router objects. Expanded skip list (80+ objects). Prevents `headers.get('user-agent')` from being reported as `GET /user-agent`.
+- **CSS specificity false positives**: Tracks brace depth to distinguish CSS rule selectors from property values. Was flagging `rgba()`, `var()`, gradient values as selectors.
+- **State map over-classification**: Skips ALL_CAPS constants, React components (arrow functions, forwardRef, memo, styled), and immutable values. Removed module.exports scanning.
+- **Entrypoints markdown formatting**: Bracket types like `[main]` no longer get mangled by markdown link reference interpretation.
+- **Dead code zero results**: Fixed registry cross-reference to use correct field names (`fn` instead of `name`). Added filtering for main(), pub functions, and test fixtures.
+- **Handbook type detection**: No longer defaults to `node-project` for Rust+TS monorepos. Cargo.toml is always checked regardless of existing type.
+- **`should_ignore_dir` ImportError in tailwind_detector.py**: Was importing a function that didn't exist in `utils.py`. Now uses shared implementation from `utils.py`.
+- **`safe_read_file` ImportError in a11y_engine.py**: Removed unused import of non-existent function. a11y_engine now uses the shared `safe_read_file` from `utils.py`.
+- **Silent exception swallowing in `context.py`**: `except Exception: pass` replaced with proper `logger.debug()` call.
+- **Silent exception swallowing in `handbook.py`**: `except Exception: pass` for sub-directory package.json replaced with `logger.debug()`.
+- **Handbook always reports `status: ok`**: Now reports `ok`, `degraded`, or `error` based on engine success/failure counts.
+- **env-check returns empty output on large repos**: Added `MAX_FILE_SIZE`, `MAX_FILES` (5000), and `GLOBAL_TIMEOUT_SEC` (90s) limits. Now uses `safe_read_file()` instead of raw `open()`.
+- **Version inconsistency**: SKILL.md said "v6" but code said "5.7.1". All version references now unified to "6.0.0".
+- **CLI version hardcoded**: `codelens.py` description now uses `CODELENS_VERSION` constant instead of hardcoded "v5".
 
 ## [5.6.0] — 2026-06-11
 

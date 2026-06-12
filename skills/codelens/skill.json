@@ -1,8 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.2.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Tauri IPC cross-language edge resolution, self-edge prevention. v5.9: PHP/Blade support, C++/Go support, XHR/network patterns, list command. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo detection, SvelteKit routes, Svelte stores, framework-adaptive perf-hint. v6.1: Tauri/Remix/Astro detection, smell_engine enhanced. v5.7.2: 7 critical bugfixes. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect.",
-  "author": "codelens",
+  "version": "6.1.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v6.1: Reverse Engineering mode (artifact-scan, binary-scan, --re flag), WASM binary analysis (header parsing, export/import extraction, section enumeration), source map JSON parsing, Tauri IPC RE, is_generated_file(), .mjs/.cjs support, framework detection (wasm-bindgen/wasm-pack/emscripten), minified file detection skip, deep scan mode. v5.10: Tauri IPC cross-language edge resolution, self-edge prevention. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect.",  "author": "codelens",
   "tags": [
     "code-analysis",
     "reference-tracking",
@@ -139,6 +138,16 @@
     "go",
     "golang",
     "network-patterns",
-    "xhr"
+    "xhr",
+    "reverse-engineering",
+    "wasm",
+    "binary-analysis",
+    "artifact-scan",
+    "source-map",
+    "minified",
+    "obfuscation",
+    "emscripten",
+    "wasm-bindgen",
+    "wasm-pack"
   ]
 }
