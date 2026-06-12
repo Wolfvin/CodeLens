@@ -261,7 +261,13 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        # "modules/" and "themes/" alone are too generic — many projects (Redis,
+        # Kubernetes, etc.) have modules/ directories without being Drupal.
+        # Require at least sites/default/ (unique to Drupal) OR a combination
+        # of indicators.  The scoring logic in 5b will handle multi-indicator.
+        "indicators": ["sites/default/"],
+        # Soft indicators that add score but don't trigger alone
+        "soft_indicators": ["modules/", "themes/"]
     },
 }
 
@@ -818,6 +824,28 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 elif fw_name == "deno":
                     detected["has_deno"] = True
                 break
+
+    # 5c. Soft indicators — frameworks that need multiple weak signals to confirm.
+    # A single generic indicator (like "modules/") is not enough to identify a
+    # framework. We require at least 2 soft indicators to match, or 1 soft indicator
+    # plus a hard indicator from another source (packages, config_files).
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        soft = sig.get("soft_indicators", [])
+        if not soft:
+            continue
+        soft_hits = 0
+        for indicator in soft:
+            indicator_path = os.path.join(workspace, indicator)
+            if os.path.exists(indicator_path):
+                soft_hits += 1
+        # Require at least 2 soft indicators to confirm (prevents false positives)
+        # e.g., Drupal needs both "modules/" AND "themes/" (not just "modules/")
+        if soft_hits >= 2:
+            detected["frameworks"].append(fw_name)
+            if fw_name == "drupal":
+                detected["has_drupal"] = True
 
     # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
