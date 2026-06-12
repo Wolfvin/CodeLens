@@ -3,8 +3,9 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Set, Tuple
+from typing import Dict, Any, List, Optional
 
 # ─── Logging ─────────────────────────────────────────────────
 
@@ -38,37 +39,16 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
-# ─── Shared Limits ──────────────────────────────────────────
-
-MAX_FILE_SIZE = 200 * 1024        # 200KB — skip files larger than this to avoid slow scans
-MAX_FILES_DEFAULT = 3000          # Default max files to scan per engine
-DEFAULT_MAX_FILE_SIZE = 200 * 1024  # 200KB — alias for engines that use this name
-
-import time as _time
-
-
-def time_budget_expired(start_time: float, timeout_sec: float) -> bool:
-    """Check if a time budget has expired.
-
-    Args:
-        start_time: The start time (from time.time()).
-        timeout_sec: The timeout in seconds.
-
-    Returns:
-        True if the time budget has expired.
-    """
-    return (_time.time() - start_time) > timeout_sec
-
 # ─── Output File Generation ─────────────────────────────────
 
-def write_output_files(workspace: str, scan_result) -> dict:
+def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> dict:
     """After a scan, generate outline.json and summary.json into .codelens/."""
     try:
         from outline_engine import get_workspace_outline
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace)
+        outline_data = get_workspace_outline(workspace, max_files=max_files)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -138,311 +118,69 @@ def compute_summary(workspace, outline_data, scan_result):
     }
 
 
-# ─── Generated / Binary File Detection ─────────────────────────
-
-_GENERATED_FILE_PATTERNS = frozenset({
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock',
-    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'pdm.lock', 'uv.lock',
-    'go.sum', 'composer.lock', 'mix.lock',
-})
-
-_GENERATED_FILE_PREFIXES = (
-    '.min.',      # minified files: .min.js, .min.css
-    '.bundle.',   # bundled files
-    '.chunk.',    # code-split chunks
-)
-
-_GENERATED_FILE_EXTENSIONS = frozenset({
-    '.map',       # source maps
-    '.d.ts',      # TypeScript declaration files
-    '.pyc', '.pyo', '.pyd',  # Python compiled
-    '.so', '.dll', '.dylib',  # Shared libraries
-    '.exe', '.msi',  # Windows executables
-    '.wasm',      # WebAssembly
-    '.node',      # Native Node addons
-})
-
-
-def is_generated_file(filename: str) -> bool:
-    """Check if a file appears to be auto-generated or a lock file.
-
-    Args:
-        filename: Just the file name (not the full path).
-
-    Returns:
-        True if the file should be skipped during analysis.
-    """
-    if filename in _GENERATED_FILE_PATTERNS:
-        return True
-    name_lower = filename.lower()
-    for prefix in _GENERATED_FILE_PREFIXES:
-        if prefix in name_lower:
-            return True
-    ext = os.path.splitext(filename)[1].lower()
-    if ext in _GENERATED_FILE_EXTENSIONS:
-        return True
-    return False
-
-
-def is_minified_file(content: str, filename: str = "") -> bool:
-    """Detect if a file is likely minified by checking line length ratio.
-
-    Args:
-        content: File contents.
-        filename: Optional filename for extension-based checks.
-
-    Returns:
-        True if the file appears to be minified.
-    """
-    if not content:
-        return False
-    # Quick check: if filename contains .min., it's minified
-    if '.min.' in filename.lower():
-        return True
-    lines = content.split('\n')
-    if len(lines) < 1:
-        return False
-    non_empty = [l for l in lines if l.strip()]
-    if not non_empty:
-        return False
-    avg_len = sum(len(l) for l in non_empty) / len(non_empty)
-    return avg_len > 500  # Minified files have very long lines
-
-
-# ─── Binary Artifact Scanning ───────────────────────────────
-
-_BINARY_EXTENSIONS = frozenset({
-    '.exe', '.dll', '.so', '.dylib', '.bin', '.dat',
-    '.wasm', '.node', '.o', '.obj', '.pyc', '.pyo', '.pyd',
-    '.class', '.jar', '.war',
-})
-
-_ELECTRON_MARKERS = frozenset({
-    'electron', 'electron-builder', 'electron-forge', 'electron-packager',
-})
-
-_TAURI_MARKERS = frozenset({
-    'tauri', '@tauri-apps/api', '@tauri-apps/cli',
-})
-
-
-def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
-    """Scan workspace for binary/compiled artifacts.
-
-    Detects:
-    - Binary files (executables, shared libraries, compiled objects)
-    - Electron apps (via package.json dependencies)
-    - Framework indicators for desktop app runtimes
-
-    Args:
-        workspace: Absolute path to workspace root.
-
-    Returns:
-        Dict with binary_files list and framework indicators.
-    """
-    workspace = os.path.abspath(workspace)
-    binary_files = []
-    frameworks = set()
-    total_size = 0
-
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        for fn in filenames:
-            ext = os.path.splitext(fn)[1].lower()
-            if ext in _BINARY_EXTENSIONS:
-                path = os.path.join(root, fn)
-                try:
-                    size = os.path.getsize(path)
-                    total_size += size
-                    binary_files.append({
-                        "path": os.path.relpath(path, workspace),
-                        "size": size,
-                        "type": ext,
-                    })
-                except OSError:
-                    pass
-
-        # Check package.json for Electron
-        if 'package.json' in filenames:
-            pkg_path = os.path.join(root, 'package.json')
-            try:
-                with open(pkg_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    pkg = json.load(f)
-                deps = set(pkg.get('dependencies', {}).keys())
-                dev_deps = set(pkg.get('devDependencies', {}).keys())
-                all_deps = deps | dev_deps
-                if all_deps & _ELECTRON_MARKERS:
-                    frameworks.add('electron')
-            except Exception:
-                pass
-
-    return {
-        "status": "ok",
-        "binary_files": binary_files[:100],  # Cap at 100
-        "binary_count": len(binary_files),
-        "total_binary_size": total_size,
-        "frameworks": sorted(frameworks),
-    }
-
-
-def scan_tauri_artifacts(workspace: str) -> Dict[str, Any]:
-    """Scan workspace for Tauri-specific artifacts.
-
-    Detects:
-    - Tauri framework (via package.json or Cargo.toml)
-    - Tauri IPC invoke patterns in frontend code
-    - Rust #[tauri::command] handlers in backend code
-
-    Args:
-        workspace: Absolute path to workspace root.
-
-    Returns:
-        Dict with Tauri detection results.
-    """
-    workspace = os.path.abspath(workspace)
-    is_tauri = False
-    tauri_config = None
-    invoke_commands = set()
-    tauri_commands = set()
-
-    # Check package.json for @tauri-apps
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        if 'package.json' in filenames:
-            pkg_path = os.path.join(root, 'package.json')
-            try:
-                with open(pkg_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    pkg = json.load(f)
-                deps = set(pkg.get('dependencies', {}).keys())
-                dev_deps = set(pkg.get('devDependencies', {}).keys())
-                if (deps | dev_deps) & _TAURI_MARKERS:
-                    is_tauri = True
-            except Exception:
-                pass
-
-        # Check for tauri.conf.json
-        if 'tauri.conf.json' in filenames:
-            is_tauri = True
-            conf_path = os.path.join(root, 'tauri.conf.json')
-            try:
-                with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    tauri_config = json.load(f)
-            except Exception:
-                pass
-
-    # Check Cargo.toml for tauri dependency
-    cargo_path = os.path.join(workspace, 'src-tauri', 'Cargo.toml')
-    if not os.path.isfile(cargo_path):
-        cargo_path = os.path.join(workspace, 'Cargo.toml')
-    if os.path.isfile(cargo_path):
-        try:
-            with open(cargo_path, 'r', encoding='utf-8', errors='ignore') as f:
-                cargo_content = f.read()
-            if 'tauri' in cargo_content:
-                is_tauri = True
-        except Exception:
-            pass
-
-    # Scan for invoke() calls and #[tauri::command] if tauri detected
-    if is_tauri:
-        import re
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            if '.codelens' in root:
-                dirs.clear()
-                continue
-            for fn in filenames:
-                ext = os.path.splitext(fn)[1].lower()
-                if ext not in {'.ts', '.tsx', '.js', '.jsx', '.rs'}:
-                    continue
-                fpath = os.path.join(root, fn)
-                content = safe_read_file(fpath, max_size=MAX_FILE_SIZE)
-                if content is None:
-                    continue
-                # Frontend: invoke('commandName')
-                for m in re.finditer(r"""invoke\s*\(\s*['"]([^'"]+)['"]""", content):
-                    invoke_commands.add(m.group(1))
-                # Rust: #[tauri::command]
-                if ext == '.rs':
-                    for m in re.finditer(r'#\[tauri::command\]', content):
-                        # Find the function name after the attribute
-                        rest = content[m.end():]
-                        fn_match = re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', rest)
-                        if fn_match:
-                            tauri_commands.add(fn_match.group(1))
-
-    return {
-        "status": "ok",
-        "is_tauri": is_tauri,
-        "tauri_config": tauri_config,
-        "invoke_commands": sorted(invoke_commands),
-        "tauri_commands": sorted(tauri_commands),
-        "invoke_count": len(invoke_commands),
-        "command_count": len(tauri_commands),
-    }
-
-
-# ─── File I/O Utilities ────────────────────────────────────────
-
-def safe_read_file(filepath: str, max_size: int = 500 * 1024, encoding: str = 'utf-8') -> Optional[str]:
-    """Safely read a file with size limit and error handling.
-
-    Args:
-        filepath: Path to the file to read.
-        max_size: Maximum file size in bytes to read (default 500KB).
-        encoding: File encoding (default utf-8).
-
-    Returns:
-        File contents as string, or None if the file cannot be read
-        (too large, missing, encoding error, etc.).
-    """
-    try:
-        if not os.path.isfile(filepath):
-            return None
-        file_size = os.path.getsize(filepath)
-        if file_size > max_size:
-            logger.debug(f"Skipping large file ({file_size} bytes): {filepath}")
-            return None
-        with open(filepath, 'r', encoding=encoding, errors='ignore') as f:
-            return f.read()
-    except (IOError, OSError, PermissionError):
-        logger.debug(f"Cannot read file: {filepath}")
-        return None
-
-
-def should_ignore_dir(rel_path: str) -> bool:
-    """Check if a directory path should be ignored during scanning.
-
-    Uses path-segment-aware matching to avoid false positives
-    (e.g., a workspace named "test-dist" should not match "dist").
-
-    Args:
-        rel_path: Relative path from workspace root (use '.' for workspace root).
-
-    Returns:
-        True if the path should be ignored.
-    """
-    if rel_path == '.':
-        return False
-    # Normalize path separators
-    parts = rel_path.replace('\\', '/').split('/')
-    for part in parts:
-        if part in DEFAULT_IGNORE_DIRS:
-            return True
-    return False
-
-
 # ─── Path and Caller Utilities ───────────────────────────────
 
 _FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+
+
+# ─── Performance Safeguards ────────────────────────────────
+
+MAX_FILE_SIZE = 200 * 1024   # 200KB — skip files larger than this
+MAX_FILES_DEFAULT = 5000      # Max source files to scan per engine
+GLOBAL_TIMEOUT_SEC = 120      # Default global timeout per engine (seconds)
+
+
+def should_ignore_dir(rel_root: str) -> bool:
+    """Check if a relative directory path should be ignored.
+
+    Uses path-segment-aware matching to avoid false positives
+    (e.g., workspace named 'test-dist' shouldn't match 'dist').
+
+    Args:
+        rel_root: Relative path from workspace root (e.g., 'src/node_modules/pkg')
+
+    Returns:
+        True if the directory should be skipped.
+    """
+    if rel_root == '.':
+        return False
+    parts = rel_root.replace('\\', '/').split('/')
+    return any(p in DEFAULT_IGNORE_DIRS for p in parts)
+
+
+def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
+    """Read a file safely with size limit and encoding handling.
+
+    Args:
+        file_path: Absolute path to the file.
+        max_size: Maximum file size in bytes. Files larger than this are skipped.
+
+    Returns:
+        File content as string, or None if the file cannot be read or is too large.
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > max_size:
+            return None
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return f.read()
+    except (IOError, OSError):
+        return None
+
+
+def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SEC) -> bool:
+    """Check if a time budget has expired.
+
+    Useful for engines that walk many files and need a global timeout.
+
+    Args:
+        start_time: Start time from time.time().
+        budget_sec: Budget in seconds.
+
+    Returns:
+        True if the budget has expired.
+    """
+    return (time.time() - start_time) > budget_sec
 
 
 def is_file_path(name: str) -> bool:
@@ -479,201 +217,231 @@ def deduplicate_callers(callers: List[Dict]) -> List[Dict]:
     return unique
 
 
+# ─── Binary Artifact Scanning ──────────────────────────────
+
+BINARY_EXTENSIONS = frozenset({
+    '.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+    '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
+    '.dylib', '.bundle', '.ko', '.msi', '.dmg', '.pkg', '.deb', '.rpm',
+    '.nupkg', '.whl', '.egg', '.tar.gz', '.zip', '.7z',
+})
+
+BINARY_MIME_SIGNATURES = {
+    b'\x7fELF': 'elf_binary',
+    b'MZ': 'pe_binary',
+    b'\xfe\xed\xfa': 'macho_binary',
+    b'\xcf\xfa\xed\xfe': 'macho_binary',
+    b'\xce\xfa\xed\xfe': 'macho_binary',
+    b'PK\x03\x04': 'zip_archive',
+    b'\x1f\x8b': 'gzip_archive',
+    b'BZh': 'bzip2_archive',
+    b'\xfd7zXZ': 'xz_archive',
+    b'\x89PNG': 'png_image',
+    b'\xff\xd8\xff': 'jpeg_image',
+    b'GIF8': 'gif_image',
+    b'RIFF': 'riff_media',
+    b'\x00asm': 'wasm_binary',
+}
+
+MAX_BINARY_SCAN_SIZE = 64 * 1024  # Only read first 64KB for signature detection
+
+
+def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
+    """Scan workspace for binary and compiled artifacts.
+
+    Detects files by:
+    1. Known binary extensions (.exe, .dll, .so, .wasm, .pyc, etc.)
+    2. MIME signature detection (ELF, PE, Mach-O, etc.)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with stats, findings list, and recommendations.
+    """
+    workspace = os.path.abspath(workspace)
+    findings = []
+    files_scanned = 0
+    by_category: Dict[str, int] = {}
+
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+
+        for filename in filenames:
+            file_path = os.path.join(root, filename)
+            ext = os.path.splitext(filename)[1].lower()
+            files_scanned += 1
+
+            finding = None
+
+            # Check by extension
+            if ext in BINARY_EXTENSIONS:
+                cat = _binary_category(ext)
+                rel_path = os.path.relpath(file_path, workspace)
+                try:
+                    fsize = os.path.getsize(file_path)
+                except OSError:
+                    fsize = 0
+                finding = {
+                    "path": rel_path,
+                    "category": cat,
+                    "extension": ext,
+                    "size_bytes": fsize,
+                    "detection_method": "extension",
+                }
+            else:
+                # Check by MIME signature for extensionless or unknown files
+                # Only check non-source files to avoid false positives
+                if ext not in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html',
+                               '.css', '.vue', '.svelte', '.json', '.md', '.yaml', '.yml',
+                               '.toml', '.cfg', '.ini', '.txt', '.sh', '.bash', '.zsh',
+                               '.gitignore', '.env', '.lock', '.map', '.d.ts'}:
+                    sig = _read_file_signature(file_path)
+                    if sig:
+                        sig_type = _identify_signature(sig)
+                        if sig_type:
+                            rel_path = os.path.relpath(file_path, workspace)
+                            try:
+                                fsize = os.path.getsize(file_path)
+                            except OSError:
+                                fsize = 0
+                            finding = {
+                                "path": rel_path,
+                                "category": sig_type,
+                                "extension": ext,
+                                "size_bytes": fsize,
+                                "detection_method": "signature",
+                            }
+
+            if finding:
+                findings.append(finding)
+                cat = finding["category"]
+                by_category[cat] = by_category.get(cat, 0) + 1
+
+    # Compute total size
+    total_size = sum(f.get("size_bytes", 0) for f in findings)
+
+    # Recommendations
+    recommendations = []
+    if by_category.get("compiled_binary", 0) > 0:
+        recommendations.append("Found compiled binaries in the workspace. Consider adding them to .gitignore and using a build pipeline instead.")
+    if by_category.get("python_bytecode", 0) > 0:
+        recommendations.append("Found Python bytecode files (.pyc/.pyo). Add '**/__pycache__/' and '*.pyc' to .gitignore.")
+    if by_category.get("archive", 0) > 5:
+        recommendations.append("Found many archive files. Consider storing large assets externally (S3, CDN) instead of in the repository.")
+    if by_category.get("image", 0) > 10:
+        recommendations.append("Found many image files. Consider optimizing or moving to an asset CDN to reduce repo size.")
+    if total_size > 50 * 1024 * 1024:
+        recommendations.append(f"Binary artifacts total {total_size / (1024*1024):.1f}MB. Consider using Git LFS for large files.")
+
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "stats": {
+            "files_scanned": files_scanned,
+            "total_artifacts": len(findings),
+            "total_size_bytes": total_size,
+            "by_category": by_category,
+        },
+        "findings": findings[:50],
+        "recommendations": recommendations,
+    }
+
+
+def _binary_category(ext: str) -> str:
+    """Map file extension to binary category."""
+    if ext in {'.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
+               '.bundle', '.ko', '.wasm'}:
+        return "compiled_binary"
+    if ext in {'.pyc', '.pyo', '.class'}:
+        return "python_bytecode"
+    if ext in {'.jar', '.war', '.nupkg', '.whl', '.egg'}:
+        return "package_archive"
+    if ext in {'.tar.gz', '.zip', '.7z', '.gz', '.rpm', '.deb', '.msi', '.dmg', '.pkg'}:
+        return "archive"
+    if ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.svg', '.bmp'}:
+        return "image"
+    return "other_binary"
+
+
+def _read_file_signature(file_path: str) -> Optional[bytes]:
+    """Read the first few bytes of a file for signature detection."""
+    try:
+        fsize = os.path.getsize(file_path)
+        if fsize == 0 or fsize > 100 * 1024 * 1024:  # Skip empty or >100MB
+            return None
+        with open(file_path, 'rb') as f:
+            return f.read(16)
+    except (IOError, OSError):
+        return None
+
+
+def _identify_signature(sig: bytes) -> Optional[str]:
+    """Identify file type from its binary signature."""
+    for magic, file_type in BINARY_MIME_SIGNATURES.items():
+        if sig.startswith(magic):
+            return file_type
+    return None
+
+
 # ─── Version ────────────────────────────────────────────────
 
 CODELENS_VERSION = "5.9.0"
 
 
-# ─── File Cache (Single-Pass Workspace Scanner) ──────────────
+# ─── Generated File Detection ───────────────────────────────
 
-# Source extensions used across engines for file filtering
-SOURCE_EXTENSIONS = {
-    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".html", ".htm",
-    ".css", ".scss", ".pcss", ".less",
-}
+_GENERATED_FILE_PATTERNS = frozenset({
+    # Lock files (auto-generated by package managers)
+    "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+    "bun.lock", "pnpm-lock.yaml", "poetry.lock", "Gemfile.lock",
+    "Cargo.lock", "composer.lock", "pipfile.lock",
+    # Generated code markers
+    ".generated.", "generated_", "autogenerated",
+})
 
-# Max file size to read into cache (500KB)
-_MAX_CACHED_FILE_SIZE = 500 * 1024
-
-
-class FileCache:
-    """Single-pass workspace scanner that caches file contents.
-
-    Instead of each engine doing its own os.walk + f.read(), a shared
-    FileCache reads every source file once and provides content to all
-    engines. This collapses 20+ workspace walks into 1 for commands
-    like `handbook`.
-
-    Usage:
-        cache = FileCache(workspace)
-        for rel_path, ext, content in cache.iter_files():
-            # process file
-        # Or:
-        files = cache.get_files()  # Dict[rel_path, content]
-    """
-
-    def __init__(self, workspace: str, max_files: int = 3000,
-                 extensions: Optional[Set[str]] = None,
-                 config: Optional[Dict] = None):
-        self.workspace = os.path.abspath(workspace)
-        self.max_files = max_files
-        self.extensions = extensions or SOURCE_EXTENSIONS
-        self.config = config or {}
-        self.truncated = False
-
-        self._files: Optional[Dict[str, str]] = None  # {rel_path: content}
-        self._file_meta: Optional[List[Tuple[str, str]]] = None  # [(rel_path, ext)]
-
-    def scan(self) -> Dict[str, str]:
-        """Single os.walk pass. Returns {rel_path: content}."""
-        if self._files is not None:
-            return self._files
-
-        self._files = {}
-        self._file_meta = []
-        count = 0
-
-        for root, dirs, filenames in os.walk(self.workspace):
-            # Filter ignored directories
-            dirs[:] = [
-                d for d in dirs
-                if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')
-            ]
-            if '.codelens' in root:
-                dirs.clear()
-                continue
-
-            for fn in filenames:
-                if count >= self.max_files:
-                    self.truncated = True
-                    logger.info(f"FileCache: truncated at {self.max_files} files")
-                    return self._files
-
-                # Skip ignored extensions
-                if any(fn.endswith(ext) for ext in DEFAULT_IGNORE_EXTENSIONS):
-                    continue
-
-                ext = os.path.splitext(fn)[1].lower()
-                if ext not in self.extensions:
-                    continue
-
-                path = os.path.join(root, fn)
-                rel = os.path.relpath(path, self.workspace)
-
-                # Skip large files
-                try:
-                    file_size = os.path.getsize(path)
-                    if file_size > _MAX_CACHED_FILE_SIZE:
-                        continue
-                except OSError:
-                    continue
-
-                try:
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        self._files[rel] = f.read()
-                    self._file_meta.append((rel, ext))
-                except (IOError, OSError):
-                    continue
-
-                count += 1
-
-        logger.info(f"FileCache: scanned {count} files from {self.workspace}")
-        return self._files
-
-    def iter_files(self, extensions: Optional[Set[str]] = None) -> List[Tuple[str, str, str]]:
-        """Returns [(rel_path, ext, content)] for cached files.
-
-        Args:
-            extensions: Optional filter by file extensions (e.g., {'.ts', '.tsx'}).
-        """
-        self.scan()
-        results = []
-        for rel, ext in (self._file_meta or []):
-            if extensions and ext not in extensions:
-                continue
-            content = self._files.get(rel)
-            if content is not None:
-                results.append((rel, ext, content))
-        return results
-
-    def get_files(self, extensions: Optional[Set[str]] = None) -> Dict[str, str]:
-        """Returns {rel_path: content} for cached files, optionally filtered by extension."""
-        self.scan()
-        if not extensions:
-            return dict(self._files)
-        return {
-            rel: content for rel, content in self._files.items()
-            if os.path.splitext(rel)[1].lower() in extensions
-        }
-
-    def get_file_count(self) -> int:
-        """Return number of cached files."""
-        self.scan()
-        return len(self._files)
-
-    def get_content(self, rel_path: str) -> Optional[str]:
-        """Get content for a specific file by relative path."""
-        self.scan()
-        return self._files.get(rel_path)
+_GENERATED_FILE_EXTENSIONS = frozenset({
+    '.min.js', '.min.css', '.map', '.bundle.js', '.chunk.js',
+    '.d.ts', '.d.tsx',  # TypeScript declarations
+    '.pb.go', '.pb.rs', '.pb.py',  # Protobuf generated
+    '.graphql.ts', '.graphql.js',  # GraphQL codegen
+})
 
 
-def walk_source_files(workspace: str, extensions: Optional[Set[str]] = None,
-                      max_files: int = 3000) -> List[Tuple[str, str, str]]:
-    """Convenience function: walk workspace and return [(rel_path, ext, content)].
+def is_generated_file(filename: str) -> bool:
+    """Check if a file is auto-generated and should be skipped for analysis.
 
-    This is a lightweight alternative to FileCache for engines that only
-    need a single pass and don't need caching across calls.
+    Detects:
+    - Lock files (package-lock.json, Cargo.lock, etc.)
+    - Minified/bundled files (.min.js, .bundle.js)
+    - Source maps (.map)
+    - TypeScript declaration files (.d.ts, .d.tsx)
+    - Protobuf-generated files (.pb.go, .pb.rs, .pb.py)
+    - Files with 'generated' in their name
 
     Args:
-        workspace: Absolute path to workspace.
-        extensions: Source file extensions to include (default: SOURCE_EXTENSIONS).
-        max_files: Maximum number of files to scan (default: 3000).
+        filename: Just the filename (not full path), e.g., 'package-lock.json'
 
     Returns:
-        List of (rel_path, ext, content) tuples.
+        True if the file appears to be auto-generated.
     """
-    workspace = os.path.abspath(workspace)
-    exts = extensions or SOURCE_EXTENSIONS
-    results = []
-    count = 0
+    lower = filename.lower()
 
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [
-            d for d in dirs
-            if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')
-        ]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
+    # Check exact filename matches
+    if lower in _GENERATED_FILE_PATTERNS:
+        return True
 
-        for fn in filenames:
-            if count >= max_files:
-                return results
+    # Check extension patterns
+    for ext in _GENERATED_FILE_EXTENSIONS:
+        if lower.endswith(ext):
+            return True
 
-            if any(fn.endswith(ext) for ext in DEFAULT_IGNORE_EXTENSIONS):
-                continue
+    # Check for 'generated' markers in filename
+    for marker in ('.generated.', 'generated_', '_generated.', '.autogenerated.'):
+        if marker in lower:
+            return True
 
-            ext = os.path.splitext(fn)[1].lower()
-            if ext not in exts:
-                continue
-
-            path = os.path.join(root, fn)
-            rel = os.path.relpath(path, workspace)
-
-            try:
-                file_size = os.path.getsize(path)
-                if file_size > _MAX_CACHED_FILE_SIZE:
-                    continue
-            except OSError:
-                continue
-
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                results.append((rel, ext, content))
-                count += 1
-            except (IOError, OSError):
-                continue
-
-    return results
+    return False

@@ -1,16 +1,6 @@
 """
-Fallback Go parser for CodeLens.
-
-Parses Go source files using regex-based extraction when the tree-sitter
-Go parser is not available. Extracts:
-- Functions (func declarations)
-- Methods (func with receiver)
-- Structs (type ... struct)
-- Interfaces (type ... interface)
-- Imports
-
-This is intentionally lightweight — a full Go AST parser would require
-tree-sitter-go or go/ast, but this covers 80%+ of what CodeLens needs.
+Fallback Go Parser for CodeLens — regex-based extraction.
+Extracts functions, methods, types, imports, and package declarations.
 """
 
 import re
@@ -18,171 +8,72 @@ from typing import Dict, List, Any
 
 
 def parse_go_fallback(content: str, rel_path: str) -> Dict[str, Any]:
-    """Parse a Go source file and extract nodes and edges.
-
-    Args:
-        content: File contents as string.
-        rel_path: Relative path from workspace root.
-
-    Returns:
-        Dict with 'nodes' and 'edges' lists.
-    """
-    nodes = []
-    edges = []
+    """Parse Go source using regex — extracts functions, types, imports."""
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
     lines = content.split('\n')
 
-    # Track line numbers and contexts
-    in_func = False
-    func_name = ""
-    func_line = 0
-    brace_depth = 0
+    # Package
+    pkg = ""
+    for i, line in enumerate(lines, 1):
+        m = re.match(r'\s*package\s+(\w+)', line)
+        if m:
+            pkg = m.group(1)
+            break
 
-    for i, line in enumerate(lines):
+    # Imports (single + grouped)
+    in_import_block = False
+    for i, line in enumerate(lines, 1):
+        if re.match(r'\s*import\s*\(', line):
+            in_import_block = True
+            continue
+        if in_import_block:
+            if ')' in line:
+                in_import_block = False
+                continue
+            m = re.search(r'"([^"]+)"', line)
+            if m:
+                edges.append({"from": rel_path, "to": m.group(1), "type": "import", "weight": 1})
+            continue
+        m = re.match(r'\s*import\s+"([^"]+)"', line)
+        if m:
+            edges.append({"from": rel_path, "to": m.group(1), "type": "import", "weight": 1})
+
+    # Functions
+    for i, line in enumerate(lines, 1):
         stripped = line.strip()
-        line_num = i + 1
-
-        # ─── Imports ─────────────────────────────────────────
-        # Single import: import "fmt"
-        m = re.match(r'^import\s+"([^"]+)"', stripped)
+        # Method with receiver
+        m = re.match(r'func\s+\(\s*\w+\s+\*?(\w+)\s*\)\s+(\w+)', stripped)
         if m:
+            nodes.append({"id": f"{rel_path}:{m.group(1)}.{m.group(2)}", "type": "method",
+                          "name": m.group(2), "fn": m.group(2),
+                          "file": rel_path, "line": i, "domain": "backend", "receiver": m.group(1)})
             continue
-
-        # Multi-line import block
-        if stripped.startswith('import') and '(' in stripped:
-            # Read until closing paren
-            for j in range(i + 1, min(i + 50, len(lines))):
-                imp_line = lines[j].strip()
-                if imp_line == ')':
-                    break
-                m2 = re.match(r'"([^"]+)"', imp_line)
-                if m2:
-                    pass  # Import recorded for dependency tracking
-            continue
-
-        # ─── Package declaration ──────────────────────────────
-        m = re.match(r'^package\s+(\w+)', stripped)
-        if m:
-            continue
-
-        # ─── Type declarations (structs, interfaces) ──────────
-        m = re.match(r'^type\s+(\w+)\s+struct\s*\{', stripped)
-        if m:
-            nodes.append({
-                "id": f"{rel_path}:{line_num}:{m.group(1)}",
-                "fn": m.group(1),
-                "file": rel_path,
-                "line": line_num,
-                "type": "struct",
-                "language": "go",
-                "exported": m.group(1)[0].isupper(),
-            })
-            continue
-
-        m = re.match(r'^type\s+(\w+)\s+interface\s*\{', stripped)
-        if m:
-            nodes.append({
-                "id": f"{rel_path}:{line_num}:{m.group(1)}",
-                "fn": m.group(1),
-                "file": rel_path,
-                "line": line_num,
-                "type": "interface",
-                "language": "go",
-                "exported": m.group(1)[0].isupper(),
-            })
-            continue
-
-        # ─── Method declarations (with receiver) ─────────────
-        # func (r *Receiver) methodName(...) ...
-        m = re.match(
-            r'^func\s+\(\s*\w+\s+\*?(\w+)\s*\)\s+(\w+)\s*\(',
-            stripped
-        )
-        if m:
-            receiver = m.group(1)
-            method_name = m.group(2)
-            full_name = f"{receiver}.{method_name}"
-            node_id = f"{rel_path}:{line_num}:{method_name}"
-
-            nodes.append({
-                "id": node_id,
-                "fn": method_name,
-                "file": rel_path,
-                "line": line_num,
-                "type": "method",
-                "language": "go",
-                "exported": method_name[0].isupper(),
-                "receiver": receiver,
-                "full_name": full_name,
-            })
-
-            # Edge from receiver to method
-            edges.append({
-                "from": node_id,
-                "to_fn": receiver,
-            })
-            continue
-
-        # ─── Function declarations ────────────────────────────
-        m = re.match(r'^func\s+(\w+)\s*\(', stripped)
+        # Regular function
+        m = re.match(r'func\s+(\w+)', stripped)
         if m:
             fn_name = m.group(1)
-            node_id = f"{rel_path}:{line_num}:{fn_name}"
+            ntype = "function"
+            if fn_name == "init": ntype = "init"
+            elif fn_name.startswith("Test"): ntype = "test"
+            elif fn_name.startswith("Benchmark"): ntype = "benchmark"
+            nodes.append({"id": f"{rel_path}:{fn_name}", "type": ntype,
+                          "name": fn_name, "fn": fn_name,
+                          "file": rel_path, "line": i, "domain": "backend"})
 
-            nodes.append({
-                "id": node_id,
-                "fn": fn_name,
-                "file": rel_path,
-                "line": line_num,
-                "type": "function",
-                "language": "go",
-                "exported": fn_name[0].isupper(),
-            })
-            func_name = fn_name
-            func_line = line_num
-            in_func = True
-            brace_depth = 0
+    # Types
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        m = re.match(r'type\s+(\w+)\s+struct\b', stripped)
+        if m:
+            nodes.append({"id": f"{rel_path}:{m.group(1)}", "type": "struct",
+                          "name": m.group(1), "fn": m.group(1),
+                          "file": rel_path, "line": i, "domain": "backend"})
             continue
+        m = re.match(r'type\s+(\w+)\s+interface\b', stripped)
+        if m:
+            nodes.append({"id": f"{rel_path}:{m.group(1)}", "type": "interface",
+                          "name": m.group(1), "fn": m.group(1),
+                          "file": rel_path, "line": i, "domain": "backend"})
 
-        # ─── Function call detection within function bodies ───
-        if in_func or brace_depth > 0:
-            # Track brace depth
-            for ch in stripped:
-                if ch == '{':
-                    brace_depth += 1
-                elif ch == '}':
-                    brace_depth -= 1
-
-            if brace_depth <= 0 and in_func:
-                in_func = False
-                continue
-
-            # Detect function calls: identifier(...) — not keywords
-            # Only track calls that could be cross-function references
-            go_keywords = {
-                'if', 'for', 'switch', 'select', 'return', 'defer',
-                'go', 'range', 'var', 'const', 'type', 'func',
-                'package', 'import', 'map', 'chan', 'make', 'new',
-                'len', 'cap', 'append', 'copy', 'delete', 'close',
-                'panic', 'recover', 'print', 'println', 'true', 'false',
-                'nil', 'else', 'case', 'default', 'break', 'continue',
-                'fallthrough', 'goto',
-            }
-
-            # Match function calls: word(...)  — but exclude keywords and method chains
-            for m2 in re.finditer(r'\b([a-zA-Z_]\w*)\s*\(', stripped):
-                called_fn = m2.group(1)
-                if called_fn in go_keywords:
-                    continue
-                if called_fn == func_name:
-                    continue  # Skip self-calls for now
-
-                caller_id = f"{rel_path}:{func_line}:{func_name}"
-                edges.append({
-                    "from": caller_id,
-                    "to_fn": called_fn,
-                })
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-    }
+    return {"nodes": nodes, "edges": edges}

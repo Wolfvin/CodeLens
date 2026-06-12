@@ -3,7 +3,7 @@
 import os
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from utils import logger
 from registry import (
@@ -24,10 +24,11 @@ from parsers.fallback_js_frontend import parse_js_frontend_fallback
 from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
-from parsers.fallback_php import parse_php_fallback
-from parsers.blade_parser import parse_blade_template
+from parsers.fallback_java import parse_java_fallback
+from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
-from parsers.fallback_cpp import parse_cpp_fallback
+from parsers.fallback_lua import parse_lua_fallback
+from parsers.fallback_csharp import parse_csharp_fallback
 
 from commands import register_command
 
@@ -60,9 +61,11 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
 
+    # Always detect frameworks for lang_note / unsupported_langs
+    fw = detect_frameworks(workspace)
+
     # Auto-detect frameworks if not configured
     if not config.get("frameworks"):
-        fw = detect_frameworks(workspace)
         recommended = get_recommended_config(workspace)
         config.update(recommended)
         save_config(workspace, config)
@@ -114,12 +117,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             # Filter out nodes/edges from deleted files
             del_set = set()
             for df in deleted:
-                # df may already be a relative path (from incremental.py);
-                # only re-compute if it's absolute
-                if os.path.isabs(df):
-                    rel = os.path.relpath(df, workspace)
-                else:
-                    rel = df
+                rel = os.path.relpath(df, workspace)
                 del_set.add(rel)
 
             # Clean backend nodes
@@ -483,23 +481,41 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
-    # Parse PHP files
-    php_data = []
-    if files["php"]:
-        for path in files["php"]:
+    # Parse Java/Kotlin files
+    java_data = []
+    if files["java"]:
+        for path in files["java"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_php_fallback(content, os.path.relpath(path, workspace))
-                php_data.append({
+                refs = parse_java_fallback(content, os.path.relpath(path, workspace))
+                java_data.append({
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                logger.debug(f"Failed to read PHP file: {path}")
+                logger.debug(f"Failed to read Java file: {path}")
+
+    # Parse C/C++ files
+    c_cpp_data = []
+    if files["c_cpp"]:
+        for path in files["c_cpp"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_c_fallback(content, os.path.relpath(path, workspace))
+                c_cpp_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read C/C++ file: {path}")
 
     # Parse Go files
     go_data = []
@@ -519,66 +535,55 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Go file: {path}")
 
-    # Parse C/C++ files
-    cpp_data = []
-    if files["cpp"]:
-        for path in files["cpp"]:
+    # Parse Lua files
+    lua_data = []
+    if files["lua"]:
+        for path in files["lua"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_cpp_fallback(content, os.path.relpath(path, workspace))
-                cpp_data.append({
+                refs = parse_lua_fallback(content, os.path.relpath(path, workspace))
+                lua_data.append({
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                logger.debug(f"Failed to read C/C++ file: {path}")
+                logger.debug(f"Failed to read Lua file: {path}")
 
-    # Parse Blade templates
-    blade_data = []
-    blade_frontend_data = []
-    if files["blade"]:
-        for path in files["blade"]:
+    # Parse C# files
+    csharp_data = []
+    if files["csharp"]:
+        for path in files["csharp"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_blade_template(content, os.path.relpath(path, workspace))
-                blade_data.append(refs)
-                # Extract frontend data from blade templates
-                fe = refs.get("frontend", {})
-                if fe.get("classes") or fe.get("ids"):
-                    blade_frontend_data.append({
-                        "path": os.path.relpath(path, workspace),
-                        "classes": fe.get("classes", []),
-                        "ids": fe.get("ids", []),
-                    })
+                refs = parse_csharp_fallback(content, os.path.relpath(path, workspace))
+                csharp_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
             except IOError:
-                logger.debug(f"Failed to read Blade file: {path}")
+                logger.debug(f"Failed to read C# file: {path}")
 
-    # Merge blade frontend data into existing frontend data for registry building
-    # Blade classes/ids are treated like HTML definitions
-    html_data.extend(blade_frontend_data)
+    # All new language data combined
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data
 
-    # Re-build frontend registry if blade data was added
-    if blade_frontend_data and not (incremental and changed_files):
-        # Rebuild frontend registry including blade data
-        frontend_registry = build_frontend_registry(
-            workspace, html_data, css_data, js_frontend_data,
-            tsx_data, vue_data, svelte_data,
-            tailwind_info, config.get("frameworks", [])
-        )
-        save_frontend_registry(workspace, frontend_registry)
+    # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
+    for item in _new_lang_data:
+        for node in item.get("nodes", []):
+            if "fn" not in node and "name" in node:
+                node["fn"] = node["name"]
 
     # Build backend registry with edge resolution
     if incremental and changed_files:
-        # Incremental: merge new parsed data into existing registry
         existing_backend = load_backend_registry(workspace)
-        new_parsed_data = rust_data + js_backend_data + python_data + php_data + go_data + cpp_data
+        new_parsed_data = rust_data + js_backend_data + python_data + _new_lang_data
         backend_registry = merge_backend_data(
             existing_backend, new_parsed_data,
             changed_files, workspace
@@ -586,10 +591,9 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         resolved_nodes = backend_registry["nodes"]
         resolved_edges = backend_registry["edges"]
     else:
-        # Full scan: build from scratch
         all_nodes = []
         all_raw_edges = []
-        for item in rust_data + js_backend_data + python_data + php_data + go_data + cpp_data:
+        for item in rust_data + js_backend_data + python_data + _new_lang_data:
             all_nodes.extend(item.get("nodes", []))
             all_raw_edges.extend(item.get("edges", []))
 
@@ -651,16 +655,20 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "tsx": len(files["tsx"]),
             "rust": len(files["rust"]),
             "python": len(files["python"]),
-            "php": len(files["php"]),
-            "blade": len(files["blade"]),
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
+            "java": len(files["java"]),
+            "c_cpp": len(files["c_cpp"]),
             "go": len(files["go"]),
-            "cpp": len(files["cpp"])
+            "lua": len(files["lua"]),
+            "csharp": len(files["csharp"]),
         },
         "python_parsed": len(python_data),
-        "php_parsed": len(php_data),
-        "blade_parsed": len(blade_data),
+        "java_parsed": len(java_data),
+        "c_cpp_parsed": len(c_cpp_data),
+        "go_parsed": len(go_data),
+        "lua_parsed": len(lua_data),
+        "csharp_parsed": len(csharp_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -671,8 +679,30 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
-        "changed_files_count": len(changed_files) if changed_files else 0
+        "changed_files_count": len(changed_files) if changed_files else 0,
+        "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
+        "lang_note": _build_lang_note(fw) if fw else None,
     }
+
+
+def _build_lang_note(fw: Dict) -> Optional[str]:
+    """Build a note about unsupported languages detected in the workspace."""
+    unsupported = fw.get("unsupported_langs", [])
+    if not unsupported:
+        return None
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte"}
+    lang_names = {
+        "go": "Go",
+        "java": "Java",
+        "kotlin": "Kotlin",
+        "c": "C",
+        "cpp": "C++",
+        "csharp": "C#",
+        "swift": "Swift",
+        "ruby": "Ruby",
+    }
+    parts = [lang_names.get(l, l) for l in unsupported]
+    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -688,25 +718,22 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "tsx": [],
         "rust": [],
         "python": [],
-        "php": [],
-        "blade": [],
         "vue": [],
         "svelte": [],
-        "cpp": [],
-        "go": []
+        "java": [],
+        "c_cpp": [],
+        "go": [],
+        "lua": [],
+        "csharp": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
         
-        # Use only relative path for ignore checking to avoid false positives
-        # when the workspace directory name contains an ignore pattern substring
-        # (e.g., workspace named "test-target" would falsely match "target/")
         if should_ignore(rel_root, config):
             dirs.clear()
             continue
 
-        # Don't descend into .codelens
         if '.codelens' in root:
             dirs.clear()
             continue
@@ -719,6 +746,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 continue
 
             ext = os.path.splitext(filename)[1].lower()
+
+            # Skip TypeScript declaration files (auto-generated, no runtime code)
+            if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
 
             if ext in ('.html', '.htm'):
                 files["html"].append(file_path)
@@ -741,22 +772,22 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["rust"].append(file_path)
             elif ext == '.py':
                 files["python"].append(file_path)
-            elif ext == '.php':
-                # Blade templates have .blade.php extension
-                if filename.endswith('.blade.php'):
-                    files["blade"].append(file_path)
-                else:
-                    files["php"].append(file_path)
             elif ext == '.vue':
                 files["vue"].append(file_path)
             elif ext == '.svelte':
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
-            elif ext in ('.cc', '.cpp', '.cxx', '.c', '.h', '.hpp', '.hxx'):
-                files["cpp"].append(file_path)
+            elif ext in ('.java', '.kt'):
+                files["java"].append(file_path)
+            elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
+                files["c_cpp"].append(file_path)
             elif ext == '.go':
                 files["go"].append(file_path)
+            elif ext == '.lua':
+                files["lua"].append(file_path)
+            elif ext in ('.cs',):
+                files["csharp"].append(file_path)
 
     return files
 
