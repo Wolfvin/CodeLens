@@ -877,7 +877,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
+    # Languages that have fallback regex-based parsers are NOT unsupported.
+    # Only list languages that truly lack any parser support.
     UNSUPPORTED_MARKERS = {
+        # All languages below have fallback parsers in CodeLens v7.1+
+        # They are kept here for detection purposes but won't appear
+        # as "unsupported" in scan output (filtered by scan.py's _build_lang_note).
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
@@ -885,6 +890,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
+        "elixir": ["mix.exs"],
+        "go": ["go.mod"],
+        "scala": ["build.sbt"],
+        "nim": ["nimble"],
+        "dart": ["pubspec.yaml"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:

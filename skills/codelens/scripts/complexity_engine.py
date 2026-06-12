@@ -37,6 +37,9 @@ SOURCE_EXTENSIONS = {
     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
     ".lua", ".php", ".java", ".cs",
     ".ex", ".exs",
+    ".rb", ".swift", ".scala", ".sc",
+    ".nim", ".nims", ".sh", ".bash", ".zsh",
+    ".dart", ".zig",
 }
 
 # Cyclomatic complexity thresholds

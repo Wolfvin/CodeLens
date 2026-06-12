@@ -538,8 +538,78 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # v7.1: Try mix.exs — detect Elixir projects
+    elixir_type = None
+    mix_exs_path = os.path.join(workspace, 'mix.exs')
+    if os.path.isfile(mix_exs_path):
+        try:
+            with open(mix_exs_path, 'r', encoding='utf-8') as f:
+                mix_content = f.read()
+            # Extract project name from defmodule
+            name_match = re.search(r'defmodule\s+([\w.]+)\.MixProject', mix_content)
+            if name_match:
+                identity["name"] = name_match.group(1).split('.')[-1]
+            # Classify Elixir project type
+            if 'phoenix' in mix_content.lower():
+                elixir_type = "elixir-phoenix"
+            elif 'ecto' in mix_content.lower():
+                elixir_type = "elixir-ecto"
+            elif 'plug' in mix_content.lower():
+                elixir_type = "elixir-plug"
+            elif 'oban' in mix_content.lower():
+                elixir_type = "elixir-worker"
+            else:
+                elixir_type = "elixir-project"
+        except Exception:
+            logger.warning("mix.exs parsing failed", exc_info=True)
+
+    # v7.1: Try Gemfile — detect Ruby projects
+    ruby_type = None
+    gemfile_path = os.path.join(workspace, 'Gemfile')
+    if os.path.isfile(gemfile_path):
+        try:
+            with open(gemfile_path, 'r', encoding='utf-8') as f:
+                gemfile_content = f.read()
+            # Extract project name from Gemfile
+            name_match = re.search(r"gem\s+['\"](\w+)['\"]", gemfile_content)
+            if name_match and identity.get("name", "unknown") == "unknown":
+                identity["name"] = name_match.group(1)
+            # Classify Ruby project type
+            if 'rails' in gemfile_content.lower():
+                ruby_type = "ruby-rails"
+            elif 'sinatra' in gemfile_content.lower():
+                ruby_type = "ruby-sinatra"
+            elif 'rspec' in gemfile_content.lower():
+                ruby_type = "ruby-testing"
+            else:
+                ruby_type = "ruby-project"
+        except Exception:
+            logger.warning("Gemfile parsing failed", exc_info=True)
+
+    # v7.1: Try composer.json — detect PHP projects
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            if composer_data.get("name") and identity.get("name", "unknown") == "unknown":
+                identity["name"] = composer_data["name"].split('/')[-1]
+            identity["version"] = composer_data.get("version", identity.get("version"))
+            require = composer_data.get("require", {})
+            if any('laravel' in k for k in require):
+                php_type = "php-laravel"
+            elif any('symfony' in k for k in require):
+                php_type = "php-symfony"
+            elif any('wordpress' in k for k in require) or 'wp-' in str(composer_data.get("autoload", {})):
+                php_type = "php-wordpress"
+            else:
+                php_type = "php-project"
+        except Exception:
+            logger.warning("composer.json parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, elixir_type, ruby_type, php_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -552,6 +622,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        if elixir_type:
+            type_parts.append("elixir")
+        if ruby_type:
+            type_parts.append("ruby")
+        if php_type:
+            type_parts.append("php")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

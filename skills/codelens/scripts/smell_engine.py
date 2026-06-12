@@ -29,9 +29,40 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
+    # Web frontend
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".php", ".go", ".java", ".cs", ".dart", ".lua",
+    ".vue", ".svelte",
+    # Python
+    ".py",
+    # Rust
+    ".rs",
+    # C/C++
+    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+    # Go
+    ".go",
+    # Java/C#
+    ".java", ".cs",
+    # PHP
+    ".php",
+    # Lua
+    ".lua",
+    # Ruby
+    ".rb",
+    # Elixir
+    ".ex", ".exs",
+    # Swift
+    ".swift",
+    # Scala
+    ".scala", ".sc",
+    # Nim
+    ".nim", ".nims",
+    # Shell
+    ".sh", ".bash", ".zsh",
+    # Dart
+    ".dart",
+    # Zig
+    ".zig",
+    # Shader
     ".wgsl",
 }
 
@@ -401,6 +432,75 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
+    elif ext in {".ex", ".exs"}:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Elixir: def, defp, defmacro, defmacrop
+            m = re.match(r'(?:def|defp|defmacro|defmacrop)\s+([\w!?]+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".rb":
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Ruby: def method_name, def self.method_name
+            m = re.match(r'def\s+(?:self\.)?(\w+[?!]?)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".swift":
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Swift: func name(), static func name()
+            m = re.match(r'(?:static\s+)?func\s+(\w+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext in {".scala", ".sc"}:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Scala: def name(), private def name()
+            m = re.match(r'(?:private|protected)?\s*def\s+(\w+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext in {".nim", ".nims"}:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Nim: proc name(), func name(), template name(), macro name()
+            m = re.match(r'(?:proc|func|template|macro)\\s+(\w+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext in {".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Go: func name()
+            m = re.match(r'func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)', stripped)
+            if m and m.group(1) not in ('init', 'main'):
+                fn_starts.append((i, m.group(1)))
+            # C/C++: type name(...)
+            elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+                m = re.match(r'(?:static\s+|inline\s+)*(?:\w+[\s*]+)+(\w+)\s*\(', stripped)
+                if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'return', 'sizeof', 'include'):
+                    fn_starts.append((i, m.group(1)))
+
+    elif ext == ".lua":
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Lua: function name(), local function name()
+            m = re.match(r'(?:local\s+)?function\s+([\w.:]+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".zig":
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Zig: pub fn name(), fn name()
+            m = re.match(r'(?:pub\s+)?fn\s+(\w+)', stripped)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -444,6 +544,59 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
+    elif ext in {".ex", ".exs"}:
+        # Elixir: count do/end pairs
+        depth = 0
+        for i in range(start, min(start + 200, len(lines))):
+            stripped = lines[i].strip()
+            depth += stripped.count(' do') + stripped.count(' do,') + stripped.endswith(' do')
+            depth -= stripped.count('end')
+            if depth <= 0 and i > start:
+                return i + 1
+        return min(start + 200, len(lines))
+    elif ext == ".rb":
+        # Ruby: count do/end, def/end
+        depth = 0
+        found_def = False
+        for i in range(start, min(start + 300, len(lines))):
+            stripped = lines[i].strip()
+            if i == start:
+                depth = 1
+                found_def = True
+                continue
+            if found_def:
+                depth += stripped.count(' do') + stripped.count(' do|') + stripped.startswith('do|')
+                depth += stripped.startswith('if ') + stripped.startswith('unless ') + stripped.startswith('while ')
+                depth -= stripped == 'end'
+                if depth <= 0:
+                    return i + 1
+        return min(start + 300, len(lines))
+    elif ext == ".lua":
+        # Lua: count function/end, if/end, for/end, while/end
+        depth = 0
+        for i in range(start, min(start + 300, len(lines))):
+            stripped = lines[i].strip()
+            if i == start:
+                depth = 1
+                continue
+            depth += len(re.findall(r'\b(?:function|if|for|while|do)\b', stripped))
+            depth -= stripped.count('end')
+            if depth <= 0:
+                return i + 1
+        return min(start + 300, len(lines))
+    elif ext in {".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                 ".java", ".cs", ".swift", ".scala", ".sc", ".zig"}:
+        # Brace-based languages: count { and }
+        brace_count = 0
+        for i in range(start, min(start + 300, len(lines))):
+            for ch in lines[i]:
+                if ch == '{':
+                    brace_count += 1
+                elif ch == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return i + 1
+        return min(start + 300, len(lines))
     else:
         # JS/TS/Rust: count braces
         brace_count = 0
@@ -501,11 +654,15 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
-        elif ext == ".rs":
-            # Rust: 4 spaces per level
+        elif ext in {".rs", ".go", ".java", ".cs", ".swift", ".scala", ".sc",
+                     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".zig"}:
+            # Rust/Go/Java/C#/Swift/Scala/C/C++/Zig: 4 spaces per level
             level = indent // 4
+        elif ext in {".ex", ".exs", ".rb", ".nim", ".nims"}:
+            # Elixir/Ruby/Nim: 2 spaces per level
+            level = indent // 2
         else:
-            # JS/TS: 2 spaces per level
+            # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
             level = indent // 2
 
         # Detect when we first enter a deep nesting block
@@ -727,6 +884,159 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using an associative array or config object."
+                })
+
+    elif ext in {".ex", ".exs"}:
+        # Elixir: def name(arg1, arg2), defp name(arg1, arg2)
+        for m in re.finditer(r'(?:def|defp|defmacro|defmacrop)\s+[\w!?]+\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use a keyword list or struct for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a keyword list or map."
+                })
+
+    elif ext == ".rb":
+        # Ruby: def name(arg1, arg2)
+        for m in re.finditer(r'def\s+(?:self\.)?\w+[?!]?\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Method has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options hash for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Method has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using keyword arguments or a config hash."
+                })
+
+    elif ext == ".go":
+        # Go: func name(params) or func (r Type) name(params)
+        for m in re.finditer(r'func\s+(?:\(\w+\s+\*?\w+\)\s+)?\w+\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options struct for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a struct or functional options pattern."
+                })
+
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".java", ".cs", ".swift", ".scala", ".sc", ".zig"}:
+        # Brace-based languages: type name(params)
+        for m in re.finditer(r'(?:static\s+|inline\s+|public\s+|private\s+|protected\s+)*(?:\w+[\s*]+)+(\w+)\s*\(([^)]*)\)', content):
+            params_str = m.group(2).strip()
+            fn_name = m.group(1)
+            if fn_name in ('if', 'for', 'while', 'switch', 'return', 'sizeof', 'catch', 'new', 'delete'):
+                continue
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use a struct/class for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a parameter object or builder pattern."
+                })
+
+    elif ext == ".lua":
+        # Lua: function name(params)
+        for m in re.finditer(r'(?:local\s+)?function\s+[\w.:]+\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use a table for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a table for parameter grouping."
+                })
+
+    elif ext in {".nim", ".nims"}:
+        # Nim: proc name(params)
+        for m in re.finditer(r'(?:proc|func|template|macro)\s+\w+\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Proc has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an object type for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Proc has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an object for parameter grouping."
                 })
 
     return smells
