@@ -274,6 +274,24 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
     # Get overall git log stats
     author_stats: Dict[str, Dict] = defaultdict(lambda: {"commits": 0, "files": set(), "lines": 0})
 
+    # v6.4.1: Detect shallow clone — ownership data will be incomplete
+    is_shallow = False
+    shallow_warning = None
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--is-shallow-repository'],
+            cwd=workspace, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip().lower() == 'true':
+            is_shallow = True
+            shallow_warning = (
+                "This is a shallow clone (git clone --depth=1). "
+                "Ownership data is incomplete — only the most recent commit is visible. "
+                "For accurate ownership analysis, use a full clone."
+            )
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
     try:
         # Get commit count per author
         result = subprocess.run(
@@ -339,7 +357,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
         except (subprocess.SubprocessError, ValueError):
             pass
 
-    return {
+    result = {
         "status": "ok",
         "workspace": workspace,
         "ownership_summary": ownership_summary,
@@ -351,6 +369,13 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
             "stale_files": len(orphan_files)
         }
     }
+
+    # v6.4.1: Add shallow clone warning if detected
+    if is_shallow:
+        result["shallow_clone_warning"] = shallow_warning
+        result["is_shallow_clone"] = True
+
+    return result
 
 
 def _analyze_without_git(

@@ -190,6 +190,13 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # v6.4.1: hyper — low-level HTTP library for Rust (used by reqwest, actix, etc.)
+    "hyper": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["hyper", "hyper-util"],
+        "indicators": []
+    },
     # tRPC
     "trpc": {
         "packages": ["@trpc/server", "@trpc/client", "@trpc/react-query", "@trpc/next"],
@@ -821,6 +828,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append(fw_name)
                     if fw_name == "tauri":
                         detected["has_tauri"] = True
+                    # v6.4.1: Mark Rust HTTP libraries as has_http_library
+                    elif fw_name in ("hyper", "actix-web", "axum", "warp", "rocket", "reqwest"):
+                        detected["has_http_library"] = True
                     break
 
         # Tauri detected via Cargo.toml means Rust backend

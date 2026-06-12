@@ -32,7 +32,6 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
-    '.dart_tool', 'dart_tool',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
@@ -121,7 +120,7 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte', '.m', '.mm'}
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
 # ─── Performance Safeguards ────────────────────────────────
@@ -390,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.4.0"
+CODELENS_VERSION = "6.4.1"
 
 
 # ─── Generated File Detection ───────────────────────────────

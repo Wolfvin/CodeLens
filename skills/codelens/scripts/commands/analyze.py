@@ -39,8 +39,6 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
-    parser.add_argument("--max-files", type=int, default=2000,
-                        help="Maximum number of files to scan per engine (default: 2000)")
     parser.add_argument("--timeout", type=int, default=300,
                         help="Total time budget in seconds for analysis engines (default: 300)")
     parser.add_argument("--exclude-tests", action="store_true", default=False,
@@ -54,7 +52,6 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
-        max_files=getattr(args, 'max_files', 2000),
         timeout=args.timeout,
         exclude_tests=args.exclude_tests,
     )
@@ -66,7 +63,6 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
-    max_files: int = 2000,
     timeout: int = 300,
     exclude_tests: bool = False,
 ) -> Dict[str, Any]:
@@ -255,7 +251,7 @@ def analyze_repository(
     # --- Security ---
     if focus in ("security", "all"):
         _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items, max_files),
+                    lambda: _detect_secrets(workspace, severity_filter, max_items),
                     start_time, total_budget)
         _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
                     lambda: _detect_vulns(workspace, max_items),
@@ -270,16 +266,16 @@ def analyze_repository(
     # --- Quality ---
     if focus in ("quality", "all"):
         _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items, max_files),
+                    lambda: _detect_smells(workspace, severity_filter, max_items),
                     start_time, total_budget)
         _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items, max_files),
+                    lambda: _detect_debug(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "complexity", "Complexity Hotspots",
                     lambda: _detect_complexity(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items, max_files),
+                    lambda: _detect_dead_code(workspace, max_items),
                     start_time, total_budget)
 
     # --- Architecture ---
@@ -288,7 +284,7 @@ def analyze_repository(
                     lambda: _detect_circular(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items, max_files),
+                    lambda: _detect_perf(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "config_drift", "Dependency Drift",
                     lambda: _detect_config_drift(workspace, max_items),
@@ -334,14 +330,25 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float, per_engine_timeout: float = 30.0) -> None:
-    """Safely run an analysis engine with time budget check and per-engine timeout."""
-    import signal
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float, per_engine_timeout: float = 60.0) -> None:
+    """Safely run an analysis engine with time budget check and per-engine timeout.
+
+    Args:
+        findings: List to append results to.
+        category: Engine category name (e.g., 'secrets').
+        label: Human-readable label (e.g., 'Hardcoded Secrets').
+        engine_fn: Callable that runs the engine and returns a dict or None.
+        start_time: Global start time for budget calculation.
+        total_budget: Total time budget in seconds.
+        per_engine_timeout: Maximum seconds a single engine may run before being
+            killed. Prevents one slow engine from blocking the entire analysis.
+            Defaults to 60 seconds.
+    """
     elapsed = time.time() - start_time
     remaining = total_budget - elapsed
 
-    # Skip if less than 10% of budget remains
-    if remaining < total_budget * 0.1 or remaining < 5:
+    # Skip if less than 20% of budget remains
+    if remaining < total_budget * 0.2:
         logger.debug(f"Skipping engine {category}: time budget nearly exhausted ({remaining:.1f}s remaining)")
         findings.append({
             "category": category,
@@ -354,59 +361,60 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
         })
         return
 
-    # Cap per-engine timeout to remaining budget
-    engine_timeout = min(per_engine_timeout, remaining - 2)  # Leave 2s buffer
-    if engine_timeout < 3:
+    # Per-engine timeout: cap at remaining budget, but at least 5s
+    engine_budget = min(per_engine_timeout, remaining)
+    if engine_budget < 5:
         findings.append({
             "category": category,
             "label": label,
             "total": 0,
             "severity": "info",
             "skipped": True,
-            "skip_reason": f"Insufficient time remaining ({remaining:.1f}s)",
+            "skip_reason": f"Insufficient time budget ({remaining:.1f}s remaining)",
             "action": f"Run '{category}' engine individually for full results",
         })
         return
 
-    class _EngineTimeout(Exception):
-        pass
-
-    def _timeout_handler(signum, frame):
-        raise _EngineTimeout(f"Engine {category} timed out after {engine_timeout:.0f}s")
-
     try:
         engine_start = time.time()
 
-        # Try to set a per-engine timeout using SIGALRM (Unix only)
-        timeout_supported = False
-        try:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(int(engine_timeout) + 1)
-            timeout_supported = True
-        except (OSError, ValueError, AttributeError):
-            pass  # SIGALRM not available (e.g., Windows)
+        # Run engine with per-engine timeout using threading
+        import threading
+        engine_result = [None]  # Mutable container for thread result
+        engine_error = [None]   # Mutable container for thread error
 
-        try:
-            result = engine_fn()
-        finally:
-            if timeout_supported:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
+        def _run():
+            try:
+                engine_result[0] = engine_fn()
+            except Exception as e:
+                engine_error[0] = e
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=engine_budget)
+
+        if thread.is_alive():
+            # Thread timed out — it's a daemon thread so it won't block exit
+            logger.warning(f"Engine {category} timed out after {engine_budget:.1f}s")
+            findings.append({
+                "category": category,
+                "label": label,
+                "total": 0,
+                "severity": "info",
+                "skipped": True,
+                "skip_reason": f"Engine timed out after {engine_budget:.0f}s (repo may be too large for this engine in aggregate mode)",
+                "action": f"Run '{category}' engine individually for full results",
+            })
+            return
+
+        if engine_error[0] is not None:
+            raise engine_error[0]
 
         engine_elapsed = time.time() - engine_start
+        result = engine_result[0]
         if result:
             result["elapsed_seconds"] = round(engine_elapsed, 2)
             findings.append(result)
-    except _EngineTimeout:
-        findings.append({
-            "category": category,
-            "label": label,
-            "total": 0,
-            "severity": "info",
-            "skipped": True,
-            "skip_reason": f"Engine timed out ({engine_timeout:.0f}s limit)",
-            "action": f"Run '{category}' engine individually or with a higher --timeout",
-        })
     except Exception as e:
         logger.debug(f"Engine {category} failed: {e}")
         findings.append({
@@ -420,9 +428,9 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
         })
 
 
-def _detect_secrets(workspace: str, severity_filter: set, max_items: int, max_files: int = 2000) -> Optional[Dict]:
+def _detect_secrets(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
     from secrets_engine import detect_secrets
-    sec = detect_secrets(workspace, max_files=max_files)
+    sec = detect_secrets(workspace)
     total = sec.get("stats", {}).get("total_secrets", 0)
     if total == 0:
         return None
@@ -500,9 +508,9 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_smells(workspace: str, severity_filter: set, max_items: int, max_files: int = 2000) -> Optional[Dict]:
+def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
     from smell_engine import detect_smells
-    smell = detect_smells(workspace, max_files=max_files)
+    smell = detect_smells(workspace)
     total = smell.get("stats", {}).get("total_smells", 0)
     if total == 0:
         return None
@@ -525,9 +533,9 @@ def _detect_smells(workspace: str, severity_filter: set, max_items: int, max_fil
     }
 
 
-def _detect_debug(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
+def _detect_debug(workspace: str, max_items: int) -> Optional[Dict]:
     from debugleak_engine import detect_debug_leaks
-    dl = detect_debug_leaks(workspace, max_files=max_files)
+    dl = detect_debug_leaks(workspace)
     total = dl.get("stats", {}).get("total_leaks", 0)
     if total == 0:
         return None
@@ -562,9 +570,9 @@ def _detect_complexity(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_dead_code(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
+def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
     from deadcode_engine import detect_dead_code
-    dc = detect_dead_code(workspace, max_files=max_files)
+    dc = detect_dead_code(workspace)
     total = dc.get("stats", {}).get("total_dead_code", 0)
     if total == 0:
         return None
@@ -604,9 +612,9 @@ def _detect_circular(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_perf(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
+def _detect_perf(workspace: str, max_items: int) -> Optional[Dict]:
     from perfhint_engine import detect_perf_hints
-    perf = detect_perf_hints(workspace, max_files=max_files)
+    perf = detect_perf_hints(workspace)
     total = perf.get("stats", {}).get("total_hints", 0)
     if total == 0:
         return None

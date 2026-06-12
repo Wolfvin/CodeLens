@@ -26,8 +26,8 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--max-files", type=int, default=2000,
-                        help="Maximum number of files to scan (default: 2000). "
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
     parser.add_argument("--timeout", type=int, default=120,
                         help="Total time budget in seconds for handbook generation (default: 120). "
@@ -35,12 +35,12 @@ def add_args(parser):
 
 
 def execute(args, workspace):
-    max_files = getattr(args, 'max_files', 2000)
+    max_files = getattr(args, 'max_files', 5000)
     timeout = getattr(args, 'timeout', 120)
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 2000, time_budget: int = 120) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -124,7 +124,7 @@ def cmd_handbook(workspace: str, max_files: int = 2000, time_budget: int = 120) 
         pass
     else:
         try:
-            smell_result = detect_smells(workspace, max_files=max_files)
+            smell_result = detect_smells(workspace)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -187,7 +187,7 @@ def cmd_handbook(workspace: str, max_files: int = 2000, time_budget: int = 120) 
             logger.warning("Circular dependency detection failed", exc_info=True)
     if not _should_skip('deadcode'):
         try:
-            dead_result = detect_dead_code(workspace, max_files=max_files)
+            dead_result = detect_dead_code(workspace)
             dead_count = dead_result.get("stats", {}).get("total_dead", 0)
             if dead_count > 0:
                 risks.append({"type": "dead_code", "count": dead_count})
@@ -195,7 +195,7 @@ def cmd_handbook(workspace: str, max_files: int = 2000, time_budget: int = 120) 
             logger.warning("Dead code detection failed", exc_info=True)
     if not _should_skip('secrets'):
         try:
-            secrets_result = detect_secrets(workspace, max_files=max_files)
+            secrets_result = detect_secrets(workspace)
             secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
             if secrets_count > 0:
                 risks.append({"type": "secrets", "count": secrets_count})
@@ -641,71 +641,69 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
-    # v6.4: Detect Flutter/Dart projects
-    dart_type = None
-    pubspec_yaml_path = os.path.join(workspace, 'pubspec.yaml')
-    if os.path.isfile(pubspec_yaml_path):
-        try:
-            with open(pubspec_yaml_path, 'r', encoding='utf-8') as f:
-                pubspec_content = f.read()
-            if 'flutter' in pubspec_content.lower():
-                dart_type = "flutter-app"
-                # Try to get project name from pubspec
-                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
-                if name_match:
-                    identity["name"] = name_match.group(1).strip()
-                ver_match = re.search(r'^version:\s*(.+)', pubspec_content, re.MULTILINE)
-                if ver_match:
-                    identity["version"] = ver_match.group(1).strip()
-            else:
-                dart_type = "dart-project"
-                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
-                if name_match:
-                    identity["name"] = name_match.group(1).strip()
-        except Exception:
-            pass
-    elif os.path.isdir(workspace):
-        # Check for pubspec.yaml in subdirectories (monorepo)
-        for subdir in ('packages', 'apps', 'examples'):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path):
-                for entry in os.listdir(subdir_path):
-                    entry_path = os.path.join(subdir_path, entry)
-                    sub_pubspec = os.path.join(entry_path, 'pubspec.yaml')
-                    if os.path.isfile(sub_pubspec):
-                        try:
-                            with open(sub_pubspec, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                            if 'flutter' in content.lower():
-                                dart_type = "flutter-monorepo"
-                                break
-                        except Exception:
-                            pass
-                if dart_type:
-                    break
-
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, dart_type] if t is not None]
+    # v6.4.1: Count source files by extension for language significance filtering
+    _lang_counts = {"ts": 0, "js": 0, "tsx": 0, "jsx": 0, "rs": 0, "py": 0,
+                    "go": 0, "php": 0, "c": 0, "cpp": 0, "h": 0, "hpp": 0,
+                    "lua": 0, "vue": 0, "svelte": 0}
+    try:
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for f in files:
+                ext = os.path.splitext(f)[1].lstrip('.')
+                if ext in _lang_counts:
+                    _lang_counts[ext] += 1
+    except Exception:
+        pass
+
+    _ts_count = _lang_counts.get("ts", 0) + _lang_counts.get("tsx", 0)
+    _js_count = _lang_counts.get("js", 0) + _lang_counts.get("jsx", 0)
+    _rust_count = _lang_counts.get("rs", 0)
+    _py_count = _lang_counts.get("py", 0)
+    _go_count = _lang_counts.get("go", 0)
+    _php_count = _lang_counts.get("php", 0)
+    _c_cpp_count = _lang_counts.get("c", 0) + _lang_counts.get("cpp", 0) + _lang_counts.get("h", 0) + _lang_counts.get("hpp", 0)
+    _lua_count = _lang_counts.get("lua", 0)
+    _total_source = sum(_lang_counts.values())
+
+    # v6.4.1: If TS files significantly outnumber JS files, upgrade js_type to typescript
+    if _ts_count > _js_count * 2 and _ts_count >= 10:
+        if js_type in ("node-project", None):
+            js_type = "typescript-project"
+
+    # v6.4.1: Filter out minor languages (<5% of source files) from polyglot type
+    # This prevents "rust-c-cpp-monorepo" when C files are just 0.3% of the codebase
+    _MIN_POLYGLOT_RATIO = 0.05  # 5% threshold
+    def _is_significant(count, total):
+        return total > 0 and (count / total) >= _MIN_POLYGLOT_RATIO
+
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
+        # Only include languages that are significant (>5% of source files)
         type_parts = []
-        if rust_type:
+        if rust_type and _is_significant(_rust_count, _total_source):
             type_parts.append("rust")
-        if go_type:
+        if go_type and _is_significant(_go_count, _total_source):
             type_parts.append("go")
         if js_type:
-            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type:
+            # TypeScript if TS files > JS files, or js_type explicitly mentions typescript
+            use_ts = _ts_count > _js_count or "typescript" in (js_type or "")
+            type_parts.append("typescript" if use_ts else "js")
+        if python_type and _is_significant(_py_count, _total_source):
             type_parts.append("python")
-        if php_type:
+        if php_type and _is_significant(_php_count, _total_source):
             type_parts.append("php")
-        if c_cpp_type:
+        if c_cpp_type and _is_significant(_c_cpp_count, _total_source):
             type_parts.append("c-cpp")
-        if lua_type:
+        if lua_type and _is_significant(_lua_count, _total_source):
             type_parts.append("lua")
-        if dart_type:
-            type_parts.append("flutter" if "flutter" in (dart_type or "") else "dart")
+
+        # Fallback: if filtering removed all types, use the original active_types
+        if not type_parts:
+            type_parts = [t.split("-")[0] for t in active_types[:3]]
+
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

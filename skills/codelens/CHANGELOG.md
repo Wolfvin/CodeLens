@@ -5,6 +5,26 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [6.4.1] — 2026-06-12
+
+### Tested against denoland/deno (Rust+TypeScript polyglot, 13,468 files, 970 .rs, 3,233 .ts, 1.89M edges)
+
+Real-world test on a massive polyglot repo (Rust core + TypeScript runtime API) — exposed
+critical performance issues and false positives that only manifest at this scale.
+
+### Fixed
+
+- **`analyze` command hangs on large repos** (CRITICAL): No per-engine timeout — a single slow engine could block the entire analysis indefinitely. Added per-engine timeout (default 60s) using daemon threads. Timed-out engines are skipped with a clear message to run them individually.
+- **`stack-trace` command hangs on high-fanout nodes** (CRITICAL): BFS traversal on 1.89M-edge graphs with no result limit caused exponential explosion. Added `max_chain_entries=500` limit, breadth cap of 50 per level, and `lazy_error_check=True` (defers file-reading to post-processing, only top 100 entries checked).
+- **`summary` identity type wrong for polyglot repos**: Deno (97% Rust+TS) was classified as `rust-c-cpp-monorepo` because 11 C files (0.3%) triggered `c_cpp_type`. Added language significance filter (minor languages <5% excluded). Also auto-upgrades `js_type="node-project"` to `"typescript-project"` when TS files > 2x JS files.
+- **`api-map` detects "express" from test fixtures**: Added test-only framework filtering — frameworks that only appear in test/example files are removed from `frameworks_detected`.
+- **`secrets` false positives on integrity hashes and example URLs**: Added `sha[235]XX-` prefix and 64+ hex char patterns to `ENTROPY_EXCLUSION_PATTERNS`, and `example.com/org/net` URL pattern to `LINE_EXCLUSION_PATTERNS`.
+
+### Added
+
+- **Rust HTTP library detection**: `hyper` added to `FRAMEWORK_SIGNATURES`. When `hyper`, `actix-web`, `axum`, `warp`, `rocket`, or `reqwest` are detected in Cargo.toml, `has_http_library` is now set to `True`.
+- **Shallow clone warning in `ownership`**: Detects shallow clones via `git rev-parse --is-shallow-repository` and adds `shallow_clone_warning` field.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against polyglot & compiler repos: Svelte, Vercel AI SDK, Elysia
