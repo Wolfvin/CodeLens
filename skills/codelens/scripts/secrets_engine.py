@@ -283,6 +283,9 @@ SAFE_VALUE_PATTERNS = [
     # Regex/syntax patterns that look like secrets but aren't
     r'^[\[\(]',  # Starts with bracket (regex, array)
     r'(?i)^rfc822msgid',
+    # v5.9: Test-only key patterns — these look like secrets but are explicitly test/dev keys
+    r'(?i)^(test-secret|dev-secret|dev-key|test-key|development-only|for-testing)',
+    r'(?i)^(change-me|replace-me|update-me|default-secret|insecure)',
 ]
 
 # ─── Template Expression Patterns (line-level) ──────────────────
@@ -347,6 +350,17 @@ LINE_EXCLUSION_PATTERNS = [
     # Angular/React template patterns
     re.compile(r'\[\w+\]\s*='),                  # Angular property binding [prop]=value
     re.compile(r'\{\{.*\|'),                       # Angular pipe {{ value | pipe }}
+    # v5.9: Test-only / dev-only variable name patterns
+    # Variable names like SECRET_KEY_FOR_TESTING_ONLY, API_KEY_DEV, DEBUG_SECRET
+    # indicate the value is intentionally a non-production placeholder
+    re.compile(r'(?i)FOR[_-]?TESTING[_-]?ONLY'),
+    re.compile(r'(?i)FOR[_-]?DEV[ELOPMENT]*[_-]?ONLY'),
+    re.compile(r'(?i)TEST[_-]?ONLY'),
+    re.compile(r'(?i)DEV[_-]?ONLY'),
+    re.compile(r'(?i)DEBUG[_-]?(?:SECRET|KEY|TOKEN|PASSWORD)'),
+    re.compile(r'(?i)(?:SECRET|KEY|TOKEN|PASSWORD)[_-]?FOR[_-]?(?:TEST|DEV|DEBUG)'),
+    re.compile(r'(?i)LOCAL[_-]?(?:SECRET|KEY|TOKEN)'),
+    re.compile(r'(?i)INSECURE[_-]?(?:SECRET|KEY|TOKEN)'),
 ]
 
 # ─── Test File Patterns ─────────────────────────────────────────

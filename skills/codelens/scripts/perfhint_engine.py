@@ -46,12 +46,11 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".html", ".vue", ".svelte",
-    ".php",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)
 FRONTEND_EXTENSIONS = {".jsx", ".tsx", ".vue", ".svelte", ".html"}
-BACKEND_EXTENSIONS = {".py", ".rs", ".go", ".php"}
+BACKEND_EXTENSIONS = {".py", ".rs", ".go"}
 JS_TS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
 
 # Test directory / file indicators
@@ -59,7 +58,6 @@ TEST_INDICATORS = [
     '.test.', '.spec.', '__tests__', 'test/', 'tests/',
     'spec/', 'specs/', 'fixtures/', '__mocks__',
     '.stories.', '.story.',
-    'stories/', 'storybook/',  # v6.1: Storybook files are not production code
 ]
 
 # ─── Performance Hint Pattern Definitions ──────────────────────
@@ -97,6 +95,17 @@ PERF_HINT_CATEGORIES = {
                 "hint": "ORM query inside loop — potential N+1 query problem",
                 "fix_suggestion": "Use .filter(id__in=ids) or prefetch_related() / select_related() for batch loading.",
             },
+            # v5.9: Python generic _fetch_* / _get_* helper calls inside loops
+            # This catches patterns like: for uid in ids: user = _fetch_user(uid)
+            {
+                "regex": (
+                    r'(?:for\s+\w+\s+in\s+)'
+                    r'[^\n]{0,80}?'
+                    r'(?:_fetch_|_get_|_load_|_query_|_find_)\w+\s*\(\s*\w+'
+                ),
+                "hint": "Per-item fetch call inside loop — likely N+1 query pattern",
+                "fix_suggestion": "Batch the fetch operation outside the loop, or use a bulk query with .filter(id__in=ids).",
+            },
             # Knex / Sequelize / TypeORM in loops
             {
                 "regex": (
@@ -107,26 +116,6 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "Query builder call inside loop — potential N+1 query problem",
                 "fix_suggestion": "Move the query builder outside the loop, use IN-clause or a DataLoader pattern.",
-            },
-            # PHP: Doctrine ORM inside loop
-            {
-                "regex": (
-                    r'(?:foreach\s*\(|while\s*\(|for\s*\()'
-                    r'[^}]{0,120}?'
-                    r'(?:\$em->find\s*\(|\$repo->find\s*\(|\$repository->find\s*\()'
-                ),
-                "hint": "Doctrine find() inside loop — potential N+1 query problem",
-                "fix_suggestion": "Use Doctrine's ->findBy(['id' => $ids]) or write a DQL/QueryBuilder batch query outside the loop.",
-            },
-            # PHP: Eloquent inside loop
-            {
-                "regex": (
-                    r'(?:foreach\s*\(|while\s*\(|for\s*\()'
-                    r'[^}]{0,120}?'
-                    r'(?:\w+::find\s*\(|\w+::where\s*\()'
-                ),
-                "hint": "Eloquent query inside loop — potential N+1 query problem",
-                "fix_suggestion": "Use Eloquent's ->findMany($ids) or ->whereIn('id', $ids) for batch loading outside the loop.",
             },
         ],
     },
@@ -210,7 +199,7 @@ PERF_HINT_CATEGORIES = {
     "sync_blocking": {
         "severity": "critical",
         "category": "sync_blocking",
-        "description": "Synchronous file/HTTP operations in request handlers",
+        "description": "Synchronous blocking operations in async/request contexts",
         "patterns": [
             # fs.readFileSync / fs.writeFileSync inside route handlers
             {
@@ -260,23 +249,23 @@ PERF_HINT_CATEGORIES = {
                 "hint": "Blocking HTTP request (requests library) in route handler — stalls the worker",
                 "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP, or offload to a background task.",
             },
-            # PHP: sleep() in non-test files
+            # v5.9: Python time.sleep() inside async function — blocks the event loop
             {
-                "regex": r'\bsleep\s*\(\s*\d+\s*\)',
-                "hint": "sleep() call blocks the entire PHP process — avoid in web requests",
-                "fix_suggestion": "Use queue dispatch with delay, or ReactPHP/event-loop timers for async waits.",
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?time\.sleep\s*\(',
+                "hint": "time.sleep() inside async function — blocks the entire event loop",
+                "fix_suggestion": "Use asyncio.sleep() instead of time.sleep() in async functions to avoid blocking the event loop.",
             },
-            # PHP: file_get_contents() for remote URLs (blocking HTTP)
+            # v5.9: Python requests.get/post inside async function — blocking HTTP in async
             {
-                "regex": r'\bfile_get_contents\s*\(\s*["\']https?://',
-                "hint": "file_get_contents() with HTTP URL — blocking network call in request handler",
-                "fix_suggestion": "Use Guzzle async or Symfony HttpClient for non-blocking HTTP requests.",
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?requests\.(?:get|post|put|delete|patch|head)\s*\(',
+                "hint": "Blocking requests.get/post inside async function — stalls the event loop",
+                "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP requests inside async functions.",
             },
-            # PHP: exec/shell_exec/system (blocking system calls)
+            # v5.9: Python subprocess in async function without asyncio
             {
-                "regex": r'\b(?:exec|shell_exec|system|passthru)\s*\(',
-                "hint": "Blocking system call (exec/shell_exec/system) — stalls the PHP process",
-                "fix_suggestion": "Use Symfony Process component or dispatch to a queue worker for system commands.",
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?subprocess\.(?:call|run|check_output|check_call)\s*\(',
+                "hint": "Blocking subprocess call inside async function — stalls the event loop",
+                "fix_suggestion": "Use asyncio.create_subprocess_exec() for non-blocking subprocess calls in async functions.",
             },
         ],
     },
@@ -321,13 +310,6 @@ PERF_HINT_CATEGORIES = {
                 "hint": "EventEmitter .on() without matching .off() — listener accumulates over time",
                 "fix_suggestion": "Call .off() or .removeListener() when the subscriber is done (e.g., in cleanup / destructor).",
             },
-            # PHP: array push without cleanup in long-running process (daemon/worker)
-            {
-                "regex": r'\$this->\w+\[\]\s*=\s*',
-                "negative_regex": r'unset\s*\(',
-                "hint": "Array append on $this in a long-running process without unset() — potential memory leak in daemons",
-                "fix_suggestion": "Use unset() or array_splice() to remove processed items, or use a fixed-size ring buffer.",
-            },
         ],
     },
 
@@ -361,6 +343,18 @@ PERF_HINT_CATEGORIES = {
                 "self_call_regex": True,  # Flag: check if function calls itself
                 "hint": "Recursive function without memoization — may recompute identical sub-problems",
                 "fix_suggestion": "Add memoization (functools.lru_cache, or a custom cache Map) to avoid redundant computation.",
+            },
+            # v5.9: Python string concatenation in loop (result += ...) — O(n²) pattern
+            {
+                "regex": r'(?:for\s+\w+\s+in\s+|while\s+)[^\n]{0,80}?result\s*\+=\s*(?:str\s*\()?[\w.\[\]]+',
+                "hint": "String concatenation inside loop using += — O(n²) time complexity",
+                "fix_suggestion": "Use list.append() + ''.join() for O(n) string building instead of repeated concatenation.",
+            },
+            # v5.9: Python list.append in loop (suggest list comprehension)
+            {
+                "regex": r'(?:for\s+\w+\s+in\s+)range\s*\([^)]+\):\s*\n\s*(?:result|items|output)\s*\.\s*append\s*\(',
+                "hint": "list.append() inside for-range loop — list comprehension is faster and more Pythonic",
+                "fix_suggestion": "Replace with a list comprehension: [expression for i in range(n)]",
             },
         ],
     },
@@ -433,19 +427,6 @@ PERF_HINT_CATEGORIES = {
                 "negative_regex": r'(?:cache_page|@cache|lru_cache|cache\.get|redis\.get)',
                 "hint": "DB query in view without caching — hits the database on every request",
                 "fix_suggestion": "Add @cache_page (Django) or @lru_cache / Redis caching to avoid repeated DB hits.",
-            },
-            # PHP: Redis KEYS command in production
-            {
-                "regex": r'\$redis->keys\s*\(|Redis::keys\s*\(',
-                "hint": "Redis KEYS command in production — O(N) scan that blocks Redis",
-                "fix_suggestion": "Use SCAN instead of KEYS for production Redis to avoid blocking the server.",
-            },
-            # PHP: Redis SET without TTL parameter
-            {
-                "regex": r'\$redis->set\s*\(\s*["\'][^"\']+["\']\s*,\s*[^)]+\)',
-                "negative_regex": r'(?:EX|PX|expire|ttl)',
-                "hint": "Redis SET without TTL — key never expires, potential memory leak",
-                "fix_suggestion": "Add an EX or PX parameter to $redis->set() or call $redis->expire() to set a TTL.",
             },
         ],
     },
@@ -637,14 +618,6 @@ def _scan_file_hints(
     for cat_name, cat_def in categories.items():
         # Category-level extension gating
         if not _category_applies_to_file(cat_name, ext):
-            continue
-
-        # v6.1: Skip large_bundle detection for barrel files (index.ts/index.js)
-        # Barrel re-exports are intentional for library projects and not a perf issue.
-        is_barrel_file = rel_path.endswith('/index.ts') or rel_path.endswith('/index.js') or \
-                         rel_path.endswith('/index.tsx') or rel_path.endswith('/index.mjs') or \
-                         rel_path.endswith('/index.cjs')
-        if cat_name == "large_bundle" and is_barrel_file:
             continue
 
         for pattern_def in cat_def["patterns"]:
