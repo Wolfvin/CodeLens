@@ -456,4 +456,13 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
+    # v6.5: Auto-generated source files (e.g., neovim's vimfn.gen.lua, _meta.lua)
+    if '.gen.' in lower:
+        return True
+    if lower.endswith('.generated.go'):
+        return True
+    if lower.endswith('.pb.go'):  # Protobuf generated Go
+        return True
+    if lower.endswith('_meta.lua'):  # Neovim auto-generated metadata
+        return True
     return False

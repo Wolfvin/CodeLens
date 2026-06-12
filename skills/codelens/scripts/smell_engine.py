@@ -80,13 +80,23 @@ GOD_CLASS_METHODS_CRITICAL = 35
 
 # C/C++-specific thresholds: C projects use deeper nesting idiomatically
 # (error-handling if-chains, platform #ifdef, switch-case nesting).
-C_CPP_DEEP_NESTING_LEVEL = 7
-C_CPP_DEEP_NESTING_CRITICAL = 10
+# Deep nesting in C is very common with error-handling patterns like
+# if (step1() == OK) { if (step2() == OK) { ... } } which is standard C.
+C_CPP_DEEP_NESTING_LEVEL = 8
+C_CPP_DEEP_NESTING_CRITICAL = 11
 C_CPP_LONG_FN_LINES = 80
 C_CPP_LONG_FN_LINES_CRITICAL = 150
+# C/C++ many-params: C functions inherently have more parameters since C lacks
+# optional params, overloading, and default values. Callbacks and struct
+# manipulation functions commonly accept 6-8 parameters.
+C_CPP_TOO_MANY_PARAMS = 7
+C_CPP_TOO_MANY_PARAMS_CRITICAL = 10
 
 # Maximum findings per category per file (prevents noise on large files)
 MAX_FINDINGS_PER_FILE = 20
+# C/C++ files are typically much larger; reduce per-file cap to prevent
+# massive aggregate counts on projects like nginx (1000+ C files).
+C_CPP_MAX_FINDINGS_PER_FILE = 10
 
 # Rust-specific thresholds: Rust idiomatically uses large impl blocks
 # (e.g., builder pattern, ECS types, trait implementations). A Rust impl
@@ -400,8 +410,8 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     # v5.9.2: Skip test/story/fixture files — long functions are expected there
-    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    if any(kw in rel_path for kw in _skip_keywords):
+    # v6.5: Use comprehensive _is_test_or_mock_file() for broader matching
+    if _is_test_or_mock_file(rel_path):
         return smells
 
     lines = content.split('\n')
@@ -706,14 +716,23 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
     
     # Skip test/story/fixture files — deep nesting is expected there
-    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    if any(kw in rel_path for kw in skip_keywords):
+    # v6.5: Use comprehensive _is_test_or_mock_file() to also catch
+    # test/ directory patterns like neovim's test/unit/, test/functional/
+    if _is_test_or_mock_file(rel_path):
+        return smells
+    
+    # v6.5: Skip C/C++ header files — headers contain macro definitions,
+    # inline functions, and declarations that appear deeply indented but
+    # don't represent actual control-flow nesting complexity.
+    is_c_cpp_header = ext in {".h", ".hpp", ".hxx"}
+    if is_c_cpp_header:
         return smells
     
     # v6.4: Use higher thresholds for C/C++ (idiomatic deeper nesting)
     is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
     nesting_level = C_CPP_DEEP_NESTING_LEVEL if is_c_cpp else DEEP_NESTING_LEVEL
     nesting_critical = C_CPP_DEEP_NESTING_CRITICAL if is_c_cpp else DEEP_NESTING_CRITICAL
+    max_findings = C_CPP_MAX_FINDINGS_PER_FILE if is_c_cpp else MAX_FINDINGS_PER_FILE
     
     lines = content.split('\n')
     
@@ -727,6 +746,17 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         stripped = line.lstrip()
         if not stripped or stripped.startswith('//') or stripped.startswith('#'):
             continue
+
+        # v6.5: For C/C++, skip preprocessor continuation lines, case/default
+        # labels, and goto labels — these inflate indentation without
+        # representing actual control-flow nesting.
+        if is_c_cpp:
+            # Skip case/default labels (idiomatic switch-case nesting)
+            if re.match(r'\s*(case\s|default\s*:)', stripped):
+                continue
+            # Skip goto labels (e.g., `cleanup:`)
+            if re.match(r'^[a-zA-Z_]\w*:\s*$', stripped):
+                continue
 
         indent = len(line) - len(stripped)
 
@@ -762,8 +792,8 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
                 "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
                 "suggestion": "Extract inner logic into separate functions. Use early returns."
             })
-            # v6.4: Cap findings per file to prevent noise
-            if len(smells) >= MAX_FINDINGS_PER_FILE:
+            # v6.5: Cap findings per file to prevent noise
+            if len(smells) >= max_findings:
                 return smells
         
         # Track the deepest level within the block
@@ -785,12 +815,20 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             "suggestion": "Extract inner logic into separate functions. Use early returns."
         })
 
+    # v6.5: Cap total findings for C/C++ files to prevent noise
+    if is_c_cpp and len(smells) > C_CPP_MAX_FINDINGS_PER_FILE:
+        smells = smells[:C_CPP_MAX_FINDINGS_PER_FILE]
+
     return smells
 
 
 def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions with too many parameters."""
     smells = []
+
+    # v6.5: Skip test files — test helpers often have many params for setup
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
         # Function declarations: function name(params)
@@ -1078,6 +1116,11 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".java", ".cs", ".swift", ".scala", ".sc", ".zig"}:
         # Brace-based languages: type name(params)
+        is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+        # v6.5: C/C++ uses higher param thresholds (no optional params, overloading,
+        # or default values; callbacks commonly accept 6-8 params).
+        param_threshold = C_CPP_TOO_MANY_PARAMS if is_c_cpp else TOO_MANY_PARAMS
+        param_critical = C_CPP_TOO_MANY_PARAMS_CRITICAL if is_c_cpp else TOO_MANY_PARAMS_CRITICAL
         for m in re.finditer(r'(?:static\s+|inline\s+|public\s+|private\s+|protected\s+)*(?:\w+[\s*]+)+(\w+)\s*\(([^)]*)\)', content):
             params_str = m.group(2).strip()
             fn_name = m.group(1)
@@ -1085,22 +1128,34 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                 continue
             if not params_str:
                 continue
+            # v6.5: Skip C/C++ forward declarations (end with ';', no '{')
+            # These are parameter declarations, not function definitions.
+            if is_c_cpp:
+                # Look for ';' or '{' after the closing ')'
+                after_match = content[m.end():m.end() + 200]
+                # Find the next non-whitespace char after the closing paren
+                after_stripped = after_match.lstrip()
+                # If the line ends with ';' before any '{', it's a declaration
+                semi_pos = after_stripped.find(';')
+                brace_pos = after_stripped.find('{')
+                if semi_pos >= 0 and (brace_pos < 0 or semi_pos < brace_pos):
+                    continue  # Forward declaration, skip
             params = [p.strip() for p in params_str.split(',') if p.strip()]
             param_count = len(params)
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+            if param_count >= param_critical:
                 line_num = content[:m.start()].count('\n') + 1
                 smells.append({
                     "file": rel_path, "line": line_num, "param_count": param_count,
                     "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "message": f"Function has {param_count} parameters (critical threshold: {param_critical})",
                     "suggestion": "Use a struct/class for grouping parameters."
                 })
-            elif param_count >= TOO_MANY_PARAMS:
+            elif param_count >= param_threshold:
                 line_num = content[:m.start()].count('\n') + 1
                 smells.append({
                     "file": rel_path, "line": line_num, "param_count": param_count,
                     "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "message": f"Function has {param_count} parameters (threshold: {param_threshold})",
                     "suggestion": "Consider using a parameter object or builder pattern."
                 })
 
@@ -1153,6 +1208,11 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "message": f"Proc has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using an object for parameter grouping."
                 })
+
+    # v6.5: Cap many_params findings for C/C++ files
+    is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+    if is_c_cpp and len(smells) > C_CPP_MAX_FINDINGS_PER_FILE:
+        smells = smells[:C_CPP_MAX_FINDINGS_PER_FILE]
 
     return smells
 
@@ -1220,9 +1280,18 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     - Expanded common_numbers with common Python/Rust constants
     - Skip numbers in dict/list literals (likely config)
     - Skip numbers that are part of string content
+    v6.5 improvements:
+    - Skip test/spec files entirely (test data inherently has magic numbers)
+    - Skip C/C++ crypto files and #define lines
+    - Higher per-file caps for C/C++ files
     """
     smells = []
     lines = content.split('\n')
+
+    # v6.5: Skip test/spec files — test data inherently contains many
+    # literal values that are NOT magic numbers (they're test expectations).
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     # Skip magic number detection entirely for config/framework config files
     config_file_keywords = [
@@ -1235,6 +1304,16 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     if any(kw in rel_lower for kw in config_file_keywords):
         return smells
 
+    # v6.5: Skip crypto/hashing algorithm files — they contain thousands of
+    # legitimate numeric constants (S-boxes, round constants, lookup tables).
+    crypto_file_keywords = [
+        'sha1', 'sha256', 'sha512', 'md5', 'crc32', 'crc64',
+        'aes', 'des', 'rsa', 'hmac', 'blake', 'chacha', 'salsa',
+        'huff', 'huffman', 'lookup', 'table', 'lut',
+    ]
+    if any(kw in rel_lower for kw in crypto_file_keywords):
+        return smells
+
     # Numbers that are likely NOT magic (common constants, HTTP codes, etc.)
     common_numbers = {
         0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 20, 24, 30, 32, 36,
@@ -1242,6 +1321,9 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         # HTTP status codes
         200, 201, 202, 204, 206, 301, 302, 304, 307, 308,
         400, 401, 403, 404, 405, 409, 422, 429, 500, 502, 503, 504,
+        # v6.5: Common C/system constants (buffer sizes, page sizes, masks)
+        4096, 8192, 16384, 32768, 65535, 65536,
+        2048, 4096, 8192, 0xffff, 0xff,
     }
 
     # Context patterns that indicate config-like lines (skip numbers on these)
@@ -1323,6 +1405,28 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             if any(re.search(pat, stripped) for pat in python_skip_patterns):
                 continue
 
+        # v6.5: C/C++-specific skips
+        is_c_cpp = ext in {'.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx'}
+        if is_c_cpp:
+            # #define lines are NAMED constants — the opposite of magic values
+            if stripped.startswith('#define') or stripped.startswith('# '):
+                continue
+            # case/default labels contain legitimate constants
+            if re.match(r'(case\s|default\s*:)', stripped):
+                continue
+            # #include, #ifdef, #ifndef etc. — skip entirely
+            if stripped.startswith('#'):
+                continue
+            # UPPER_CASE macro/constant assignments
+            if re.match(r'^[A-Z_][A-Z0-9_]*\s*=', stripped):
+                continue
+            # sizeof() / offsetof() / alignof() — not magic
+            if 'sizeof(' in stripped or 'offsetof(' in stripped or 'alignof(' in stripped:
+                continue
+            # Hexadecimal constants (0x...) are usually register addresses/masks
+            if re.search(r'0x[0-9a-fA-F]+', stripped):
+                continue
+
         # Check for magic numbers
         for m in re.finditer(r'(?<![.\w])(\d+)(?![.\w])', stripped):
             try:
@@ -1364,6 +1468,10 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             })
             break  # One per line is enough
 
+        # v6.5: Cap magic_values per file for C/C++ to prevent noise
+        if is_c_cpp and len(smells) >= C_CPP_MAX_FINDINGS_PER_FILE:
+            break
+
     return smells
 
 
@@ -1371,16 +1479,35 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
     """Detect overly complex conditional expressions."""
     smells = []
     lines = content.split('\n')
+    is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+
+    # v6.5: Skip test files — test conditionals are expected to be complex
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     for i, line in enumerate(lines):
         stripped = line.strip()
+
+        # Skip comments and preprocessor directives
+        if stripped.startswith('//') or stripped.startswith('#'):
+            continue
+
+        # v6.5: For C/C++, skip #if defined() / #ifdef chains — preprocessor
+        # conditionals with || / && are platform detection, not code complexity.
+        if is_c_cpp and stripped.startswith('#'):
+            continue
 
         # Count &&, || operators in a single line
         and_count = stripped.count('&&') + stripped.count(' and ')
         or_count = stripped.count('||') + stripped.count(' or ')
         total_ops = and_count + or_count
 
-        if total_ops >= 5:
+        # v6.5: For C/C++, use higher threshold (3+ operators is common in
+        # error-checking chains: if (rc == NGX_OK && ptr != NULL && ...)
+        cc_threshold = 5 if is_c_cpp else 3
+        cc_critical = 7 if is_c_cpp else 5
+
+        if total_ops >= cc_critical:
             smells.append({
                 "file": rel_path,
                 "line": i + 1,
@@ -1389,7 +1516,7 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
                 "message": f"Complex conditional with {total_ops} logical operators",
                 "suggestion": "Extract sub-conditions into named boolean variables."
             })
-        elif total_ops >= 3:
+        elif total_ops >= cc_threshold:
             smells.append({
                 "file": rel_path,
                 "line": i + 1,
@@ -1398,6 +1525,10 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
                 "message": f"Conditional with {total_ops} logical operators",
                 "suggestion": "Consider simplifying with guard clauses or extracted methods."
             })
+
+        # v6.5: Cap findings per file for C/C++
+        if is_c_cpp and len(smells) >= C_CPP_MAX_FINDINGS_PER_FILE:
+            break
 
     return smells
 

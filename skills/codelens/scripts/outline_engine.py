@@ -549,7 +549,16 @@ def _outline_go(content: str, detail: str) -> Dict:
 
 
 def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
-    """Extract outline from C/C++ source files."""
+    """Extract outline from C/C++ source files.
+
+    v6.5: Support multi-line function definitions where the return type
+    is on a separate line from the function name (common in nginx, Linux
+    kernel, and many C projects):
+
+        static void
+        ngx_master_process_cycle(ngx_cycle_t *cycle)
+        {
+    """
     import re
     outline = {
         "imports": [],
@@ -561,6 +570,9 @@ def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
 
     lines = content.split('\n')
     is_header = ext in {'.h', '.hpp', '.hxx'}
+
+    # v6.5: Track previous line's return type for multi-line function definitions
+    prev_return_type = None
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -576,7 +588,23 @@ def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
 
         # Skip preprocessor directives and comments
         if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*'):
+            prev_return_type = None
             continue
+
+        # v6.5: Detect return type on its own line (nginx/Linux kernel style)
+        # Matches: "static void", "ngx_int_t", "char *", "static ngx_int_t", etc.
+        if not stripped.endswith(';') and not stripped.endswith('{') and not stripped.endswith(','):
+            # Check if this line is just a return type (no function name, no params)
+            # Pattern: optional qualifiers + type name + optional pointer
+            return_type_match = re.match(
+                r'^(?:(?:static|inline|extern|const|unsigned|signed|volatile|struct|enum)\s+)*'
+                r'(?:\w+(?:\s+\w+)*\s*\**)\s*$',
+                stripped
+            )
+            if return_type_match and re.match(r'^[a-zA-Z_]', stripped):
+                # This looks like a standalone return type line
+                prev_return_type = stripped
+                continue
 
         # Struct/union/enum declarations
         struct_match = re.match(
@@ -588,13 +616,22 @@ def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
                 "name": struct_match.group(1),
                 "line": i + 1
             })
+            prev_return_type = None
+            continue
 
         # Function definitions: type name(params) {
-        # Distinguish from declarations (ending with ;)
+        # Also support: name(params) { when preceded by a return type line
         fn_match = re.match(
             r'(?:static\s+|inline\s+|extern\s+)*(?:const\s+)?(?:\w+[\s*]+)+(\w+)\s*\([^)]*\)\s*(?:\{|$)',
             stripped
         )
+        if not fn_match and prev_return_type:
+            # v6.5: Multi-line style: return type on previous line
+            # name(params) { or name(params)
+            fn_match = re.match(
+                r'(\w+)\s*\([^)]*\)\s*(?:\{|$)',
+                stripped
+            )
         if fn_match:
             fn_name = fn_match.group(1)
             if fn_name not in ('if', 'for', 'while', 'switch', 'return', 'sizeof',
@@ -612,6 +649,8 @@ def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
                         "line": i + 1,
                         "declaration": True
                     })
+            prev_return_type = None
+            continue
 
         # Typedef declarations
         typedef_match = re.match(r'typedef\s+.*\s+(\w+)\s*;', stripped)
@@ -623,6 +662,12 @@ def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
                     "line": i + 1,
                     "type": "typedef"
                 })
+            prev_return_type = None
+            continue
+
+        # Reset prev_return_type if line doesn't continue the pattern
+        if stripped and not stripped.startswith('//'):
+            prev_return_type = None
 
     if detail != "full":
         outline["imports"] = outline["imports"][:50]
@@ -791,14 +836,28 @@ def _outline_php(content: str, detail: str) -> Dict:
             outline["enums"].append(entry)
             continue
 
-        # Standalone functions (not methods — methods are inside class bodies)
-        m = re.match(r'function\s+(\w+)\s*\(', stripped)
+        # Function declarations (both standalone and class methods)
+        m = re.match(r'(?:public\s+|private\s+|protected\s+|static\s+|abstract\s+|final\s+)*function\s+(\w+)\s*\(', stripped)
         if m:
-            # Skip if indented (likely a method inside a class)
+            fn_name = m.group(1)
             indent = len(line) - len(line.lstrip())
             if indent == 0:
-                outline["functions"].append({"name": m.group(1), "line": line_num})
-                continue
+                # Standalone function (not a method)
+                outline["functions"].append({"name": fn_name, "line": line_num})
+            else:
+                # Class method
+                entry = {"name": fn_name, "line": line_num, "type": "method"}
+                # Detect visibility
+                if 'public' in stripped[:stripped.index('function')]:
+                    entry["visibility"] = "public"
+                elif 'private' in stripped[:stripped.index('function')]:
+                    entry["visibility"] = "private"
+                elif 'protected' in stripped[:stripped.index('function')]:
+                    entry["visibility"] = "protected"
+                if 'static' in stripped[:stripped.index('function')]:
+                    entry["static"] = True
+                outline["functions"].append(entry)
+            continue
 
         # Class constants
         m = re.match(r'const\s+(\w+)\s*=', stripped)
