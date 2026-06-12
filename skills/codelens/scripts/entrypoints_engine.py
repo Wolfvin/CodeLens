@@ -30,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go",
+    ".go", ".lua",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -741,6 +741,68 @@ ENTRYPOINT_PATTERNS = {
                 "name_group": 1,
                 "label": "rust_test_module",
             },
+            # Lua busted framework: describe/it
+            {
+                "regex": r'(?:describe|context)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_describe",
+            },
+            {
+                "regex": r'it\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_it",
+            },
+        ],
+    },
+
+    # ═══════════════════════════════════════════════════════════
+    # 9. NEOVIM PLUGIN — Neovim plugin entry points
+    # ═══════════════════════════════════════════════════════════
+    "neovim_plugin": {
+        "patterns": [
+            # Neovim init.lua / init.vim (plugin entry)
+            {
+                "regex": r'vim\.api\.nvim_create_user_command\s*\(\s*["\'](\w+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "nvim_user_command",
+            },
+            # vim.keymap.set
+            {
+                "regex": r'vim\.keymap\.set\s*\(\s*["\'](\w+)["\']\s*,\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "custom",
+                "label": "nvim_keymap",
+            },
+            # vim.api.nvim_create_autocmd
+            {
+                "regex": r'vim\.api\.nvim_create_autocmd\s*\(\s*["\'](\w+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "nvim_autocmd",
+            },
+            # Lua module return (M = {}; return M)
+            {
+                "regex": r'return\s+(\w+)\s*$',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_module_return",
+            },
+            # Neovim lazy.nvim plugin spec
+            {
+                "regex": r'lazy\.setup\s*\(',
+                "language": {".lua"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "lazy_nvim_setup",
+            },
         ],
     },
 }
@@ -770,7 +832,7 @@ def map_entrypoints(
 
     valid_types = {
         "main", "http_handler", "event_handler", "cli_command",
-        "cron_job", "worker", "module_export", "test_entry"
+        "cron_job", "worker", "module_export", "test_entry", "neovim_plugin"
     }
 
     if entry_type and entry_type not in valid_types:
