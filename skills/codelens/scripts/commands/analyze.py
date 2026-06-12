@@ -23,7 +23,7 @@ import os
 import time
 from typing import Dict, Any, List, Optional
 from commands import register_command
-from utils import logger
+from utils import logger, CODELENS_VERSION
 
 
 def add_args(parser):
@@ -96,7 +96,7 @@ def analyze_repository(
         "workspace": workspace,
         "focus": focus,
         "detail": detail,
-        "codelens_version": "6.0",
+        "codelens_version": CODELENS_VERSION,
         "time_budget_seconds": total_budget,
     }
 
@@ -425,9 +425,12 @@ def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
 
 
 def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
-    from envcheck_engine import audit_environment
-    env = audit_environment(workspace)
-    issues = env.get("stats", {}).get("total_issues", 0)
+    from envcheck_engine import check_env_vars
+    env = check_env_vars(workspace)
+    # check_env_vars returns stats with total_vars, undocumented, etc.
+    total_vars = env.get("stats", {}).get("total_vars", 0)
+    undocumented = env.get("stats", {}).get("undocumented", 0)
+    issues = undocumented + env.get("stats", {}).get("missing", 0)
     if issues == 0:
         return None
     return {
@@ -435,7 +438,7 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
         "label": "Environment Issues",
         "total": issues,
         "severity": "medium",
-        "top_items": env.get("issues", [])[:max_items],
+        "top_items": env.get("variables", [])[:max_items],
         "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
         "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
     }

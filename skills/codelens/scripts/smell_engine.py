@@ -566,34 +566,10 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
         return len(lines)
     elif ext in {".ex", ".exs"}:
         # Elixir: count do/end pairs
-        # IMPORTANT: Must avoid double-counting 'do' and must skip one-liner 'do:' syntax
         depth = 0
-        in_heredoc = False
         for i in range(start, min(start + 200, len(lines))):
             stripped = lines[i].strip()
-            # Skip heredoc content (""" or ''')
-            if not in_heredoc:
-                if stripped.count('"""') >= 2 or stripped.count("'''") >= 2:
-                    continue  # Single-line heredoc
-                if '"""' in stripped or "'''" in stripped:
-                    in_heredoc = True
-                    continue
-            else:
-                if '"""' in stripped or "'''" in stripped:
-                    in_heredoc = False
-                continue  # Skip heredoc content
-            # Count one-liner do: syntax (e.g., def foo(x), do: x + 1)
-            inline_do_colon = len(re.findall(r'\bdo:', stripped))
-            # Count block-opening 'do' keywords (not do:)
-            # Match: 'do' at end of line, or 'do' after pipe like 'do |args|'
-            # But NOT 'do:' (one-liner), NOT inside words like 'module'
-            if stripped.endswith(' do') or stripped.endswith(' do|'):
-                depth += 1
-            elif re.search(r'\bdo\b(?!\s*:)', stripped):
-                # Inline 'do' not at end — e.g., "for x <- list do"
-                depth += 1
-            # Subtract one-liner do: (they don't have corresponding 'end')
-            depth -= inline_do_colon
+            depth += stripped.count(' do') + stripped.count(' do,') + stripped.endswith(' do')
             depth -= stripped.count('end')
             if depth <= 0 and i > start:
                 return i + 1
@@ -672,6 +648,12 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     Reports only the entry point of each deeply-nested block (where the
     nesting first exceeds the threshold), not every line inside the block.
     This avoids inflating the smell count with hundreds of duplicate findings.
+    
+    For brace-based languages (JS/TS/C/C++/Java/Go/etc.), uses actual
+    brace-depth tracking so indentation style doesn't cause false positives.
+    For indentation-based languages (Python/Ruby/etc.), uses indentation.
+    For shell scripts (.sh/.bash), uses brace-depth tracking since shell
+    indentation is purely visual (e.g. pushd/popd blocks) and not logical nesting.
     """
     smells = []
     
@@ -680,31 +662,172 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     if any(kw in rel_path for kw in skip_keywords):
         return smells
     
+    # ─── Choose detection strategy based on language ────
+    # Brace-based languages: track actual { } depth (not indentation)
+    BRACE_BASED_EXTS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+                        ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                        ".rs", ".go", ".java", ".cs", ".swift", ".scala", ".sc",
+                        ".zig", ".php", ".dart", ".lua", ".kt", ".kts",
+                        ".sh", ".bash", ".zsh"}  # Shell: indentation is visual, only {} is real nesting
+    
+    if ext in BRACE_BASED_EXTS:
+        return _detect_deep_nesting_brace(content, ext, rel_path)
+    
+    # Indentation-based languages
+    return _detect_deep_nesting_indent(content, ext, rel_path)
+
+
+def _detect_deep_nesting_brace(content: str, ext: str, rel_path: str) -> List[Dict]:
+    """Detect deep nesting using brace-depth tracking.
+    
+    Tracks actual { and } to determine logical nesting depth.
+    This avoids false positives from indentation style differences
+    and from shell scripts where indentation is purely visual.
+    
+    For shell scripts, only {} and subshell () blocks count as nesting,
+    not pushd/popd visual indentation.
+    """
+    smells = []
+    lines = content.split('\n')
+    
+    is_shell = ext in {".sh", ".bash", ".zsh"}
+    
+    max_brace_depth = 0
+    max_depth_line = 0
+    brace_depth = 0
+    in_deep_block = False
+    deep_block_start = 0
+    deep_block_max_depth = 0
+    
+    in_string = False
+    string_char = None
+    in_comment = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        
+        # Reset line-level comment state
+        in_comment = False
+        
+        j = 0
+        line_len = len(line)
+        while j < line_len:
+            ch = line[j]
+            
+            # Handle string literals (avoid counting braces inside strings)
+            if ch in ('"', "'") and not in_comment:
+                if not in_string:
+                    in_string = True
+                    string_char = ch
+                elif ch == string_char:
+                    # Check for escaped quote
+                    if j > 0 and line[j-1] == '\\':
+                        # Check for double-escaped
+                        num_backslashes = 0
+                        k = j - 1
+                        while k >= 0 and line[k] == '\\':
+                            num_backslashes += 1
+                            k -= 1
+                        if num_backslashes % 2 == 0:  # Even number = not escaped
+                            in_string = False
+                            string_char = None
+                    else:
+                        in_string = False
+                        string_char = None
+                j += 1
+                continue
+            
+            if in_string:
+                j += 1
+                continue
+            
+            # Handle comments
+            if ch == '#' and (not is_shell or j == 0 or line[:j].strip() == ''):
+                # Shell: # is a comment only at start or after whitespace
+                # For non-shell, # inside code isn't a comment (could be preprocessor)
+                if not is_shell:
+                    j += 1
+                    continue
+                break  # Rest of line is comment
+            
+            if ch == '/' and j + 1 < line_len:
+                if line[j+1] == '/':
+                    break  # C++ style comment, rest of line
+                elif line[j+1] == '*':
+                    in_comment = True
+                    j += 2
+                    continue
+            
+            if in_comment:
+                if ch == '*' and j + 1 < line_len and line[j+1] == '/':
+                    in_comment = False
+                    j += 2
+                    continue
+                j += 1
+                continue
+            
+            # Track brace depth
+            if ch == '{':
+                brace_depth += 1
+                if brace_depth >= DEEP_NESTING_LEVEL and not in_deep_block:
+                    in_deep_block = True
+                    deep_block_start = i + 1
+                    deep_block_max_depth = brace_depth
+                if in_deep_block and brace_depth > deep_block_max_depth:
+                    deep_block_max_depth = brace_depth
+            elif ch == '}':
+                if brace_depth > 0:
+                    brace_depth -= 1
+                if in_deep_block and brace_depth < DEEP_NESTING_LEVEL:
+                    in_deep_block = False
+                    severity = "critical" if deep_block_max_depth >= DEEP_NESTING_CRITICAL else "warning"
+                    threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+                    smells.append({
+                        "file": rel_path,
+                        "line": deep_block_start,
+                        "nesting_level": deep_block_max_depth,
+                        "severity": severity,
+                        "message": f"Code is nested {deep_block_max_depth} levels deep (threshold: {threshold})",
+                        "suggestion": "Extract inner logic into separate functions. Use early returns."
+                    })
+            
+            j += 1
+    
+    # Handle case where file ends while still in a deep block
+    if in_deep_block:
+        severity = "critical" if deep_block_max_depth >= DEEP_NESTING_CRITICAL else "warning"
+        threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+        smells.append({
+            "file": rel_path,
+            "line": deep_block_start,
+            "nesting_level": deep_block_max_depth,
+            "severity": severity,
+            "message": f"Code is nested {deep_block_max_depth} levels deep (threshold: {threshold})",
+            "suggestion": "Extract inner logic into separate functions. Use early returns."
+        })
+    
+    return smells
+
+
+def _detect_deep_nesting_indent(content: str, ext: str, rel_path: str) -> List[Dict]:
+    """Detect deep nesting using indentation tracking.
+    
+    Used for indentation-based languages (Python, Ruby, Elixir, Nim, etc.)
+    where indentation IS the nesting indicator.
+    """
+    smells = []
     lines = content.split('\n')
     
     prev_level = 0
     in_deep_block = False
     deep_block_level = 0
     deep_block_start = 0
-    in_heredoc = False  # Track heredoc/dedent content for Elixir/Ruby
 
     for i, line in enumerate(lines):
         # Calculate indentation level
         stripped = line.lstrip()
-        
-        # Skip heredoc/dedent content (Elixir @doc """, Ruby =begin, etc.)
-        if ext in {".ex", ".exs", ".rb"}:
-            if not in_heredoc:
-                if stripped.count('"""') >= 2 or stripped.count("'''") >= 2:
-                    continue  # Single-line heredoc
-                if '"""' in stripped or "'''" in stripped:
-                    in_heredoc = True
-                    continue
-            else:
-                if '"""' in stripped or "'''" in stripped:
-                    in_heredoc = False
-                continue  # Skip heredoc content from nesting analysis
-        
         if not stripped or stripped.startswith('//') or stripped.startswith('#'):
             continue
 
@@ -713,19 +836,11 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
-        elif ext in {".rs", ".go", ".java", ".cs", ".swift", ".scala", ".sc",
-                     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".zig"}:
-            # Rust/Go/Java/C#/Swift/Scala/C/C++/Zig: 4 spaces per level
-            level = indent // 4
-        elif ext in {".ex", ".exs"}:
-            # Elixir: 2 spaces per level, but has ~2 levels of structural overhead
-            # (defmodule do + def do) that aren't real nesting
-            level = max(0, (indent // 2) - 2)
-        elif ext in {".rb", ".nim", ".nims"}:
-            # Ruby/Nim: 2 spaces per level
+        elif ext in {".ex", ".exs", ".rb", ".nim", ".nims"}:
+            # Elixir/Ruby/Nim: 2 spaces per level
             level = indent // 2
         else:
-            # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
+            # Fallback: 2 spaces per level
             level = indent // 2
 
         # Detect when we first enter a deep nesting block
@@ -1927,21 +2042,13 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
     Does NOT flag:
     - Parameterized queries with placeholders (?, %s without % operator)
     - Static SQL strings without variable interpolation
-    - f-strings that only interpolate table/column names but use %s/? for values
-    - Django migration files (downgraded to info)
-    - CLI command strings containing SQL keywords in non-SQL context
     """
     smells = []
     lines = content.split('\n')
 
-    # v7.0: Detect file context
-    is_test = _is_test_or_mock_file(rel_path)
-    is_migration = '/migrations/' in rel_path or '/migration/' in rel_path
-    is_cli_file = '/cli/' in rel_path or '/management/commands/' in rel_path
-
-    # SQL keywords that start a SQL statement
-    sql_start_keywords = re.compile(
-        r'(?i)^(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|WITH|TRUNCATE)\s'
+    # SQL keywords to detect SQL statements
+    sql_keywords = re.compile(
+        r'(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b'
     )
 
     for i, line in enumerate(lines):
@@ -1951,143 +2058,62 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
         if stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
             continue
 
+        # Skip test files for severity reduction
+        is_test = _is_test_or_mock_file(rel_path)
+
         # Check for f-string SQL injection
-        # v7.0: Improved regex — require SQL keyword at start of string content
-        # (within first 20 chars) to avoid false positives from CLI commands
-        # containing "SET", "SELECT" in HTML, etc.
+        # Pattern: f"SELECT ..." or f"INSERT ..." etc. with {variable} inside
         fstring_sql = re.findall(
-            r'f["\'](.{0,200})["\']',
+            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC).{0,200})["\']',
             stripped, re.IGNORECASE
         )
         for sql_str in fstring_sql:
             # Check if it contains variable interpolation
-            if '{' not in sql_str or '}' not in sql_str:
-                continue
-
-            # v7.0: Require SQL keyword near the start of the string content.
-            # Real SQL queries start with a keyword like SELECT, INSERT, etc.
-            # CLI commands like "archivebox config --set FOO={bar}" should NOT match.
-            # HTML like '<select name="{name}">' should NOT match.
-            prefix = sql_str[:20].strip()
-            if not sql_start_keywords.search(prefix):
-                continue
-
-            # v7.0: Skip if this looks like HTML (common false positive)
-            # e.g., f'<select ...>' or f'<option value="{val}">'
-            if '<select' in sql_str.lower() or '<option' in sql_str.lower():
-                continue
-
-            # v7.0: Skip if this looks like a CLI command (not SQL)
-            # e.g., f"archivebox config --set KEY={val}"
-            if re.search(r'--\w+=', sql_str) or re.search(r'\bconfig\b.*--', sql_str, re.IGNORECASE):
-                continue
-
-            # v7.0: If the f-string uses %s or ? placeholders for VALUES
-            # and only uses f-string interpolation for table/column names,
-            # it's a partially parameterized query — still a smell but less severe.
-            # e.g., f"UPDATE {table_name} SET config = %s WHERE id = %s"
-            has_param_placeholder = bool(re.search(r'%s|\?', sql_str))
-            # Count f-string interpolations vs placeholders
-            interp_count = len(re.findall(r'\{[^}]+\}', sql_str))
-
-            if has_param_placeholder and interp_count <= 2:
-                # Likely just table/column name interpolation — less severe
-                severity = "info"
-            elif is_migration:
-                severity = "info"
-            elif is_test:
-                severity = "info"
-            elif is_cli_file:
-                severity = "info"
-            else:
-                severity = "critical"
-
-            message = "Potential SQL injection: f-string used in SQL query"
-            if has_param_placeholder and interp_count <= 2:
-                message = "Partial SQL injection risk: f-string for table/column names with parameterized values"
-            elif is_migration:
-                message += " (in migration file — typically safe)"
-            elif is_cli_file:
-                message += " (in CLI file — verify context)"
-
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "pattern": "f-string_sql",
-                "severity": severity,
-                "message": message,
-                "suggestion": "Use parameterized queries with placeholders (? or %s) instead of f-string interpolation."
-            })
-            break  # One finding per line is enough
+            if '{' in sql_str and '}' in sql_str:
+                severity = "warning" if is_test else "critical"
+                smells.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": "f-string_sql",
+                    "severity": severity,
+                    "message": f"Potential SQL injection: f-string used in SQL query",
+                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of f-string interpolation."
+                })
+                break  # One finding per line is enough
 
         # Check for .format() SQL injection
         if '.format(' in stripped:
-            # v7.0: Require SQL keyword near the start of the string content
+            # Find SQL strings followed by .format()
             format_sql = re.search(
-                r'["\'](.{0,200})["\']\s*\.format\(',
+                r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*\.format\(',
                 stripped, re.IGNORECASE
             )
             if format_sql:
-                sql_str = format_sql.group(1)
-                prefix = sql_str[:20].strip()
-                if sql_start_keywords.search(prefix):
-                    # Skip HTML false positives
-                    if '<select' in sql_str.lower() or '<option' in sql_str.lower():
-                        continue
-
-                    if is_migration:
-                        severity = "info"
-                    elif is_test:
-                        severity = "info"
-                    elif is_cli_file:
-                        severity = "info"
-                    else:
-                        severity = "critical"
-
-                    message = "Potential SQL injection: .format() used in SQL query"
-                    if is_migration:
-                        message += " (in migration file — typically safe)"
-
-                    smells.append({
-                        "file": rel_path,
-                        "line": i + 1,
-                        "pattern": "format_sql",
-                        "severity": severity,
-                        "message": message,
-                        "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
-                    })
+                severity = "warning" if is_test else "critical"
+                smells.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": "format_sql",
+                    "severity": severity,
+                    "message": f"Potential SQL injection: .format() used in SQL query",
+                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
+                })
 
         # Check for % formatting SQL injection
         # Pattern: "SELECT ... %s ..." % variable (but not just "SELECT ... %s" alone)
         pct_sql = re.search(
-            r'["\'](.{0,200})["\']\s*%\s*\(',
+            r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*%\s*\(',
             stripped, re.IGNORECASE
         )
         if pct_sql:
-            sql_str = pct_sql.group(1)
-            # v7.0: Require SQL keyword near the start
-            prefix = sql_str[:20].strip()
-            if sql_start_keywords.search(prefix):
-                if is_migration:
-                    severity = "info"
-                elif is_test:
-                    severity = "info"
-                elif is_cli_file:
-                    severity = "info"
-                else:
-                    severity = "critical"
-
-                message = "Potential SQL injection: % formatting used in SQL query"
-                if is_migration:
-                    message += " (in migration file — typically safe)"
-
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "percent_format_sql",
-                    "severity": severity,
-                    "message": message,
-                    "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
-                })
+            severity = "warning" if is_test else "critical"
+            smells.append({
+                "file": rel_path,
+                "line": i + 1,
+                "pattern": "percent_format_sql",
+                "severity": severity,
+                "message": f"Potential SQL injection: % formatting used in SQL query",
+                "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
+            })
 
     return smells

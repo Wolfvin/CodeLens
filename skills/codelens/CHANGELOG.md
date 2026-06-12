@@ -5,36 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [7.2.0] — 2026-06-12
+## [6.5.0] — 2026-06-12
 
-### Tested against ArchiveBox/ArchiveBox (412 Python files, Django+CLI+MCP)
+### Tested against SerenityOS/serenity (18,601 files: 3,725 C++ + 3,722 C headers + 1,099 JS + 1,814 HTML + 455 Shell + 26 Python, C++ OS from scratch with kernel, browser, and userspace)
 
-Real-world test on a self-hosted web archiving tool — a Django project with management commands, REST API, MCP server, LDAP auth, background workers, and heavy subprocess/shell integration. This test target exposed critical gaps in CodeLens's handling of Django URL routing, Django model state classification, Python project identity extraction, and Python-centric false positive patterns.
-
-### Added
-
-- **Django URL route detection** — apimap_engine.py now properly parses Django `path()`, `re_path()`, and legacy `url()` patterns from `urls.py` files. Detects `include('module.path')`, `ViewClass.as_view()`, `admin.site.urls`, and `lambda` handlers. Uses paren-depth-aware extraction (`_extract_until_paren_close()`) to prevent look-ahead from bleeding into the next route definition. Route count: 0 → 61 on ArchiveBox.
-- **`production_only` parameter for api-map** — `map_api_routes()` now accepts `production_only: bool = False` to filter out test/example routes. Fixes TypeError crash when `--production-only` flag was used.
-- **`is_bundled_file()` utility** — New function in utils.py that detects bundled/compiled artifacts (dist/, build/, out/ directories, .bundle./.chunk./.global. patterns, .min.js/.min.css, .d.ts). Path-segment-aware matching prevents false positives on directories like `distributed/`. Fixes ImportError that broke 4 commands (ask, complexity, context, perf_hint).
-- **Django model state filtering** — statemap_engine.py now detects `class X(models.Model)`, `X = apps.get_model()`, `X = get_user_model()` and skips those from state store classification. Also detects lazy import patterns (`_name = None` + `import name as _name_import`) and type aliases (`Name = TypeA | TypeB`). Indentation check fixed to use raw line instead of stripped line. Stores: 22 → 1 on ArchiveBox.
-- **Secrets: path value filtering** — `pwd="/tmp/archivebox"` is now correctly identified as a filesystem path (not a password) when the key is `pwd` and the value starts with `/tmp/`, `/var/`, `/home/`, etc.
-- **Secrets: URL test data filtering** — Values containing `example.com`, `ex.co`, `test.com` in test files are now skipped. Prevents flagging URL parsing test fixtures.
-- **pyproject.toml description extraction** — Handbook now extracts `description` field from the `[project]` section in pyproject.toml. Uses section-scoped regex with `re.MULTILINE` flag to avoid matching fields from other TOML sections (e.g., `[tool.bumpver]`). Description: `""` → `"Self-hosted internet archiving solution."` on ArchiveBox.
-- **Debug-leak Django CLI context** — Files in `management/commands/`, `cli/`, or files using `click.command()`/`argparse` are detected as CLI files. `print()`/`pprint()` in CLI files are skipped unless they contain debug-specific patterns. Django settings files get higher commented_block thresholds (5 lines, score 3). Total leaks: 1041 → 728 (-30%). print() in cli/: 200 → 1 (-99.5%).
-- **SQL injection FP reduction** — smell_engine.py now requires SQL keywords at the START of f-strings (first 20 chars), not anywhere. Skips HTML context (`<select>` tags), CLI commands (`--flag=` patterns), and migration files. Parameterized queries with `%s`/`?` placeholders are downgraded to info severity. SQL findings: 124 → 24 (-81%). Critical: 88 → 1 (-99%).
+Real-world test on a massive C++ monorepo (CMake-based OS project with Ladybird browser).
+This exposed critical import errors and deep nesting false positives that were invisible
+on web-tech projects.
 
 ### Fixed
 
-- **CRITICAL: `is_bundled_file` missing from utils.py** — 4 commands (ask, complexity, context, perf_hint) failed with ImportError. Now defined in utils.py.
-- **CRITICAL: api-map TypeError crash** — `map_api_routes() got an unexpected keyword argument 'production_only'`. Now accepted as optional parameter.
-- **CRITICAL: Zero Django routes detected** — Django `path()`/`re_path()`/`url()` patterns were not being parsed from urls.py files due to regex that couldn't capture dotted handler names (`admin.site.urls`, `View.as_view()`).
-- **State map: Django models classified as module_constant** — `Crawl`, `Snapshot`, `ArchiveResult`, etc. were misclassified as state stores. Now properly detected and filtered.
-- **State map: Lazy imports classified as stores** — `_psutil = None`, `_environ = {}`, `_fcntl = None` were misclassified. Now detected as lazy import patterns.
-- **Handbook: empty description from pyproject.toml** — Description field was never extracted from `[project]` section. Now properly parsed.
-- **Secrets: pwd= path values flagged as passwords** — `pwd="/tmp/archivebox"` is a filesystem path, not a password.
-- **Secrets: URL test data flagged as credentials** — `"http://us:pa@ex.co:42/..."` in test files is URL parsing test data, not real credentials.
-- **Debug-leak: Django management command print() flagged** — print() in CLI/management commands is legitimate output, not debug leaks.
-- **SQL injection: massive false positive rate** — 124 findings reduced to 24, with only 1 genuine critical finding remaining.
+- **`is_bundled_file` ImportError** (4 command modules + 3 engines broken): `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function was renamed to `is_generated_file` without updating callers. This caused `ask`, `complexity`, `context`, and `perf-hint` commands to fail on import, and `analyze` skipped 3 engine categories (env_issues, complexity, perf_hints). Fixed by adding `is_bundled_file = is_generated_file` backward compatibility alias in `utils.py`.
+- **`analyze` command calls non-existent `audit_environment()`**: `_detect_env()` in `analyze.py` called `envcheck_engine.audit_environment()` which doesn't exist — the actual function is `check_env_vars()`. This caused the env_issues engine to always be skipped with `ImportError`. Fixed to use `check_env_vars()` and correctly parse its output format (`variables` key instead of `issues`).
+- **Shell script deep nesting false positives** (nesting levels 22-30 reported): Indentation-based nesting detection counted visual indentation in shell scripts (e.g., `pushd`/`popd` blocks) as logical nesting, producing absurd results like "30 levels deep" for build scripts. Fixed by switching to brace-depth tracking for shell scripts and all brace-based languages (JS/TS/C/C++/Java/Go/Rust/Swift/PHP/Dart/Lua). Only indentation-based languages (Python/Ruby/Elixir/Nim) still use indentation tracking.
+- **Version mismatch across codebase**: `utils.py` reported version `6.3.0`, `analyze.py` hardcoded `6.0`, actual version was `6.5.0`. Fixed `utils.py` to `6.5.0` and `analyze.py` now imports `CODELENS_VERSION` from `utils.py`.
+- **C/C++ incorrectly listed as "unsupported_langs"**: `framework_detect.py` marked C and C++ as unsupported when `CMakeLists.txt` exists, even though the scan command successfully parses 7,000+ C/C++ files using `fallback_c.py`. Removed C/C++ from the `UNSUPPORTED_MARKERS` dict (same treatment Go already received).
+
+### Added
+
+- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for project name (`project(NAME)`) and version (`project(... VERSION x.y.z)`). Detects project types: `cpp-operating-system` (Kernel+Userland dirs), `cpp-browser-engine`, `cpp-library`, `cpp-gui-application`, `cpp-embedded`, `cpp-project`. Also detects CMake monorepo pattern (3+ `add_subdirectory` entries → `cmake-workspace`).
+- **Expanded directory hints for C/C++ projects**: Added hints for `kernel`, `userland`, `ports`, `toolchain`, `ak` directories common in C++ projects.
+- **Expanded source file counting**: Directory map now counts `.c`, `.cpp`, `.h`, `.go`, `.java`, `.kt`, `.cs`, `.sh`, `.rb`, `.swift`, `.scala`, `.lua`, `.php`, `.dart` files as source (was only `.py`, `.js`, `.ts`, `.rs`, `.html`, `.css`).
 
 ## [5.10.0] — 2026-06-12
 

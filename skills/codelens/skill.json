@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "7.2.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 47 commands. v7.2: Django URL route detection (0 → 61 routes), Django model/lazy-import state filtering, pyproject.toml description extraction, SQL injection FP reduction (124 → 24), debug-leak Django CLI context (1041 → 728), secrets path/URL test data FP filtering, api-map production_only fix, is_bundled_file fix (4 commands unbroken). Tested on ArchiveBox/ArchiveBox (412 Python files, Django+CLI+MCP).",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.5.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes: missing_refs O(n²) typo detection now time-budgeted (15s cap, prefix filtering, 500K comparison cap); analyze command gets --timeout (default 300s) with per-engine time budget and graceful skip; handbook command gets --timeout (default 120s) with per-engine skip and partial output. False positive fixes: api-map tauri detection tightened (removed broad invoke() pattern); state-map react_context now requires actual React import/dependency; entrypoints --exclude-tests flag (69K test entries excluded by default in analyze); smell god_object JS/TS brace-depth tracking (was 29x inflation, now accurate).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",

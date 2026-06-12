@@ -539,12 +539,68 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # v6.5: Try CMakeLists.txt — detect C/C++ CMake projects
+    cmake_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            # Extract project name from cmake_minimum_required / project() command
+            # project(SerenityOS VERSION 1.0)  or  project(serenity)  or  project(SerenityOS LANGUAGES CXX)
+            project_match = re.search(
+                r'project\s*\(\s*([^\s\)]+)', cmake_content, re.IGNORECASE
+            )
+            if project_match:
+                project_name = project_match.group(1)
+                if identity["type"] == "unknown":
+                    identity["name"] = project_name
+            # Extract VERSION from project() command
+            version_match = re.search(
+                r'project\s*\([^)]*VERSION\s+([0-9]+(?:\.[0-9]+)*)', cmake_content, re.IGNORECASE
+            )
+            if version_match:
+                identity["version"] = version_match.group(1)
+            # Classify CMake project type based on content
+            cmake_lower = cmake_content.lower()
+            has_kernel = os.path.isdir(os.path.join(workspace, 'Kernel'))
+            has_userland = os.path.isdir(os.path.join(workspace, 'Userland'))
+            has_ladybird = os.path.isdir(os.path.join(workspace, 'Ladybird'))
+            has_ak = os.path.isdir(os.path.join(workspace, 'AK'))
+            # Detect OS project (like SerenityOS)
+            if has_kernel and has_userland:
+                cmake_type = "cpp-operating-system"
+            # Detect browser project (like Ladybird)
+            elif has_ladybird and ('web' in cmake_lower or 'browser' in cmake_lower):
+                cmake_type = "cpp-browser-engine"
+            # Detect library/framework
+            elif any(kw in cmake_lower for kw in ('add_library', 'shared', 'static')):
+                cmake_type = "cpp-library"
+            # Detect application with GUI
+            elif any(kw in cmake_lower for kw in ('qt', 'gtk', 'sdl', 'wxwidgets')):
+                cmake_type = "cpp-gui-application"
+            # Detect embedded/firmware project
+            elif any(kw in cmake_lower for kw in ('arm', 'embedded', 'firmware', 'microcontroller', 'freertos', 'zephyr')):
+                cmake_type = "cpp-embedded"
+            else:
+                cmake_type = "cpp-project"
+            # Check for CMake monorepo (multiple add_subdirectory with distinct projects)
+            subdirs = re.findall(r'add_subdirectory\s*\(\s*([^\s\)]+)', cmake_content)
+            if len(subdirs) >= 3 and not identity["is_monorepo"]:
+                identity["is_monorepo"] = True
+                if "cmake-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cmake-workspace")
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
+        if cmake_type:
+            type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
@@ -613,6 +669,13 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
+        'kernel': 'OS kernel code',
+        'userland': 'User-space applications and libraries',
+        'ports': 'Third-party software ports/packages',
+        'toolchain': 'Build toolchain scripts',
+        'ak': 'Core utility library',
+        'tests': 'Test files',
+        'documentation': 'Documentation',
     }
     dir_map = {}
     try:
@@ -629,7 +692,9 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                         for f in filenames:
                             ext = os.path.splitext(f)[1].lower()
-                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
+                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte',
+                                        '.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx', '.go', '.java', '.kt', '.cs',
+                                        '.sh', '.bash', '.rb', '.ex', '.exs', '.swift', '.scala', '.lua', '.php', '.dart'}:
                                 src_count += 1
                 except Exception:
                     logger.warning("Directory file counting failed", exc_info=True)
