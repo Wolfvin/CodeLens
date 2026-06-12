@@ -1,5 +1,24 @@
 # CodeLens Changelog
 
+## v5.9.0 — 2026-06-12
+
+### Tested against wasmerio/wasmer (2,292 files: 1,188 Rust + 354 C/C++ + 10 Python + 24 WASM binaries)
+
+### Added (4)
+
+- **`scan_tauri_artifacts()`** — Full Tauri reverse engineering analysis: IPC commands, capabilities/permissions, sidecars, updater config, WebView security (CSP), deep-links, build config, Electron detection, security recommendations.
+- **`_is_graphql_project()`** — Validates GraphQL resolver implementations before treating .graphql schema files as active API routes. Prevents false positives in non-GraphQL projects.
+- **Dataflow violation markdown rendering** — Summary formatter now renders dataflow violations as source→sink flow chains.
+- **Python typing false positive filter** — State-map skips MapEntry, DictEntry, Optional, Union, TypeVar, Generic, Protocol, etc.
+
+### Fixed (5)
+
+- **binary-scan crash** — `scan_tauri_artifacts` was imported but never defined, causing ImportError.
+- **scan/handbook outline TypeError** — `get_workspace_outline()` called with invalid `max_files` parameter.
+- **GraphQL schema false positives** — .graphql files in non-GraphQL projects reported as active API routes.
+- **Dataflow violations empty in summary** — Markdown formatter rendered nested flow objects as empty fields.
+- **MapEntry false positive** — Python typing generics classified as state stores.
+
 ## v6.2.0 — 2026-06-12
 
 ### Added (8)

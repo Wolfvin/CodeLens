@@ -48,7 +48,7 @@ def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> di
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace, max_files=max_files)
+        outline_data = get_workspace_outline(workspace)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -387,9 +387,283 @@ def _identify_signature(sig: bytes) -> Optional[str]:
     return None
 
 
+# ─── Tauri Artifact Scanning ────────────────────────────────────
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and configuration.
+
+    Detects Tauri desktop app projects by looking for:
+    1. tauri.conf.json or Tauri.toml configuration files
+    2. src-tauri/ directory structure
+    3. Tauri IPC commands in Rust source (#[tauri::command])
+    4. Tauri capabilities/permissions files
+    5. Sidecar binary configurations
+    6. Updater configuration
+    7. WebView security settings (CSP, asset protocol)
+    8. Deep-link scheme configurations
+    9. Build configuration (bundlers, windows config, etc.)
+    10. Electron app detection (for comparison/migration)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with Tauri analysis results, or None if no Tauri project detected.
+    """
+    import re
+    workspace = os.path.abspath(workspace)
+
+    # ─── Detect Tauri project ──────────────────────────
+    is_tauri = False
+    tauri_conf_path = None
+    src_tauri_dir = None
+
+    # Check for tauri.conf.json (can be in root or src-tauri/)
+    for candidate in [
+        os.path.join(workspace, 'tauri.conf.json'),
+        os.path.join(workspace, 'src-tauri', 'tauri.conf.json'),
+        os.path.join(workspace, 'Tauri.toml'),
+        os.path.join(workspace, 'src-tauri', 'Tauri.toml'),
+    ]:
+        if os.path.exists(candidate):
+            is_tauri = True
+            tauri_conf_path = candidate
+            break
+
+    # Check for src-tauri directory
+    src_tauri_candidate = os.path.join(workspace, 'src-tauri')
+    if os.path.isdir(src_tauri_candidate):
+        is_tauri = True
+        src_tauri_dir = src_tauri_candidate
+        if not tauri_conf_path:
+            # Look deeper in src-tauri
+            for name in ('tauri.conf.json', 'Tauri.toml'):
+                deeper = os.path.join(src_tauri_candidate, name)
+                if os.path.exists(deeper):
+                    tauri_conf_path = deeper
+                    break
+
+    if not is_tauri:
+        return None
+
+    result = {
+        "is_tauri_project": True,
+        "tauri_conf_path": os.path.relpath(tauri_conf_path, workspace) if tauri_conf_path else None,
+        "src_tauri_dir": os.path.relpath(src_tauri_dir, workspace) if src_tauri_dir else None,
+    }
+
+    # ─── Parse Tauri configuration ──────────────────────────
+    tauri_conf = {}
+    if tauri_conf_path:
+        try:
+            with open(tauri_conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            if tauri_conf_path.endswith('.json'):
+                tauri_conf = json.loads(content)
+            elif tauri_conf_path.endswith('.toml'):
+                try:
+                    import tomllib
+                    tauri_conf = tomllib.loads(content)
+                except ImportError:
+                    try:
+                        import tomli as tomllib
+                        tauri_conf = tomllib.loads(content)
+                    except ImportError:
+                        # Basic TOML parsing fallback
+                        tauri_conf = {}
+        except (IOError, json.JSONDecodeError, ValueError):
+            tauri_conf = {}
+
+    if tauri_conf:
+        result["tauri_config"] = {
+            "product_name": _safe_get(tauri_conf, ["productName", "package", "productName"], ""),
+            "version": _safe_get(tauri_conf, ["version", "package", "version"], ""),
+            "identifier": _safe_get(tauri_conf, ["identifier", "tauri", "bundle", "identifier"], ""),
+        }
+
+    # ─── Tauri IPC Commands (#[tauri::command]) ──────────────
+    ipc_commands = []
+    search_root = src_tauri_dir or workspace
+    for root, dirs, filenames in os.walk(search_root):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            if not filename.endswith('.rs'):
+                continue
+            file_path = os.path.join(root, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+            # Find #[tauri::command] annotated functions
+            for m in re.finditer(r'#\[tauri::command\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', content):
+                fn_name = m.group(1)
+                line_num = content[:m.start()].count('\n') + 1
+                rel_path = os.path.relpath(file_path, workspace)
+                ipc_commands.append({
+                    "command": fn_name,
+                    "file": rel_path,
+                    "line": line_num,
+                })
+    result["ipc_commands"] = ipc_commands
+    result["ipc_command_count"] = len(ipc_commands)
+
+    # ─── Capabilities / Permissions ──────────────────────────
+    capabilities = []
+    cap_dirs = [
+        os.path.join(src_tauri_dir or workspace, 'capabilities'),
+        os.path.join(src_tauri_dir or workspace, 'permissions'),
+    ]
+    for cap_dir in cap_dirs:
+        if not os.path.isdir(cap_dir):
+            continue
+        for root, dirs, filenames in os.walk(cap_dir):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS]
+            for filename in filenames:
+                if filename.endswith('.json') or filename.endswith('.toml'):
+                    cap_path = os.path.join(root, filename)
+                    try:
+                        with open(cap_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            cap_content = f.read()
+                        if filename.endswith('.json'):
+                            cap_data = json.loads(cap_content)
+                        else:
+                            cap_data = {}
+                        rel_path = os.path.relpath(cap_path, workspace)
+                        permissions = cap_data.get("permissions", [])
+                        capabilities.append({
+                            "file": rel_path,
+                            "permissions": permissions if isinstance(permissions, list) else [],
+                        })
+                    except (IOError, json.JSONDecodeError, ValueError):
+                        pass
+    result["capabilities"] = capabilities
+
+    # ─── Sidecar Binaries ──────────────────────────────────
+    sidecars = []
+    if tauri_conf:
+        bundle = tauri_conf.get("bundle", tauri_conf.get("tauri", {}).get("bundle", {}))
+        external_bin = bundle.get("externalBin", bundle.get("external_bin", []))
+        if isinstance(external_bin, list):
+            sidecars = external_bin
+    result["sidecars"] = sidecars
+
+    # ─── Updater Configuration ──────────────────────────────
+    updater = None
+    if tauri_conf:
+        tauri_section = tauri_conf.get("tauri", tauri_conf)
+        updater_conf = tauri_section.get("updater", {})
+        if updater_conf:
+            updater = {
+                "active": updater_conf.get("active", False),
+                "endpoints": updater_conf.get("endpoints", []),
+                "pubkey": bool(updater_conf.get("pubkey", "")),
+            }
+    result["updater"] = updater
+
+    # ─── WebView Security ──────────────────────────────────
+    webview_security = {}
+    if tauri_conf:
+        tauri_section = tauri_conf.get("tauri", tauri_conf)
+        security = tauri_section.get("security", {})
+        if security:
+            webview_security = {
+                "csp": security.get("csp", None),
+                "asset_protocol": security.get("assetProtocol", security.get("asset_protocol", {})),
+                "dangerous_disable_asset_csp_modification": security.get("dangerousDisableAssetCspModification", False),
+                "freeze_prototype": security.get("freezePrototype", False),
+            }
+    if webview_security:
+        result["webview_security"] = webview_security
+
+    # ─── Deep-link Schemes ──────────────────────────────────
+    deep_links = []
+    if tauri_conf:
+        tauri_section = tauri_conf.get("tauri", tauri_conf)
+        dl = tauri_section.get("deep-link", tauri_section.get("deepLink", {}))
+        if dl:
+            schemes = dl.get("schemes", dl.get("mobile", []))
+            if isinstance(schemes, list):
+                deep_links = schemes
+    result["deep_link_schemes"] = deep_links
+
+    # ─── Build Configuration ──────────────────────────────
+    build_info = {}
+    if tauri_conf:
+        build_section = tauri_conf.get("build", {})
+        if build_section:
+            build_info = {
+                "dev_path": build_section.get("devPath", build_section.get("dev_path", "")),
+                "dist_dir": build_section.get("distDir", build_section.get("dist_dir", "")),
+                "before_build": build_section.get("beforeBuildCommand", build_section.get("before_build_command", "")),
+                "before_dev": build_section.get("beforeDevCommand", build_section.get("before_dev_command", "")),
+            }
+    result["build_config"] = build_info
+
+    # ─── Electron Detection (for comparison) ──────────────
+    is_electron = False
+    for marker in ['electron-builder.yml', 'electron-builder.json', 'electron.vite.config.ts', 'electron.vite.config.js']:
+        if os.path.exists(os.path.join(workspace, marker)):
+            is_electron = True
+            break
+    if not is_electron:
+        # Check package.json for electron dependency
+        pkg_json_path = os.path.join(workspace, 'package.json')
+        if os.path.exists(pkg_json_path):
+            try:
+                with open(pkg_json_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                if any(k.startswith("electron") for k in deps):
+                    is_electron = True
+            except (IOError, json.JSONDecodeError):
+                pass
+    result["is_electron_project"] = is_electron
+
+    # ─── Security Recommendations ──────────────────────────
+    recommendations = []
+    if webview_security.get("csp") is None:
+        recommendations.append("No Content Security Policy (CSP) configured. Add a CSP header to prevent XSS attacks.")
+    if webview_security.get("dangerous_disable_asset_csp_modification"):
+        recommendations.append("CSP modification is disabled — this is dangerous and may expose the app to injection attacks.")
+    if not webview_security.get("freeze_prototype"):
+        recommendations.append("Prototype freezing is not enabled. Enable freezePrototype to prevent prototype pollution.")
+    if sidecars:
+        recommendations.append(f"Found {len(sidecars)} sidecar binary/binaries. Ensure they are from trusted sources and properly signed.")
+    if updater and updater.get("active") and not updater.get("pubkey"):
+        recommendations.append("Updater is active but no public key is configured. Unsigned updates are vulnerable to MITM attacks.")
+    for cap in capabilities:
+        perms = cap.get("permissions", [])
+        dangerous_perms = [p for p in perms if isinstance(p, str) and any(d in p.lower() for d in ['shell', 'fs', 'process', 'os'])]
+        if dangerous_perms:
+            recommendations.append(f"Capability '{cap['file']}' has potentially dangerous permissions: {', '.join(dangerous_perms[:5])}")
+    result["security_recommendations"] = recommendations
+
+    return result
+
+
+def _safe_get(data: dict, keys: list, default=None):
+    """Safely get a nested value from a dict using a list of key paths to try."""
+    for key_path in keys if isinstance(keys[0], list) else [[keys]]:
+        obj = data
+        found = True
+        for k in key_path if isinstance(key_path, list) else [key_path]:
+            if isinstance(obj, dict) and k in obj:
+                obj = obj[k]
+            else:
+                found = False
+                break
+        if found:
+            return obj
+    return default
+
+
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.8.0"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Generated File Detection ───────────────────────────────

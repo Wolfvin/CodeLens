@@ -104,6 +104,7 @@ def map_api_routes(
     middleware_map: Dict[str, List[Dict]] = defaultdict(list)
     route_groups: List[Dict[str, Any]] = []
     files_scanned = 0
+    gql_schema_routes: List[Dict[str, Any]] = []  # Schema-only routes (no resolvers)
 
     # Global middleware collectors
     global_middleware: List[Dict] = []
@@ -163,11 +164,21 @@ def map_api_routes(
                 global_middleware.extend(py_mw)
 
             # ─── GraphQL ──────────────────────────────────────
+            # Only extract GraphQL schema routes if the project actually uses
+            # GraphQL (has resolver implementations, not just schema definition files).
+            # Schema-only files in non-GraphQL projects (e.g., a WASM runtime with
+            # a backend-api/ directory) should NOT be treated as active API routes.
             elif ext in {".graphql", ".gql"}:
                 gql_routes = _extract_graphql_schema(content, rel_path)
-                if gql_routes:
+                if gql_routes and _is_graphql_project(workspace):
                     frameworks_detected.add("graphql")
                     routes.extend(gql_routes)
+                elif gql_routes:
+                    # Schema file found but no resolvers — mark as documentation only
+                    for route in gql_routes:
+                        route["is_schema_only"] = True
+                        route["note"] = "GraphQL schema definition (no resolvers found in project)"
+                    gql_schema_routes.extend(gql_routes)
 
             # Also detect GraphQL in JS/TS files
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -306,6 +317,7 @@ def map_api_routes(
             "files_scanned": files_scanned,
         },
         "routes": routes,
+        "gql_schema_only": gql_schema_routes,
         "route_groups": route_groups,
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
@@ -1390,6 +1402,46 @@ def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
 
 
 # ─── GraphQL ───────────────────────────────────────────────────
+
+def _is_graphql_project(workspace: str) -> bool:
+    """Check if the workspace is actually a GraphQL project with resolvers.
+
+    A project with .graphql schema files but no resolver implementations
+    is NOT a GraphQL project — the schema files may just be API documentation
+    or reference specs (common in WASM runtime repos that include a backend-api
+    directory for a separate cloud service).
+
+    Returns True only if resolver implementations are found.
+    """
+    resolver_indicators = 0
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.rs'}:
+                continue
+            file_path = os.path.join(root, filename)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+            except IOError:
+                continue
+            # Check for resolver implementation patterns
+            if re.search(r'(?:Query|Mutation|Subscription)\s*:\s*\{', content):
+                resolver_indicators += 1
+            if re.search(r'(?:createGraphQLSchema|makeExecutableSchema|ApolloServer|buildSchema)', content):
+                resolver_indicators += 2
+            if re.search(r'(?:@resolver|@Query|@Mutation|@FieldResolver)', content):
+                resolver_indicators += 1
+            if re.search(r'(?:graphql_resolver|resolve[=:]\s*(?:async\s+)?\()', content):
+                resolver_indicators += 1
+            if resolver_indicators >= 2:
+                return True
+    return False
+
 
 def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract routes from GraphQL schema files (.graphql/.gql)."""

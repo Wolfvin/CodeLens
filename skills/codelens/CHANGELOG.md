@@ -5,6 +5,39 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Tested against wasmerio/wasmer (2,292 source files: 1,188 Rust + 354 C/C++ + 10 Python + 24 WASM binaries, polyglot WebAssembly runtime)
+
+Real-world test on a Rust+C+WASM polyglot runtime with 20,658 backend nodes and 69,663 edges.
+Found and fixed 5 critical bugs exposed by this unique test case.
+
+### Added
+
+- **`scan_tauri_artifacts()` function**: Full Tauri reverse engineering analysis in `utils.py`:
+  - Tauri project detection (tauri.conf.json, Tauri.toml, src-tauri/ directory)
+  - Tauri configuration parsing (product name, version, identifier)
+  - IPC command extraction from Rust source (`#[tauri::command]` functions)
+  - Capabilities/permissions security audit
+  - Sidecar binary analysis
+  - Updater configuration analysis (active, endpoints, public key validation)
+  - WebView security audit (CSP, asset protocol, prototype freezing)
+  - Deep-link scheme analysis
+  - Build configuration analysis (dev path, dist dir, before commands)
+  - Electron app detection (for comparison/migration)
+  - Security recommendations engine
+- **GraphQL project validation**: `_is_graphql_project()` in `apimap_engine.py` — validates that a project actually has GraphQL resolver implementations before treating .graphql schema files as active API routes. Prevents false positives in non-GraphQL projects that include schema files as documentation/reference.
+- **Dataflow violation markdown rendering**: Summary markdown formatter now properly renders dataflow violations with source→sink flow chains instead of empty fields.
+- **Python typing false positive filter**: State-map now skips Python typing generics (MapEntry, DictEntry, Optional, Union, TypeVar, Generic, Protocol, etc.) that were incorrectly classified as state stores.
+
+### Fixed
+
+- **binary-scan command crash**: `scan_tauri_artifacts` was imported from `utils` but never defined, causing `ImportError` and making the `binary-scan` command completely unusable. Now implemented with full Tauri RE capabilities.
+- **scan/handbook outline TypeError**: `write_output_files()` called `get_workspace_outline(workspace, max_files=max_files)` but `get_workspace_outline()` does not accept a `max_files` parameter, causing a `TypeError` on every scan. Fixed by removing the invalid parameter.
+- **GraphQL schema false positives in api-map**: `.graphql` schema files in non-GraphQL projects (e.g., WASM runtimes with a backend-api directory) were reported as active API routes with fake resolver names. Now validated against actual resolver implementations.
+- **Dataflow violations empty in summary**: Summary markdown formatter attempted to render dataflow violations as flat dicts (`file`, `line`, `message`) but they are nested flow objects (`source`, `sink`). Now properly extracts and displays source→sink flow chains with file paths and labels.
+- **MapEntry false positive in state-map**: Python typing constructs like `MapEntry` from `typing` module were classified as global state stores. Added comprehensive Python typing generics skip list.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)
