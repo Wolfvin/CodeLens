@@ -5,6 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.2] — 2026-06-12
+
+### Tested against custom Tauri 2.0 test app (12 Rust files + 4 TSX files, React+Zustand+Tokio+SQLite+Reqwest)
+
+Real-world test on a Tauri 2.0 application with `#[tauri::command]` async handlers,
+Zustand state management, React components, and Rust state/config modules.
+
+### Fixed
+
+- **CRITICAL: `api-map` missed all `async` Tauri IPC commands** — The regex in `_extract_tauri_rust_commands()` only matched `#\[tauri::command\]...fn name(` but not `#\[tauri::command\]...pub async fn name(`. Since most Tauri commands are async, this meant **api-map returned 0 routes for the majority of Tauri apps**. Fixed by adding `(?:async\s+)?` to the regex pattern.
+- **`max_files` feature disconnected from CLI** — After previous fix removed `--max-files` from command wrappers (because engines didn't support it), the engines were later updated to accept `max_files`, but the CLI args were never restored. This meant the `max_files` performance safeguard was completely non-functional from the CLI. Restored `--max-files` argument to `perf-hint`, `smell`, `complexity`, and `secrets` commands, properly passing the value to the engine functions.
+
+### Changed
+
+- Version bumped from 5.8.1 to 5.9.2.
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

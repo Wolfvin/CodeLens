@@ -2235,7 +2235,7 @@ def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict]:
     # Match #[tauri::command] followed by fn name(
     # Allow attributes between #[tauri::command] and fn
     for m in re.finditer(
-        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?fn\s+(\w+)\s*\(',
+        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
         content
     ):
         command_name = m.group(1)

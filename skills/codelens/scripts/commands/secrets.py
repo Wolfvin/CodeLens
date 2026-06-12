@@ -9,10 +9,12 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
                         help="Filter by severity")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000)")
 
 
 def execute(args, workspace):
-    return detect_secrets(workspace, severity=args.severity)
+    return detect_secrets(workspace, severity=args.severity, max_files=args.max_files)
 
 
 register_command("secrets", "Detect hardcoded secrets and API keys", add_args, execute)
