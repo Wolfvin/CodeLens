@@ -29,6 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
+    ".nim", ".nims",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -382,6 +383,28 @@ def _detect_print_statements(
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
 
+            # Nim: echo() is the standard print mechanism, similar to println! in Rust.
+            # Only flag if in test context or contains debug-specific patterns.
+            if label == "echo()" and ext in {".nim", ".nims"}:
+                has_debug_pattern = bool(re.search(
+                    r'debug|todo|fixme|FIXME|TODO|hack|HACK|TEMP|temp\b|dbg|trace',
+                    stripped, re.IGNORECASE
+                ))
+                if not has_debug_pattern:
+                    continue  # Standard Nim output, not a debug leak
+
+            # Python: Skip echo() if it's a function definition (not a call)
+            # e.g. "def echo(debugger, command, result, internal_dict):" in LLDB extensions
+            if label == "echo()" and ext == ".py":
+                # Check if this is a def echo(...), not a call echo(...)
+                if re.match(r'\s*def\s+echo\s*\(', line):
+                    continue
+                # Also skip if inside an LLDB command handler context
+                context_start = max(0, i - 10)
+                context = '\n'.join(lines[context_start:i + 1])
+                if 'lldb' in context.lower() or 'debugger' in context.split():
+                    continue
+
             severity = "medium"
             should_remove = True
 
@@ -705,6 +728,7 @@ def _get_comment_prefix(ext: str) -> str:
         ".ts": "//", ".tsx": "//", ".jsx": "//",
         ".py": "#", ".rs": "//", ".go": "//",
         ".rb": "#", ".vue": "//", ".svelte": "//",
+        ".nim": "#", ".nims": "#",
     }
     return prefixes.get(ext, "")
 
@@ -761,6 +785,16 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         r'\w+\.\w+\(',
         r'\w+\s*,\s*\w+\s*:=',
     ]
+    code_indicators_nim = [
+        r'(?:proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|return|if|elif|else|for|while|case|of|when|try|except|finally|block|defer|discard|raise|yield)\s',
+        r'[{}();:]',
+        r'->',
+        r'\w+\.\w+\(',
+        r'\w+\s*=\s*',
+        r'echo\s*\(',
+        r'new\s+\w+',
+        r'discard\s',
+    ]
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
         indicators = code_indicators_js
@@ -770,6 +804,8 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         indicators = code_indicators_rs
     elif ext == ".go":
         indicators = code_indicators_go
+    elif ext in {".nim", ".nims"}:
+        indicators = code_indicators_nim
     else:
         indicators = code_indicators_js  # Default to JS-like
 

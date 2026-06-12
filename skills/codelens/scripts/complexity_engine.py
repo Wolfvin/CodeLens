@@ -35,6 +35,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".go",
     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
+    ".nim", ".nims",
 }
 
 # Cyclomatic complexity thresholds

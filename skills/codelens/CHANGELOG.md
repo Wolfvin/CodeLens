@@ -5,6 +5,36 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.2] — 2026-06-12
+
+### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)
+
+Real-world test on a self-hosting Nim compiler — the language writes itself!
+Only 40/3734 source files were parsed before this release (1.1% coverage).
+After adding Nim support: 3,710 files parsed, 99.6% coverage.
+
+### Added
+
+- **Nim fallback parser** (`fallback_nim.py`): Regex-based parser that extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Handles Nim's `*` export marker, backtick-quoted identifiers, and indentation-based block tracking.
+- **Nim framework detection**: `detect_frameworks()` now detects `nim` (via `.nim`/`.nims`/`.nimble` files), `nimble` (package manager), `jester` (web framework), `prologue` (web framework), `karax` (SPA framework), `happyx` (web framework), `norm` (ORM), `nimcrypto` (crypto library). Parses `.nimble` files for `requires "package"` dependencies.
+- **`has_nim` field in framework detection**: `detect_frameworks()` now includes `has_nim: true` when Nim source files are found.
+- **Handbook Nim identity**: `handbook` now parses `.nimble` files for project name, version, and description. Classifies Nim projects as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project` based on name and dependencies.
+- **Nim entrypoints**: `entrypoints` command now detects `when isMainModule:` (Nim's equivalent of `if __name__ == "__main__"`) and `proc main()`.
+- **Nimble manifest parsing in vuln-scan**: `vuln-scan` now parses `.nimble` files for dependency versions and checks against the vulnerability database. Supports `requires "pkg >= version"` patterns.
+- **Nim code indicators for debug-leak commented_code**: Added `code_indicators_nim` with Nim-specific patterns (`proc`, `func`, `method`, `iterator`, `template`, `macro`, `type`, `const`, `let`, `var`, `import`, `from`, `export`, `discard`, `echo`, `new`).
+- **Nim comment prefix**: Debug-leak engine now recognizes `#` as the comment prefix for `.nim`/`.nims` files.
+
+### Fixed
+
+- **`echo()` false positive in debug-leak**: Python's `def echo(debugger, command, result, internal_dict)` in LLDB extensions was flagged as a debug print statement. Now skips: (1) Python function definitions `def echo(...)`, (2) echo calls in LLDB/debugger context, (3) Nim `echo()` calls without debug patterns (echo is standard output in Nim, like `println!` in Rust).
+- **Handbook `type: unknown` and `version: 0.0.0` for Nim projects**: Nim projects without package.json/Cargo.toml/go.mod had no identity detection. Now parses `.nimble` files for name, version, description, and type classification.
+- **Scan reports Nim as unsupported language**: Nim was silently dropped during scan (0 files parsed from 3672). Now has full parser support and is listed in the `supported` set.
+
+### Changed
+
+- **SOURCE_EXTENSIONS expanded**: Added `.nim` and `.nims` to all 16 engines (smell, complexity, debug-leak, entrypoints, regex-audit, side-effect, dataflow, ownership, config-drift, type-infer, secrets, env-check, test-map, state-map, dead-code, perf-hint, api-map).
+- **Version bump**: 5.8.1 → 5.8.2
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

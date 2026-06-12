@@ -52,6 +52,10 @@ DEPENDENCY_FILE_PATTERNS = {
         "manifest": ["go.mod"],
         "lockfile": ["go.sum"],
     },
+    "nimble": {
+        "manifest": [],  # Populated dynamically from *.nimble files
+        "lockfile": ["nimble.lock"],
+    },
 }
 
 AUDIT_TOOLS = {
@@ -69,6 +73,11 @@ AUDIT_TOOLS = {
         "command": ["pip-audit", "--format", "json", "--desc"],
         "parse": "_parse_pip_audit",
         "required_file": "requirements.txt",  # Or pyproject.toml — checked dynamically
+    },
+    "nimble": {
+        "command": ["nimble", "audit"],  # Placeholder — nimble audit may not exist
+        "parse": "_parse_nimble_audit",
+        "required_file": "*.nimble",  # Wildcard — checked dynamically
     },
     "go": {
         "command": ["govulncheck", "-json", "./..."],
@@ -506,6 +515,34 @@ def scan_vulnerabilities(
             manifest_findings = _parse_manifest_file(manifest_path, manifest, ecosystem)
             findings.extend(manifest_findings)
 
+    # Phase 3b: Nimble manifest matching (*.nimble files are dynamic)
+    nimble_deps = _parse_nimble_manifest(workspace)
+    if nimble_deps:
+        files_scanned.append("*.nimble")
+        for dep in nimble_deps:
+            # Check against VULN_DB
+            for entry in VULN_DB:
+                if entry.get("ecosystem") != "nimble":
+                    continue
+                if dep["package"] != entry.get("package", "").lower():
+                    continue
+                installed = dep["installed"]
+                vuln_range = entry.get("affected_range", "")
+                if vuln_range and installed != "latest":
+                    findings.append({
+                        "type": "vulnerability",
+                        "ecosystem": "nimble",
+                        "package": dep["package"],
+                        "installed_version": installed,
+                        "vulnerable_range": vuln_range,
+                        "severity": entry.get("severity", "medium"),
+                        "cve": entry.get("cve", ""),
+                        "title": entry.get("title", "Nimble dependency vulnerability")[:120],
+                        "fix_version": entry.get("fix_version", ""),
+                        "file": dep["source"],
+                        "source": "nimble_manifest",
+                    })
+
     # ─── Deduplicate findings ─────────────────────────────────
     findings = _deduplicate_findings(findings)
 
@@ -759,6 +796,70 @@ def _parse_pip_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
             })
 
     return findings
+
+
+def _parse_nimble_audit(stdout: str, workspace: str) -> List[Dict[str, Any]]:
+    """Parse nimble audit output (if available). nimble doesn't currently
+    have a standard audit command, so this is a placeholder for future support."""
+    findings = []
+    try:
+        data = json.loads(stdout)
+        for vuln in data.get("vulnerabilities", []):
+            findings.append({
+                "type": "vulnerability",
+                "ecosystem": "nimble",
+                "package": vuln.get("name", "unknown"),
+                "installed_version": vuln.get("version", "?"),
+                "vulnerable_range": vuln.get("affected", "?"),
+                "severity": vuln.get("severity", "medium"),
+                "cve": vuln.get("cve", ""),
+                "title": vuln.get("title", "")[:120],
+                "fix_version": vuln.get("fix", ""),
+                "file": "*.nimble",
+                "source": "nimble_audit",
+            })
+    except (json.JSONDecodeError, KeyError):
+        pass
+    return findings
+
+
+def _parse_nimble_manifest(workspace: str) -> List[Dict[str, Any]]:
+    """Parse .nimble files for dependency versions and check against VULN_DB."""
+    deps = []
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for f in filenames:
+            if f.endswith('.nimble'):
+                nimble_path = os.path.join(root, f)
+                rel_path = os.path.relpath(nimble_path, workspace)
+                try:
+                    with open(nimble_path, 'r', encoding='utf-8') as fh:
+                        content = fh.read()
+                    # requires "pkg >= 1.0.0"
+                    for m in re.finditer(r'requires\s+"(\w+)\s*(?:>=|>|==|<=|<)\s*([0-9.]+)', content):
+                        deps.append({
+                            "ecosystem": "nimble",
+                            "package": m.group(1).lower(),
+                            "installed": m.group(2),
+                            "source": rel_path,
+                        })
+                    # requires "pkg" (no version)
+                    for m in re.finditer(r'requires\s+"(\w+)"', content):
+                        pkg_name = m.group(1).lower()
+                        if not any(d["package"] == pkg_name for d in deps):
+                            deps.append({
+                                "ecosystem": "nimble",
+                                "package": pkg_name,
+                                "installed": "latest",
+                                "source": rel_path,
+                            })
+                except IOError:
+                    pass
+    return deps
+
 
 def _parse_go_vulncheck(stdout: str, workspace: str) -> List[Dict[str, Any]]:
     """Parse govulncheck -json output."""

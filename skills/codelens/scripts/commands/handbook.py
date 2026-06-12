@@ -433,8 +433,51 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # v5.8.2: Try .nimble file — detect Nim projects
+    nim_type = None
+    nimble_file = None
+    for f in os.listdir(workspace):
+        if f.endswith('.nimble'):
+            nimble_file = os.path.join(workspace, f)
+            break
+
+    if nimble_file and os.path.isfile(nimble_file):
+        try:
+            with open(nimble_file, 'r', encoding='utf-8') as f:
+                nimble_content = f.read()
+            # Parse Nimble format: name = "nim", version = "2.2.3", etc.
+            name_match = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', nimble_content, re.MULTILINE)
+            ver_match = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', nimble_content, re.MULTILINE)
+            desc_match = re.search(r'^\s*description\s*=\s*["\']([^"\']+)["\']', nimble_content, re.MULTILINE)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            else:
+                # Nimble convention: name defaults to filename without .nimble extension
+                nimble_basename = os.path.basename(nimble_file).replace('.nimble', '')
+                identity["name"] = nimble_basename
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
+
+            # Classify Nim project type based on name and dependencies
+            requires_lower = nimble_content.lower()
+            proj_name = identity["name"].lower()
+            if 'compiler' in proj_name or proj_name == 'nim':
+                nim_type = "nim-compiler"
+            elif any(kw in requires_lower for kw in ('jester', 'prologue', 'happyx', 'basolato')):
+                nim_type = "nim-web-service"
+            elif any(kw in requires_lower for kw in ('norm', 'sqlite3_abi', 'db_postgres')):
+                nim_type = "nim-database"
+            elif any(kw in requires_lower for kw in ('karax',)):
+                nim_type = "nim-frontend-app"
+            else:
+                nim_type = "nim-project"
+        except Exception:
+            logger.warning(".nimble file parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, nim_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -443,6 +486,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if nim_type:
+            type_parts.append("nim")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

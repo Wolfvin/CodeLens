@@ -32,13 +32,24 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Nim, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
 # CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v5.8.2 — Tested on nim-lang/Nim (3,672 .nim files, self-hosting compiler)
+
+- **Nim fallback parser**: New `fallback_nim.py` extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Before: 40/3734 files parsed (1.1%). After: 3,710/3,734 files parsed (99.6%).
+- **Nim framework detection**: `detect_frameworks()` detects `nim`, `nimble`, `jester`, `prologue`, `karax`, `happyx`, `norm`, `nimcrypto` from `.nimble` file dependencies. `has_nim: true` field added.
+- **Handbook Nim identity**: Parses `.nimble` files for name/version/description. Classifies as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project`.
+- **Nim entrypoints**: Detects `when isMainModule:` and `proc main()` in `.nim`/`.nims` files.
+- **`echo()` false positive fix**: Python `def echo(...)` in LLDB extensions no longer flagged. Nim `echo()` treated like Rust `println!` — only flagged with debug patterns.
+- **Debug-leak Nim patterns**: Nim comment prefix (`#`), Nim code indicators, Nim `echo()` handling.
+- **Vuln-scan nimble manifest**: Parses `.nimble` requires for dependency vulnerability checking.
+- **16 engines updated**: `.nim`/`.nims` added to SOURCE_EXTENSIONS across all engines.
 
 ## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 

@@ -238,6 +238,54 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
+    # Nim frameworks
+    "nim": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".nim"]
+    },
+    "nimble": {
+        "packages": [],
+        "nimble_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "jester": {
+        "packages": [],
+        "nimble_packages": ["jester"],
+        "config_files": [],
+        "indicators": []
+    },
+    "prologue": {
+        "packages": [],
+        "nimble_packages": ["prologue"],
+        "config_files": [],
+        "indicators": []
+    },
+    "karax": {
+        "packages": [],
+        "nimble_packages": ["karax"],
+        "config_files": [],
+        "indicators": []
+    },
+    "happyx": {
+        "packages": [],
+        "nimble_packages": ["happyx"],
+        "config_files": [],
+        "indicators": []
+    },
+    "norm": {
+        "packages": [],
+        "nimble_packages": ["norm"],
+        "config_files": [],
+        "indicators": []
+    },
+    "nimcrypto": {
+        "packages": [],
+        "nimble_packages": ["nimcrypto"],
+        "config_files": [],
+        "indicators": []
+    },
 }
 
 
@@ -293,6 +341,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_nim": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -551,6 +600,46 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append(fw_name)
                     break
 
+    # 4b. Check Nim .nimble files for framework detection
+    nimble_deps = set()
+    for root, dirs, fnames in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in fnames:
+            if f.endswith('.nimble'):
+                nimble_path = os.path.join(root, f)
+                try:
+                    with open(nimble_path, 'r', encoding='utf-8') as fh:
+                        nimble_content = fh.read()
+                    # Parse requires/deps lines: requires "jester >= 0.5.0"
+                    for m in re.finditer(r'requires\s+"([^">=]+)', nimble_content):
+                        nimble_deps.add(m.group(1).strip().lower())
+                    # Also parse: requires "package"
+                    for m in re.finditer(r'requires\s+"(\w+)', nimble_content):
+                        nimble_deps.add(m.group(1).strip().lower())
+                except IOError:
+                    pass
+
+    if nimble_deps:
+        if "nim" not in detected["frameworks"]:
+            detected["frameworks"].append("nim")
+        detected["has_nim"] = True
+
+        # Match nimble deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            nimble_pkgs = sig.get("nimble_packages", [])
+            for pkg_name in nimble_pkgs:
+                if pkg_name.lower() in nimble_deps:
+                    detected["frameworks"].append(fw_name)
+                    break
+
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
@@ -611,6 +700,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            elif (f.endswith('.nim') or f.endswith('.nims') or f.endswith('.nimble')) and not detected["has_nim"]:
+                if "nim" not in detected["frameworks"]:
+                    detected["frameworks"].append("nim")
+                detected["has_nim"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -786,6 +879,17 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                             config["backend_paths"].append(rel + "/")
                 except OSError:
                     pass
+
+    # Nim: add Nim-specific paths
+    if fw.get("has_nim"):
+        config["backend_paths"].extend(["src/", "compiler/", "lib/", "nimble/"])
+        # Check for common Nim project structures
+        nim_src = os.path.join(workspace, "src")
+        if os.path.isdir(nim_src):
+            config["backend_paths"].append("src/")
+        compiler_dir = os.path.join(workspace, "compiler")
+        if os.path.isdir(compiler_dir):
+            config["backend_paths"].append("compiler/")
 
     # Laravel/PHP: add PHP-specific paths
     if fw.get("has_laravel") or fw.get("has_php"):

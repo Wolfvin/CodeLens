@@ -34,6 +34,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".php", ".env", ".yaml", ".yml",
     ".json", ".toml", ".cfg", ".ini", ".conf",
+    ".nim", ".nims",
 }
 
 # ─── Secret Pattern Definitions ────────────────────────────────

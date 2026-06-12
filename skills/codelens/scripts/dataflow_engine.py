@@ -295,7 +295,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
 
 
 def trace_dataflow(

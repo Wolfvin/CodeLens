@@ -38,6 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".go", ".vue", ".svelte",
+    ".nim", ".nims",
 }
 
 ENV_FILE_PATTERNS = {
