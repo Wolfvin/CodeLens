@@ -278,6 +278,46 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
         "indicators": ["sites/default/", "sites/all/"]
     },
+    # Dart/Flutter frameworks
+    "flutter": {
+        "packages": ["flutter"],
+        "pub_packages": ["flutter"],
+        "config_files": ["pubspec.yaml"],
+        "indicators": ["lib/main.dart", ".flutter-plugins"]
+    },
+    "dart": {
+        "packages": [],
+        "pub_packages": [],
+        "config_files": ["pubspec.yaml"],
+        "indicators": [".dart_tool/"]
+    },
+    # Mobile/Desktop platform detection
+    "android": {
+        "packages": [],
+        "config_files": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+        "indicators": ["AndroidManifest.xml", "app/src/main/"]
+    },
+    "ios": {
+        "packages": [],
+        "config_files": ["Podfile", "Package.swift"],
+        "indicators": ["Info.plist", ".xcodeproj/", ".xcworkspace/"]
+    },
+    # .NET frameworks
+    "dotnet": {
+        "packages": [],
+        "config_files": ["*.csproj", "*.sln", "Directory.Build.props"],
+        "indicators": []
+    },
+    "unity": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["Assets/", "ProjectSettings/ProjectSettings.asset"]
+    },
+    "unreal": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["*.uproject", "Source/", "Content/"]
+    },
     # HTTP/network library signatures — these are detected both as dependency and
     # when the repo IS the library (package.json name field match)
     "axios": {"packages": ["axios"], "composer_packages": [], "config_files": [], "indicators": []},
@@ -429,6 +469,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
+        "has_flutter": False,
+        "has_dart": False,
+        "has_android": False,
+        "has_ios": False,
+        "has_unity": False,
+        "has_unreal": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -924,23 +970,225 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect Dart/Flutter from pubspec.yaml
+    pubspec_deps = set()
+    pubspec_path = os.path.join(workspace, "pubspec.yaml")
+    if os.path.isfile(pubspec_path):
+        detected["has_dart"] = True
+        if "dart" not in detected["frameworks"]:
+            detected["frameworks"].append("dart")
+
+        try:
+            with open(pubspec_path, 'r', encoding='utf-8') as f:
+                pubspec_content = f.read()
+            # Check for Flutter SDK dependency
+            if 'flutter' in pubspec_content.lower():
+                if "flutter" not in detected["frameworks"]:
+                    detected["frameworks"].append("flutter")
+                detected["has_flutter"] = True
+
+            # Extract pub package dependencies for framework detection
+            in_deps = False
+            for line in pubspec_content.split('\n'):
+                stripped = line.strip()
+                if stripped.startswith('dependencies:'):
+                    in_deps = True
+                    continue
+                elif stripped.startswith('dev_dependencies:'):
+                    in_deps = True
+                    continue
+                elif stripped.startswith(('#', 'environment:', 'flutter:', 'scripts:')) or (in_deps and not stripped.startswith('-') and ':' not in stripped and not stripped[0:1].isspace()):
+                    if stripped and not stripped[0:1].isspace():
+                        in_deps = False
+                        continue
+                if in_deps:
+                    # Match dependency lines: "  package_name:" or "  package_name: ^version"
+                    dep_match = re.match(r'\s+([\w_-]+)\s*:', stripped)
+                    if dep_match:
+                        pubspec_deps.add(dep_match.group(1).lower())
+        except IOError:
+            pass
+
+        # Match pub deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            pub_pkgs = sig.get("pub_packages", [])
+            for pkg_name in pub_pkgs:
+                if pkg_name.lower() in pubspec_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "flutter":
+                        detected["has_flutter"] = True
+                    break
+
+    # Also check for pubspec.yaml in subdirectories (monorepo packages)
+    if not detected["has_flutter"]:
+        for subdir in ('packages', 'apps', 'examples'):
+            subdir_path = os.path.join(workspace, subdir)
+            if not os.path.isdir(subdir_path):
+                continue
+            try:
+                for entry in os.listdir(subdir_path):
+                    entry_path = os.path.join(subdir_path, entry)
+                    if os.path.isdir(entry_path):
+                        sub_pubspec = os.path.join(entry_path, "pubspec.yaml")
+                        if os.path.isfile(sub_pubspec):
+                            try:
+                                with open(sub_pubspec, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                if 'flutter' in content.lower():
+                                    if "flutter" not in detected["frameworks"]:
+                                        detected["frameworks"].append("flutter")
+                                    detected["has_flutter"] = True
+                                    break
+                            except IOError:
+                                pass
+                if detected["has_flutter"]:
+                    break
+            except OSError:
+                pass
+
+    # 8. Detect Android platform
+    # Check for build.gradle / build.gradle.kts / AndroidManifest.xml
+    android_markers = ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts']
+    for marker in android_markers:
+        if os.path.exists(os.path.join(workspace, marker)):
+            if "android" not in detected["frameworks"]:
+                detected["frameworks"].append("android")
+            detected["has_android"] = True
+            break
+    if not detected["has_android"]:
+        # Check deeper: android/ or app/ directories with AndroidManifest.xml
+        for subdir in ('android', 'app'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                for root, dirs, files in os.walk(subdir_path):
+                    if 'AndroidManifest.xml' in files:
+                        if "android" not in detected["frameworks"]:
+                            detected["frameworks"].append("android")
+                        detected["has_android"] = True
+                        break
+                if detected["has_android"]:
+                    break
+
+    # 9. Detect iOS platform
+    ios_markers = ['Podfile', 'Package.swift']
+    for marker in ios_markers:
+        if os.path.exists(os.path.join(workspace, marker)):
+            if "ios" not in detected["frameworks"]:
+                detected["frameworks"].append("ios")
+            detected["has_ios"] = True
+            break
+    if not detected["has_ios"]:
+        # Check for .xcodeproj/ or .xcworkspace/ directories
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip:
+                continue
+            for d in dirs:
+                if d.endswith('.xcodeproj') or d.endswith('.xcworkspace'):
+                    if "ios" not in detected["frameworks"]:
+                        detected["frameworks"].append("ios")
+                    detected["has_ios"] = True
+                    break
+            if detected["has_ios"]:
+                break
+        # Also check Info.plist in ios/ directory
+        if not detected["has_ios"]:
+            ios_dir = os.path.join(workspace, 'ios')
+            if os.path.isdir(ios_dir):
+                for entry in os.listdir(ios_dir):
+                    if entry.endswith('.xcodeproj') or entry == 'Info.plist':
+                        if "ios" not in detected["frameworks"]:
+                            detected["frameworks"].append("ios")
+                        detected["has_ios"] = True
+                        break
+
+    # 10. Detect Unity game engine
+    unity_indicators = ['Assets/', 'ProjectSettings/ProjectSettings.asset']
+    for indicator in unity_indicators:
+        if os.path.exists(os.path.join(workspace, indicator)):
+            if "unity" not in detected["frameworks"]:
+                detected["frameworks"].append("unity")
+            detected["has_unity"] = True
+            break
+
+    # 11. Detect Unreal Engine
+    for entry in os.listdir(workspace):
+        if entry.endswith('.uproject'):
+            if "unreal" not in detected["frameworks"]:
+                detected["frameworks"].append("unreal")
+            detected["has_unreal"] = True
+            break
+
+    # 12. Detect .csproj/.sln for .NET/C#
+    for entry in os.listdir(workspace):
+        if entry.endswith('.csproj') or entry.endswith('.sln'):
+            if "dotnet" not in detected["frameworks"]:
+                detected["frameworks"].append("dotnet")
+            break
+
+    # 13. Detect truly unsupported languages (those without any parser)
+    # Note: Many languages now have fallback parsers (Go, Java, Kotlin, C/C++,
+    # Ruby, Elixir, Dart, Swift, Scala, Shell, C#, PHP, GDScript, Lua).
+    # Only list languages that truly have no extraction capability.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        "perl": ["Makefile.PL", "Build.PL", "cpanfile"],
+        "clojure": ["project.clj", "deps.edn"],
+        "fsharp": [".fsproj"],
+        "ocaml": ["dune", "dune-project"],
+        "zig": ["build.zig"],
+        "erlang": ["rebar.config", "erlang.mk"],
+        "fortran": ["Makefile"],
+        "haskell": ["stack.yaml", "cabal.file"],
+        "r": ["DESCRIPTION", ".Rproj"],
+        "objc": [".xcodeproj/"],  # ObjC files (.m/.mm) detected but no dedicated parser
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
+        if lang in detected["unsupported_langs"]:
+            continue
         for marker in markers:
             if os.path.exists(os.path.join(workspace, marker)):
-                if lang not in detected["unsupported_langs"]:
-                    detected["unsupported_langs"].append(lang)
+                detected["unsupported_langs"].append(lang)
+                break
+
+    # Also detect unsupported languages by file extension (quick scan)
+    _LANG_EXTENSIONS = {
+        "perl": ('.pl', '.pm', '.t'),
+        "clojure": ('.clj', '.cljs', '.cljc'),
+        "fsharp": ('.fs', '.fsi', '.fsx'),
+        "ocaml": ('.ml', '.mli'),
+        "zig": ('.zig',),
+        "erlang": ('.erl', '.hrl'),
+        "fortran": ('.f', '.f90', '.f95', '.f03'),
+        "haskell": ('.hs', '.lhs'),
+        "r": ('.R', '.r'),
+        "objc": ('.m', '.mm'),
+    }
+    if not detected["unsupported_langs"]:
+        found_exts = set()
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip:
+                continue
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                for lang, exts in _LANG_EXTENSIONS.items():
+                    if lang in detected["unsupported_langs"]:
+                        continue
+                    if ext in exts and lang not in found_exts:
+                        detected["unsupported_langs"].append(lang)
+                        found_exts.add(lang)
+            if len(found_exts) >= 3:
+                # Enough language detection, stop walking
                 break
 
     return detected
@@ -1045,6 +1293,25 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         if fw.get("has_laravel"):
             config["backend_paths"].extend(["app/Http/Controllers/", "app/Http/Middleware/", "app/Models/"])
             config["frontend_paths"].extend(["resources/views/"])
+
+    # Flutter/Dart: add Flutter-specific paths
+    if fw.get("has_flutter") or fw.get("has_dart"):
+        config["backend_paths"].extend(["lib/", "bin/"])
+        config["frontend_paths"].extend(["lib/", "web/"])
+        config["ignore"].extend(["dart_tool/", ".dart_tool/", ".packages"])
+        # Add sub-package paths for Flutter monorepos
+        for subdir in ('packages', 'apps', 'examples'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                try:
+                    for entry in os.listdir(subdir_path):
+                        entry_path = os.path.join(subdir_path, entry)
+                        if os.path.isdir(entry_path):
+                            rel = os.path.relpath(entry_path, workspace)
+                            config["backend_paths"].append(rel + "/lib/")
+                            config["frontend_paths"].append(rel + "/lib/")
+                except OSError:
+                    pass
 
     # Symfony: add Symfony-specific paths
     if fw.get("has_symfony"):

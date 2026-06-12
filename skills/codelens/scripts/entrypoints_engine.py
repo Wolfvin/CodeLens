@@ -33,6 +33,7 @@ SOURCE_EXTENSIONS = {
     ".go",
     ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sh", ".bash", ".zsh",
     ".kt", ".R", ".r", ".hs", ".lhs", ".nim", ".nims", ".lua",
+    ".m", ".mm",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -167,6 +168,37 @@ ENTRYPOINT_PATTERNS = {
                 "language": {".php"},
                 "extract": "none",
                 "label": "php_cli_entry",
+            },
+            # Dart — main() function
+            {
+                "regex": r'(?:void\s+)?main\s*\(\s*(?:List<String>\s+\w+\s*)?\)\s*(?:async\s*)?\{',
+                "language": {".dart"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "dart_main_fn",
+            },
+            # Kotlin — fun main()
+            {
+                "regex": r'fun\s+main\s*\(\s*(?:args:\s*Array<String>)?\s*\)',
+                "language": {".kt"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "kotlin_main_fn",
+            },
+            # Swift — @main attribute
+            {
+                "regex": r'@main',
+                "language": {".swift"},
+                "extract": "none",
+                "label": "swift_main_attr",
+            },
+            # Objective-C — main function
+            {
+                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "language": {".m", ".mm"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "objc_main_fn",
             },
         ],
     },

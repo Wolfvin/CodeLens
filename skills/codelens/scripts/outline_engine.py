@@ -95,6 +95,8 @@ def get_file_outline(
         outline = _outline_scala(content, detail_level)
     elif ext in ('.sh', '.bash', '.zsh'):
         outline = _outline_shell(content, detail_level)
+    elif ext in ('.m', '.mm'):
+        outline = _outline_objc(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -1377,6 +1379,77 @@ def _outline_shell(content: str, detail_level: str) -> Dict[str, Any]:
     return outline
 
 
+def _outline_objc(content: str, detail_level: str = "normal") -> Dict[str, Any]:
+    """Extract outline from Objective-C source code."""
+    import re as _re
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines, 1):
+        # #import / #include
+        m = _re.match(r'\s*#(?:import|include)\s+[<"]([^>"]+)[>"]', line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i, "type": "import"})
+            continue
+
+        # @interface ClassName : SuperClass
+        m = _re.match(r'\s*@interface\s+(\w+)\s*(?:\(|:\s*(\w+))?', line)
+        if m:
+            cls_name = m.group(1)
+            super_cls = m.group(2)
+            entry = {"name": cls_name, "line": i, "type": "class"}
+            if super_cls:
+                entry["extends"] = super_cls
+            outline["classes"].append(entry)
+            continue
+
+        # @interface ClassName (Category)
+        m = _re.match(r'\s*@interface\s+(\w+)\s*\((\w*)\)', line)
+        if m:
+            cls_name = m.group(1)
+            cat_name = m.group(2)
+            entry = {"name": f"{cls_name}({cat_name})", "line": i,
+                     "type": "category" if cat_name else "extension"}
+            outline["classes"].append(entry)
+            continue
+
+        # @protocol ProtocolName
+        m = _re.match(r'\s*@protocol\s+(\w+)', line)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": i, "type": "protocol"})
+            continue
+
+        # Instance/class methods: - (type)name or + (type)name
+        m = _re.match(r'\s*([+-])\s*\([^)]*\)\s*(\w+)', line)
+        if m:
+            method_type = "class_method" if m.group(1) == '+' else "instance_method"
+            method_name = m.group(2)
+            # Get full selector
+            parts = _re.findall(r'(\w+)\s*:', line)
+            full_selector = ':'.join(parts) + ':' if parts else method_name
+            outline["functions"].append({"name": full_selector, "line": i, "type": method_type})
+            continue
+
+        # C functions
+        m = _re.match(r'\s*(?:static\s+)?(?:[\w*<>]+\s+)+(\w+)\s*\(', line)
+        if m:
+            fn_name = m.group(1)
+            if fn_name not in ('if', 'else', 'while', 'for', 'switch', 'return', 'void',
+                               'id', 'Class', 'SEL', 'IMP', 'BOOL', 'NSInteger'):
+                ntype = "entry_point" if fn_name == "main" else "function"
+                outline["functions"].append({"name": fn_name, "line": i, "type": ntype})
+                continue
+
+        # @property
+        m = _re.match(r'\s*@property\s*\([^)]*\)\s*[\w<*>\s]+\s*(\w+)\s*;', line)
+        if m:
+            outline["exports"].append({"name": m.group(1), "line": i, "type": "property"})
+
+    return outline
+
+
 def _detect_language(ext: str) -> str:
     """Detect language from file extension."""
     mapping = {
@@ -1399,5 +1472,6 @@ def _detect_language(ext: str) -> str:
         '.nim': 'nim', '.nims': 'nim',
         '.gd': 'gdscript',
         '.zig': 'zig', '.wgsl': 'wgsl',
+        '.m': 'objective-c', '.mm': 'objective-c++',
     }
     return mapping.get(ext, 'unknown')

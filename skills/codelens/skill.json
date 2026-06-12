@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint) due to missing is_bundled_file. apimap_engine NoneType crash on path=None fixed. Tested on meilisearch/meilisearch (Rust search engine, 21 crates, 490K edges). v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes, false positive fixes, analyze/handbook timeout flags.",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.4.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4.0: Tested on flutter/flutter (16K files, 6434 Dart + 3514 C/C++ + 347 ObjC + 304 Java + 133 Swift + 69 Kotlin). NEW: Objective-C parser (fallback_objc.py), Flutter/Dart/Android/iOS/Unity/Unreal framework detection, pubspec.yaml parsing, ObjC outline, Dart main()/Kotlin main()/Swift @main/ObjC main entry points, .m/.mm file detection, updated unsupported languages list. v6.3.1: Critical fix — 4 broken commands restored. Tested on meilisearch/meilisearch (Rust, 21 crates, 490K edges).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",
@@ -170,4 +170,16 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection"  ]}
+    "timeout-protection",
+    "objective-c",
+    "objc",
+    "flutter",
+    "dart",
+    "android",
+    "ios",
+    "mobile",
+    "pubspec",
+    "swiftui",
+    "xcode",
+    "dotnet",
+    "cross-platform"  ]}

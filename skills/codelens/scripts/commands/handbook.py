@@ -641,8 +641,51 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
+    # v6.4: Detect Flutter/Dart projects
+    dart_type = None
+    pubspec_yaml_path = os.path.join(workspace, 'pubspec.yaml')
+    if os.path.isfile(pubspec_yaml_path):
+        try:
+            with open(pubspec_yaml_path, 'r', encoding='utf-8') as f:
+                pubspec_content = f.read()
+            if 'flutter' in pubspec_content.lower():
+                dart_type = "flutter-app"
+                # Try to get project name from pubspec
+                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
+                if name_match:
+                    identity["name"] = name_match.group(1).strip()
+                ver_match = re.search(r'^version:\s*(.+)', pubspec_content, re.MULTILINE)
+                if ver_match:
+                    identity["version"] = ver_match.group(1).strip()
+            else:
+                dart_type = "dart-project"
+                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
+                if name_match:
+                    identity["name"] = name_match.group(1).strip()
+        except Exception:
+            pass
+    elif os.path.isdir(workspace):
+        # Check for pubspec.yaml in subdirectories (monorepo)
+        for subdir in ('packages', 'apps', 'examples'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                for entry in os.listdir(subdir_path):
+                    entry_path = os.path.join(subdir_path, entry)
+                    sub_pubspec = os.path.join(entry_path, 'pubspec.yaml')
+                    if os.path.isfile(sub_pubspec):
+                        try:
+                            with open(sub_pubspec, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            if 'flutter' in content.lower():
+                                dart_type = "flutter-monorepo"
+                                break
+                        except Exception:
+                            pass
+                if dart_type:
+                    break
+
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, dart_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -661,6 +704,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
+        if dart_type:
+            type_parts.append("flutter" if "flutter" in (dart_type or "") else "dart")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
