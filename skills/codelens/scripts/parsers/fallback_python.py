@@ -28,9 +28,32 @@ def parse_python_fallback(content, file_path):
 
         # Track class context (dedent = class ended)
         if stripped.startswith('class '):
-            class_match = re.match(r'class\s+(\w+)', stripped)
+            class_match = re.match(r'class\s+(\w+)(?:\s*\([^)]*\))?:', stripped)
+            if not class_match:
+                class_match = re.match(r'class\s+(\w+)', stripped)
             if class_match:
                 current_class = class_match.group(1)
+                if current_class not in skip_names:
+                    # Register the class as a node so it can be queried
+                    node_id = f"{file_path}:{line_num}:class:{current_class}"
+                    class_node = {
+                        "id": node_id,
+                        "fn": current_class,  # backward compat: query by fn
+                        "name": current_class,
+                        "type": "class",
+                        "file": file_path,
+                        "line": line_num,
+                        "async": False,
+                    }
+                    # Detect parent class(es) from class Foo(Bar, Baz):
+                    parent_match = re.match(r'class\s+\w+\s*\(([^)]+)\)', stripped)
+                    if parent_match:
+                        parents = [p.strip().split('.')[-1] for p in parent_match.group(1).split(',')]
+                        parents = [p for p in parents if p and p not in skip_names]
+                        if parents:
+                            class_node["inherits"] = parents
+                    nodes.append(class_node)
+                    fn_map[current_class] = node_id
 
         # Detect indent level to track class scope
         if current_class and not line.startswith(' ') and not line.startswith('\t') and stripped and not stripped.startswith('class '):
@@ -41,7 +64,8 @@ def parse_python_fallback(content, file_path):
             name = m.group(1)
             if name not in skip_names:
                 node_id = f"{file_path}:{line_num}"
-                node_data = {"id": node_id, "fn": name, "file": file_path,
+                node_data = {"id": node_id, "fn": name, "name": name, "type": "function",
+                             "file": file_path,
                              "line": line_num, "async": 'async' in stripped[:m.start()]}
                 if current_class:
                     node_data["impl_for"] = current_class

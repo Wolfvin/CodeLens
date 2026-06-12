@@ -38,6 +38,27 @@ def get_dependents(
 
     # Direct dependents
     direct = reverse_graph.get(file_path, set())
+
+    # If no results, try fuzzy matching (e.g., models.py -> models/__init__.py)
+    suggestion = None
+    if not direct and file_path not in import_graph:
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        parent_dir = os.path.dirname(file_path)
+        # Try: path/file.py -> path/file/__init__.py (Python package)
+        candidate = os.path.join(parent_dir, base_name, '__init__.py') if parent_dir else os.path.join(base_name, '__init__.py')
+        if candidate in reverse_graph or candidate in import_graph:
+            suggestion = candidate
+            direct = reverse_graph.get(candidate, set())
+            file_path = candidate
+        else:
+            # Try substring match
+            for key in reverse_graph:
+                if base_name in os.path.basename(key) and key.endswith('__init__.py'):
+                    suggestion = key
+                    direct = reverse_graph.get(key, set())
+                    file_path = key
+                    break
+
     direct_list = sorted(direct)
 
     # Transitive dependents (BFS)
@@ -62,6 +83,7 @@ def get_dependents(
         "status": "ok",
         "file": file_path,
         "workspace": workspace,
+        "suggestion": suggestion,
         "direct_dependents": direct_list,
         "transitive_dependents": sorted(transitive),
         "stats": {

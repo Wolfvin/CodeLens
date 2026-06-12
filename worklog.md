@@ -48,3 +48,30 @@ Stage Summary:
   * ask routing: "show me the most complex functions" → now routes to complexity command
   * state-map stores: 408 → 339 (17% reduction)
   * a11y engine: no longer crashes on ImportError
+---
+Task ID: 1
+Agent: Main Agent
+Task: Test and improve CodeLens skill with diverse test repos
+
+Work Log:
+- Cloned Wolfvin/CodeLens repo and pulled latest from main
+- Examined the codelens skill (v6.2, 42 commands, 12+ languages)
+- Cloned 5 diverse test repos: Django (Python, 2922 files), Lua (C, 102 files), Laravel (PHP, 27 files), Svelte (JS/TS, 7888 files), Actix-web (Rust, 312 files)
+- Ran init+scan on all 5 test repos and multiple analysis commands
+- Identified 6 bugs across the codebase
+- Fixed all 6 bugs:
+  1. fallback_rust.py: PCRE named groups (?<name>) → Python (?P<name>)
+  2. scan.py + framework_detect.py: Added PHP/Blade/Laravel/Symfony/WordPress/Drupal support
+  3. smell_engine.py + complexity_engine.py: Added C/C++/Go/Java/Lua/C#/PHP support
+  4. utils.py: Fixed get_workspace_outline() max_files argument mismatch
+  5. dependents_engine.py: Added fuzzy matching for Python package resolution
+  6. fallback_python.py: Added class extraction; query.py: Fixed fuzzy override and name field search
+- Verified all fixes work on test repos
+- Deleted all test repos after testing
+
+Stage Summary:
+- 6 critical bugs fixed across 9 files
+- New language support: PHP, Blade, C/C++, Go, Java, Lua, C# for smell/complexity engines
+- New framework detection: Laravel, Symfony, WordPress, Drupal, PHP
+- Python class nodes now properly registered for querying
+- All changes ready for push to new branch

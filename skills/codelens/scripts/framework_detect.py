@@ -189,44 +189,30 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
-    # C/C++ frameworks
-    "make": {
-        "packages": [],
-        "config_files": ["Makefile", "makefile", "GNUmakefile"],
-        "indicators": []
-    },
-    "cmake": {
-        "packages": [],
-        "config_files": ["CMakeLists.txt"],
-        "indicators": []
-    },
-    "autotools": {
-        "packages": [],
-        "config_files": ["configure.ac", "configure.in", "Makefile.am"],
-        "indicators": []
-    },
-    # Lua / Neovim frameworks
-    "neovim": {
-        "packages": [],
-        "config_files": ["init.lua", "init.vim"],
-        "indicators": ["lua/", "plugin/", "after/", "ftplugin/"]
-    },
-    "lua": {
-        "packages": [],
-        "config_files": ["rockspec"],
-        "indicators": [".lua"]
-    },
-    # TypeScript (as a language/framework)
-    "typescript": {
-        "packages": ["typescript"],
-        "config_files": ["tsconfig.json"],
-        "indicators": []
-    },
-    # PHP / Laravel
+    # PHP frameworks
     "laravel": {
         "packages": [],
+        "composer_packages": ["laravel/framework"],
         "config_files": ["artisan"],
-        "indicators": ["app/Http/", "routes/web.php"]
+        "indicators": ["app/Http/Kernel.php", "app/Http/Middleware/", "routes/web.php", "routes/api.php"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle"],
+        "config_files": ["symfony.lock"],
+        "indicators": ["config/bundles.php", "src/Kernel.php"]
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php"],
+        "indicators": ["wp-includes/", "wp-admin/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core"],
+        "config_files": [],
+        "indicators": ["modules/", "themes/"]
     },
 }
 
@@ -280,9 +266,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
-        "has_c": False,
-        "has_lua": False,
-        "has_typescript": False,
+        "has_php": False,
+        "has_laravel": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -440,13 +425,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 4. Check Rust/Cargo.toml for framework detection
     cargo_deps = set()
     cargo_path = os.path.join(workspace, "Cargo.toml")
-    # Also check subdirectories for Cargo.toml (e.g., pydantic-core/Cargo.toml)
-    if not os.path.exists(cargo_path):
-        for subdir in os.listdir(workspace):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path) and os.path.exists(os.path.join(subdir_path, "Cargo.toml")):
-                cargo_path = os.path.join(subdir_path, "Cargo.toml")
-                break
     if os.path.exists(cargo_path):
         if "rust" not in detected["frameworks"]:
             detected["frameworks"].append("rust")
@@ -549,7 +527,45 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tauri"] = True
                     break
 
-    # 5. Check file patterns (for Vue, Svelte)
+    # 5. Check PHP/composer.json for framework detection
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        if "php" not in detected["frameworks"]:
+            detected["frameworks"].append("php")
+        detected["has_php"] = True
+
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_deps.update(composer.get("require", {}).keys())
+            composer_deps.update(composer.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            pass
+
+        # Match composer deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name.lower() in {d.lower() for d in composer_deps}:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    break
+
+    # 5b. Also check for artisan file (Laravel) and other PHP markers
+    if not detected["has_php"]:
+        php_markers = ['composer.json', 'index.php', 'artisan']
+        for marker in php_markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
+                break
+
+    # 5. Check file patterns (for Vue, Svelte, PHP)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -569,6 +585,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "svelte" not in detected["frameworks"]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
+            elif f.endswith('.blade.php') and not detected["has_laravel"]:
+                if "laravel" not in detected["frameworks"]:
+                    detected["frameworks"].append("laravel")
+                detected["has_laravel"] = True
+            elif f.endswith('.php') and not detected["has_php"]:
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -586,6 +610,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_fastapi"] = True
                 elif fw_name == "flask":
                     detected["has_flask"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                    detected["has_php"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -619,20 +646,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
-    # These languages have fallback parsers (not tree-sitter) but are still supported.
+    # These languages are detected but not parsed by tree-sitter.
     UNSUPPORTED_MARKERS = {
         "go": ["go.mod", "go.sum"],
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
-        "c": ["Makefile", "makefile", "GNUmakefile", "configure.ac"],
-        "cpp": ["CMakeLists.txt"],
+        "c": ["CMakeLists.txt", "Makefile"],
+        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
     }
-    # Count source files by extension to detect languages without markers
-    lang_file_counts = _count_source_files(workspace)
-
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
             if os.path.exists(os.path.join(workspace, marker)):
@@ -641,75 +665,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang == "go" and "golang" not in detected["frameworks"]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
-                if lang in ("c", "cpp"):
-                    detected["has_c"] = True
                 break
 
-    # 7b. Detect C/C++ from source file counts if no build system markers found
-    if not detected["has_c"]:
-        c_count = lang_file_counts.get(".c", 0) + lang_file_counts.get(".h", 0)
-        cpp_count = lang_file_counts.get(".cpp", 0) + lang_file_counts.get(".hpp", 0) + lang_file_counts.get(".cc", 0)
-        if c_count > 10 or cpp_count > 10:
-            detected["has_c"] = True
-            lang_label = "c" if c_count > cpp_count else "cpp"
-            if lang_label not in detected["unsupported_langs"]:
-                detected["unsupported_langs"].append(lang_label)
-
-    # 7c. Detect Lua / Neovim plugins
-    lua_count = lang_file_counts.get(".lua", 0)
-    if lua_count > 0:
-        detected["has_lua"] = True
-        # Check for Neovim plugin structure
-        neovim_markers = ["init.lua", "init.vim"]
-        has_init = any(os.path.exists(os.path.join(workspace, m)) for m in neovim_markers)
-        lua_dir = os.path.join(workspace, "lua")
-        plugin_dir = os.path.join(workspace, "plugin")
-        has_lua_dir = os.path.isdir(lua_dir)
-        has_plugin_dir = os.path.isdir(plugin_dir)
-        if (has_init or has_lua_dir) and has_plugin_dir:
-            if "neovim" not in detected["frameworks"]:
-                detected["frameworks"].append("neovim")
-        elif lua_count > 5:
-            if "lua" not in detected["frameworks"]:
-                detected["frameworks"].append("lua")
-
-    # 7d. Detect TypeScript from source files even without tsconfig.json
-    ts_count = lang_file_counts.get(".ts", 0) + lang_file_counts.get(".tsx", 0)
-    if ts_count > 0 and "typescript" not in detected["frameworks"] and "react" not in detected["frameworks"]:
-        detected["frameworks"].append("typescript")
-        detected["has_typescript"] = True
-
     return detected
-
-
-def _count_source_files(workspace: str, max_files: int = 2000) -> Dict[str, int]:
-    """Count source files by extension to help detect languages.
-
-    Walks the workspace and counts file extensions. Stops after max_files
-    to avoid spending too much time on huge repos.
-
-    Returns:
-        Dict mapping extension to count, e.g. {'.c': 789, '.h': 156, '.lua': 155}
-    """
-    counts: Dict[str, int] = {}
-    total = 0
-    for root, dirs, files in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for f in files:
-            _, ext = os.path.splitext(f)
-            ext = ext.lower()
-            if ext in ('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.hh', '.go', '.java',
-                       '.py', '.rs', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
-                       '.lua', '.vim', '.rb', '.swift', '.cs', '.kt', '.php',
-                       '.vue', '.svelte', '.html', '.css', '.scss', '.less'):
-                counts[ext] = counts.get(ext, 0) + 1
-                total += 1
-                if total >= max_files:
-                    return counts
-    return counts
 
 
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
