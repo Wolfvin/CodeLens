@@ -641,8 +641,57 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
+    # v6.5: Detect Elixir projects from mix.exs
+    elixir_type = None
+    mix_exs_path = os.path.join(workspace, 'mix.exs')
+    has_mix_exs = os.path.isfile(mix_exs_path)
+    if has_mix_exs:
+        try:
+            with open(mix_exs_path, 'r', encoding='utf-8') as f:
+                mix_content = f.read()
+            # Extract app name and version from project function
+            # Pattern: app: :atom_name
+            app_match = re.search(r'app:\s*:(\w+)', mix_content)
+            # Pattern: @version "x.y.z" or version: @version or version: "x.y.z"
+            ver_match = re.search(r'@version\s+["\']([^"\']+)["\']', mix_content)
+            if not ver_match:
+                ver_match = re.search(r'version:\s*["\']([^"\']+)["\']', mix_content)
+            # Pattern: description: "..."
+            desc_match = re.search(r'description:\s*["\']([^"\']+)["\']', mix_content)
+            if app_match:
+                identity["name"] = app_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
+            # Detect Elixir framework type from deps
+            hex_deps = set()
+            for m_dep in re.finditer(r'\{:([\w_]+)\s*,', mix_content):
+                hex_deps.add(m_dep.group(1).lower())
+            if 'phoenix' in hex_deps or 'phoenix_pubsub' in hex_deps:
+                elixir_type = "phoenix-web-framework"
+            elif 'ecto' in hex_deps or 'ecto_sql' in hex_deps:
+                elixir_type = "elixir-data-app"
+            elif 'oban' in hex_deps:
+                elixir_type = "elixir-worker-app"
+            elif 'nerves' in hex_deps:
+                elixir_type = "elixir-embedded-app"
+            elif 'plug' in hex_deps:
+                elixir_type = "elixir-web-app"
+            else:
+                # Check if this IS the Phoenix framework source itself
+                if os.path.isfile(os.path.join(workspace, 'lib', 'phoenix.ex')):
+                    elixir_type = "phoenix-web-framework"
+                elif re.search(r'defmodule\s+Phoenix\.', mix_content):
+                    elixir_type = "phoenix-web-framework"
+                else:
+                    elixir_type = "elixir-project"
+        except Exception:
+            logger.warning("mix.exs parsing failed", exc_info=True)
+            elixir_type = "elixir-project"
+
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, elixir_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -661,6 +710,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
+        if elixir_type:
+            type_parts.append("elixir")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -668,6 +719,31 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         if identity["is_monorepo"]:
             identity["type"] = active_types[0] + "-monorepo"
     # If no type detected, remains "unknown"
+
+    # v6.5: Priority fix — if Elixir type was detected AND Elixir files outnumber JS files,
+    # the Elixir type should take precedence over a JS type derived from a minor package.json
+    # (e.g., Phoenix has a package.json for its JS client, but it's primarily an Elixir project)
+    if elixir_type and js_type:
+        ex_count = 0
+        js_count = 0
+        try:
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for fn in filenames:
+                    if fn.endswith(('.ex', '.exs')):
+                        ex_count += 1
+                    elif fn.endswith(('.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs')):
+                        js_count += 1
+        except Exception:
+            pass
+        if ex_count > js_count:
+            # Elixir is the primary language — override the type
+            identity["type"] = elixir_type
+            if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
+                identity["type"] += "-monorepo"
 
     # v6: When frameworks are found in subdirectory package.json files,
     #     update the identity type if it's still generic

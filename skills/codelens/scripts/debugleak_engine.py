@@ -122,6 +122,12 @@ PRINT_PATTERNS = [
     (r'\bvar_dump\s*\(', "var_dump()"),
     (r'\bprint_r\s*\(', "print_r()"),
     (r'\bphpinfo\s*\(', "phpinfo()"),
+    # Elixir debug output
+    (r'\bIO\.inspect\s*\(', "IO.inspect()"),
+    (r'\bIO\.puts\s*\(', "IO.puts()"),
+    (r'\bIO\.warn\s*\(', "IO.warn()"),
+    (r'\bdbg\s*\(', "dbg()"),
+    (r'\brequire_logger\s*\(', "require_logger()"),
 ]
 
 # v5.9: CLI/framework output functions that are NOT debug leaks.
@@ -161,6 +167,8 @@ DEBUGGER_PATTERNS = [
     (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
     (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
     (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
+    # Elixir debug/die statements
+    (r'\bIEx\.pry\s*\(', "IEx.pry()"),     # Elixir debugger breakpoint
 ]
 
 # Rust logging macros from the `log` crate — these are NOT debugger statements.
@@ -182,6 +190,16 @@ RUST_LOG_MACROS = [
     (r'\btracing::warn!\s*\(', "tracing::warn!()"),
     (r'\btracing::error!\s*\(', "tracing::error!()"),
     (r'\btracing::trace!\s*\(', "tracing::trace!()"),
+]
+
+# Elixir Logger patterns — these are NOT debug leaks, they are proper structured logging.
+ELIXIR_LOGGER_PATTERNS = [
+    (r'\bLogger\.debug\s*\(', "Logger.debug()"),
+    (r'\bLogger\.info\s*\(', "Logger.info()"),
+    (r'\bLogger\.warning\s*\(', "Logger.warning()"),
+    (r'\bLogger\.warn\s*\(', "Logger.warn()"),
+    (r'\bLogger\.error\s*\(', "Logger.error()"),
+    (r'\brequire Logger\b', "require Logger"),
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -677,6 +695,37 @@ def _detect_debugger_statements(
         # We flag them as low-severity debug_log entries, not high-severity debugger statements.
         if ext == ".rs":
             for pattern, label in RUST_LOG_MACROS:
+                m = re.search(pattern, stripped)
+                if not m:
+                    continue
+
+                # Downgrade severity in test files — logging in tests is expected
+                if is_test_file:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging in test: {label}"
+                else:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging statement: {label} (structured logging, not a debugger)"
+
+                leaks.append({
+                    "category": "debug_log",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": label,
+                    "message": message,
+                    "content": stripped[:120],
+                    "match": label,
+                    "severity": severity,
+                    "should_remove": should_remove,
+                })
+                break
+
+        # Then check for Elixir Logger (not debugger statements, but debug logging)
+        # Elixir Logger is proper structured logging — flag as low severity.
+        if ext in {".ex", ".exs"}:
+            for pattern, label in ELIXIR_LOGGER_PATTERNS:
                 m = re.search(pattern, stripped)
                 if not m:
                     continue

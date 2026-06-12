@@ -34,6 +34,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".php", ".env", ".yaml", ".yml",
     ".json", ".toml", ".cfg", ".ini", ".conf",
+    ".ex", ".exs",
 }
 
 # ─── Secret Pattern Definitions ────────────────────────────────
@@ -104,6 +105,8 @@ SECRET_PATTERNS = {
             r'(?i)password:\s*["\']([^"\']{6,})["\']',
             # PHP-style
             r"(?i)(?:DB_PASS|DB_PASSWORD|DATABASE_PASS)\s*(?:=|:)\s*[\"']([^\"']{6,})[\"']",
+            # Elixir-style config: password: "value" or password: 'value' in .ex/.exs files
+            r"(?i)(?:secret_key_base|encryption_salt|signing_salt|live_view_signing_salt)\s*(?:=|:)\s*[\"']([^\"']{6,})[\"']",
         ],
     },
 

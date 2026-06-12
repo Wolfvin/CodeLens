@@ -618,6 +618,9 @@ def _detect_languages(workspace: str) -> Dict[str, int]:
         ".dart": "dart", ".c": "c", ".cpp": "cpp", ".h": "c",
         ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue",
         ".svelte": "svelte", ".sql": "sql", ".sh": "shell",
+        ".ex": "elixir", ".exs": "elixir",
+        ".swift": "swift", ".scala": "scala", ".kt": "kotlin",
+        ".nim": "nim", ".gd": "gdscript",
     }
     languages = {}
     for root, dirs, files in os.walk(workspace):
