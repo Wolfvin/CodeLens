@@ -57,6 +57,20 @@ def parse_cpp_fallback(content: str, rel_path: str) -> Dict[str, Any]:
         stripped = line.strip()
         line_num = i + 1
 
+        # ─── Brace tracking for class scope (MUST be before pattern matching) ──
+        old_brace_depth = brace_depth
+        for ch in stripped:
+            if ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth -= 1
+
+        # If we're in a class and brace depth returns to class level, exit class
+        if in_class and brace_depth <= class_brace_depth:
+            in_class = False
+            current_class = ""
+            class_brace_depth = 0
+
         # ─── Includes ────────────────────────────────────────
         m = re.match(r'^#include\s+[<"]([^>"]+)[>"]', stripped)
         if m:
@@ -76,6 +90,7 @@ def parse_cpp_fallback(content: str, rel_path: str) -> Dict[str, Any]:
                 continue
             current_class = class_name
             in_class = True
+            class_brace_depth = old_brace_depth  # Set class_brace_depth when entering class
 
             full_name = f"{current_namespace}::{class_name}" if current_namespace else class_name
             nodes.append({
@@ -88,7 +103,7 @@ def parse_cpp_fallback(content: str, rel_path: str) -> Dict[str, Any]:
                 "namespace": current_namespace,
                 "full_name": full_name,
             })
-            continue
+            # No continue — brace tracking already done above
 
         # ─── Function definition (standalone) ────────────────
         # Pattern: [qualifiers] type name(params) { or ;
@@ -129,7 +144,7 @@ def parse_cpp_fallback(content: str, rel_path: str) -> Dict[str, Any]:
                 node["class"] = current_class
                 node["full_name"] = f"{current_class}::{fn_name}"
             nodes.append(node)
-            continue
+            # No continue — brace tracking already done above
 
         # ─── Method definition outside class (ClassName::methodName) ──
         m = re.match(
@@ -157,20 +172,7 @@ def parse_cpp_fallback(content: str, rel_path: str) -> Dict[str, Any]:
                 "class": class_name,
                 "full_name": f"{class_name}::{method_name}",
             })
-            continue
-
-        # ─── Brace tracking for class scope ───────────────────
-        for ch in stripped:
-            if ch == '{':
-                brace_depth += 1
-            elif ch == '}':
-                brace_depth -= 1
-
-        # If we're in a class and brace depth returns to class level, exit class
-        if in_class and brace_depth <= class_brace_depth:
-            in_class = False
-            current_class = ""
-            class_brace_depth = 0
+            # No continue — brace tracking already done above
 
     # ─── Function call edge detection ────────────────────────
     # Second pass: find function calls within function bodies

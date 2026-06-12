@@ -339,7 +339,7 @@ LINE_EXCLUSION_PATTERNS = [
     # HTML content in descriptions
     re.compile(r'(?i)<(?:a |href|img |src=)'),
     # Property definitions in credential/node files (not actual assignments)
-    re.compile(r"(?i)(?:displayName|name|type|default|placeholder|hint|description)\s*[:=]\\s*['\"]"),
+    re.compile(r"(?i)(?:displayName|name|type|default|placeholder|hint|description)\s*[:=]\s*['\"]"),
     # Test assertion patterns
     re.compile(r'(?i)(?:expect|assert|should)\s*\('),
     # String concatenation / template literals (variable references)

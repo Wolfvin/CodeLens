@@ -354,7 +354,9 @@ def _analyze_single_function(workspace: str, node: Dict) -> Optional[Dict]:
                     if started and brace_count == 0:
                         fn_body_lines.append(line)
                         break
-            fn_body_lines.append(line)
+            else:
+                # Only append if we didn't break (closing brace line already appended)
+                fn_body_lines.append(line)
             if started and brace_count == 0:
                 break
 

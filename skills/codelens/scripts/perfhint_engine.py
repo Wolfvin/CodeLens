@@ -25,7 +25,6 @@ developers toward the optimal fix.
 
 import os
 import re
-import signal
 import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
@@ -553,6 +552,7 @@ def detect_perf_hints(
         "risk": risk,
         "frameworks_detected": detected_frameworks,
         "hints": findings[:200],  # Cap to avoid explosion (key matches stats.total_hints)
+        "findings": findings[:200],  # Alias for backward compat with tests
         "recommendations": recommendations,
     }
 

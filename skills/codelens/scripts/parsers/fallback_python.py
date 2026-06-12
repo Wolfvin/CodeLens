@@ -10,6 +10,7 @@ def parse_python_fallback(content, file_path):
     edges = []
     fn_map = {}
     current_class = None
+    class_stack = []  # Track nested class scopes
 
     skip_names = {
         'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
@@ -23,15 +24,18 @@ def parse_python_fallback(content, file_path):
         'self', 'cls',
     }
 
+    prev_indent = 0
     for line_num, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()
+        curr_indent = len(line) - len(line.lstrip())
 
-        # Track class context (dedent = class ended)
+        # Track class context using indentation-based scope
         if stripped.startswith('class '):
             class_match = re.match(r'class\s+(\w+)(?:\s*\([^)]*\))?:', stripped)
             if not class_match:
                 class_match = re.match(r'class\s+(\w+)', stripped)
             if class_match:
+                class_stack.append((class_match.group(1), curr_indent))
                 current_class = class_match.group(1)
                 if current_class not in skip_names:
                     # Register the class as a node so it can be queried
@@ -55,9 +59,12 @@ def parse_python_fallback(content, file_path):
                     nodes.append(class_node)
                     fn_map[current_class] = node_id
 
-        # Detect indent level to track class scope
-        if current_class and not line.startswith(' ') and not line.startswith('\t') and stripped and not stripped.startswith('class '):
-            current_class = None
+        # Pop class stack when dedenting
+        while class_stack and curr_indent <= class_stack[-1][1] and stripped and not stripped.startswith('class '):
+            class_stack.pop()
+            current_class = class_stack[-1][0] if class_stack else None
+
+        prev_indent = curr_indent
 
         # def name(
         for m in re.finditer(r'\b(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(', stripped):

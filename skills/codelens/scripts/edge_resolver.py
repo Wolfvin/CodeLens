@@ -8,6 +8,22 @@ from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 
 
+def _extract_file_from_id(node_id: str) -> str:
+    """Extract the file path from a node ID like 'path/to/file.rs:42:fn_name'.
+
+    Handles multi-colon formats (Rust, C++) where rsplit(':',1)[0] would
+    incorrectly return 'file:line' instead of just 'file'.
+    """
+    parts = node_id.split(':')
+    if len(parts) >= 3:
+        # Format: file:line:name — rejoin everything except last two parts
+        return ':'.join(parts[:-2])
+    elif len(parts) == 2:
+        # Format: file:name or file:line
+        return parts[0]
+    return node_id
+
+
 # ─── Cached Index for O(1) lookups ────────────────────────────
 # Built lazily on first call to get_callers/get_callees, invalidated
 # when edges list changes (via _edge_list_fingerprint).
@@ -122,7 +138,7 @@ def resolve_edges(
                 target_node = candidates[0]
             else:
                 # Multiple definitions — prefer same file, then first definition
-                from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                from_file = _extract_file_from_id(from_id)
                 same_file_candidates = [c for c in candidates if c.get("file", "") == from_file]
 
                 if same_file_candidates:
@@ -138,7 +154,7 @@ def resolve_edges(
             if alt_key in fn_name_to_nodes:
                 candidates = fn_name_to_nodes[alt_key]
                 # Prefer same-file matches first
-                from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                from_file = _extract_file_from_id(from_id)
                 same_file_candidates = [c for c in candidates if c.get("file", "") == from_file]
                 if same_file_candidates:
                     target_node = same_file_candidates[0]
@@ -147,7 +163,7 @@ def resolve_edges(
                     target_node = candidates_sorted[0]
             elif to_fn in alt_case_index:
                 candidates = alt_case_index[to_fn]
-                from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                from_file = _extract_file_from_id(from_id)
                 same_file_candidates = [c for c in candidates if c.get("file", "") == from_file]
                 if same_file_candidates:
                     target_node = same_file_candidates[0]
@@ -162,7 +178,7 @@ def resolve_edges(
                 candidates = fn_name_to_nodes[method_name]
                 if candidates:
                     # Prefer same file
-                    from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                    from_file = _extract_file_from_id(from_id)
                     same_file = [c for c in candidates if c.get("file", "") == from_file]
                     target_node = same_file[0] if same_file else candidates[0]
 
@@ -175,7 +191,7 @@ def resolve_edges(
                 if pinia_nodes:
                     target_node = pinia_nodes[0]
                 else:
-                    from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+                    from_file = _extract_file_from_id(from_id)
                     same_file = [c for c in candidates if c.get("file", "") == from_file]
                     target_node = same_file[0] if same_file else candidates[0]
 

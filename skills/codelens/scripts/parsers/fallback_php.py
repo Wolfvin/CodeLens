@@ -339,7 +339,7 @@ def _parse_class_members(body: str, rel_path: str, class_line: int,
     """Parse methods and properties from a class body string."""
     # ─── Methods ────────────────────────────────────
     method_pattern = re.compile(
-        r'(?:public|protected|private|static)\s+'
+        r'(?:(?:public|protected|private|var)\s+)?'  # optional visibility
         r'(?:static\s+)?'
         r'function\s+(\w+)\s*\(',
         re.MULTILINE
@@ -456,7 +456,7 @@ def _parse_class_members(body: str, rel_path: str, class_line: int,
 
         traits = [t.strip().strip('\\') for t in m.group(1).split(',')]
         for trait_name in traits:
-            if trait_name[0].isupper():  # Trait names are typically PascalCase
+            if trait_name and trait_name[0].isupper():  # Trait names are typically PascalCase
                 line_in_body = body[:m.start()].count('\n') + 1
                 line = class_line + line_in_body
                 edges.append({

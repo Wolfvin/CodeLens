@@ -5,42 +5,51 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.10.0] — 2026-06-12
+## [5.9.1] — 2026-06-12
 
-### Tested against database & network-themed repos
+### Tested against nushell/nushell (1,749 Rust files, 26,432 nodes, 1,103,749 edges, Rust+Tokio shell)
 
-Real-world testing on 7 repos across C, C++, Python, JS/TS, and Rust:
-- **Redis** (C, 30MB, 1842 files) — 19,025 backend nodes, 4,523 edges
-- **LevelDB** (C++, 1.9MB, 181 files) — 1,557 backend nodes, 778 edges
-- **RethinkDB** (C++, 39MB, 1930 files) — 21,477 backend nodes, 25,647 edges
-- **Axios** (JS/TS, 5.5MB, 478 files) — HTTP client library
-- **Got** (JS/TS, 2.6MB, 149 files) — Node.js HTTP request library
-- **HTTPie** (Python, 4.4MB, 294 files) — Modern HTTP client
-- **Reqwest** (Rust, 1.9MB, 123 files) — Rust HTTP client
+Real-world test on a large Rust monorepo with 45+ crates. Previously crashed on scan
+due to Python/JS regex syntax mismatch. Now scans successfully.
 
-### Fixed
+### Fixed (22 bugs)
 
-- **CRITICAL: `perf-hint` command crash**: `detect_perf_hints()` did not accept `max_files` parameter but the command passed it, causing TypeError crash. Added `max_files` parameter to `detect_perf_hints()` with default value of `MAX_FILES_TO_SCAN` (5000). Now uses the parameter instead of hardcoded constant.
-- **CRITICAL: `scan` and `handbook` WARNING on every run**: `get_workspace_outline()` did not accept `max_files` parameter but `write_output_files()` and `handbook` both passed it, causing TypeError WARNING on every scan and handbook execution. Added `max_files` parameter to `get_workspace_outline()` with proper file limiting logic.
-- **CRITICAL: `perf-hint` early return used `findings` key**: When an unknown category was passed, the early return dict used `findings` key instead of the current `hints` key. Updated to `hints` for API consistency.
-- **`max_files` parameter missing from 4 engine functions**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` all lacked `max_files` parameter despite their command handlers passing it via `**kwargs`. Added `max_files` parameter to all four engines with proper file scan limiting.
-- **`pyproject.toml` syntax error**: Missing newlines between `description`, `readme`, and `requires-python` fields on line 8-9 caused `tomllib` parse failure. Fixed formatting.
-- **`has_rust_backend` key missing from framework detection**: Tests expected this key but it was never set. Added `has_rust_backend` field to detected dict, set to `True` when Tauri or Rust web frameworks (axum, actix, rocket) are detected.
-- **`is_monorepo` key missing from framework detection**: Tests expected this key but it was never set. Added `is_monorepo` field with detection for npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
-- **`lockfile` key missing from framework detection**: Tests expected lockfile type detection. Added `lockfile` field that detects pnpm-lock.yaml, yarn.lock, bun.lock, and package-lock.json.
-- **Tauri monorepo config paths**: For Tauri monorepo projects, `src/` was incorrectly added to `backend_paths` by the Rust handler. Now properly removed and placed in `frontend_paths`. Monorepo sub-app paths like `apps/<name>/src/` are now correctly added to frontend paths.
-- **Rust parser regex syntax**: `fallback_rust.py` used `?<name>` named group syntax (Perl/JS style) but Python's `re` module requires `?P<name>`. Caused `re.error` crash on any Rust impl block parsing.
-- **Missing framework signatures**: Added `trpc`, `zustand`, and `vite` framework signatures that tests expected but were not in `FRAMEWORK_SIGNATURES`.
-- **Perf-hint test API mismatch**: Tests used `findings` key but engine returns `hints`. Updated tests to match the current API.
+**CRITICAL (6 bugs):**
+- `fallback_rust.py`: JS named groups `(?<trait>...)` → Python `(?P<trait>...)` — **broke ALL Rust scanning**
+- `fallback_cpp.py`: Class scope tracking completely broken — `continue` statements skipped brace tracking, causing all methods to be misclassified as standalone functions instead of class methods
+- `dataflow_engine.py`: Sanitizer check compared sink labels against `sanitizes_for` keys — SQL injection and command execution sanitizers were never matched, producing false positive taint violations
+- `secrets_engine.py`: Double-escaped `\\s` in `LINE_EXCLUSION_PATTERNS` — raw string `\\s` matched literal backslash+`s` instead of whitespace, causing false positive secret reports for property definition lines
+- `incremental.py`: `rsplit(':',1)[0]` extracted `file:line` instead of `file` for Rust/C++ node IDs with format `path:line:name` — broke incremental scan edge handling for Rust and C++ codebases
+- `impact_engine.py`: `node_by_fn` undefined when `domain="frontend"` — caused NameError crash
 
-### Added
+**HIGH (7 bugs):**
+- `fallback_rust.py`: Impl block exit detection checked for `{` instead of `}` in recent lines — impl scope never exited for certain patterns
+- `fallback_rust.py`: `impl_brace_start` never set when `{` on different line than `impl` — multi-line impl declarations permanently leaked scope
+- `fallback_php.py`: `trait_name[0].isupper()` IndexError crash when trait_name is empty
+- `smell_engine.py`: Arrow function parameters never detected — regex required double `(`
+- `complexity_engine.py`: Unreachable `else if` branch — `\bif\s*\(` matched before `\belse\s+if\s*\(` in both JS and Rust cognitive complexity
+- `framework_detect.py`: `logger` undefined (should be `_logger`) — NameError crash on IOError paths
+- `sideeffect_engine.py`: Duplicate closing-brace line appended to function body
 
-- **Lockfile type detection**: `detect_frameworks()` now returns `lockfile` field with values: `"pnpm"`, `"yarn"`, `"bun"`, or `"npm"`.
-- **Monorepo detection**: `detect_frameworks()` now returns `is_monorepo` field. Detects npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
-- **`has_rust_backend` detection**: `detect_frameworks()` returns `has_rust_backend: true` when Tauri or Rust web frameworks (axum, actix, rocket) are detected via Cargo.toml.
-- **tRPC, Zustand, Vite framework signatures**: New framework signatures for popular JS/TS tools.
-- **`max_files` support in outline engine**: `get_workspace_outline()` now accepts and respects `max_files` parameter (0 = unlimited) to prevent timeout on huge repos.
-- **File limiting in 4 engines**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` now all respect `max_files` parameter for consistent behavior across commands.
+**MEDIUM (6 bugs):**
+- `fallback_rust.py`: Dead code on line 101 — math error `count('{') - count('{')` cancels out
+- `fallback_php.py`: Method regex required visibility keyword — methods without visibility were silently dropped
+- `fallback_python.py`: Nested class scope not tracked — inner class overwrote outer, never restored
+- `smell_engine.py`: Third regex alternative matched function calls, not definitions
+- `query.py`: `fuzzy` parameter never used — `--fuzzy` flag had no effect
+- `utils.py`: `.tar.gz` unreachable in `BINARY_EXTENSIONS`; `.gz` missing from set
+
+**LOW (3 bugs):**
+- `fallback_java.py`: Unused `import os`
+- `perfhint_engine.py`: Unused `import signal`
+- `query.py`: Fragile `'backend' not in dir()` replaced with explicit initialization
+
+**Bonus fixes:**
+- `edge_resolver.py`: Same `rsplit(':',1)[0]` bug — replaced with `_extract_file_from_id()` helper
+- `utils.py`: `get_workspace_outline()` called with unsupported `max_files` keyword
+- `perf_hint.py`: `detect_perf_hints()` called with unsupported `max_files` keyword
+- `perfhint_engine.py`: Added `"findings"` key as alias for `"hints"` for test backward compatibility
+- `pyproject.toml`: TOML syntax error — missing newlines between `description`/`readme`/`license`/`requires-python`
 
 ## [5.8.0] — 2026-06-12
 

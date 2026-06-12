@@ -706,18 +706,19 @@ def _check_sanitizer(
     sanitizers_by_file: Dict[str, List[Dict]]
 ) -> bool:
     """Check if a sanitizer exists between source and sink."""
-    sink_label = sink.get("label", "")
+    # Use sink_type (key) not sink label — sanitizes_for uses keys like "db_query", "command_exec"
+    sink_key = sink.get("sink_type", sink.get("label", ""))
 
     # Check same-file sanitizers
     for san in sanitizers_by_file.get(source["file"], []):
         # Sanitizer must be between source and sink
         if san["line"] > source["line"] and san["line"] < sink["line"]:
-            if sink_label in san.get("sanitizes_for", set()):
+            if sink_key in san.get("sanitizes_for", set()):
                 return True
 
     # Check cross-file: any file in the import chain has relevant sanitizer
     for san in all_sanitizers:
-        if sink_label in san.get("sanitizes_for", set()):
+        if sink_key in san.get("sanitizes_for", set()):
             # Heuristic: if sanitizer is in source file or sink file, it's in the chain
             if san["file"] == source["file"] or san["file"] == sink["file"]:
                 return True

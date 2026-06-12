@@ -27,6 +27,22 @@ def _to_rel_paths(changed_files: Set[str], workspace: str) -> Set[str]:
     return rel_paths
 
 
+def _extract_file_from_id(node_id: str) -> str:
+    """Extract the file path from a node ID like 'path/to/file.rs:42:fn_name'.
+
+    Handles multi-colon formats (Rust, C++) where rsplit(':',1)[0] would
+    incorrectly return 'file:line' instead of just 'file'.
+    """
+    parts = node_id.split(':')
+    if len(parts) >= 3:
+        # Format: file:line:name — rejoin everything except last two parts
+        return ':'.join(parts[:-2])
+    elif len(parts) == 2:
+        # Format: file:name or file:line
+        return parts[0]
+    return node_id
+
+
 def load_mtimes(workspace: str) -> Dict[str, float]:
     """Load cached file modification times."""
     path = os.path.join(workspace, MTIME_CACHE_FILE)
@@ -327,7 +343,8 @@ def merge_backend_data(
         is_resolved = edge.get("resolved", True) is not False
 
         # Determine if the from-side is from a changed file
-        from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+        # Handle multi-colon node IDs (e.g., 'path/to/file.rs:42:fn_name')
+        from_file = _extract_file_from_id(from_id)
         from_is_changed = from_file in changed_rel_paths
 
         if from_is_changed:
@@ -383,7 +400,7 @@ def merge_backend_data(
         if old_fn and old_fn in fn_name_to_new_nodes:
             candidates = fn_name_to_new_nodes[old_fn]
             # Prefer same file, then first candidate
-            from_file = from_id.rsplit(':', 1)[0] if ':' in from_id else ""
+            from_file = _extract_file_from_id(from_id)
             same_file = [c for c in candidates if c.get("file", "") == from_file]
             target = same_file[0] if same_file else candidates[0]
             re_resolved_edges.append({

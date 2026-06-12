@@ -59,12 +59,11 @@ def parse_rust_fallback(content: str, file_path: str) -> Dict[str, Any]:
         brace_depth += stripped_line.count('{') - stripped_line.count('}')
 
         # Detect when we exit an impl block
-        if impl_brace_start is not None and brace_depth <= impl_brace_start and '{' in ''.join(lines[max(0, line_num - 3):line_num]):
-            # Check if we're back to the level before the impl
-            if old_brace_depth > 0 and brace_depth <= old_brace_depth - 1:
-                current_impl_for = None
-                current_trait_name = None
-                impl_brace_start = None
+        if impl_brace_start is not None and brace_depth <= impl_brace_start:
+            # We've returned to the brace depth before the impl
+            current_impl_for = None
+            current_trait_name = None
+            impl_brace_start = None
 
         # ─── Impl blocks ───────────────────────────────
         impl_match = re.search(
@@ -98,9 +97,14 @@ def parse_rust_fallback(content: str, file_path: str) -> Dict[str, Any]:
 
                 # Track brace depth to know when impl ends
                 if '{' in stripped_line:
-                    impl_brace_start = brace_depth - stripped_line.count('{') + stripped_line.count('{')
-                    # Simpler: just track that we're inside an impl
                     impl_brace_start = old_brace_depth
+                else:
+                    # Multi-line impl: opening brace is on a later line
+                    impl_brace_start = -1  # sentinel: need to find opening brace
+
+        # Check if we're waiting for impl's opening brace
+        if impl_brace_start == -1 and '{' in stripped_line and current_impl_for:
+            impl_brace_start = old_brace_depth
 
         # ─── Struct declarations ───────────────────────
         struct_match = re.search(
