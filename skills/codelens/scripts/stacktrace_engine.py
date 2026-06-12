@@ -161,11 +161,22 @@ def _trace_error_chain(
 
         callers = callers_map.get(current_id, [])
 
+        # Deduplicate callers by caller_id — a function may call another
+        # function multiple times (different call sites), creating multiple
+        # edges with the same from_id. Only process each unique caller once.
+        seen_callers_at_depth = set()
+        unique_callers = []
         for caller_info in callers:
+            caller_id = caller_info["caller_id"]
+            if caller_id not in seen_callers_at_depth:
+                seen_callers_at_depth.add(caller_id)
+                unique_callers.append(caller_info)
+
+        for caller_info in unique_callers:
             caller_id = caller_info["caller_id"]
 
             if caller_id in visited:
-                # Cyclic reference
+                # Cyclic reference — add a single marker, not one per edge
                 if caller_id in node_by_id:
                     n = node_by_id[caller_id]
                     chain.append({

@@ -306,6 +306,19 @@ def analyze_impact(
     affected["tests"] = sorted(test_files)
 
     # ─── Risk Assessment ────────────────────────────────
+    # ─── Deduplicate affected items ─────────────────────
+    # Multiple target nodes (e.g., same-named functions in different files) can
+    # share callers, producing duplicate entries. Deduplicate by (name, file, line).
+    for key in ("direct", "indirect"):
+        seen = set()
+        deduped = []
+        for item in affected[key]:
+            identity = (item.get("name", ""), item.get("file", ""), item.get("line", 0))
+            if identity not in seen:
+                seen.add(identity)
+                deduped.append(item)
+        affected[key] = deduped
+
     direct_count = len(affected["direct"])
     indirect_count = len(affected["indirect"])
     file_count = len(affected["files"])

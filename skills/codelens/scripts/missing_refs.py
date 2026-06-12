@@ -278,6 +278,35 @@ def _is_likely_tailwind(class_name: str) -> bool:
         'sr-only', 'not-sr-only',
         # Typography plugin (@tailwindcss/typography)
         'prose', 'prose-',
+        # Aspect ratio
+        'aspect-',
+        # Backdrop filter
+        'backdrop-blur-', 'backdrop-brightness-', 'backdrop-contrast-',
+        'backdrop-grayscale-', 'backdrop-hue-rotate-', 'backdrop-invert-',
+        'backdrop-opacity-', 'backdrop-saturate-', 'backdrop-sepia-',
+        'backdrop-filter',
+        # Container
+        'container',
+        # Columns
+        'columns-',
+        # Break inside/after/before
+        'break-', 'box-',
+        # Float & clear
+        'float-', 'clear-',
+        # Isolation
+        'isolate', 'isolation-',
+        # Object fit/position
+        'object-',
+        # Overscroll
+        'overscroll-',
+        # Line clamp
+        'line-clamp-',
+        # Touch
+        'touch-',
+        # Will change
+        'will-change-',
+        # Group/Peer (used as group-hover:, peer-focus: base classes)
+        'group', 'peer',
     ]
 
     for prefix in tailwind_prefixes:
@@ -320,7 +349,9 @@ def _is_likely_tailwind(class_name: str) -> bool:
     if re.match(r'^[wh]\d+/\d+$', stripped):
         return True
 
-    return False
+    # Final fallback: check against the utility base set (covers standalones
+    # like "aspect-square", "container", etc. that aren't in the prefix list)
+    return _is_utility_base(stripped)
 
 
 def _is_utility_base(name: str) -> bool:

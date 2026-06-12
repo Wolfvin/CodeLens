@@ -88,7 +88,11 @@ SECRET_PATTERNS = {
             # Environment variable style
             r'(?i)(?:DB_PASSWORD|DATABASE_PASSWORD|MYSQL_PASSWORD|POSTGRES_PASSWORD|PG_PASSWORD|MONGO_PASSWORD|REDIS_PASSWORD)\s*(?:=|:)\s*["\']?([^\s"\'`]{6,})["\']?',
             # URL-embedded passwords: user:pass@
-            r'(?i)[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
+            # Exclude '/' from the password capture group to avoid false positives
+            # from URLs like http://host/path/file@2x.webp where @ is part of
+            # the path (e.g., image density descriptors), not a credential separator.
+            # Real credential URLs have format protocol://user:pass@host (no / before @).
+            r'(?i)[\w+\-\.]+:([^\s/@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
             # Config-style password
             r'(?i)["\']password["\']\s*:\s*["\']([^"\']{6,})["\']',
             # Python-style
