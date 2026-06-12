@@ -475,19 +475,24 @@ def map_state(
     # v5.8.1: Also filter stores where the name is ALL_CAPS with no underscore
     # and looks like a simple constant (3+ uppercase letters only = config constant).
     # e.g., "ROOT", "CLI", "LOG" — not state, just module-level constants.
-    def _is_likely_constant(name: str) -> bool:
+    # IMPORTANT: Do NOT filter Rust state stores — Rust convention is SCREAMING_SNAKE_CASE
+    # for statics with interior mutability (AtomicBool, OnceLock, etc.), which ARE state.
+    def _is_likely_constant(name: str, framework: str = "") -> bool:
         """Check if a name looks like a simple constant, not state."""
         if not name:
+            return False
+        # Rust state stores use SCREAMING_SNAKE_CASE by convention — never filter them
+        if framework.startswith('rust_'):
             return False
         # Pure uppercase with no underscore and length >= 3 → likely constant
         if name == name.upper() and len(name) >= 3 and name.isalpha():
             return True
-        # ALL_CAPS with underscores → definitely a constant
+        # ALL_CAPS with underscores → definitely a constant (for JS/TS)
         if name == name.upper() and '_' in name:
             return True
         return False
 
-    stores = [s for s in stores if not _is_likely_constant(s.get("name", ""))]
+    stores = [s for s in stores if not _is_likely_constant(s.get("name", ""), s.get("framework", ""))]
 
     # v5.8.1: Filter likely React components — PascalCase names that end with
     # common component suffixes. These are UI components, not state stores.
@@ -512,8 +517,8 @@ def map_state(
         """Check if a name looks like a React component, not a state store."""
         if not name:
             return False
-        # Skip if this came from a known state management framework
-        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate'):
+        # Skip if this came from a known state management framework (including Rust)
+        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate') or framework.startswith('rust_'):
             return False
         # PascalCase name that ends with a common component suffix
         if name[0].isupper() and any(name.endswith(s) for s in _COMPONENT_SUFFIXES):
@@ -535,8 +540,11 @@ def map_state(
     # ─── Post-processing: Reclassify global stores without mutations ──
     # A "global" store with no actions/mutations is not really mutable state —
     # it's a module-level constant. Reclassify as module_constant.
+    # IMPORTANT: Skip Rust state stores — Rust statics with interior mutability
+    # (AtomicBool, OnceLock, etc.) ARE mutable state even without tracked actions,
+    # because Rust's interior mutability pattern allows mutation through &self.
     for store in stores:
-        if store.get("type") == "global":
+        if store.get("type") == "global" and not store.get("framework", "").startswith("rust_"):
             actions = store.get("actions", [])
             has_mutations = len(actions) > 0
             if not has_mutations:
@@ -544,9 +552,13 @@ def map_state(
 
     # ─── Post-processing: Filter module_constant without consumers ──
     # Module-level constants that nobody imports are dead code, not interesting state.
+    # IMPORTANT: Skip Rust frameworks — Rust uses `use` statements, not JS imports,
+    # so cross-file consumer resolution doesn't work for Rust state yet.
     stores = [
         s for s in stores
-        if s.get("type") != "module_constant" or s.get("consumers")
+        if s.get("type") != "module_constant"
+        or s.get("consumers")
+        or s.get("framework", "").startswith("rust_")
     ]
 
     # ─── Post-processing: Validate file paths ────────────────────
@@ -1879,8 +1891,9 @@ def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
     # ─── Static items with interior mutability ────────────────
     # pub static COUNTER: AtomicUsize = AtomicUsize::new(0);
     # static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
+    # Also matches statics inside fn bodies (with leading whitespace)
     for m in re.finditer(
-        r'(?:pub\s+)?static\s+(\w+)\s*:\s*([^=;]+)',
+        r'(?:pub\s+)?static\s+(\w+)\s*:\s*([^=;{]+)',
         content
     ):
         var_name = m.group(1)
@@ -1889,15 +1902,14 @@ def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
 
         if var_name in RUST_SKIP or len(var_name) <= 2:
             continue
-        if var_name == var_name.upper() and '_' not in var_name:
-            # Single-word ALL_CAPS likely just a constant
-            continue
+        # Only skip ALL_CAPS single-word if the type is clearly immutable
+        # (AtomicBool, AtomicUsize, OnceLock, etc. are ALWAYS stateful regardless of name)
 
         # Check for interior mutability or shared state patterns
         is_stateful = any(pattern in type_expr for pattern in [
             'Atomic', 'Mutex', 'RwLock', 'OnceCell', 'OnceLock',
-            'Lazy', 'lazy_static', 'Arc', 'RefCell', 'Cell',
-            'Data<', 'State<',
+            'Lazy', 'LazyLock', 'lazy_static', 'Arc', 'RefCell', 'Cell',
+            'Data<', 'State<', 'Jemalloc',
         ])
 
         if is_stateful:
