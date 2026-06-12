@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-12T19:48:00.576517+00:00",
+  "timestamp": "2026-06-12T19:43:00.125251+00:00",
   "version": "1.0.0",
   "quick_mode": false,
   "fixtures": {
@@ -8,18 +8,18 @@
         "dead-code": {
           "description": "Dead code detection",
           "expected_count": 0,
-          "found_count": 3,
+          "found_count": 6,
           "metrics": {
             "precision": 0.0,
             "recall": 0.0,
             "f1": 0.0,
-            "fpr": 0.3,
+            "fpr": 0.5455,
             "tp": 0,
-            "fp": 3,
+            "fp": 6,
             "fn": 0,
-            "tn": 7
+            "tn": 5
           },
-          "elapsed_seconds": 0.423,
+          "elapsed_seconds": 0.422,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
           "meets_target": false,
@@ -39,7 +39,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.418,
+          "elapsed_seconds": 0.413,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": true,
@@ -53,16 +53,16 @@
             "precision": 0.0,
             "recall": 0.0,
             "f1": 0.0,
-            "fpr": 0.0,
+            "fpr": 0.9688,
             "tp": 0,
-            "fp": 0,
+            "fp": 31,
             "fn": 0,
             "tn": 1
           },
-          "elapsed_seconds": 0.418,
+          "elapsed_seconds": 0.419,
           "target_f1": 0.98,
           "competitor_f1": 0.95,
-          "meets_target": true,
+          "meets_target": false,
           "beats_competitor": false
         },
         "smell": {
@@ -79,7 +79,7 @@
             "fn": 0,
             "tn": 7
           },
-          "elapsed_seconds": 0.419,
+          "elapsed_seconds": 0.42,
           "target_f1": 0.8,
           "competitor_f1": 0.78,
           "meets_target": false,
@@ -99,7 +99,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.407,
+          "elapsed_seconds": 0.408,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
           "meets_target": true,
@@ -119,7 +119,7 @@
             "fn": 0,
             "tn": 7
           },
-          "elapsed_seconds": 0.409,
+          "elapsed_seconds": 0.405,
           "target_f1": 0.75,
           "competitor_f1": 0.7,
           "meets_target": false,
@@ -139,7 +139,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.403,
+          "elapsed_seconds": 0.395,
           "target_f1": 0.9,
           "competitor_f1": 0.85,
           "meets_target": true,
@@ -152,21 +152,21 @@
         "dead-code": {
           "description": "Dead code detection",
           "expected_count": 10,
-          "found_count": 32,
+          "found_count": 43,
           "metrics": {
-            "precision": 0.8889,
-            "recall": 0.8,
-            "f1": 0.8421,
+            "precision": 0.8333,
+            "recall": 1.0,
+            "f1": 0.9091,
             "fpr": 1.0,
-            "tp": 8,
-            "fp": 1,
-            "fn": 2,
+            "tp": 10,
+            "fp": 2,
+            "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.427,
+          "elapsed_seconds": 0.422,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
-          "meets_target": false,
+          "meets_target": true,
           "beats_competitor": true
         },
         "secrets": {
@@ -183,7 +183,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.435,
+          "elapsed_seconds": 0.434,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": false,
@@ -203,7 +203,7 @@
             "fn": 1,
             "tn": 0
           },
-          "elapsed_seconds": 0.417,
+          "elapsed_seconds": 0.419,
           "target_f1": 0.98,
           "competitor_f1": 0.95,
           "meets_target": false,
@@ -223,7 +223,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.427,
+          "elapsed_seconds": 0.421,
           "target_f1": 0.8,
           "competitor_f1": 0.78,
           "meets_target": false,
@@ -243,7 +243,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.423,
+          "elapsed_seconds": 0.419,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
           "meets_target": false,
@@ -263,7 +263,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.423,
+          "elapsed_seconds": 0.408,
           "target_f1": 0.75,
           "competitor_f1": 0.7,
           "meets_target": true,
@@ -283,7 +283,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.397,
+          "elapsed_seconds": 0.401,
           "target_f1": 0.9,
           "competitor_f1": 0.85,
           "meets_target": true,
@@ -293,10 +293,10 @@
     }
   },
   "summary": {
-    "avg_f1": 0.8562,
-    "avg_precision": 0.8098,
-    "avg_recall": 0.9429,
-    "avg_fpr_clean": 0.0925,
+    "avg_f1": 0.8658,
+    "avg_precision": 0.8019,
+    "avg_recall": 0.9714,
+    "avg_fpr_clean": 0.2659,
     "meets_target_pct": 42.9,
     "beats_competitor_pct": 28.6,
     "total_commands_run": 14
@@ -304,16 +304,16 @@
   "token_efficiency": {
     "dead-code": {
       "json": {
-        "estimated_tokens": 570
+        "estimated_tokens": 942
       },
       "ai": {
-        "estimated_tokens": 359
+        "estimated_tokens": 564
       },
       "ai_lite": {
-        "estimated_tokens": 105
+        "estimated_tokens": 110
       },
-      "ai_savings_pct": 37.0,
-      "ai_lite_savings_pct": 81.6
+      "ai_savings_pct": 40.1,
+      "ai_lite_savings_pct": 88.3
     },
     "secrets": {
       "json": {

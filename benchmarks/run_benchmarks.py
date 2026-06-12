@@ -87,8 +87,19 @@ def extract_findings(result, command):
             if isinstance(items, list):
                 for item in items:
                     if isinstance(item, dict):
+                        # Extract function name from message like "Function 'process_order' is 68 lines"
+                        msg = item.get("message", "")
+                        name = item.get("name", "")
+                        if not name:
+                            fnm = re.search(r"Function '(\w+)'", msg)
+                            if fnm:
+                                name = fnm.group(1)
+                            else:
+                                fnm2 = re.search(r"'(\w+)'", msg)
+                                if fnm2:
+                                    name = fnm2.group(1)
                         findings.append({"file": item.get("file",""), "line": item.get("line",0),
-                                         "name": item.get("message",""), "category": cat})
+                                         "name": name, "category": cat, "message": msg})
     elif command == "debug-leak":
         for item in result.get("leaks", []):
             if isinstance(item, dict):
@@ -219,7 +230,12 @@ def run_benchmark_suite(fixture_name=None, quick=False, output_file=None, compar
                 src = sum(1 for r,d,fs in os.walk(fd) for f in fs if any(f.endswith(e) for e in ('.py','.js','.ts','.tsx','.jsx'))
                           if not any(x in r for x in ('.codelens','__pycache__','node_modules')))
                 fset = set(f.get("file","") for f in findings if f.get("file"))
-                fp = len(findings); tn = max(src-len(fset), 0)
+                # For complexity, only count high_complexity as FP (normal complexity is not a finding)
+                if cmd == "complexity":
+                    fp = len([f for f in findings if f.get("category") == "high_complexity"])
+                else:
+                    fp = len(findings)
+                tn = max(src-len(fset), 0)
                 metrics = calc_metrics(0, fp, 0, tn)
             else:
                 sf, _ = scope_findings(findings, scope)

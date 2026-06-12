@@ -85,7 +85,7 @@ SECRET_PATTERNS = {
             # AWS access key IDs (AKIA...)
             r'["\']?(AKIA[A-Z0-9]{16})["\']?',
             # AWS secret access keys (40-char base64 after known key)
-            r'(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*(?:=|:)\s*["\']([A-Za-z0-9/+=]{40})["\']',
+            r'(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*(?:=|:)\s*["\']([A-Za-z0-9/+=]{40,})["\']',
             # SendGrid API keys (SG.) — require word boundary
             r'(?:^|(?<=[\s"\':=,;(]))SG\.[A-Za-z0-9_\-]{22,}\.[A-Za-z0-9_\-]{43,}',
             # Twilio API keys
@@ -1312,6 +1312,14 @@ def _is_enum_or_constant_definition(line_text: str, ext: str) -> bool:
     if ext == ".py":
         # ALL_CAPS = "kebab-case-value"  or  PascalCase = "kebab-value"
         if re.match(r'^[A-Z][A-Z0-9_]*\s*=\s*["\'][\w-]+["\']', stripped):
+            # But NOT if the variable name contains known secret keywords
+            var_name_match = re.match(r'^([A-Z][A-Z0-9_]*)\s*=', stripped)
+            if var_name_match:
+                var_name = var_name_match.group(1)
+                _secret_keywords = {'SECRET', 'KEY', 'PASSWORD', 'TOKEN', 'CREDENTIAL',
+                                    'PRIVATE', 'API_KEY', 'ACCESS_KEY'}
+                if any(kw in var_name for kw in _secret_keywords):
+                    return False  # This is a real secret assignment, not an enum
             value_match = re.search(r'["\']([^"\']+)["\']', stripped)
             if value_match and '-' in value_match.group(1):
                 return True

@@ -337,6 +337,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     terminal_line = 0
     terminal_type = ""
     terminal_depth = 0         # v7: brace depth where the terminal statement was found
+    terminal_indent = 0        # Python: indentation level of the terminal statement
 
     # v5.10: Rust match arm tracking
     in_match = False
@@ -431,14 +432,14 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             if ext in {".ex", ".exs"}:
                 if re.match(r'(?:return|raise|throw|exit)\b', stripped):
                     found_terminal = True
-                    terminal_line = i + 1
+                    terminal_line = i  # 0-based: next line has i+1 > i = True
                     terminal_type = stripped.split()[0]
                     terminal_depth = brace_depth
             # Ruby: raise/return/throw are terminal
             elif ext == ".rb":
                 if re.match(r'(?:return|raise|throw|fail|exit)\b', stripped):
                     found_terminal = True
-                    terminal_line = i + 1
+                    terminal_line = i  # 0-based: next line has i+1 > i = True
                     terminal_type = stripped.split()[0]
                     terminal_depth = brace_depth
             elif re.match(r'(?:return|throw|break|continue)\s', stripped):
@@ -454,9 +455,10 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     if not stripped.endswith(';') and not stripped.endswith('}') and not stripped.endswith(')') and not stripped.endswith(']'):
                         continue  # Not a complete return statement yet
                 found_terminal = True
-                terminal_line = i + 1
+                terminal_line = i  # 0-based: next line has i+1 > i = True
                 terminal_type = stripped.split()[0]
                 terminal_depth = brace_depth  # v7: record depth of terminal statement
+                terminal_indent = len(lines[i]) - len(lines[i].lstrip())  # Python indent of terminal
 
             # v5.10: Rust match arm separator — new arm starts after => or pattern
             if ext == ".rs" and in_match:
@@ -504,6 +506,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 found_terminal = False
                 continue
 
+            # Python: if the current line is at a lower or equal indent to the
+            # terminal statement, we've exited the block containing the return.
+            # Code at this level is in a different branch and is reachable.
+            if ext == ".py" and in_function and found_terminal and terminal_indent > 0:
+                current_indent = len(line) - len(line.lstrip()) if stripped else 0
+                if current_indent <= terminal_indent and stripped:
+                    found_terminal = False
+                    continue
+
             # Check if we're at a lower indentation (function ended in Python)
             if ext == ".py" and in_function and found_terminal:
                 current_indent = len(line) - len(line.lstrip()) if stripped else 0
@@ -524,12 +535,17 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     "file": rel_path,
                     "line": i + 1,
                     "after": terminal_type,
-                    "after_line": terminal_line,
+                    "after_line": terminal_line + 1,  # Convert to 1-based for output
                     "severity": "warning",
-                    "message": f"Unreachable code after {terminal_type} on line {terminal_line}",
+                    "message": f"Unreachable code after {terminal_type} on line {terminal_line + 1}",
                     "suggestion": f"Remove code after {terminal_type} or fix the control flow."
                 })
                 found_terminal = False  # Only report first unreachable
+            elif found_terminal and stripped.startswith(('elif', 'else', 'except', 'finally')):
+                # New branch starts after a terminal statement — code in the new branch
+                # is reachable even though the previous branch had a return.
+                # Reset the terminal flag so we don't falsely flag code in this new branch.
+                found_terminal = False
 
     return items
 
