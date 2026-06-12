@@ -93,6 +93,10 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
     for id_entry in frontend.get("ids", []):
         name = id_entry["name"]
 
+        # v6.5: Skip IDs that are hex color codes (3-8 hex chars)
+        if re.match(r'^[0-9a-fA-F]{3,8}$', name):
+            continue
+
         has_html = len(id_entry.get("defined_in_html", [])) > 0
         has_css = len(id_entry.get("css", [])) > 0
         has_js = len(id_entry.get("js", [])) > 0

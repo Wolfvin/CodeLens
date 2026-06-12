@@ -36,6 +36,17 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
+## What's New in v6.5 — Tested on ionic-team/ionic-framework (2330 files, Stencil+React+Vue+Angular lerna monorepo)
+
+- **Stencil.js framework detection**: `detect_frameworks()` now recognizes `@stencil/core` dependency and `stencil.config.ts` config files. Stencil components (`@Component`, `@Prop`, `@State`, `@Method`, `@Listen`) are detected as framework indicators. Sub-directory scanning also detects Stencil in monorepo packages.
+- **SCSS control flow false positive fix**: `css-deep` specificity_wars engine now skips SCSS directives (`@if`, `@else`, `@each`, `@for`, `@while`, `@mixin`, `@include`, `@function`, `@at-root`) that were incorrectly classified as CSS selectors. Handles both standalone directives and inline closing-brace patterns (`} } @else if $var == val {`). Eliminates 4+ false positives from SCSS mixin/control flow blocks per project.
+- **CSS ID hex-color false positive fix**: `missing-refs` now filters out hex color codes (3-8 hex chars like `a0a0a0`, `a1eb9a`) that were falsely classified as CSS IDs. Reduced missing-refs noise from 163 to 72 issues (91 false positives eliminated) on the Ionic test repo.
+- **Monorepo identity from core sub-package**: `_extract_project_identity()` now looks for a `core/`, `packages/core/`, `lib/`, or `src/` sub-directory package.json when the root package.json has no meaningful name (common in lerna monorepos where root is private). For scoped packages like `@ionic/core`, uses the scope name ("ionic") as the project identity. Fixes "test-target-repo" and "0.0.0" identity on monorepos.
+- **Monorepo core/ directory scanning**: `_find_package_jsons()` now also checks top-level directories like `core/`, `lib/`, `src/` for package.json files, not just standard monorepo directories (`apps/`, `packages/`). This fixes framework detection for repos like Ionic where the main package lives in `core/` not `packages/`.
+- **Stencil wrapper component filtering in state-map**: React wrapper components that wrap Stencil web components (Ion-prefixed like `IonButton`, `IonCheckbox`) are no longer classified as state stores. These are React components, not global state. Reduced state-map entries from 16+ to 6 real stores.
+- **Skip .d.ts in entrypoints**: TypeScript declaration files (`.d.ts`) are no longer listed as entry points. They're type declarations, not executable code. Eliminates noise from type declaration files in the entry points list.
+- **Version**: 6.3.1 → 6.5.0.
+
 # CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
