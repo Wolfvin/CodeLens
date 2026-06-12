@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes: missing_refs O(n²) typo detection now time-budgeted (15s cap, prefix filtering, 500K comparison cap); analyze command gets --timeout (default 300s) with per-engine time budget and graceful skip; handbook command gets --timeout (default 120s) with per-engine skip and partial output. False positive fixes: api-map tauri detection tightened (removed broad invoke() pattern); state-map react_context now requires actual React import/dependency; entrypoints --exclude-tests flag (69K test entries excluded by default in analyze); smell god_object JS/TS brace-depth tracking (was 29x inflation, now accurate).",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.4.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on redis/redis (1844 files, C+Lua+Python+TCL Makefile project). C/C++ project support: removed from unsupported_langs, added c_project framework detection, c-project/c-database identity types, Makefile version/name extraction. Fixed is_bundled_file missing from utils.py (broke ask/complexity/context/perf_hint commands). Fixed Drupal false positive (modules/ indicator too generic, replaced with sites/default/ and sites/all/). Fixed C function name false positives (void, const, unsigned etc. no longer detected as function names in smell_engine and fallback_c parser).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",
@@ -170,4 +170,9 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection"  ]}
+    "timeout-protection",
+    "c-project",
+    "makefile",
+    "c-database",
+    "bundled-file-detection"
+  ]}

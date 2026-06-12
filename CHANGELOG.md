@@ -2,6 +2,18 @@
 
 All notable changes to CodeLens are documented here.
 
+## [7.2.0] — 2026-06-12
+
+### CodeLens v6.4.0 — Tested against redis/redis
+
+- Fixed `is_bundled_file()` missing from utils.py (broke ask/complexity/context/perf_hint)
+- Fixed Drupal false positive from `modules/` indicator
+- Fixed C/C++ function name false positives (void, const, unsigned detected as function names)
+- Removed C/C++ from unsupported_langs (fallback parsers work)
+- Added C/C++ project framework detection (c_project)
+- Added C/C++ project identity in handbook (c-database, c-infrastructure, c-project)
+- Added c_type in polyglot detection
+
 ## [7.1.0] — 2026-06-12
 
 ### Tested against nestjs/nest (1673 TypeScript files, lerna monorepo, 11 packages)

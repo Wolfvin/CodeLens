@@ -276,7 +276,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "indicators": ["sites/default/", "sites/all/", "profiles/"]
     },
 }
 
@@ -889,14 +889,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect unsupported languages (Java, C#, Swift, Ruby)
+    # Note: Go and C/C++ were previously listed here but now have fallback parser
+    # support. They are no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
@@ -907,6 +905,36 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 7b. Detect C/C++ projects via Makefile / CMakeLists.txt
+    # C/C++ have fallback parser support, so they are NOT in unsupported_langs.
+    # We still detect them as frameworks for identity and config purposes.
+    _C_MAKEFILE_MARKERS = {
+        "Makefile", "makefile", "GNUmakefile",
+        "CMakeLists.txt", "Makefile.am",
+    }
+    _has_makefile = any(
+        os.path.exists(os.path.join(workspace, marker))
+        for marker in _C_MAKEFILE_MARKERS
+    )
+    if _has_makefile:
+        # Check if there are actual C/C++ source files to confirm
+        _has_c_sources = False
+        for root_d, _, fnames in os.walk(workspace):
+            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
+                continue
+            if '.codelens' in root_d:
+                continue
+            for fn in fnames:
+                if fn.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
+                    _has_c_sources = True
+                    break
+            if _has_c_sources:
+                break
+
+        if _has_c_sources:
+            if "c_project" not in detected["frameworks"]:
+                detected["frameworks"].append("c_project")
 
     return detected
 

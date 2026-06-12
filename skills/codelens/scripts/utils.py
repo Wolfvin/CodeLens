@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.4.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -402,6 +402,42 @@ GENERATED_FILE_PATTERNS = frozenset({
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file path looks like a bundled, vendored, or third-party file.
+
+    Bundled/vendor files should be skipped during analysis because they are
+    not part of the project's own source code (e.g., deps/ directories,
+    vendor/ directories, or bundled minified files).
+
+    Args:
+        rel_path: Relative path from workspace root (e.g., 'deps/hiredis/hiredis.c')
+
+    Returns:
+        True if the file appears to be bundled/vendored.
+    """
+    if not rel_path:
+        return False
+    # Normalize path separators
+    normalized = rel_path.replace('\\', '/')
+    lower = normalized.lower()
+
+    # Common bundled/vendor directory prefixes
+    _BUNDLED_PREFIXES = (
+        'deps/', 'vendor/', 'third_party/', 'thirdparty/',
+        'external/', 'ext/', 'submodules/', 'packages/',
+        'node_modules/',
+    )
+    for prefix in _BUNDLED_PREFIXES:
+        if lower.startswith(prefix) or ('/' + prefix) in lower:
+            return True
+
+    # Minified/bundled file patterns
+    if '.min.' in lower or '.bundle.' in lower or '.chunk.' in lower:
+        return True
+
+    return False
 
 
 def is_generated_file(filename: str) -> bool:

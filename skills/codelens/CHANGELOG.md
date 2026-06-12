@@ -5,6 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] — 2026-06-12
+
+### Tested against redis/redis (1,844 files: 471 C + 311 H + 20 Lua + 46 Python + 228 TCL + 69 Shell, in-memory database)
+
+Real-world test on a pure C project with Makefile build system, embedded Lua scripting,
+and polyglot codebase (C+Lua+Python+TCL+Shell). Exposed critical gaps in C/C++ project
+support that were invisible on JS/TS/Rust/Go projects.
+
+### Fixed
+
+- **`is_bundled_file()` missing from `utils.py`**: `perfhint_engine.py` and `complexity_engine.py` imported `is_bundled_file` from `utils`, but the function was never defined there. This broke 4 commands silently: `ask`, `complexity`, `context`, `perf-hint`. Added `is_bundled_file()` to `utils.py` with detection for `deps/`, `vendor/`, `third_party/`, `external/`, `submodules/`, and minified/bundled file patterns.
+
+- **Drupal false positive from `modules/` indicator**: Redis (and many non-Drupal projects) have a `modules/` directory, which was listed as a Drupal indicator. Replaced `modules/` and `themes/` with `sites/default/` and `sites/all/` — directories that are truly unique to Drupal installations. This eliminates the false positive on Redis and similar C projects with module systems.
+
+- **C/C++ function name false positives in `smell_engine.py`**: The regex `r'(?:static\s+|inline\s+)*(?:\w+[\s*]+)+(\w+)\s*\('` matched C type keywords like `void`, `const`, `unsigned`, `signed`, `volatile`, `extern`, `register`, `auto`, `static`, `inline` as function names, producing absurd findings like "Function 'void' is 248 lines". Added all C type keywords and storage-class specifiers to the skip list.
+
+- **C/C++ function name false positives in `fallback_c.py`**: Same issue as smell_engine — the parser's skip list was missing `void`, `const`, `unsigned`, `signed`, `volatile`, `extern`, `register`, `auto`, `static`, `inline`. Extended the skip list to match.
+
+- **C/C++ listed as `unsupported_langs`**: Despite having working fallback parsers (790 C/C++ files successfully parsed on redis/redis), C and C++ were listed in `UNSUPPORTED_MARKERS` in `framework_detect.py`, causing the scan output to say "these languages are not yet supported". Removed C/C++ from `UNSUPPORTED_MARKERS` since they have fallback parser support.
+
+### Added
+
+- **C/C++ project framework detection**: Added `c_project` framework detection in `framework_detect.py` when a Makefile/CMakeLists.txt is found alongside C/C++ source files. This gives C projects proper framework recognition instead of empty framework lists.
+
+- **C/C++ project identity detection in handbook**: Added C/C++ project type detection in `_extract_project_identity()` with Makefile version/name extraction. Supports classification as `c-database` (projects with `.conf` files like redis.conf), `c-infrastructure` (nginx-like structure), or `c-project` (generic). Polyglot C+Python/Lua projects get combined type like `c-python-polyglot`.
+
+- **`c_type` in polyglot detection**: Extended the polyglot type builder to include C projects alongside Rust, Go, JS, and Python types.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)
