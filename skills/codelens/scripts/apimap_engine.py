@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql", ".php", ".go",
+    ".graphql", ".gql", ".php", ".go", ".zig",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -125,11 +125,12 @@ def map_api_routes(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # v5.9: Detect if this file is a test/example file for route source tagging
+            # v5.9: Detect if this file is a test/example/vendor file for route source tagging
             is_test_file = any(x in rel_path for x in [
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/third_party/', '/vendor/', '/fixtures/',
             ])
 
             try:

@@ -39,10 +39,13 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
-    parser.add_argument("--timeout", type=int, default=300,
-                        help="Total time budget in seconds for analysis engines (default: 300)")
+    parser.add_argument("--timeout", type=int, default=600,
+                        help="Total time budget in seconds for analysis engines (default: 600)")
     parser.add_argument("--exclude-tests", action="store_true", default=False,
                         help="Exclude test entry points from entrypoints analysis")
+    parser.add_argument("--max-files", type=int, default=0,
+                        help="Maximum number of files to scan (0=unlimited). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
@@ -54,6 +57,7 @@ def execute(args, workspace):
         max_items=args.max_items,
         timeout=args.timeout,
         exclude_tests=args.exclude_tests,
+        max_files=args.max_files,
     )
 
 
@@ -63,8 +67,9 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
-    timeout: int = 300,
+    timeout: int = 600,
     exclude_tests: bool = False,
+    max_files: int = 0,
 ) -> Dict[str, Any]:
     """
     Full repository analysis — the single command to understand an entire codebase.
@@ -121,6 +126,7 @@ def analyze_repository(
                 incremental=False,
                 full=False,
                 format="json",
+                max_files=max_files,
             )
             scan_result = scan_execute(scan_args, workspace)
             result["scan"] = {
@@ -335,8 +341,10 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
     elapsed = time.time() - start_time
     remaining = total_budget - elapsed
 
-    # Skip if less than 20% of budget remains
-    if remaining < total_budget * 0.2:
+    # Skip if less than the greater of 20% of budget or 30s remains
+    # (higher threshold for analyze since it runs many engines)
+    min_remaining = max(30, total_budget * 0.15)
+    if remaining < min_remaining:
         logger.debug(f"Skipping engine {category}: time budget nearly exhausted ({remaining:.1f}s remaining)")
         findings.append({
             "category": category,

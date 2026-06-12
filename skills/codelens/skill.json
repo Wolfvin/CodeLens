@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint) due to missing is_bundled_file. apimap_engine NoneType crash on path=None fixed. Tested on meilisearch/meilisearch (Rust search engine, 21 crates, 490K edges). v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes, false positive fixes, analyze/handbook timeout flags.",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.5.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.5.0: Universal repo support — Zig language parser, scan --max-files, handbook/analyze timeout improvements (300s/600s), production-only API routes in handbook, Cargo.toml workspace version resolution, third_party/vendor test file filtering, outline max_files passthrough, summary.json fallback. Tested on oven-sh/bun (14716 files, Zig+Rust+C+++JS+TS polyglot monorepo).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",

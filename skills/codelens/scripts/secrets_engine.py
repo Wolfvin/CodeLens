@@ -33,7 +33,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".php", ".env", ".yaml", ".yml",
-    ".json", ".toml", ".cfg", ".ini", ".conf",
+    ".json", ".toml", ".cfg", ".ini", ".conf", ".zig",
 }
 
 # ─── Secret Pattern Definitions ────────────────────────────────

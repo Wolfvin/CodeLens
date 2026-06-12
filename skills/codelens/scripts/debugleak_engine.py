@@ -29,7 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
-    ".php", ".dart", ".lua", ".java", ".cs",
+    ".php", ".dart", ".lua", ".java", ".cs", ".zig",
 }
 
 # Test-file patterns — findings in these files are downgraded

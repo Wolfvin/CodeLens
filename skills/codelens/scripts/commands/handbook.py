@@ -29,8 +29,8 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
-    parser.add_argument("--timeout", type=int, default=120,
-                        help="Total time budget in seconds for handbook generation (default: 120). "
+    parser.add_argument("--timeout", type=int, default=300,
+                        help="Total time budget in seconds for handbook generation (default: 300). "
                              "Remaining engines are skipped when budget is nearly exhausted.")
 
 
@@ -40,7 +40,7 @@ def execute(args, workspace):
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -62,7 +62,8 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
 
     def _should_skip(engine_name: str) -> bool:
         """Check if we should skip an engine due to time budget."""
-        if _remaining() < 15:
+        min_remaining = max(15, time_budget * 0.1)  # 10% of budget or 15s, whichever is larger
+        if _remaining() < min_remaining:
             engines_skipped.append(engine_name)
             logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
                            f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
@@ -154,7 +155,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         pass
     else:
         try:
-            api_result = map_api_routes(workspace)
+            api_result = map_api_routes(workspace, production_only=True)
             api_routes = [
                 {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
                 for r in api_result.get("routes", [])[:50]
@@ -217,9 +218,21 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
     summary = {}
     if not _should_skip('summary'):
         try:
-            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+            summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=max_files), scan_result)
         except Exception:
             logger.warning("Summary computation failed", exc_info=True)
+
+    # Fallback: if summary is empty, try loading from previously saved .codelens/summary.json
+    if not summary or not summary.get('files'):
+        try:
+            summary_path = os.path.join(workspace, '.codelens', 'summary.json')
+            if os.path.exists(summary_path):
+                with open(summary_path, 'r', encoding='utf-8') as sf:
+                    saved = json.load(sf)
+                    if saved and saved.get('files'):
+                        summary = saved
+        except Exception:
+            pass
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -484,9 +497,17 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 content = f.read()
             name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
             ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            # Handle version.workspace = true by looking for [workspace.package] version
+            if not ver_match:
+                ws_ver_match = re.search(r'version\.workspace\s*=\s*true', content)
+                if ws_ver_match:
+                    ws_pkg_ver = re.search(r'\[workspace\.package\][^\[]*?version\s*=\s*["\']([^"\']+)["\']', content, re.DOTALL)
+                    if ws_pkg_ver:
+                        ver_match = ws_pkg_ver
             if name_match:
                 identity["name"] = name_match.group(1)
-            if ver_match:
+            # Only overwrite version if we found a non-empty, non-placeholder version
+            if ver_match and ver_match.group(1) not in ('', '0.0.0'):
                 identity["version"] = ver_match.group(1)
             rust_type = "rust-project"
         except Exception:

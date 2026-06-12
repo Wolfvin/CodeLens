@@ -429,6 +429,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
+        "has_zig": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -774,6 +775,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Tauri detected via Cargo.toml means Rust backend
         if detected["has_tauri"] or detected["has_rust"]:
             detected["has_rust_backend"] = True
+
+    # 4a. Check Zig (build.zig)
+    build_zig_path = os.path.join(workspace, "build.zig")
+    build_zig_zon_path = os.path.join(workspace, "build.zig.zon")
+    if os.path.exists(build_zig_path) or os.path.exists(build_zig_zon_path):
+        if "zig" not in detected["frameworks"]:
+            detected["frameworks"].append("zig")
+        detected["has_zig"] = True
 
     # 4b. Detect monorepo structure
     _detect_monorepo(workspace, detected)
