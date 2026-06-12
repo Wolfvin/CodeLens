@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v7.2 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,

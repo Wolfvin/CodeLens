@@ -5,9 +5,12 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v7.2.0 — Quick Reference
+# CodeLens v7.2.0 — Quick Reference (45 Commands)
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
+
+> **AI Loading Guide**: Read THIS FILE FIRST. Do NOT read scripts/*.py unless debugging errors.
+> All commands support `--format json|markdown` and auto-detect workspace if omitted.
 
 ## State Prerequisites
 
@@ -103,70 +106,108 @@ description: >
 | "clean up" / "bersihkan" | `debug-leak` → `dead-code` → `smell` |
 | "is this safe?" / "aman ga" | `secrets` → `vuln-scan` → `debug-leak` → `env-check` |
 
-## Workspace Auto-Detect (v5.1)
+---
 
-The `workspace` argument is now **optional** for ALL 41 commands.
-If omitted, CodeLens auto-detects via:
-1. Current directory (if has project markers: package.json, pyproject.toml, etc.)
-2. Parent directories (walk up to find project root)
-3. Source files in current directory
-4. Last used workspace (cached at `~/.codelens/.codelens_last_workspace`)
-5. Fallback: current working directory
+## All 45 Commands — Grouped by Category
 
-```bash
-$CLI scan              # Auto-detect → works!
-$CLI query "myFunc"    # Auto-detect → works!
-$CLI smell             # Auto-detect → works!
-```
+### Setup & Registry
 
-## All 44 Commands Quick Reference
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 1 | `init` | `$CLI init [ws]` | JSON `{initialized, config_path}` | `workspace-not-found` |
+| 2 | `scan` | `$CLI scan [ws] [--incremental]` | JSON `{scanned_files, registry_size}` | `workspace-not-found`, `parse-error` |
+| 3 | `validate` | `$CLI validate [ws]` | JSON `{valid, issues[]}` | `no-registry` |
 
-| # | Command | Priority | One-liner |
-|---|---------|----------|-----------|
-| 1 | `init` | P0 | Initialize workspace |
-| 2 | `scan` | P0 | Scan & build registry |
-| 3 | `query` | P0 | Check if name exists |
-| 4 | `list` | P3 | List with filter |
-| 5 | `detect` | P3 | Detect frameworks |
-| 6 | `watch` | P3 | File watcher |
-| 7 | `handbook` | P0 | Project handbook for AI agents |
-| 8 | `ask` | P1 | Natural language query router |
-| 9 | `search` | P1 | Regex search |
-| 10 | `symbols` | P1 | Registry symbol search |
-| 11 | `trace` | P1 | Call chain trace |
-| 12 | `impact` | P1 | Change impact analysis |
-| 13 | `outline` | P2 | File structure outline |
-| 14 | `missing-refs` | P2 | CSS/HTML mismatch |
-| 15 | `diff` | P2 | Registry diff |
-| 16 | `circular` | P2 | Circular dependency |
-| 17 | `context` | P1 | Rich symbol context (+quality) |
-| 18 | `dependents` | P2 | Module import tracking |
-| 19 | `validate` | P3 | Registry sanity check |
-| 20 | `dataflow` | P0 | Source→sink analysis |
-| 21 | `smell` | P0 | Code smell detection |
-| 22 | `side-effect` | P1 | Pure vs impure |
-| 23 | `refactor-safe` | P1 | Rename/move safety |
-| 24 | `dead-code` | P1 | Enhanced dead code |
-| 25 | `stack-trace` | P2 | Error propagation |
-| 26 | `test-map` | P2 | Test coverage |
-| 27 | `config-drift` | P2 | Dependency drift |
-| 28 | `type-infer` | P3 | Type inference |
-| 29 | `ownership` | P3 | Code ownership |
-| 30 | `secrets` | P0 | Hardcoded secret scan |
-| 31 | `entrypoints` | P0 | Entry point mapping |
-| 32 | `api-map` | P1 | Route→handler mapping |
-| 33 | `state-map` | P1 | State management |
-| 34 | `env-check` | P1 | Environment audit |
-| 35 | `debug-leak` | P2 | Debug code detection |
-| 36 | `complexity` | P2 | Complexity scoring |
-| 37 | `regex-audit` | P3 | Regex safety audit |
-| 38 | `a11y` | P3 | Accessibility audit |
-| 39 | `vuln-scan` | P0 | CVE vulnerability scan |
-| 40 | `perf-hint` | P1 | Performance hints |
-| 41 | `css-deep` | P2 | Deep CSS analysis |
-| 42 | `summary` | P0 | **Anti-overload condensed view** |
-| 43 | `binary-scan` | P1 | **Binary/Tauri/Electron RE analysis** (v5.9) |
-| 44 | `artifact-scan` | P1 | **Compiled artifact reverse engineering** (v5.9) |
+### Pre-Write Checks (MOST IMPORTANT)
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 4 | `query` | `$CLI query "name" [ws] [--domain {frontend,backend}] [--fuzzy]` | JSON `{found, status, callers, callees}` | `no-registry` |
+| 5 | `impact` | `$CLI impact "name" [ws] [--action {modify,delete}]` | JSON `{affected[], risk_level}` | `symbol-not-found`, `no-registry` |
+| 6 | `refactor-safe` | `$CLI refactor-safe "name" [ws] [--action {rename,move}] [--new-name X]` | JSON `{safe, conflicts[], suggestions[]}` | `symbol-not-found`, `no-registry` |
+
+### Navigation & Understanding
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 7 | `summary` | `$CLI summary [ws] [--focus {security,quality,architecture,all}] [--detail {minimal,standard,full,auto}]` | JSON/MD `{overview, findings[]}` | `no-registry`, `timeout` |
+| 8 | `context` | `$CLI context "name" [ws] [--domain {frontend,backend,auto}]` | JSON `{symbol, code, callers[], callees[]}` | `symbol-not-found`, `no-registry` |
+| 9 | `trace` | `$CLI trace "name" [ws] [--direction {up,down,both}] [--depth N]` | JSON `{chain[], depth}` | `symbol-not-found`, `no-registry` |
+| 10 | `search` | `$CLI search "pattern" [ws]` | JSON `{matches[], count}` | `no-registry` |
+| 11 | `symbols` | `$CLI symbols "name" [ws] [--domain {frontend,backend,all}] [--fuzzy]` | JSON `{symbols[], count}` | `no-registry` |
+| 12 | `outline` | `$CLI outline [ws] [--file path] [--detail {minimal,normal,full}]` | JSON `{file, functions[], classes[]}` | `file-not-found`, `no-registry` |
+| 13 | `dependents` | `$CLI dependents "file" [ws] [--direction {dependents,dependencies,graph}]` | JSON `{dependents[], dependencies[]}` | `file-not-found`, `no-registry` |
+| 14 | `list` | `$CLI list [ws] [--filter {all,dead,duplicate_define,duplicate_ref,collision,active}] [--domain {frontend,backend,all}]` | JSON `{entries[], total}` | `no-registry` |
+| 15 | `ask` | `$CLI ask "question" [ws]` | JSON `{answer, suggested_commands[]}` | `no-registry` |
+
+### Entry Points & Architecture
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 16 | `entrypoints` | `$CLI entrypoints [ws] [--type {main,http_handler,event_handler,cli_command,cron_job,worker,module_export,test_entry}] [--exclude-tests]` | JSON `{entrypoints[]}` | `no-registry`, `timeout` |
+| 17 | `api-map` | `$CLI api-map [ws] [--method {GET,POST,PUT,DELETE,PATCH}] [--path filter] [--production-only]` | JSON `{routes[{method, path, handler, file}]}` | `no-registry` |
+| 18 | `state-map` | `$CLI state-map [ws] [--store name]` | JSON `{stores[{name, actions, files}]}` | `no-registry` |
+| 19 | `detect` | `$CLI detect [ws]` | JSON `{frameworks[], languages[]}` | `workspace-not-found` |
+| 20 | `handbook` | `$CLI handbook [ws]` | JSON/MD `{project_overview, conventions, key_files}` | `workspace-not-found`, `timeout` |
+| 21 | `diff` | `$CLI diff [ws] [--snapshot1 ID] [--snapshot2 ID] [--list-snapshots]` | JSON `{added[], removed[], modified[]}` | `no-snapshots`, `no-registry` |
+
+### Security
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 22 | `secrets` | `$CLI secrets [ws] [--severity {critical,high,medium,low}]` | JSON `{findings[{type, severity, file, line, snippet}]}` | `no-registry` |
+| 23 | `dataflow` | `$CLI dataflow [ws] [--source {user_input,env_var,file_input,api_response}] [--sink {db_query,html_output,command_exec,file_write,http_header}]` | JSON `{flows[{source, path, sink, risk}]}` | `no-registry`, `timeout` |
+| 24 | `vuln-scan` | `$CLI vuln-scan [ws] [--severity {critical,high,medium,low}]` | JSON `{vulnerabilities[{cve, package, severity, fix_version}]}` | `no-lockfile`, `no-registry` |
+| 25 | `env-check` | `$CLI env-check [ws] [--var NAME]` | JSON `{variables[{name, used_in[], defined_in, missing}]}` | `no-registry` |
+
+### Code Quality
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 26 | `smell` | `$CLI smell [ws] [--categories ...] [--severity {info,warning,critical}]` | JSON `{smells[{category, severity, file, description}]}` | `no-registry` |
+| 27 | `complexity` | `$CLI complexity [ws] [--name FN] [--file PATH] [--threshold N] [--sort {complexity,cognitive,loc}]` | JSON `{functions[{name, complexity, cognitive, loc}]}` | `no-registry` |
+| 28 | `dead-code` | `$CLI dead-code [ws] [--categories {unreachable,unused_exports,zombie_css,unused_vars,dead_listeners}]` | JSON `{findings[{category, item, file}]}` | `no-registry` |
+| 29 | `debug-leak` | `$CLI debug-leak [ws] [--category {console_log,print_statement,debugger,todo_fixme,commented_code,test_skip,mock_data,dev_only}]` | JSON `{leaks[{category, file, line, snippet}]}` | `no-registry` |
+| 30 | `circular` | `$CLI circular [ws] [--domain {backend,imports,css,all}]` | JSON `{cycles[{participants, type}]}` | `no-registry` |
+| 31 | `missing-refs` | `$CLI missing-refs [ws]` | JSON `{missing[{ref, file, type}]}` | `no-registry` |
+| 32 | `side-effect` | `$CLI side-effect [ws] [--name FN] [--file PATH]` | JSON `{functions[{name, pure, effects[]}]}` | `no-registry` |
+| 33 | `perf-hint` | `$CLI perf-hint [ws] [--severity {critical,high,medium,low}] [--category {n_plus_one,sync_blocking,memory_leak,expensive_renders,large_bundle,inefficient_iteration,cache_miss}]` | JSON `{hints[{category, severity, file, description}]}` | `no-registry` |
+
+### Refactoring & Safety
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 34 | `test-map` | `$CLI test-map [ws] [--function FN] [--file PATH]` | JSON `{coverage[{function, tested, test_files[]}]}` | `no-registry` |
+| 35 | `stack-trace` | `$CLI stack-trace "name" [ws] [--error-type TYPE] [--depth N]` | JSON `{propagation[{function, error_type, file}]}` | `symbol-not-found`, `no-registry` |
+| 36 | `config-drift` | `$CLI config-drift [ws]` | JSON `{drift[{package, declared_version, actual_usage}]}` | `no-lockfile`, `no-registry` |
+
+### Frontend-Specific
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 37 | `css-deep` | `$CLI css-deep [ws] [--severity {high,medium,low}] [--category {unused_vars,orphan_keyframes,specificity_wars,duplicate_props,unused_media,z_index_abuse}]` | JSON `{issues[{category, severity, file, detail}]}` | `no-registry` |
+| 38 | `a11y` | `$CLI a11y [ws]` | JSON `{issues[{rule, severity, element, file}]}` | `no-registry` |
+
+### Advanced & Specialized
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 39 | `analyze` | `$CLI analyze [ws] [--focus {security,quality,architecture,all}] [--detail {minimal,standard,full}] [--skip-scan]` | JSON `{summary, security, quality, architecture}` | `workspace-not-found`, `timeout` |
+| 40 | `type-infer` | `$CLI type-infer [ws] [--file PATH] [--function FN]` | JSON `{types[{name, inferred_type, confidence}]}` | `no-registry` |
+| 41 | `ownership` | `$CLI ownership [ws] [--file PATH] [--function FN]` | JSON `{owners[{author, lines, percentage}]}` | `no-git`, `no-registry` |
+| 42 | `regex-audit` | `$CLI regex-audit [ws] [--severity {high,medium,low}]` | JSON `{issues[{pattern, severity, risk, file}]}` | `no-registry` |
+| 43 | `binary-scan` | `$CLI binary-scan [ws]` | JSON `{binaries[{path, type, size}]}` | `workspace-not-found` |
+| 44 | `artifact-scan` | `$CLI artifact-scan [ws] [--deep]` | JSON `{artifacts[{path, type, details}]}` | `workspace-not-found` |
+
+### Utility
+
+| # | Command | Syntax | Output | Errors |
+|---|---------|--------|--------|--------|
+| 45 | `watch` | `$CLI watch [ws] [--debounce SECS]` | Streaming: file change events | `workspace-not-found` |
+
+> **Note**: `watch` runs continuously until interrupted. Not for one-shot use.
+
+---
 
 ## CLI Usage Pattern
 
@@ -174,7 +215,7 @@ $CLI smell             # Auto-detect → works!
 CODELENS_DIR="{project_path}"
 CLI="python3 $CODELENS_DIR/scripts/codelens.py"
 
-# Workspace is AUTO-DETECTED if omitted (NEW in v5.1)
+# Workspace is AUTO-DETECTED if omitted (since v5.1)
 # Fallback: cwd → parent dirs → last workspace → cwd
 
 # Setup
@@ -198,7 +239,7 @@ $CLI vuln-scan
 $CLI perf-hint
 $CLI css-deep
 
-# Agent-first commands (NEW v5.2)
+# Agent-first commands (since v5.2)
 $CLI handbook              # One-shot project orientation
 $CLI ask "dead code?"      # Natural language query
 $CLI context "fn" -f markdown  # Markdown output
