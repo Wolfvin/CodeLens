@@ -39,13 +39,12 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
-    parser.add_argument("--timeout", type=int, default=600,
-                        help="Total time budget in seconds for analysis engines (default: 600)")
+    parser.add_argument("--max-files", type=int, default=2000,
+                        help="Maximum number of files to scan per engine (default: 2000)")
+    parser.add_argument("--timeout", type=int, default=300,
+                        help="Total time budget in seconds for analysis engines (default: 300)")
     parser.add_argument("--exclude-tests", action="store_true", default=False,
                         help="Exclude test entry points from entrypoints analysis")
-    parser.add_argument("--max-files", type=int, default=0,
-                        help="Maximum number of files to scan (0=unlimited). "
-                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
@@ -55,9 +54,9 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
+        max_files=getattr(args, 'max_files', 2000),
         timeout=args.timeout,
         exclude_tests=args.exclude_tests,
-        max_files=args.max_files,
     )
 
 
@@ -67,9 +66,9 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
-    timeout: int = 600,
+    max_files: int = 2000,
+    timeout: int = 300,
     exclude_tests: bool = False,
-    max_files: int = 0,
 ) -> Dict[str, Any]:
     """
     Full repository analysis — the single command to understand an entire codebase.
@@ -84,7 +83,7 @@ def analyze_repository(
     - Know what to fix first
     - Navigate the codebase efficiently
     """
-    overall_start = time.time()
+    start_time = time.time()
     total_budget = float(timeout)
     workspace = os.path.abspath(workspace)
 
@@ -126,7 +125,6 @@ def analyze_repository(
                 incremental=False,
                 full=False,
                 format="json",
-                max_files=max_files,
             )
             scan_result = scan_execute(scan_args, workspace)
             result["scan"] = {
@@ -145,14 +143,6 @@ def analyze_repository(
         except Exception as e:
             logger.warning(f"Scan phase failed: {e}")
             result["scan"] = {"error": str(e)}
-
-    # Reset start_time AFTER scan so the engine time budget is independent.
-    # The scan phase can take 30-90s on large repos; without this reset,
-    # the engine budget would be consumed by scan time, causing remaining
-    # engines to be skipped prematurely.
-    start_time = time.time()
-    scan_elapsed = start_time - overall_start
-    result["scan_elapsed_seconds"] = round(scan_elapsed, 2)
 
     # ─── Phase 2: Project Identity ───────────────────────────
 
@@ -240,7 +230,7 @@ def analyze_repository(
 
     try:
         from apimap_engine import map_api_routes
-        api = map_api_routes(workspace, production_only=True)
+        api = map_api_routes(workspace)
         result["api_map"] = {
             "total_routes": api.get("stats", {}).get("total_routes", 0),
             "routes": [
@@ -265,7 +255,7 @@ def analyze_repository(
     # --- Security ---
     if focus in ("security", "all"):
         _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items),
+                    lambda: _detect_secrets(workspace, severity_filter, max_items, max_files),
                     start_time, total_budget)
         _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
                     lambda: _detect_vulns(workspace, max_items),
@@ -280,16 +270,16 @@ def analyze_repository(
     # --- Quality ---
     if focus in ("quality", "all"):
         _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items),
+                    lambda: _detect_smells(workspace, severity_filter, max_items, max_files),
                     start_time, total_budget)
         _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items),
+                    lambda: _detect_debug(workspace, max_items, max_files),
                     start_time, total_budget)
         _run_engine(findings, "complexity", "Complexity Hotspots",
                     lambda: _detect_complexity(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items),
+                    lambda: _detect_dead_code(workspace, max_items, max_files),
                     start_time, total_budget)
 
     # --- Architecture ---
@@ -298,7 +288,7 @@ def analyze_repository(
                     lambda: _detect_circular(workspace, max_items),
                     start_time, total_budget)
         _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items),
+                    lambda: _detect_perf(workspace, max_items, max_files),
                     start_time, total_budget)
         _run_engine(findings, "config_drift", "Dependency Drift",
                     lambda: _detect_config_drift(workspace, max_items),
@@ -335,10 +325,8 @@ def analyze_repository(
 
     # ─── Done ─────────────────────────────────────────────────
 
-    engine_elapsed = time.time() - start_time
-    total_elapsed = time.time() - overall_start
-    result["engine_elapsed_seconds"] = round(engine_elapsed, 2)
-    result["elapsed_seconds"] = round(total_elapsed, 2)
+    elapsed = time.time() - start_time
+    result["elapsed_seconds"] = round(elapsed, 2)
     result["analysis_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
     return result
@@ -346,15 +334,14 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float) -> None:
-    """Safely run an analysis engine with time budget check."""
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float, per_engine_timeout: float = 30.0) -> None:
+    """Safely run an analysis engine with time budget check and per-engine timeout."""
+    import signal
     elapsed = time.time() - start_time
     remaining = total_budget - elapsed
 
-    # Skip if less than the greater of 20% of budget or 30s remains
-    # (higher threshold for analyze since it runs many engines)
-    min_remaining = max(30, total_budget * 0.15)
-    if remaining < min_remaining:
+    # Skip if less than 10% of budget remains
+    if remaining < total_budget * 0.1 or remaining < 5:
         logger.debug(f"Skipping engine {category}: time budget nearly exhausted ({remaining:.1f}s remaining)")
         findings.append({
             "category": category,
@@ -367,13 +354,59 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
         })
         return
 
+    # Cap per-engine timeout to remaining budget
+    engine_timeout = min(per_engine_timeout, remaining - 2)  # Leave 2s buffer
+    if engine_timeout < 3:
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": 0,
+            "severity": "info",
+            "skipped": True,
+            "skip_reason": f"Insufficient time remaining ({remaining:.1f}s)",
+            "action": f"Run '{category}' engine individually for full results",
+        })
+        return
+
+    class _EngineTimeout(Exception):
+        pass
+
+    def _timeout_handler(signum, frame):
+        raise _EngineTimeout(f"Engine {category} timed out after {engine_timeout:.0f}s")
+
     try:
         engine_start = time.time()
-        result = engine_fn()
+
+        # Try to set a per-engine timeout using SIGALRM (Unix only)
+        timeout_supported = False
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(int(engine_timeout) + 1)
+            timeout_supported = True
+        except (OSError, ValueError, AttributeError):
+            pass  # SIGALRM not available (e.g., Windows)
+
+        try:
+            result = engine_fn()
+        finally:
+            if timeout_supported:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+
         engine_elapsed = time.time() - engine_start
         if result:
             result["elapsed_seconds"] = round(engine_elapsed, 2)
             findings.append(result)
+    except _EngineTimeout:
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": 0,
+            "severity": "info",
+            "skipped": True,
+            "skip_reason": f"Engine timed out ({engine_timeout:.0f}s limit)",
+            "action": f"Run '{category}' engine individually or with a higher --timeout",
+        })
     except Exception as e:
         logger.debug(f"Engine {category} failed: {e}")
         findings.append({
@@ -387,9 +420,9 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
         })
 
 
-def _detect_secrets(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
+def _detect_secrets(workspace: str, severity_filter: set, max_items: int, max_files: int = 2000) -> Optional[Dict]:
     from secrets_engine import detect_secrets
-    sec = detect_secrets(workspace)
+    sec = detect_secrets(workspace, max_files=max_files)
     total = sec.get("stats", {}).get("total_secrets", 0)
     if total == 0:
         return None
@@ -428,20 +461,15 @@ def _detect_vulns(workspace: str, max_items: int) -> Optional[Dict]:
 def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
     from dataflow_engine import trace_dataflow
     df = trace_dataflow(workspace)
-    all_violations = df.get("violations", [])
-    # Only count production violations (test file violations are low severity)
-    production_violations = [v for v in all_violations if not v.get("in_test_file", False)]
-    total_production = len(production_violations)
-    total_all = df.get("stats", {}).get("violations", 0)
-    if total_all == 0:
+    violations = df.get("stats", {}).get("violations", 0)
+    if violations == 0:
         return None
     return {
         "category": "dataflow_violations",
         "label": "Unsafe Data Flows",
-        "total": total_production,
-        "total_including_tests": total_all,
+        "total": violations,
         "severity": "high",
-        "top_items": production_violations[:max_items],
+        "top_items": df.get("violations", [])[:max_items],
         "action": "Add input sanitization and output encoding at every source→sink boundary",
         "impact": "Untainted data flows can lead to SQL injection, XSS, and command injection attacks",
     }
@@ -472,9 +500,9 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
+def _detect_smells(workspace: str, severity_filter: set, max_items: int, max_files: int = 2000) -> Optional[Dict]:
     from smell_engine import detect_smells
-    smell = detect_smells(workspace)
+    smell = detect_smells(workspace, max_files=max_files)
     total = smell.get("stats", {}).get("total_smells", 0)
     if total == 0:
         return None
@@ -497,9 +525,9 @@ def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Opti
     }
 
 
-def _detect_debug(workspace: str, max_items: int) -> Optional[Dict]:
+def _detect_debug(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
     from debugleak_engine import detect_debug_leaks
-    dl = detect_debug_leaks(workspace)
+    dl = detect_debug_leaks(workspace, max_files=max_files)
     total = dl.get("stats", {}).get("total_leaks", 0)
     if total == 0:
         return None
@@ -534,9 +562,9 @@ def _detect_complexity(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
+def _detect_dead_code(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
     from deadcode_engine import detect_dead_code
-    dc = detect_dead_code(workspace)
+    dc = detect_dead_code(workspace, max_files=max_files)
     total = dc.get("stats", {}).get("total_dead_code", 0)
     if total == 0:
         return None
@@ -576,9 +604,9 @@ def _detect_circular(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_perf(workspace: str, max_items: int) -> Optional[Dict]:
+def _detect_perf(workspace: str, max_items: int, max_files: int = 2000) -> Optional[Dict]:
     from perfhint_engine import detect_perf_hints
-    perf = detect_perf_hints(workspace)
+    perf = detect_perf_hints(workspace, max_files=max_files)
     total = perf.get("stats", {}).get("total_hints", 0)
     if total == 0:
         return None
@@ -641,9 +669,6 @@ def _detect_languages(workspace: str) -> Dict[str, int]:
         ".dart": "dart", ".c": "c", ".cpp": "cpp", ".h": "c",
         ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue",
         ".svelte": "svelte", ".sql": "sql", ".sh": "shell",
-        ".ex": "elixir", ".exs": "elixir",
-        ".swift": "swift", ".scala": "scala", ".kt": "kotlin",
-        ".nim": "nim", ".gd": "gdscript",
     }
     languages = {}
     for root, dirs, files in os.walk(workspace):

@@ -5,110 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
-## [6.5.0] — 2026-06-12
-
-### Tested against xtermjs/xterm.js (739 files, 339 TypeScript, terminal emulator npm-workspace monorepo)
-
-Real-world test on a TypeScript monorepo with npm workspaces (`addons/*`), webpack resolve
-aliases, benchmark files with non-npm imports, and large source files (156KB InputHandler.ts).
-Exposed critical false positives in config-drift and a severe performance regression in perf-hint.
-
-### Fixed
-
-- **`config-drift` false positives on npm workspace packages** (HIGH): In npm workspace monorepos,
-  packages like `@xterm/addon-webgl` are implicitly available as dependencies through the
-  `workspaces` field in root `package.json`. The engine reported all workspace packages as
-  "missing dependencies" (15+ false positives on xterm.js). Added `_detect_npm_workspace_packages()`
-  which resolves workspace globs (`addons/*`, `packages/*`) and also scans for nested
-  `package.json` files outside the workspace pattern (e.g., `headless/package.json`).
-  Missing deps reduced from 19 to 2 (both `info` severity).
-
-- **`config-drift` false positives on webpack resolve aliases** (HIGH): Webpack aliases like
-  `common: path.resolve('../../out/common')` create non-npm import paths. The engine reported
-  these as missing dependencies. Added `_detect_webpack_aliases()` which scans webpack.config.js
-  files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`. Also added
-  a PascalCase heuristic: single-word PascalCase imports (e.g., `SerializeAddon`,
-  `UnicodeGraphemeProvider`) are likely build aliases, not npm packages — downgraded to `info`
-  severity with appropriate messaging.
-
-- **`perf-hint` severe performance regression** (CRITICAL): The `_timed_finditer()` function used
-  Python threading for every regex call on content >5000 chars. With 40 patterns and 350+ files,
-  this created ~14,000 thread objects, adding ~2ms overhead per call. Full analysis took >120s
-  and usually timed out. Replaced threading with iterative time-checking (check `time.monotonic()`
-  every 10 matches). Also increased the direct-run threshold from 5KB to 50KB (most source files
-  are under 50KB and do not need any timeout mechanism). Performance: 350 files now completes in
-  ~29s (was >120s timeout). Added `GLOBAL_TIMEOUT_SEC=180` to the scan loop as a safety net.
-
-- **`perf-hint` wide quantifier detection incomplete** (MEDIUM): `_WIDE_QUANTIFIER_RE` only caught
-  `{0,N}`, `.*?`, and `.+?` patterns. Negated character classes with quantifiers like `[^{]*\{[^}]*`
-  (used in the nested loop detection regex) cause catastrophic backtracking on large files but
-  were not detected. Added `[^X]*` and `[^X]+` patterns to the detection regex, ensuring content
-  truncation is applied for these patterns too.
-
-- **`side-effect` test file context awareness** (LOW): IO side effects (console.log, print) in test
-  files are expected and not actionable. Added test/benchmark/demo file detection in the analysis
-  loop. IO effects in test files are now downgraded to `severity: "test_context"` with a note
-  explaining they are expected. This preserves the detection while making it clear the finding
-  is not actionable.
-
-### Added
-
-- **npm workspace package detection**: New `_detect_npm_workspace_packages()` function parses
-  root `package.json` for `workspaces` field, resolves glob patterns, and also walks for nested
-  `package.json` files with `name` fields. Returns a set of workspace package names that are
-  excluded from "missing dependency" checks and counted as "used" for unused dependency checks.
-
-- **Webpack/tsconfig resolve alias detection**: New `_detect_webpack_aliases()` function scans
-  webpack.config.js files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`.
-  Detected aliases are excluded from "missing dependency" checks.
-
-- **`perf-hint` global timeout**: New `GLOBAL_TIMEOUT_SEC=180` constant and corresponding check
-  in the scan loop. Prevents runaway analysis on very large repos by stopping the scan gracefully
-  when the global time budget is exceeded.
-
 ## [6.4.0] — 2026-06-12
 
-### Cross-Language Framework Detection & Project Identity — v6.4
+### Tested against compiler-explorer/compiler-explorer (2,694 files: 813 TS + 40 CPP + 40 Python + 7 Java, multi-language web app)
 
-Tested against 5 diverse real-world repositories:
-- **denoland/deno** — Rust+JS runtime (46K backend nodes, 272K edges, cross-language monorepo)
-- **elixir-lang/elixir** — Elixir compiler/language (16K nodes, 312K edges, functional language)
-- **laravel/framework** — PHP framework (31K nodes, 271K edges, PHP/Blade)
-- **nim-lang/Nim** — Nim compiler (C/C++/Nim polyglot, 530 nodes)
-- **haskell/bytestring** — Haskell library (Haskell/C, 54 nodes)
+Real-world test on a large multi-language project with massive test/fixture files (9.8MB JSON)
+exposed catastrophic regex backtracking in secrets_engine and timeout issues in aggregate commands.
+
+### Fixed (Large Repo Reliability)
+
+- **`secrets_engine` catastrophic regex backtracking** (CRITICAL): Files larger than 1MB (e.g., 9.8MB JSON test fixtures, 6.6MB asm-docs) caused regex matching to hang indefinitely. Added `MAX_FILE_SIZE_BYTES = 1_000_000` file size limit and `PER_FILE_REGEX_TIMEOUT = 5s` per-file SIGALRM timeout to prevent hangs. Files that are too large are skipped; files where regex times out are logged and skipped.
+- **Lock file false positives in secrets detection** (HIGH): `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and other lock files contain registry URLs like `"resolved": "https://registry.npmjs.org/..."` which trigger the URL-embedded-password pattern (`user:pass@host`). These are now explicitly skipped via `_is_example_config_file()`.
+- **`summary` command timeout on large repos** (CRITICAL): The summary command had a hardcoded 90s budget but `_time_left()` used the old default instead of the configurable `total_budget`. Now uses the `--timeout` flag (default 120s). Also added `--max-files` default reduction from 5000→2000, and all engine calls now pass `max_files` consistently.
+- **`analyze` command timeout on large repos** (CRITICAL): Added per-engine SIGALRM timeout (30s default per engine, capped to remaining budget) in `_run_engine()`. Added `--max-files` flag (default 2000). All engine helper functions now accept and forward `max_files` to their respective engines.
+- **`handbook` command timeout on large repos** (HIGH): Engine calls (`detect_smells`, `detect_dead_code`, `detect_secrets`) now pass `max_files` parameter. Default `--max-files` reduced from 5000→2000.
+- **Missing `logger` import in secrets_engine** (MEDIUM): After adding timeout logging, `logger` was not imported. Added to `from utils import` statement.
 
 ### Added
 
-- **Elixir framework detection**: mix.exs (root + subdirectories), Phoenix, Ecto detection
-- **Haskell framework detection**: .cabal files, cabal.project, stack.yaml detection
-- **Nim framework detection**: .nimble files, nim.cfg detection with version extraction
-- **Godot/GDScript framework detection**: project.godot detection with project name extraction
-- **Dart/Flutter framework detection**: pubspec.yaml detection with Flutter identification
-- **Ruby/Rails framework detection**: Gemfile detection with Rails identification
-- **Scala framework detection**: build.sbt detection with Play framework identification
-- **Swift framework detection**: Package.swift detection with Vapor identification
-- **Kotlin framework detection**: build.gradle.kts detection with Ktor identification
-- **R language detection**: DESCRIPTION file detection with package name/version extraction
-- **Elixir project identity**: elixir-project, phoenix-app, elixir-ecto-app types
-- **Haskell project identity**: haskell-cabal-project, haskell-stack-project types
-- **Nim project identity**: nim-project, nim-js-project, nim-c-project types
-- **Godot project identity**: godot-project type
-- **Dart project identity**: dart-project, flutter-app types
-- **Ruby project identity**: ruby-project, rails-app types
-- **Scala project identity**: scala-project, play-app types
-- **Swift project identity**: swift-project, vapor-app types
-- **R project identity**: r-package type
-- **Kotlin project identity**: kotlin-project, ktor-app, android-kotlin-project types
-- **Polyglot type detection extended**: now includes elixir, haskell, nim, godot, dart, ruby, scala, swift, r, kotlin
-- **File extension scanning**: .ex, .hs, .nim, .gd, .swift, .kt, .rb, .dart, .scala, .R detection
-- **`_set_framework_flag` helper**: replaces repetitive if/elif chains for framework flag setting
-- **`_FRAMEWORK_FLAG_MAP`**: centralized mapping from framework name to has_* flag
-
-### Fixed
-
-- **Removed false `unsupported_langs` for languages with fallback parsers**: Kotlin, Ruby, Swift, Elixir, Haskell, Nim, GDScript, Scala, Dart, R are no longer listed as unsupported since they have fallback regex parsers
-- **Elixir monorepo detection**: subdirectory mix.exs files (lib/*, apps/*) now detected even without root mix.exs
-- **Project identity no longer "unknown"** for Elixir, Haskell, Nim, Godot, Dart, Ruby, Scala, Swift, R, Kotlin projects
+- **Per-engine SIGALRM timeout in `_run_engine()`**: The analyze command's engine runner now sets a per-engine alarm signal. If an engine exceeds its timeout (capped to remaining budget minus 2s buffer), it's caught gracefully and marked as skipped with a reason. Falls back to no-timeout on platforms without SIGALRM (Windows).
+- **`elapsed_seconds` and `time_budget_seconds` in summary output**: Summary now reports how long it took and what the budget was.
+- **`files_skipped_oversized` and `files_skipped_regex_timeout` in secrets output**: New diagnostic fields showing how many files were skipped and why.
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 

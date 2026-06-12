@@ -99,9 +99,11 @@ def add_args(parser):
                         default="auto",
                         help="Detail level: minimal (critical only), standard (critical+high), "
                              "full (all), auto (adapts to codebase size, default)")
-    parser.add_argument("--max-files", type=int, default=5000,
-                        help="Maximum number of files to scan (default: 5000). "
+    parser.add_argument("--max-files", type=int, default=2000,
+                        help="Maximum number of files to scan (default: 2000). "
                              "Prevents timeout on very large repos.")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Total time budget in seconds for all engines (default: 120)")
     parser.add_argument("--write-agent-md", action="store_true",
                         help="Write a condensed AGENT.md file to .codelens/ for AI context")
     parser.add_argument("--max-tokens", type=int, default=8000,
@@ -109,19 +111,20 @@ def add_args(parser):
 
 
 def execute(args, workspace):
-    max_files = getattr(args, 'max_files', 5000)
+    max_files = getattr(args, 'max_files', 2000)
     return generate_summary(
         workspace,
         focus=args.focus,
         max_items=args.max_items,
         detail=args.detail,
         max_files=max_files,
+        timeout=getattr(args, 'timeout', 120),
         write_agent_md=getattr(args, 'write_agent_md', False),
         max_tokens=getattr(args, 'max_tokens', 8000),
     )
 
 
-def _time_left(start: float, budget: float = 120) -> float:
+def _time_left(start: float, budget: float = 90) -> float:
     """Return remaining seconds within the time budget."""
     return max(0.0, budget - (time.time() - start))
 
@@ -157,7 +160,8 @@ def generate_summary(
     focus: str = "all",
     max_items: int = 10,
     detail: str = "auto",
-    max_files: int = 5000,
+    max_files: int = 2000,
+    timeout: int = 120,
     write_agent_md: bool = False,
     max_tokens: int = 8000,
 ) -> Dict[str, Any]:
@@ -169,6 +173,7 @@ def generate_summary(
     internally but filters and prioritizes the output.
     """
     start = time.time()
+    total_budget = float(timeout)
     skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
 
@@ -265,18 +270,15 @@ def generate_summary(
 
     # ─── 4. Prioritized Findings ─────────────────────────
     findings = []
-    # For summary, cap max_files to prevent timeout on huge repos
-    # On repos with 20K+ files, even 1500 files causes 60+ seconds
-    summary_max_files = min(max_files, 500)
 
     if focus in ("security", "all"):
         # Security findings
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("secrets")
         else:
             try:
                 from secrets_engine import detect_secrets
-                sec = detect_secrets(workspace, max_files=min(summary_max_files, 500))
+                sec = detect_secrets(workspace, max_files=max_files)
                 sec_stats = sec.get("stats", {})
                 if sec_stats.get("total_secrets", 0) > 0:
                     # Get only the highest severity items
@@ -293,7 +295,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Secrets scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("vulnerabilities")
         else:
             try:
@@ -311,12 +313,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Vuln scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("dataflow")
         else:
             try:
                 from dataflow_engine import trace_dataflow
-                df = trace_dataflow(workspace, max_files=summary_max_files, timeout_sec=30.0)
+                df = trace_dataflow(workspace)
                 violations = df.get("stats", {}).get("violations", 0)
                 if violations > 0:
                     df_items = df.get("violations", [])
@@ -335,12 +337,12 @@ def generate_summary(
 
     if focus in ("quality", "all"):
         # Quality findings
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("code_smells")
         else:
             try:
                 from smell_engine import detect_smells
-                smell = detect_smells(workspace, max_files=summary_max_files)
+                smell = detect_smells(workspace, max_files=max_files)
                 smell_stats = smell.get("stats", {})
                 if smell_stats.get("total_smells", 0) > 0:
                     top_items = smell.get("top_priority", [])[:max_items]
@@ -360,12 +362,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Smell scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("debug_leaks")
         else:
             try:
                 from debugleak_engine import detect_debug_leaks
-                dl = detect_debug_leaks(workspace, max_files=summary_max_files)
+                dl = detect_debug_leaks(workspace, max_files=max_files)
                 dl_stats = dl.get("stats", {})
                 if dl_stats.get("total_leaks", 0) > 0:
                     high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
@@ -387,7 +389,7 @@ def generate_summary(
 
     if focus in ("architecture", "all"):
         # Architecture findings
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("circular")
         else:
             try:
@@ -411,12 +413,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Circular detection failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, total_budget) < 5:
             skipped_engines.append("dead_code")
         else:
             try:
                 from deadcode_engine import detect_dead_code
-                dc = detect_dead_code(workspace, max_files=summary_max_files)
+                dc = detect_dead_code(workspace, max_files=max_files)
                 dc_stats = dc.get("stats", {})
                 dead_count = dc_stats.get("total_dead_code", 0)
                 if dead_count > 0:
@@ -486,6 +488,11 @@ def generate_summary(
     # ─── 8. Write AGENT.md (optional, for AI context) ──────
     if write_agent_md:
         _write_agent_md(workspace, result)
+
+    # ─── 9. Elapsed time ──────────────────────────────────────
+    elapsed = time.time() - start
+    result["elapsed_seconds"] = round(elapsed, 2)
+    result["time_budget_seconds"] = total_budget
 
     return result
 

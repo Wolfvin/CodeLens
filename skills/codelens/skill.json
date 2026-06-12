@@ -1,9 +1,9 @@
 {
   "name": "codelens",
   "version": "6.4.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4.0: Tested on flutter/flutter (16K files, 6434 Dart + 3514 C/C++ + 347 ObjC + 304 Java + 133 Swift + 69 Kotlin). NEW: Objective-C parser (fallback_objc.py), Flutter/Dart/Android/iOS/Unity/Unreal framework detection, pubspec.yaml parsing, ObjC outline, Dart main()/Kotlin main()/Swift @main/ObjC main entry points, .m/.mm file detection, updated unsupported languages list. v6.3.1: Critical fix — 4 broken commands restored. Tested on meilisearch/meilisearch (Rust, 21 crates, 490K edges).",  "author": "codelens",  "tags": [    "code-analysis",
-    "reference-tracking",    "dead-code",
-    "duplicate-detection",    "frontend",    "backend",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4.0: Large repo reliability — secrets_engine max_file_size limit (1MB) + per-file regex timeout (5s SIGALRM) prevents catastrophic backtracking on huge files. Lock file false positives eliminated (package-lock.json, yarn.lock, etc). summary/analyze/handbook commands: --max-files default reduced to 2000, --timeout flag added to summary, per-engine SIGALRM timeout in analyze. All engine calls in summary/analyze/handbook now pass max_files consistently. Tested on compiler-explorer/compiler-explorer (2694 files, 813 TS, multi-language). v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint).",  "author": "codelens",  "tags": [    "code-analysis",
+    "reference-tracking",
+    "dead-code",    "duplicate-detection",    "frontend",    "backend",
     "rust",    "html",
     "css",    "javascript",
     "typescript",
