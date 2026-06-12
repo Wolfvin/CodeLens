@@ -5,6 +5,33 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.1] — 2026-06-12
+
+### Tested against clash-verge-rev/clash-verge-rev (645 files: 115 Rust + 221 TSX + 107 TS, Tauri 2.0 desktop app with React frontend, Tokio runtime, and Cargo workspace monorepo)
+
+Real-world test on a large Tauri application with 2,049 backend nodes, 62,466 edges, 739 entrypoints,
+134 circular dependencies, 1923 code smells (health score 55), 265 debug leaks, 163 perf hints,
+1,482 functions analyzed for complexity, 43 regex patterns, 210 a11y issues, 6 React context stores,
+33 data flow violations, and 15 environment variables.
+
+### Fixed
+
+- **CRITICAL: PCRE named group regex crash** — `fallback_rust.py` used `(?<name>...)` (PCRE syntax) instead of `(?P<name>...)` (Python syntax), causing `scan` to crash with "unknown extension ?<t at position 13" on any workspace containing Rust files. Fixed by converting to Python regex syntax.
+- **CRITICAL: `max_files` TypeError in 5 commands** — `perf-hint`, `smell`, `complexity`, `secrets`, and `entrypoints` commands passed `max_files` keyword argument to engine functions that don't accept it, causing `TypeError: detect_perf_hints() got an unexpected keyword argument 'max_files'`. Fixed by removing the mismatched parameter from command wrappers.
+- **CRITICAL: `write_output_files()` TypeError** — `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`. Fixed by removing the invalid parameter.
+- **Secrets false positives on i18n/locale files** — Translation files in `locales/`, `i18n/`, `lang/`, `translations/`, `intl/`, `localization/` directories were incorrectly flagged as containing hardcoded passwords (e.g., translated word "Password" in `src/locales/id/shared.json`). Added these directories to the `_is_docs_or_example_file()` skip list.
+- **`impact` command NameError on frontend-only domain** — `impact_engine.py` referenced `node_by_fn` in the result dict, but `node_by_fn` was only defined inside the backend block, causing `NameError` when `domain="frontend"`. Fixed by initializing `node_by_fn = None` before the conditional block and using `is not None` check.
+- **Dead code: unused `fn_stack` variables** — `js_backend_parser.py` and `ts_backend_parser.py` declared `fn_stack = []` that was never used. Removed.
+- **Inline `import re` in function bodies** — `js_backend_parser.py`, `ts_backend_parser.py`, and `outline_engine.py` (12 occurrences) had `import re` inside function bodies, which is both a performance anti-pattern (re-importing on every call) and PEP 8 violation. Moved to module-level imports.
+
+### Added
+
+- **`BaseEngine` class** (`base_engine.py`) — Extracted the common workspace-walking boilerplate (`os.walk` + `should_ignore_dir` + `safe_read_file` + time budget checking) into a reusable base class. Every engine previously duplicated ~50 lines of this pattern. New engines can now subclass `BaseEngine`, define `FILE_EXTENSIONS` and `_analyze_file()`, and get the walking, filtering, and timing for free.
+
+### Changed
+
+- Version bumped from 5.8.0 to 5.9.1 to reflect the multiple critical fixes.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

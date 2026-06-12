@@ -879,6 +879,9 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         '/changelog/', '/changes/', '/news/',
         # Playwright snapshot directories (auto-generated screenshots)
         '/playwright/',
+        # i18n / locale directories — contain translated UI labels, NOT real secrets
+        '/locales/', '/locale/', '/i18n/', '/lang/', '/translations/',
+        '/intl/', '/localization/',
     ]
     # Also match paths that START with these directory names
     start_indicators = [
@@ -888,6 +891,8 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'tutorial/', 'tutorials/', 'guides/',
         'fixtures/', 'fixture/',
         'changelog/', 'changes/', 'news/',
+        'locales/', 'locale/', 'i18n/', 'lang/', 'translations/',
+        'intl/', 'localization/',
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))

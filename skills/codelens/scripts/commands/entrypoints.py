@@ -11,15 +11,10 @@ def add_args(parser):
                         choices=["main", "http_handler", "event_handler", "cli_command",
                                  "cron_job", "worker", "module_export", "test_entry"],
                         help="Filter by entry point type")
-    parser.add_argument("--max-files", type=int, default=None,
-                        help="Max files to scan (default 3000)")
 
 
 def execute(args, workspace):
-    kwargs = {}
-    if args.max_files is not None:
-        kwargs["max_files"] = args.max_files
-    return map_entrypoints(workspace, entry_type=args.entry_type, **kwargs)
+    return map_entrypoints(workspace, entry_type=args.entry_type)
 
 
 register_command("entrypoints", "Map execution entry points", add_args, execute)
