@@ -189,6 +189,89 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # Flutter / Dart
+    "flutter": {
+        "packages": [],
+        "config_files": ["pubspec.yaml"],
+        "indicators": [".dart", "lib/main.dart"]
+    },
+    # Android
+    "android": {
+        "packages": [],
+        "config_files": ["AndroidManifest.xml", "build.gradle", "build.gradle.kts"],
+        "indicators": ["res/values/", "AndroidManifest.xml"]
+    },
+    # Gradle (generic Java/Kotlin build)
+    "gradle": {
+        "packages": [],
+        "config_files": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+        "indicators": []
+    },
+    # Maven
+    "maven": {
+        "packages": [],
+        "config_files": ["pom.xml"],
+        "indicators": []
+    },
+    # Make / Autotools (C/C++)
+    "make": {
+        "packages": [],
+        "config_files": ["Makefile", "Makefile.am", "configure.ac", "configure"],
+        "indicators": []
+    },
+    # SCons (Python-based build, used by Godot etc.)
+    "scons": {
+        "packages": [],
+        "config_files": ["SConstruct", "SConscript"],
+        "indicators": []
+    },
+    # Emscripten (WASM compilation)
+    "emscripten": {
+        "packages": [],
+        "config_files": [".emscripten", "emscripten.cmake"],
+        "indicators": [".wasm"]
+    },
+    # Godot Engine
+    "godot": {
+        "packages": [],
+        "config_files": ["project.godot", "SConstruct"],
+        "indicators": [".tscn", ".gd", ".godot/"]
+    },
+    # ESP-IDF (IoT/Embedded)
+    "esp-idf": {
+        "packages": [],
+        "config_files": ["sdkconfig", "sdkconfig.defaults", "Kconfig"],
+        "indicators": ["components/", "main/main.c"]
+    },
+    # .NET
+    "dotnet": {
+        "packages": [],
+        "config_files": [".csproj", ".sln", "global.json", "Directory.Build.props"],
+        "indicators": []
+    },
+    # Lua
+    "lua": {
+        "packages": [],
+        "config_files": [".luacheckrc", "rockspec"],
+        "indicators": [".lua"]
+    },
+    # PHP / Laravel / WordPress
+    "php": {
+        "packages": [],
+        "config_files": ["composer.json", "php.ini"],
+        "indicators": [".php"]
+    },
+    "laravel": {
+        "packages": ["laravel/framework"],
+        "pip_packages": [],
+        "config_files": ["artisan", "config/app.php"],
+        "indicators": ["resources/views/", "app/Http/"]
+    },
+    "wordpress": {
+        "packages": [],
+        "config_files": ["wp-config.php", "wp-config-sample.php"],
+        "indicators": ["wp-content/", "wp-includes/"]
+    },
 }
 
 
@@ -241,6 +324,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_flutter": False,
+        "has_android": False,
+        "has_gradle": False,
+        "has_maven": False,
+        "has_make": False,
+        "has_scons": False,
+        "has_godot": False,
+        "has_esp_idf": False,
+        "has_dotnet": False,
+        "has_laravel": False,
+        "has_wordpress": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -320,6 +414,28 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
+                elif fw_name == "flutter":
+                    detected["has_flutter"] = True
+                elif fw_name == "android":
+                    detected["has_android"] = True
+                elif fw_name == "gradle":
+                    detected["has_gradle"] = True
+                elif fw_name == "maven":
+                    detected["has_maven"] = True
+                elif fw_name == "make":
+                    detected["has_make"] = True
+                elif fw_name == "scons":
+                    detected["has_scons"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "esp-idf":
+                    detected["has_esp_idf"] = True
+                elif fw_name == "dotnet":
+                    detected["has_dotnet"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "wordpress":
+                    detected["has_wordpress"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -580,6 +696,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
+        "dart": ["pubspec.yaml"],
+        "lua": [".luacheckrc"],
+        "php": ["composer.json"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -589,6 +708,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang == "go" and "golang" not in detected["frameworks"]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
+                elif lang == "dart" and "flutter" not in detected["frameworks"]:
+                    detected["frameworks"].append("flutter")
+                    detected["has_flutter"] = True
                 break
 
     return detected

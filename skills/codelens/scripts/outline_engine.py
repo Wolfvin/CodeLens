@@ -96,7 +96,8 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 0
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
@@ -111,11 +112,14 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+        '.java', '.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx',
+        '.kt', '.lua', '.cs', '.dart',
     }
 
     outlines = []
     errors = []
+    files_count = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -138,11 +142,20 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            # Respect max_files limit to prevent timeout on huge repos
+            files_count += 1
+            if max_files > 0 and files_count > max_files:
+                break
+
             result = get_file_outline(file_path, workspace, detail_level="minimal")
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+
+        # Break outer loop too if max_files reached
+        if max_files > 0 and files_count > max_files:
+            break
 
     return {
         "status": "ok",

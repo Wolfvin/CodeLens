@@ -247,6 +247,11 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
+    c_type = None  # v7: track C/C++-derived type
+    go_type = None  # v7: track Go-derived type
+    java_type = None  # v7: track Java/Kotlin-derived type
+    csharp_type = None  # v7: track .NET/C#-derived type
+    flutter_type = None  # v7: track Flutter/Dart-derived type
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -398,14 +403,151 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    # v7: Detect C/C++ projects (Makefile, CMake, configure)
+    makefile_path = os.path.join(workspace, 'Makefile')
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    configure_path = os.path.join(workspace, 'configure')
+    sconstruct_path = os.path.join(workspace, 'SConstruct')
+    if os.path.isfile(makefile_path) or os.path.isfile(cmake_path) or os.path.isfile(configure_path):
+        # Determine more specific C/C++ project type
+        if os.path.isfile(sconstruct_path):
+            c_type = "cpp-game-engine"  # SCons typically used by game engines like Godot
+        elif os.path.isfile(cmake_path):
+            # Check for ESP-IDF specific markers
+            sdkconfig_path = os.path.join(workspace, 'sdkconfig')
+            kconfig_path = os.path.join(workspace, 'Kconfig')
+            if os.path.isfile(sdkconfig_path) or os.path.isfile(kconfig_path):
+                c_type = "embedded-iot"
+            else:
+                c_type = "cpp-project"
+        elif os.path.isfile(configure_path):
+            c_type = "c-system-library"  # Autotools typically for system-level C libs
+        else:
+            c_type = "c-project"
+        # Try to get name/version from configure.ac or Makefile
+        if os.path.isfile(configure_path):
+            try:
+                configure_ac = os.path.join(workspace, 'configure.ac')
+                if os.path.isfile(configure_ac):
+                    with open(configure_ac, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    ac_init = re.search(r'AC_INIT\s*\(\s*\[([^\]]+)\]\s*,\s*\[([^\]]+)\]', content)
+                    if ac_init:
+                        identity["name"] = ac_init.group(1)
+                        identity["version"] = ac_init.group(2)
+            except Exception:
+                pass
+    elif os.path.isfile(sconstruct_path):
+        c_type = "cpp-game-engine"
+
+    # v7: Detect Go projects
+    go_mod_path = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            module_match = re.search(r'^module\s+(\S+)', content, re.MULTILINE)
+            if module_match:
+                identity["name"] = module_match.group(1).split('/')[-1]
+            ver_match = re.search(r'^go\s+(\S+)', content, re.MULTILINE)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            go_type = "go-project"
+        except Exception:
+            go_type = "go-project"
+
+    # v7: Detect Java/Kotlin projects (Maven/Gradle)
+    pom_path = os.path.join(workspace, 'pom.xml')
+    gradle_path = os.path.join(workspace, 'build.gradle')
+    gradle_kts_path = os.path.join(workspace, 'build.gradle.kts')
+    if os.path.isfile(pom_path):
+        try:
+            with open(pom_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            group_match = re.search(r'<groupId>([^<]+)</groupId>', content)
+            artifact_match = re.search(r'<artifactId>([^<]+)</artifactId>', content)
+            ver_match = re.search(r'<version>([^<]+)</version>', content)
+            if artifact_match:
+                identity["name"] = artifact_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            java_type = "java-maven-project"
+        except Exception:
+            java_type = "java-project"
+    elif os.path.isfile(gradle_path) or os.path.isfile(gradle_kts_path):
+        java_type = "java-gradle-project"
+        try:
+            gfile = gradle_kts_path if os.path.isfile(gradle_kts_path) else gradle_path
+            with open(gfile, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Check for Android
+            if 'com.android.application' in content or 'android {' in content:
+                java_type = "android-project"
+            name_match = re.search(r'(?:rootProject\.name|project\.name)\s*=\s*["\']([^"\']+)["\']', content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+        except Exception:
+            pass
+
+    # v7: Detect C#/.NET projects
+    csproj_files = [f for f in os.listdir(workspace) if f.endswith('.csproj')] if os.path.isdir(workspace) else []
+    sln_files = [f for f in os.listdir(workspace) if f.endswith('.sln')] if os.path.isdir(workspace) else []
+    if csproj_files or sln_files:
+        csharp_type = "dotnet-project"
+        try:
+            for csproj in csproj_files[:1]:
+                with open(os.path.join(workspace, csproj), 'r', encoding='utf-8') as f:
+                    content = f.read()
+                name_match = re.search(r'<AssemblyName>([^<]+)</AssemblyName>', content)
+                ver_match = re.search(r'<Version>([^<]+)</Version>', content)
+                if name_match:
+                    identity["name"] = name_match.group(1)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+                # Check for Unity
+                if 'UnityEngine' in content:
+                    csharp_type = "unity-game"
+        except Exception:
+            pass
+
+    # v7: Detect Flutter/Dart projects
+    pubspec_path = os.path.join(workspace, 'pubspec.yaml')
+    if os.path.isfile(pubspec_path):
+        try:
+            with open(pubspec_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            name_match = re.search(r'^name:\s*(.+)$', content, re.MULTILINE)
+            ver_match = re.search(r'^version:\s*(.+)$', content, re.MULTILINE)
+            if name_match:
+                identity["name"] = name_match.group(1).strip()
+            if ver_match:
+                identity["version"] = ver_match.group(1).strip()
+            # Check if it's a Flutter project (depends on flutter SDK)
+            if 'flutter' in content.lower():
+                flutter_type = "flutter-app"
+            else:
+                flutter_type = "dart-project"
+        except Exception:
+            flutter_type = "flutter-app"
+
+    # v7: Combined type detection — handle polyglot projects (expanded)
+    active_types = [t for t in [js_type, python_type, rust_type, c_type, go_type, java_type, csharp_type, flutter_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
             type_parts.append("rust")
+        if c_type:
+            type_parts.append("cpp" if "cpp" in c_type else "c")
+        if go_type:
+            type_parts.append("go")
+        if java_type:
+            type_parts.append("java")
+        if csharp_type:
+            type_parts.append("dotnet")
+        if flutter_type:
+            type_parts.append("flutter")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
