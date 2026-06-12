@@ -5,6 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.0] — 2026-06-12
+
+### Tested against screenpipe/screenpipe (1,933 source files: 639 Rust + 582 TS/JS + 218 TSX, Tauri desktop app)
+
+Real-world test on a 19.3k-star Tauri app with real-time screen/audio capture and ML inference.
+Confirmed: 15,436 backend nodes, 94,374 edges, 7 frameworks detected (React, Next.js, Tailwind,
+Tauri, Rust, Tokio, Axum), 108 API routes (37 IPC_HANDLER, 16 IPC, 37 GET, 18 POST),
+121 secrets, 514 dataflow violations, 269 circular deps, 581 dead code items.
+
+### Fixed
+
+- **God object false positives (critical)**: JS/TS `_detect_god_objects()` now uses brace-depth tracking to scope method counts to actual class bodies. Previously counted ALL function-like patterns in the entire file as methods of the first `class` found via `re.search()`. This caused error classes like `CliError` to be reported with 136 methods and `BackendDownError` with 549 methods (10-500x inflation). The new implementation handles multiple classes per file and properly excludes non-method patterns (`if`, `for`, `while`, etc.). Rust impl blocks also use brace-depth tracking instead of counting all `fn` definitions file-wide.
+- **`write_output_files` crash**: Removed invalid `max_files` keyword argument from `get_workspace_outline()` call in `utils.py`. This TypeError was silently caught but prevented outline.json and summary.json from being generated after every scan.
+- **Monorepo detection inconsistency**: `summary` command now uses `_extract_project_identity()` (same source as `handbook`) for `is_monorepo` detection. Previously sourced from `detect_frameworks()` which does not return `is_monorepo`, causing `summary` to always report `false` while `handbook` correctly reported `true`.
+- **`ask` command fallback chain**: Three-tier fallback now implemented: `context` → `symbol search` → `code search`. Previously only tried symbol search, which fails for conceptual queries like "where is authentication handled" where no exact symbol exists. The code search fallback uses `search_workspace()` with case-insensitive matching to find relevant code patterns.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

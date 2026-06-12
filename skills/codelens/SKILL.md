@@ -36,9 +36,17 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v6.3
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.3 — Tested on screenpipe/screenpipe (1,933 files, Rust+TS Tauri monorepo)
+
+- **Fixed god object false positives**: JS/TS class method counting now uses brace-depth tracking to scope methods to actual class bodies. Previously counted ALL function-like patterns in the file as methods of the first class found (10-500x inflation). Error classes like `CliError` no longer reported with 136+ methods. Rust impl blocks also properly scoped.
+- **Fixed `write_output_files` crash**: Removed invalid `max_files` keyword argument from `get_workspace_outline()` call that caused TypeError on every scan/handbook run.
+- **Improved `ask` command fallback chain**: Three-tier fallback: `context` → `symbol search` → `code search`. Conceptual queries like "where is authentication handled" now fall through to full-text code search when no exact symbol match exists.
+- **Fixed monorepo detection consistency**: `summary` command now uses the same `_extract_project_identity()` source as `handbook` for consistent `is_monorepo` reporting. Previously `summary` always reported `false` because `detect_frameworks()` doesn't return `is_monorepo`.
+- **Tested on screenpipe/screenpipe**: 19.3k-star Tauri app with real-time screen/audio capture + ML inference. 1,933 files, 15,436 backend nodes, 94,374 edges, 7 frameworks detected (React, Next.js, Tailwind, Tauri, Rust, Tokio, Axum). All 43 commands verified working.
 
 ## What's New in v5.8 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
 
