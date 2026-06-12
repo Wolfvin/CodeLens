@@ -165,10 +165,10 @@ SINK_PATTERNS = {
     "command_exec": {
         "patterns": [
             r"eval\s*\(",
-            r"Function\s*\(",
+            r"(?:^|[^\w.])Function\s*\(",  # v5.9.2: word boundary — avoids isFunction(), createFunction()
             r"setTimeout\s*\(\s*[\"']",
             r"setInterval\s*\(\s*[\"']",
-            r"exec(?:Sync)?\s*\(",
+            r"(?:^|[^\w.])exec(?:Sync)?\s*\(",  # v5.9.2: word boundary — avoids execQuery(), execSql()
             r"spawn(?:Sync)?\s*\(",
             r"child_process\.",
             r"os\.system\s*\(",

@@ -350,8 +350,21 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
         # Find const/let/var declarations (including destructuring)
         declared_vars = []
 
+        # v5.9.2: Collect all exported names to exclude from unused detection
+        # Exported variables are part of the public API — not dead code
+        exported_names = set()
+        for m in re.finditer(r'export\s+(?:const|let|var|function|type|interface|enum|class)\s+(\w+)', clean_content):
+            exported_names.add(m.group(1))
+        # Also capture re-exports: export { foo, bar }
+        for m in re.finditer(r'export\s*\{([^}]+)\}', clean_content):
+            for name_match in re.finditer(r'(\w+)', m.group(1)):
+                exported_names.add(name_match.group(1))
+        # Also capture default exports: export default function foo
+        for m in re.finditer(r'export\s+default\s+(?:function|class|const|let|var)?\s*(\w+)', clean_content):
+            exported_names.add(m.group(1))
+
         # Standard declarations: const/let/var x = ...
-        for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=', clean_content):
+        for m in re.finditer(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=', clean_content):
             declared_vars.append((m.group(1), m.start()))
 
         # Object destructuring: const { a, b, c } = ...
@@ -370,8 +383,12 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             line_num = clean_content[:start_pos].count('\n') + 1
 
             # Skip common patterns that are used indirectly
-            skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module'}
+            skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module',
+                          'result', 'data', 'value', 'options', 'args', 'params', 'callback', 'next', 'dispatch', 'action', 'payload'}
             if var_name in skip_names or var_name.startswith('_'):
+                continue
+            # v5.9.2: Skip exported names — they're part of public API
+            if var_name in exported_names:
                 continue
             # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
             #     would be more accurate. Constants like API_URL, MAX_RETRIES are
@@ -638,7 +655,10 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             if is_pub:
                 continue
             # Skip test fixtures and example files
-            if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
+            # v5.9.2: Added .test. / .spec. filename patterns
+            _test_patterns = ['/test', '/tests', '/__test', '/__tests__', '/example', '/fixture', '/mock',
+                              '.test.', '.spec.', '.e2e.', '.stories.', '.story.']
+            if any(x in file_path for x in _test_patterns):
                 continue
             # v6.1: Skip story files — Storybook story functions are called by the
             # Storybook runtime, not by other code. They're not dead code.

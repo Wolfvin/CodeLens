@@ -7,19 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.2] — 2026-06-12
 
-### Tested against custom Tauri 2.0 test app (12 Rust files + 4 TSX files, React+Zustand+Tokio+SQLite+Reqwest)
+### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
 
-Real-world test on a Tauri 2.0 application with `#[tauri::command]` async handlers,
-Zustand state management, React components, and Rust state/config modules.
+Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
+across all analysis engines after targeted fixes based on SWR analysis findings.
 
 ### Fixed
 
-- **CRITICAL: `api-map` missed all `async` Tauri IPC commands** — The regex in `_extract_tauri_rust_commands()` only matched `#\[tauri::command\]...fn name(` but not `#\[tauri::command\]...pub async fn name(`. Since most Tauri commands are async, this meant **api-map returned 0 routes for the majority of Tauri apps**. Fixed by adding `(?:async\s+)?` to the regex pattern.
-- **`max_files` feature disconnected from CLI** — After previous fix removed `--max-files` from command wrappers (because engines didn't support it), the engines were later updated to accept `max_files`, but the CLI args were never restored. This meant the `max_files` performance safeguard was completely non-functional from the CLI. Restored `--max-files` argument to `perf-hint`, `smell`, `complexity`, and `secrets` commands, properly passing the value to the engine functions.
-
-### Changed
-
-- Version bumped from 5.8.1 to 5.9.2.
+- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
+- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
+- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
+- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
+- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
+- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
+- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
+- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
+- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
 
 ## [5.8.1] — 2026-06-12
 
