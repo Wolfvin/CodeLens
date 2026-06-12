@@ -247,7 +247,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
-    cpp_type = None  # v7: track C++-derived type separately
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -293,83 +292,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 if "cargo-workspace" not in identity["monorepo_tools"]:
                     identity["monorepo_tools"].append("cargo-workspace")
 
-    # v7: Check for C++ project — CMakeLists.txt based detection
-    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    if os.path.isfile(cmake_path):
-        try:
-            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
-                cmake_content = f.read()
-
-            # Extract project name and version from CMakeLists.txt
-            # Matches: project(name VERSION x.y.z) or project(name VERSION x.y.z DESCRIPTION ...)
-            proj_match = re.search(r'project\s*\(\s*(\S+)\s+VERSION\s+([0-9][^\s\)]*)', cmake_content)
-            if proj_match:
-                identity["name"] = proj_match.group(1)
-                identity["version"] = proj_match.group(2)
-            else:
-                # Fallback: project(Name) without version
-                proj_name_match = re.search(r'project\s*\(\s*(\S+)', cmake_content)
-                if proj_name_match:
-                    identity["name"] = proj_name_match.group(1)
-                # Fallback: set(VERSION x.y.z)
-                ver_match = re.search(r'set\s*\(\s*VERSION\s+([0-9][^\s\)]*)\s*\)', cmake_content)
-                if ver_match:
-                    identity["version"] = ver_match.group(1)
-
-            # Detect C++ project type based on directory structure
-            workspace_dirs = set()
-            try:
-                for entry in os.listdir(workspace):
-                    if os.path.isdir(os.path.join(workspace, entry)):
-                        workspace_dirs.add(entry)
-            except OSError:
-                pass
-
-            # Check for OS kernel projects (Kernel/ or kernel/ directory)
-            has_kernel = 'Kernel' in workspace_dirs or 'kernel' in workspace_dirs
-            # Check for SerenityOS-like structure
-            serenity_indicators = {'Userland', 'AK', 'LibJS'}
-            has_serenity = bool(workspace_dirs & serenity_indicators)
-            # Check for large C++ project indicators
-            large_cpp_indicators = {'AK', 'Base', 'Meta', 'Ports', 'Tests'}
-            large_cpp_count = len(workspace_dirs & large_cpp_indicators)
-
-            if has_kernel and has_serenity:
-                cpp_type = "cpp-os"
-            elif has_kernel:
-                cpp_type = "cpp-os"
-            elif large_cpp_count >= 3:
-                cpp_type = "cpp-monorepo"
-            else:
-                cpp_type = "cpp-project"
-
-            # Detect C++ monorepo: multiple CMakeLists.txt in subdirectories
-            sub_cmake_count = 0
-            sub_cmake_dirs = []
-            try:
-                for entry in sorted(os.listdir(workspace)):
-                    sub_cmake = os.path.join(workspace, entry, 'CMakeLists.txt')
-                    if os.path.isfile(sub_cmake):
-                        sub_cmake_count += 1
-                        sub_cmake_dirs.append(entry)
-            except OSError:
-                pass
-
-            if sub_cmake_count >= 2:
-                identity["is_monorepo"] = True
-                if "cmake-workspace" not in identity["monorepo_tools"]:
-                    identity["monorepo_tools"].append("cmake-workspace")
-                if cpp_type == "cpp-project":
-                    cpp_type = "cpp-monorepo"
-
-            # Kernel/ + CMakeLists.txt → cmake-workspace monorepo
-            if has_kernel and "cmake-workspace" not in identity["monorepo_tools"]:
-                identity["is_monorepo"] = True
-                identity["monorepo_tools"].append("cmake-workspace")
-
-        except Exception:
-            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
-
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
@@ -380,46 +302,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["name"] = pkg.get("name", identity["name"])
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
-
-            # v5.9.3: If root package.json has placeholder name/version ("root", "0.0.0"),
-            # scan sub-packages for a better identity. Common in monorepos where root
-            # package.json is just a workspace orchestrator.
-            _placeholder_names = {"root", "monorepo", "workspace", "tbd", ""}
-            _placeholder_versions = {"0.0.0", "0.0.1", "1.0.0", ""}
-            if (identity["name"] in _placeholder_names or
-                identity["version"] in _placeholder_versions):
-                for subdir in ["packages", "apps", "services", "src"]:
-                    subdir_path = os.path.join(workspace, subdir)
-                    if not os.path.isdir(subdir_path):
-                        continue
-                    try:
-                        for entry in sorted(os.listdir(subdir_path)):
-                            entry_pkg = os.path.join(subdir_path, entry, "package.json")
-                            if not os.path.isfile(entry_pkg):
-                                continue
-                            try:
-                                with open(entry_pkg, 'r', encoding='utf-8') as f:
-                                    sub_pkg = json.load(f)
-                                sub_name = sub_pkg.get("name", "")
-                                sub_version = sub_pkg.get("version", "")
-                                # Prefer the first sub-package with a real name and version
-                                if (sub_name and sub_name not in _placeholder_names and
-                                    sub_version and sub_version not in _placeholder_versions):
-                                    if identity["name"] in _placeholder_names:
-                                        # Use scoped name without @scope/ prefix for readability
-                                        identity["name"] = sub_name.split("/")[-1] if "/" in sub_name else sub_name
-                                    if identity["version"] in _placeholder_versions:
-                                        identity["version"] = sub_version
-                                    if not identity["description"]:
-                                        identity["description"] = sub_pkg.get("description", "")
-                                    break  # Found a good identity, stop looking
-                            except Exception:
-                                pass
-                        else:
-                            continue
-                        break  # Found identity from inner loop
-                    except OSError:
-                        pass
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             # v6.1: Detect library vs application from package.json fields
             # Libraries have: main, module, types, files, sideEffects
@@ -593,18 +475,86 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, cpp_type, go_type] if t is not None]
+    # v6.2: Try composer.json — detect PHP projects
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_name = composer.get("name", "")
+            if composer_name:
+                # Take last part of vendor/package name
+                identity["name"] = composer_name.split('/')[-1]
+            composer_ver = composer.get("version", "")
+            if composer_ver:
+                identity["version"] = composer_ver
+            # Classify PHP project type
+            composer_require = composer.get("require", {})
+            all_deps = " ".join(list(composer_require.keys()))
+            if "laravel/framework" in composer_require or "illuminate/" in all_deps:
+                php_type = "php-laravel"
+            elif "symfony/symfony" in composer_require or "symfony/" in all_deps:
+                php_type = "php-symfony"
+            elif "drupal/core" in composer_require or "drupal/" in all_deps:
+                php_type = "php-drupal"
+            elif "wordpress" in all_deps.lower():
+                php_type = "php-wordpress"
+            else:
+                php_type = "php-project"
+        except Exception:
+            logger.warning("composer.json parsing failed", exc_info=True)
+
+    # v6.2: Detect C/C++ projects via Makefile/CMakeLists.txt
+    c_type = None
+    has_makefile = os.path.isfile(os.path.join(workspace, 'Makefile'))
+    has_cmake = os.path.isfile(os.path.join(workspace, 'CMakeLists.txt'))
+    if has_makefile or has_cmake:
+        # Count C vs C++ files to determine which dominates
+        c_count = 0
+        cpp_count = 0
+        try:
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fn in filenames:
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext in ('.c', '.h'):
+                        c_count += 1
+                    elif ext in ('.cpp', '.cxx', '.cc', '.cxx', '.hpp', '.hxx', '.hh'):
+                        cpp_count += 1
+        except Exception:
+            pass
+        if c_count > cpp_count:
+            c_type = "c-project"
+        elif cpp_count > c_count:
+            c_type = "cpp-project"
+        else:
+            c_type = "c-cpp-project"
+        # Override name/version from Makefile if possible
+        if has_makefile and identity["version"] == "0.0.0":
+            try:
+                with open(os.path.join(workspace, 'Makefile'), 'r', encoding='utf-8', errors='ignore') as f:
+                    makefile_content = f.read()
+                ver_match = re.search(r'VERSION\s*[:?]?=\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)', makefile_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+            except Exception:
+                pass
+
+    # v6.2: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
+        if c_type:
+            type_parts.append("c" if "c-project" == c_type else "cpp" if "cpp-project" == c_type else "c-cpp")
         if rust_type:
             type_parts.append("rust")
-        if cpp_type:
-            type_parts.append("cpp")
         if go_type:
             type_parts.append("go")
+        if php_type:
+            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

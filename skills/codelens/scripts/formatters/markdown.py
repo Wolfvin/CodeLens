@@ -2144,12 +2144,31 @@ def _md_summary(data: Dict, lines: list) -> None:
                             sev_tag = f"[{sev.upper()}] " if sev else ""
                             lines.append(f"  - {sev_tag}`{source.get('file', '')}:{source.get('line', '')}` → `{sink.get('file', '')}:{sink.get('line', '')}` — {src_label} → {snk_label}")
                         else:
-                            file = item.get("file", "")
+                            file = item.get("file", item.get("path", ""))
                             line = item.get("line", "")
-                            msg = item.get("message", item.get("description", item.get("name", "")))[:80]
+                            # Build description from available fields
+                            msg = item.get("message", item.get("description", item.get("name", "")))
+                            if not msg:
+                                # Fallback: construct description from category/match/type
+                                parts = []
+                                if item.get("category"):
+                                    parts.append(item["category"])
+                                if item.get("match"):
+                                    parts.append(item["match"])
+                                if item.get("type") and item.get("type") != "pattern_match":
+                                    parts.append(item["type"])
+                                if item.get("extension"):
+                                    parts.append(item["extension"])
+                                if item.get("detection_method"):
+                                    parts.append(f"({item['detection_method']})")
+                                msg = " ".join(parts) if parts else ""
+                            msg = msg[:80] if msg else ""
                             sev = item.get("severity", "")
                             sev_tag = f"[{sev.upper()}] " if sev else ""
-                            lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}")
+                            if file:
+                                lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}" if msg else f"  - {sev_tag}`{file}:{line}`")
+                            elif msg:
+                                lines.append(f"  - {sev_tag}{msg}")
                     elif isinstance(item, (str, list)):
                         lines.append(f"  - {item}")
 
@@ -2329,12 +2348,30 @@ def _md_analyze(data: Dict, lines: list) -> None:
                             snk_label = sink.get("match", sink.get("label", ""))[:40]
                             lines.append(f"  - `{source.get('file', '')}:{source.get('line', '')}` → `{sink.get('file', '')}:{sink.get('line', '')}` — {src_label} → {snk_label}")
                         else:
-                            file = item.get("file", "")
+                            file = item.get("file", item.get("path", ""))
                             line = item.get("line", "")
-                            msg = item.get("message", item.get("description", item.get("name", item.get("hint", ""))))[:80]
+                            # Build description from available fields
+                            msg = item.get("message", item.get("description", item.get("name", item.get("hint", ""))))
+                            if not msg:
+                                parts = []
+                                if item.get("category"):
+                                    parts.append(item["category"])
+                                if item.get("match"):
+                                    parts.append(item["match"])
+                                if item.get("type") and item.get("type") != "pattern_match":
+                                    parts.append(item["type"])
+                                if item.get("extension"):
+                                    parts.append(item["extension"])
+                                if item.get("detection_method"):
+                                    parts.append(f"({item['detection_method']})")
+                                msg = " ".join(parts) if parts else ""
+                            msg = msg[:80] if msg else ""
                             item_sev = item.get("severity", "")
                             sev_tag = f"[{item_sev.upper()}] " if item_sev else ""
-                            lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}")
+                            if file:
+                                lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}" if msg else f"  - {sev_tag}`{file}:{line}`")
+                            elif msg:
+                                lines.append(f"  - {sev_tag}{msg}")
                     elif isinstance(item, (str, list)):
                         lines.append(f"  - {item}")
 

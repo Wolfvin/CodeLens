@@ -37,6 +37,7 @@ TEST_FILE_PATTERNS = {
     ".test.", ".spec.", "_test.", "_spec.",
     "__tests__", "/tests/", "/test/",
     "test_", "spec_", "_test.py", "_test.rs",
+    "Test.", "/Tests/",   # PHP PHPUnit convention: *Test.php, Tests/ directory
 }
 
 # Performance limits for large codebases
@@ -157,6 +158,25 @@ TEST_SKIP_PATTERNS = [
     (r'#\[ignore\]', "#[ignore]"),
     (r'\.pend\s*\(', ".pend()"),
     (r'\.todo\s*\(', ".todo()"),
+]
+
+# v6.2: PHP test framework patterns that are NOT mock data — they are the proper way to
+# write tests in PHP. These should never be flagged as mock_data leaks.
+PHP_MOCK_ALLOWLIST = [
+    r'\$this->createMock\s*\(',           # PHPUnit mock creation
+    r'\$this->getMockBuilder\s*\(',      # PHPUnit mock builder
+    r'\$this->createStub\s*\(',          # PHPUnit stub creation
+    r'\$this->mock\s*\(',                # Laravel mock helper
+    r'\$this->spy\s*\(',                 # Laravel spy helper
+    r'Mockery::mock\s*\(',               # Mockery framework
+    r'Mockery::spy\s*\(',                # Mockery spy
+    r'Event::fake\s*\(',                 # Laravel event faking
+    r'Bus::fake\s*\(',                   # Laravel bus faking
+    r'Mail::fake\s*\(',                  # Laravel mail faking
+    r'Notification::fake\s*\(',          # Laravel notification faking
+    r'Queue::fake\s*\(',                 # Laravel queue faking
+    r'Storage::fake\s*\(',               # Laravel storage faking
+    r'Event::fakeFor\s*\(',              # Laravel scoped event faking
 ]
 
 MOCK_DATA_PATTERNS = [
@@ -528,10 +548,51 @@ def _detect_debugger_statements(
                 continue
             if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
                 continue
+            # v6.2: PHP debug/die patterns only apply to PHP files
+            if label in ("dd()", "dump()", "ray()", "dpm()", "kint()",
+                         "xdebug_var_dump()", "exit;", "die()") and ext != ".php":
+                continue
+            # v6.2: trap() is Delphi/JS, not PHP
+            if label == "trap()" and ext == ".php":
+                continue
 
             m = re.search(pattern, stripped)
             if not m:
                 continue
+
+            # v6.2: For PHP, skip dd()/dump() in test files — these are normal test debugging tools.
+            # exit; and die() are too common in legitimate PHP CLI code to flag as debugger statements.
+            if ext == ".php":
+                # In PHP test files, dd() and dump() are standard debugging tools
+                if is_test_file and label in ("dd()", "dump()"):
+                    continue
+                # exit; and die() are common flow control in PHP CLI scripts,
+                # not debugger statements. Only flag them if they look like
+                # debug leftovers (e.g., die('debug') or exit('debug')).
+                if label == "exit;":
+                    continue  # Too common in legitimate PHP code
+                if label == "die()":
+                    # Only flag bare die() with no arguments or with debug-like strings
+                    # die() with a meaningful message is usually legitimate flow control
+                    die_match = re.search(r'\bdie\s*\(\s*\)', stripped)
+                    if not die_match:
+                        # die('some message') — likely legitimate, skip
+                        continue
+                    # Even bare die() is debatable, downgrade severity
+                    severity = "medium"
+                    should_remove = False
+                    leaks.append({
+                        "category": "debugger",
+                        "file": rel_path,
+                        "line": i + 1,
+                        "pattern": label,
+                        "message": f"Potential debugger leftover: {label} (common in PHP CLI scripts)",
+                        "content": stripped[:120],
+                        "match": label,
+                        "severity": severity,
+                        "should_remove": should_remove,
+                    })
+                    break
 
             severity = "high"
             should_remove = True
@@ -768,6 +829,17 @@ def _detect_mock_data(
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             continue
 
+        # v6.2: Skip PHP test framework patterns — createMock(), Mockery::mock(), etc.
+        # are the standard way to write tests in PHP, not debug leaks.
+        if ext == ".php":
+            is_php_mock_framework = False
+            for allow_pattern in PHP_MOCK_ALLOWLIST:
+                if re.search(allow_pattern, stripped):
+                    is_php_mock_framework = True
+                    break
+            if is_php_mock_framework:
+                continue
+
         for pattern, label in MOCK_DATA_PATTERNS:
             # Skip constants that are just ALL_CAPS naming
             if label in ("MOCK_CONSTANT", "FAKE_CONSTANT", "TEST_CONSTANT"):
@@ -778,6 +850,24 @@ def _detect_mock_data(
             m = re.search(pattern, stripped)
             if not m:
                 continue
+
+            # v6.2: For PHP, skip mock patterns that are part of test framework calls
+            # e.g., $mockBuilder = $this->getMockBuilder(...) — the mockBuilder variable
+            # is part of a PHPUnit call, not a standalone mock data definition.
+            if ext == ".php":
+                # Check if the match is preceded by $this-> or part of a framework call
+                match_start = m.start()
+                before_match = stripped[:match_start]
+                if '$this->' in before_match or 'Mockery::' in before_match:
+                    continue
+                # Also skip if the line contains a framework call (even after the match)
+                is_php_framework_call = False
+                for allow_pattern in PHP_MOCK_ALLOWLIST:
+                    if re.search(allow_pattern, stripped):
+                        is_php_framework_call = True
+                        break
+                if is_php_framework_call:
+                    continue
 
             # Additional check: is this actually an assignment/declaration?
             # We want to avoid flagging function parameters like `mockData` in tests

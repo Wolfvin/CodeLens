@@ -139,6 +139,7 @@ def get_workspace_outline(
     outlines = []
     errors = []
     file_count = 0
+    total_lines = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -165,6 +166,11 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            # Count lines before outlining
+            content = safe_read_file(file_path)
+            if content is not None:
+                total_lines += len(content.split('\n'))
+
             result = get_file_outline(file_path, workspace, detail_level="minimal")
             file_count += 1
             if result["status"] == "ok":
@@ -176,6 +182,7 @@ def get_workspace_outline(
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
+        "total_lines": total_lines,
         "outlines": outlines,
         "errors": errors if errors else None,
         "truncated": max_files > 0 and file_count >= max_files
