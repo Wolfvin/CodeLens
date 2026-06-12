@@ -28,9 +28,10 @@ Additional detection: middleware stacks, route groups/prefixes,
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -42,6 +43,10 @@ SOURCE_EXTENSIONS = {
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+# Performance limits for large codebases
+MAX_FILES_APIMAP = 5000    # Max files to scan for API routes
+APIMAP_TIMEOUT_SEC = 120   # Hard timeout for API mapping
 
 # Valid HTTP methods in uppercase (for validation of extracted method names)
 VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
@@ -106,6 +111,8 @@ def map_api_routes(
     middleware_map: Dict[str, List[Dict]] = defaultdict(list)
     route_groups: List[Dict[str, Any]] = []
     files_scanned = 0
+    start_time = time.time()
+    timed_out = False
 
     # Global middleware collectors
     global_middleware: List[Dict] = []
@@ -118,6 +125,17 @@ def map_api_routes(
             continue
 
         for filename in filenames:
+            # File count limit
+            if files_scanned >= MAX_FILES_APIMAP:
+                logger.warning(f"Max files limit ({MAX_FILES_APIMAP}) reached for API mapping, truncating results")
+                break
+
+            # Timeout check
+            if time.time() - start_time > APIMAP_TIMEOUT_SEC:
+                timed_out = True
+                logger.warning(f"API mapping timeout ({APIMAP_TIMEOUT_SEC}s) reached, truncating results")
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -374,6 +392,7 @@ def map_api_routes(
         "route_groups": route_groups,
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
+        "timed_out": timed_out,
     }
 
 

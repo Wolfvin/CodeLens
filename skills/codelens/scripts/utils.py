@@ -92,6 +92,12 @@ def compute_summary(workspace, outline_data, scan_result):
         total_imports += len(inner.get('imports', []))
         for cls in inner.get('classes', []):
             total_functions += len(cls.get('methods', []))
+        for iface in inner.get('interfaces', []):
+            total_functions += len(iface.get('methods', []))
+        for trait in inner.get('traits', []):
+            total_functions += len(trait.get('methods', []))
+        for enum in inner.get('enums', []):
+            total_functions += len(enum.get('methods', []))
 
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)
     be_edges = scan_result.get('backend', {}).get('edges', 0)
@@ -389,7 +395,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.1"
+CODELENS_VERSION = "7.2.0"
 
 
 # ─── Generated File Detection ───────────────────────────────

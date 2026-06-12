@@ -25,7 +25,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims", ".php"}
 
 # Performance limits for large codebases
 MAX_FILES_PER_RUN = 3000       # Max files to scan (prevents timeout on huge repos)
@@ -207,6 +207,100 @@ SIDE_EFFECT_PATTERNS = {
         ],
         "label": "vscode_extension_api",
         "severity": "high"
+    },
+    # ── PHP Side Effects ──────────────────────────────────────
+    "php_io": {
+        "patterns": [
+            r"\bfile_get_contents\s*\(",
+            r"\bfile_put_contents\s*\(",
+            r"\bfopen\s*\(",
+            r"\bfwrite\s*\(",
+            r"\bfread\s*\(",
+            r"\bfclose\s*\(",
+            r"\bunlink\s*\(",
+            r"\brename\s*\(",
+            r"\bmkdir\s*\(",
+            r"\brmdir\s*\(",
+            r"\bmove_uploaded_file\s*\(",
+            r"\bStorage::(put|delete|copy|move|append|prepend)\s*\(",
+        ],
+        "label": "php_file_io",
+        "severity": "medium"
+    },
+    "php_output": {
+        "patterns": [
+            r"\becho\s+",
+            r"\bprint\s*\(",
+            r"\bvar_dump\s*\(",
+            r"\bprint_r\s*\(",
+            r"\bprintf\s*\(",
+            r"\bvar_export\s*\(",
+        ],
+        "label": "php_output",
+        "severity": "low"
+    },
+    "php_network": {
+        "patterns": [
+            r"\bcurl_exec\s*\(",
+            r"\bHttp::(get|post|put|patch|delete|head)\s*\(",
+            r"\bhttp_request\s*\(",
+            r"\bfile_get_contents\s*\(\s*['\"]https?://",
+        ],
+        "label": "php_network",
+        "severity": "high"
+    },
+    "php_database": {
+        "patterns": [
+            r"\bDB::(insert|update|delete|statement|raw|select|unprepared)\s*\(",
+            r"\b->save\s*\(",
+            r"\b->delete\s*\(",
+            r"\b->update\s*\(\[",
+            r"\bmysqli_query\s*\(",
+            r"\bPDO::query\s*\(",
+            r"\b->exec\s*\(",
+        ],
+        "label": "php_database",
+        "severity": "high"
+    },
+    "php_state": {
+        "patterns": [
+            r"\$_SESSION\b",
+            r"\$_GLOBALS\b",
+            r"\bCache::(put|forget|flush|increment|decrement)\s*\(",
+            r"\bSession::(put|forget|flush)\s*\(",
+            r"\bConfig::set\s*\(",
+            r"\bRedis::(set|del|flushdb|flushall)\s*\(",
+        ],
+        "label": "php_state_mutation",
+        "severity": "high"
+    },
+    "php_external": {
+        "patterns": [
+            r"\bMail::(send|raw|queue)\s*\(",
+            r"\bQueue::push\s*\(",
+            r"\bEvent::dispatch\s*\(",
+            r"\bdispatch\s*\(",
+            r"\bexec\s*\(",
+            r"\bshell_exec\s*\(",
+            r"\bsystem\s*\(",
+            r"\bpassthru\s*\(",
+            r"\bproc_open\s*\(",
+            r"\bpopen\s*\(",
+            r"\bArtisan::call\s*\(",
+        ],
+        "label": "php_external_service",
+        "severity": "high"
+    },
+    "php_random": {
+        "patterns": [
+            r"\brandom_bytes\s*\(",
+            r"\brandom_int\s*\(",
+            r"\bStr::random\s*\(",
+            r"\bmt_rand\s*\(",
+            r"\brand\s*\(",
+        ],
+        "label": "php_nondeterministic",
+        "severity": "low"
     },
 }
 
@@ -462,14 +556,15 @@ def _scan_for_function(workspace: str, function_name: str, file_filter: Optional
                 continue
 
             # Check if function exists in this file
-            if re.search(r'(?:function\s+' + re.escape(function_name) +
+            if re.search(r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+' + re.escape(function_name) +
                          r'|(?:const|let|var)\s+' + re.escape(function_name) +
                          r'\s*=|def\s+' + re.escape(function_name) +
-                         r'|(?:pub\s+)?fn\s+' + re.escape(function_name) + r')\s*[\(=]', content):
+                         r'|(?:pub\s+)?fn\s+' + re.escape(function_name) + r'\s*[\(=]', content):
                 lines = content.split('\n')
                 for i, line in enumerate(lines):
                     if function_name in line and re.search(
-                        r'(?:function |const |let |var |def |fn )' + re.escape(function_name),
+                        r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+' + re.escape(function_name) +
+                        r'|(?:function |const |let |var |def |fn )' + re.escape(function_name),
                         line
                     ):
                         effects = _detect_effects(content[max(0, i-5):min(len(content), i+500)], ext)
@@ -533,6 +628,28 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 # Skip init() and main() — they're entry points, not regular functions
                 if fn_name not in ('init', 'main'):
                     functions.append({"name": fn_name, "line": i + 1, "async": False})
+
+    elif ext == ".php":
+        # PHP function/method detection
+        # Matches: function name(), public function name(), private function name(), etc.
+        _PHP_MAGIC_METHODS = frozenset({
+            '__construct', '__destruct', '__call', '__callStatic',
+            '__get', '__set', '__isset', '__unset', '__sleep',
+            '__wakeup', '__toString', '__invoke', '__set_state',
+            '__clone', '__debugInfo', '__serialize', '__unserialize',
+        })
+        for m in re.finditer(r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+(\w+)\s*\(', content):
+            name = m.group(1)
+            # Skip PHP magic methods
+            if name.startswith('__') and name.endswith('__'):
+                continue
+            if name in _PHP_MAGIC_METHODS:
+                continue
+            functions.append({
+                'name': name,
+                'line': content[:m.start()].count('\n') + 1,
+                'async': False,
+            })
 
     return functions
 

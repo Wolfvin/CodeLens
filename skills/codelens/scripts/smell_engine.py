@@ -21,6 +21,7 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
@@ -96,6 +97,10 @@ RUST_GOD_IMPL_METHODS = 35
 RUST_GOD_IMPL_METHODS_CRITICAL = 60
 MAX_FILE_SIZE = 500 * 1024  # 500KB
 
+# Performance limits for large codebases
+SMELL_TIMEOUT_SEC = 120  # Hard timeout for smell detection
+SMELL_MAX_FILES = 5000   # Max files to scan for smells
+
 
 def detect_smells(
     workspace: str,
@@ -138,6 +143,8 @@ def detect_smells(
     files_scanned = 0
     files_truncated = False
     production_files_scanned = 0
+    start_time = time.time()
+    timed_out = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -148,6 +155,13 @@ def detect_smells(
         for filename in filenames:
             if files_scanned >= max_files:
                 files_truncated = True
+                break
+
+            # Timeout check — bail out before hanging on huge repos
+            if time.time() - start_time > SMELL_TIMEOUT_SEC:
+                timed_out = True
+                files_truncated = True
+                logger.warning(f"Smell detection timeout ({SMELL_TIMEOUT_SEC}s) reached, truncating results")
                 break
 
             ext = os.path.splitext(filename)[1].lower()
@@ -396,6 +410,7 @@ def detect_smells(
             "health_score": health_score
         },
         "files_truncated": files_truncated,
+        "timed_out": timed_out,
         "by_category": {
             cat: smells for cat, smells in all_smells.items() if smells
         },
@@ -746,6 +761,10 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
 
         indent = len(line) - len(stripped)
 
+        if ext == ".php":
+            # PHP: use brace-based depth tracking for more accurate nesting detection
+            continue  # handled separately below
+
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
@@ -757,7 +776,7 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             # Elixir/Ruby/Nim: 2 spaces per level
             level = indent // 2
         else:
-            # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
+            # JS/TS/Lua/Shell/Dart: 2 spaces per level
             level = indent // 2
 
         # Detect when we first enter a deep nesting block
@@ -800,6 +819,57 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
             "suggestion": "Extract inner logic into separate functions. Use early returns."
         })
+
+    # ─── PHP: brace-based deep nesting detection ───────────────
+    # PHP uses braces {} for nesting and indentation can be inconsistent.
+    # Track actual brace depth for more accurate results.
+    if ext == ".php":
+        brace_depth = 0
+        in_deep_block_php = False
+        deep_block_start_php = 0
+        deep_block_level_php = 0
+        for line_num, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+                continue
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+            if brace_depth >= nesting_level and not in_deep_block_php:
+                in_deep_block_php = True
+                deep_block_start_php = line_num
+                deep_block_level_php = brace_depth
+            elif in_deep_block_php and brace_depth < nesting_level:
+                in_deep_block_php = False
+                severity = "critical" if deep_block_level_php >= nesting_critical else "warning"
+                threshold = nesting_critical if severity == "critical" else nesting_level
+                smells.append({
+                    "file": rel_path,
+                    "line": deep_block_start_php,
+                    "nesting_level": deep_block_level_php,
+                    "severity": severity,
+                    "message": f"Code is nested {deep_block_level_php} levels deep (threshold: {threshold})",
+                    "suggestion": "Extract inner logic into separate methods. Use early returns or guard clauses."
+                })
+                if len(smells) >= MAX_FINDINGS_PER_FILE:
+                    return smells
+            if in_deep_block_php and brace_depth > deep_block_level_php:
+                deep_block_level_php = brace_depth
+
+        # Handle case where file ends while still in a deep block
+        if in_deep_block_php:
+            severity = "critical" if deep_block_level_php >= nesting_critical else "warning"
+            threshold = nesting_critical if severity == "critical" else nesting_level
+            smells.append({
+                "file": rel_path,
+                "line": deep_block_start_php,
+                "nesting_level": deep_block_level_php,
+                "severity": severity,
+                "message": f"Code is nested {deep_block_level_php} levels deep (threshold: {threshold})",
+                "suggestion": "Extract inner logic into separate methods. Use early returns or guard clauses."
+            })
 
     return smells
 
@@ -959,41 +1029,14 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                 })
 
     elif ext == ".php":
-        # PHP function/method: (public|private|protected) function name(params)
-        for m in re.finditer(r'(?:public|private|protected)\s+(?:static\s+)?function\s+\w+\s*\(([^)]*)\)', content):
+        # PHP function/method with optional visibility/static/abstract/final modifiers
+        # Matches: function name(params), public function name(params),
+        #          abstract protected function name(params), static function name(params), etc.
+        for m in re.finditer(r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+\w+\s*\(([^)]*)\)', content):
             params_str = m.group(1).strip()
             if not params_str:
                 continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use an options array or DTO class for grouping."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider using an associative array or config object."
-                })
-
-        # PHP standalone functions: function name(params)
-        for m in re.finditer(r'\bfunction\s+(\w+)\s*\(([^)]*)\)', content):
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            params = [p.strip() for p in params_str.split(',') if p.strip() and not p.strip().startswith('//')]
             param_count = len(params)
 
             if param_count >= TOO_MANY_PARAMS_CRITICAL:
@@ -1612,6 +1655,95 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Impl block for '{name}' has {count} methods",
                     "suggestion": "Consider extracting some methods into separate traits or helper modules."
+                })
+
+    elif ext == ".php":
+        # PHP class method counting using brace-depth tracking
+        lines = content.split('\n')
+        class_blocks = []  # list of (class_name, method_count, prop_count)
+        in_class = False
+        class_name = ""
+        class_start_depth = 0
+        method_count = 0
+        prop_count = 0
+        brace_depth = 0
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Track brace depth
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+
+            # Detect class start: class Foo { or class Foo extends Bar {
+            class_match = re.match(
+                r'(?:abstract|final)?\s*class\s+(\w+)',
+                stripped
+            )
+            if class_match:
+                # If we were already inside a class, save it before starting a new one
+                if in_class and (method_count + prop_count) >= GOD_CLASS_METHODS:
+                    class_blocks.append((class_name, method_count, prop_count))
+
+                in_class = True
+                class_name = class_match.group(1)
+                class_start_depth = brace_depth
+                method_count = 0
+                prop_count = 0
+                continue
+
+            if in_class:
+                # Count methods in PHP classes
+                if re.match(
+                    r'\s*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+\w+\s*\(',
+                    stripped
+                ) or re.match(
+                    r'\s*function\s+\w+\s*\(',
+                    stripped
+                ):
+                    method_count += 1
+
+                # Count properties
+                if re.match(
+                    r'\s*(?:public|private|protected)\s+(?:static\s+)?(?:\?\w+\s+)?\$\w+',
+                    stripped
+                ):
+                    prop_count += 1
+
+                # End class block when brace depth returns to start level
+                if brace_depth < class_start_depth:
+                    in_class = False
+                    if (method_count + prop_count) >= GOD_CLASS_METHODS:
+                        class_blocks.append((class_name, method_count, prop_count))
+
+        # Handle class still open at end of file
+        if in_class and (method_count + prop_count) >= GOD_CLASS_METHODS:
+            class_blocks.append((class_name, method_count, prop_count))
+
+        for name, m_count, p_count in class_blocks:
+            total = m_count + p_count
+            if total >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": name,
+                    "method_count": m_count,
+                    "property_count": p_count,
+                    "severity": "critical",
+                    "message": f"Class '{name}' has {m_count} methods and {p_count} properties (total: {total}, critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle. Use traits for shared behavior."
+                })
+            elif total >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": name,
+                    "method_count": m_count,
+                    "property_count": p_count,
+                    "severity": "warning",
+                    "message": f"Class '{name}' has {m_count} methods and {p_count} properties (total: {total}, threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class or trait."
                 })
 
     return smells

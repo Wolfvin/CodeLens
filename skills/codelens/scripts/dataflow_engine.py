@@ -142,6 +142,51 @@ SOURCE_PATTERNS = {
         "severity": "high",
         "languages": {".go"}
     },
+    # PHP superglobal input
+    "php_user_input": {
+        "patterns": [
+            r"\$_GET\b",
+            r"\$_POST\b",
+            r"\$_REQUEST\b",
+            r"\$_COOKIE\b",
+            r"\$_FILES\b",
+            r"\$_SERVER\b",
+        ],
+        "label": "php_superglobal_input",
+        "severity": "high",
+        "languages": {".php"}
+    },
+    # Laravel request input
+    "php_laravel_input": {
+        "patterns": [
+            r"\$request->input\s*\(",
+            r"\$request->get\s*\(",
+            r"\$request->query\s*\(",
+            r"\$request->post\s*\(",
+            r"\$request->all\s*\(",
+            r"\$request->only\s*\(",
+            r"\$request->except\s*\(",
+            r"request\(\)->input\s*\(",
+            r"request\(\)->get\s*\(",
+            r"request\(\)->all\s*\(",
+            r"Input::get\s*\(",
+            r"Input::all\s*\(",
+        ],
+        "label": "laravel_request_input",
+        "severity": "high",
+        "languages": {".php"}
+    },
+    # PHP env sources
+    "php_env": {
+        "patterns": [
+            r"\benv\s*\(",
+            r"\bgetenv\s*\(",
+            r"\$_ENV\b",
+        ],
+        "label": "php_env_source",
+        "severity": "medium",
+        "languages": {".php"}
+    },
 }
 
 # ─── Sink Patterns (where data could be dangerous) ────────────
@@ -231,6 +276,62 @@ SINK_PATTERNS = {
         "severity": "high",
         "description": "Data in HTTP header — header injection risk"
     },
+    # PHP SQL injection sinks
+    "php_sql": {
+        "patterns": [
+            r"\bDB::raw\s*\(",
+            r"\bDB::select\s*\(",
+            r"\bDB::statement\s*\(",
+            r"\bDB::insert\s*\(",
+            r"\bDB::update\s*\(",
+            r"\bDB::delete\s*\(",
+            r"\bDB::unprepared\s*\(",
+            r"\bmysqli_query\s*\(",
+            r"\bPDO::query\s*\(",
+            r"\b->rawQuery\s*\(",
+            r"\b->query\s*\(",
+        ],
+        "label": "php_sql_sink",
+        "severity": "critical",
+        "description": "Data reaches PHP SQL query — SQL injection risk"
+    },
+    # PHP command execution sinks
+    "php_command_exec": {
+        "patterns": [
+            r"\bexec\s*\(",
+            r"\bshell_exec\s*\(",
+            r"\bsystem\s*\(",
+            r"\bpassthru\s*\(",
+            r"\bproc_open\s*\(",
+            r"\bpopen\s*\(",
+            r"\bArtisan::call\s*\(",
+        ],
+        "label": "php_command_exec",
+        "severity": "critical",
+        "description": "Data reaches PHP command execution — code injection risk"
+    },
+    # PHP file write sinks
+    "php_file_write": {
+        "patterns": [
+            r"\bfile_put_contents\s*\(",
+            r"\bfwrite\s*\(",
+            r"\bStorage::put\s*\(",
+            r"\bmove_uploaded_file\s*\(",
+        ],
+        "label": "php_file_write",
+        "severity": "high",
+        "description": "Data written to file via PHP — path traversal / data integrity risk"
+    },
+    # PHP unescaped output sinks
+    "php_output": {
+        "patterns": [
+            r"\becho\s+.*\$",
+            r"\bprintf\s*\(.*\$",
+        ],
+        "label": "php_unescaped_output",
+        "severity": "high",
+        "description": "Data rendered as unescaped PHP output — XSS risk"
+    },
 }
 
 # ─── Sanitizer Patterns (functions that make data safe) ───────
@@ -290,6 +391,26 @@ SANITIZER_PATTERNS = {
         "sanitizes_for": {"file_write"},
         "label": "path_sanitizer"
     },
+    # PHP sanitizers
+    "php_sanitizer": {
+        "patterns": [
+            r"\bhtmlspecialchars\s*\(",
+            r"\bhtmlentities\s*\(",
+            r"\bstrip_tags\s*\(",
+            r"\baddslashes\s*\(",
+            r"\bmysqli_real_escape_string\s*\(",
+            r"\bPDO::prepare\s*\(",
+            r"\be\s*\(",
+            r"\bclean\s*\(",
+            r"\b\$request->validate\s*\(",
+            r"\bValidator::make\s*\(",
+            r"\bfilter_input\s*\(",
+            r"\bfilter_var\s*\(",
+        ],
+        "sanitizes_for": {"php_sql", "php_output", "php_file_write", "php_command_exec"},
+        "label": "php_sanitizer",
+        "languages": {".php"}
+    },
 }
 
 # ─── Propagator Patterns (functions that pass data through) ───
@@ -317,7 +438,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".php"}
 
 # Test file patterns — violations in these files are downgraded
 TEST_FILE_PATTERNS = {

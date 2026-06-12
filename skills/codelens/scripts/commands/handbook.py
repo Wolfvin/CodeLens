@@ -529,8 +529,10 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
     # v6.4: Detect PHP projects via composer.json
     php_type = None
+    has_php = False
     composer_path = os.path.join(workspace, 'composer.json')
     if os.path.isfile(composer_path):
+        has_php = True
         try:
             with open(composer_path, 'r', encoding='utf-8') as f:
                 composer_data = json.load(f)
@@ -540,6 +542,52 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             php_version = composer_data.get('version', '')
             if php_version:
                 identity["version"] = php_version
+            else:
+                # Fallback 1: git tags (most PHP packages use git tags for versioning)
+                try:
+                    import subprocess
+                    git_result = subprocess.run(
+                        ['git', 'describe', '--tags', '--abbrev=0'],
+                        capture_output=True, text=True, timeout=5,
+                        cwd=workspace
+                    )
+                    if git_result.returncode == 0 and git_result.stdout.strip():
+                        tag = git_result.stdout.strip().lstrip('v')
+                        if tag and re.match(r'^\d', tag):
+                            identity["version"] = tag
+                except Exception:
+                    pass
+            # Fallback 2: VERSION file
+            if identity["version"] == "0.0.0":
+                version_file = os.path.join(workspace, 'VERSION')
+                if os.path.isfile(version_file):
+                    try:
+                        with open(version_file, 'r', encoding='utf-8') as f:
+                            ver = f.read().strip()
+                            if ver and re.match(r'^\d', ver):
+                                identity["version"] = ver
+                    except Exception:
+                        pass
+            # Fallback 3: CHANGELOG.md version headers
+            if identity["version"] == "0.0.0":
+                changelog_path = os.path.join(workspace, 'CHANGELOG.md')
+                if os.path.isfile(changelog_path):
+                    try:
+                        with open(changelog_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                m = re.match(r'^#+\s*\[?v?(\d+\.\d+\.\d+)', line)
+                                if m:
+                                    identity["version"] = m.group(1)
+                                    break
+                    except Exception:
+                        pass
+            # Fallback 4: composer.json extra.branch-alias
+            if identity["version"] == "0.0.0":
+                branch_alias = composer_data.get('extra', {}).get('branch-alias', {})
+                for _branch, alias_ver in branch_alias.items():
+                    if isinstance(alias_ver, str) and re.match(r'^\d+\.\d+', alias_ver):
+                        identity["version"] = alias_ver.rstrip('.x-dev').rstrip('-dev').rstrip('.x')
+                        break
             # Detect PHP framework from require dependencies
             php_req = composer_data.get('require', {})
             php_req_str = ' '.join(php_req.keys()).lower()
@@ -561,6 +609,20 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 php_type = "php-project"
         except Exception:
             logger.warning("composer.json parsing failed", exc_info=True)
+    else:
+        # Check for PHP files even without composer.json
+        _php_count = 0
+        for _root, _dirs, _files in os.walk(workspace):
+            _dirs[:] = [d for d in _dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            for _f in _files:
+                if _f.endswith('.php'):
+                    _php_count += 1
+                    if _php_count >= 3:
+                        break
+            if _php_count >= 3:
+                break
+        if _php_count >= 3:
+            has_php = True
 
     # v6.4: Detect C/C++ projects
     c_cpp_type = None
@@ -688,6 +750,11 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
     """Build a one-level-deep directory map with descriptions."""
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
+
+    # Detect if this is a PHP/Laravel project for framework-aware descriptions
+    is_php_project = os.path.isfile(os.path.join(workspace, 'composer.json'))
+    is_laravel = os.path.isdir(os.path.join(workspace, 'src', 'Illuminate')) or is_php_project
+
     dir_hints = {
         'src': 'Application source code',
         'app': 'Application pages/routes',
@@ -722,6 +789,31 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
     }
+
+    # PHP/Laravel-specific directory overrides
+    if is_php_project:
+        php_dir_hints = {
+            'app': 'Application source code',
+            'routes': 'Route definitions',
+            'config': 'Laravel configuration files',
+            'config-stubs': 'Laravel configuration stubs/publishable configs',
+            'database': 'Database migrations and seeders',
+            'resources': 'Views, assets, and language files',
+            'bootstrap': 'Framework bootstrap files',
+            'public': 'Web server document root',
+            'storage': 'Logs, cache, and compiled files',
+            'tests': 'PHPUnit test files',
+            'types': 'PHP type definition stubs',
+        }
+        dir_hints.update(php_dir_hints)
+
+    # Laravel framework source code overrides (for projects like laravel/framework)
+    if is_laravel and os.path.isdir(os.path.join(workspace, 'src', 'Illuminate')):
+        laravel_src_hints = {
+            'src': 'Laravel framework source code (Illuminate components)',
+        }
+        dir_hints.update(laravel_src_hints)
+
     dir_map = {}
     try:
         for entry in sorted(os.listdir(workspace)):
@@ -737,7 +829,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                         for f in filenames:
                             ext = os.path.splitext(f)[1].lower()
-                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
+                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte', '.php'}:
                                 src_count += 1
                 except Exception:
                     logger.warning("Directory file counting failed", exc_info=True)
@@ -760,55 +852,90 @@ def _detect_conventions(workspace: str) -> Dict[str, Any]:
         "patterns": {}
     }
 
+    # Detect PHP project for convention overrides
+    is_php_project = os.path.isfile(os.path.join(workspace, 'composer.json'))
+    php_framework = None
+    if is_php_project:
+        try:
+            with open(os.path.join(workspace, 'composer.json'), 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            php_req = composer_data.get('require', {})
+            if 'laravel/framework' in php_req or 'laravel/laravel' in php_req:
+                php_framework = "laravel"
+            elif 'symfony/symfony' in php_req or 'symfony/framework-bundle' in php_req:
+                php_framework = "symfony"
+        except Exception:
+            pass
+
     # Try to import convention_engine if it exists
     try:
         from convention_engine import detect_conventions
         result = detect_conventions(workspace)
         if result.get("status") == "ok":
-            return result.get("conventions", conventions)
+            conventions = result.get("conventions", conventions)
     except ImportError:
         pass
     except Exception:
         logger.warning("Convention engine failed", exc_info=True)
 
-    # Fallback: basic convention detection from filenames
-    files = []
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        for fn in filenames:
-            ext = os.path.splitext(fn)[1].lower()
-            if ext in {'.py', '.js', '.ts', '.tsx', '.rs'}:
-                files.append(fn)
+    # Apply PHP-specific convention overrides
+    if is_php_project:
+        patterns = conventions.setdefault("patterns", {})
+        # PHP uses require/include or Composer autoload, not ES modules
+        patterns["import_style"] = "composer_autoload"
+        patterns["module_system"] = "Composer"
+        patterns["error_handling"] = "exceptions"
 
-    snake_count = sum(1 for f in files if '_' in os.path.splitext(f)[0] and f == f.lower())
-    kebab_count = sum(1 for f in files if '-' in os.path.splitext(f)[0] and f == f.lower())
-    camel_count = sum(1 for f in files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
-    pascal_count = sum(1 for f in files if f[0].isupper() and f[0].isalpha())
+        # Add PHP naming conventions
+        naming = conventions.setdefault("naming", {})
+        php_info = {
+            "naming": "PascalCase classes, camelCase methods",
+        }
+        if php_framework:
+            php_info["framework"] = php_framework
+        naming["php"] = php_info
 
-    if snake_count > kebab_count and snake_count > camel_count:
-        conventions["naming"]["files"] = "snake_case"
-    elif kebab_count > snake_count and kebab_count > camel_count:
-        conventions["naming"]["files"] = "kebab-case"
-    elif pascal_count > camel_count:
-        conventions["naming"]["files"] = "PascalCase"
-    elif camel_count > 0:
-        conventions["naming"]["files"] = "camelCase"
+        return conventions
 
-    py_files = [f for f in files if f.endswith('.py')]
-    js_files = [f for f in files if f.endswith(('.js', '.ts', '.tsx'))]
+    # Fallback: basic convention detection from filenames (only if no convention_engine result)
+    if not conventions.get("naming") and not conventions.get("patterns"):
+        files = []
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            for fn in filenames:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext in {'.py', '.js', '.ts', '.tsx', '.rs', '.php'}:
+                    files.append(fn)
 
-    if py_files:
-        py_snake = sum(1 for f in py_files if '_' in os.path.splitext(f)[0])
-        if py_snake > len(py_files) * 0.5:
-            conventions["naming"]["python_files"] = "snake_case"
+        snake_count = sum(1 for f in files if '_' in os.path.splitext(f)[0] and f == f.lower())
+        kebab_count = sum(1 for f in files if '-' in os.path.splitext(f)[0] and f == f.lower())
+        camel_count = sum(1 for f in files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+        pascal_count = sum(1 for f in files if f[0].isupper() and f[0].isalpha())
 
-    if js_files:
-        js_kebab = sum(1 for f in js_files if '-' in os.path.splitext(f)[0])
-        js_camel = sum(1 for f in js_files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
-        if js_kebab > js_camel:
-            conventions["naming"]["javascript_files"] = "kebab-case"
-        elif js_camel > 0:
-            conventions["naming"]["javascript_files"] = "camelCase"
+        if snake_count > kebab_count and snake_count > camel_count:
+            conventions["naming"]["files"] = "snake_case"
+        elif kebab_count > snake_count and kebab_count > camel_count:
+            conventions["naming"]["files"] = "kebab-case"
+        elif pascal_count > camel_count:
+            conventions["naming"]["files"] = "PascalCase"
+        elif camel_count > 0:
+            conventions["naming"]["files"] = "camelCase"
+
+        py_files = [f for f in files if f.endswith('.py')]
+        js_files = [f for f in files if f.endswith(('.js', '.ts', '.tsx'))]
+
+        if py_files:
+            py_snake = sum(1 for f in py_files if '_' in os.path.splitext(f)[0])
+            if py_snake > len(py_files) * 0.5:
+                conventions["naming"]["python_files"] = "snake_case"
+
+        if js_files:
+            js_kebab = sum(1 for f in js_files if '-' in os.path.splitext(f)[0])
+            js_camel = sum(1 for f in js_files if re.match(r'^[a-z]+[A-Z]', os.path.splitext(f)[0]))
+            if js_kebab > js_camel:
+                conventions["naming"]["javascript_files"] = "kebab-case"
+            elif js_camel > 0:
+                conventions["naming"]["javascript_files"] = "camelCase"
 
     return conventions
 

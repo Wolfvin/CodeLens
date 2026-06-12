@@ -19,6 +19,7 @@ file, line, and optionally a call chain to downstream functions.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -34,6 +35,10 @@ SOURCE_EXTENSIONS = {
     ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sh", ".bash", ".zsh",
     ".kt", ".R", ".r", ".hs", ".lhs", ".nim", ".nims", ".lua",
 }
+
+# Performance limits for large codebases
+MAX_FILES_ENTRYPOINTS = 5000   # Max files to scan for entrypoints
+ENTRYPOINTS_TIMEOUT_SEC = 120  # Hard timeout for entrypoint mapping
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
 
@@ -496,6 +501,22 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "svelte_onmount",
             },
+            # Laravel Event::listen() calls
+            {
+                "regex": r'Event::listen\s*\(\s*[\'"]([^\'"]+)',
+                "language": {".php"},
+                "extract": "event_name",
+                "event_group": 1,
+                "label": "laravel_event_listener",
+            },
+            # Laravel EventServiceProvider $listen property
+            {
+                "regex": r'protected\s+\$listen\s*=\s*\[',
+                "language": {".php"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "laravel_event_provider",
+            },
         ],
     },
 
@@ -632,6 +653,14 @@ ENTRYPOINT_PATTERNS = {
                 "schedule_group": 1,
                 "label": "rust_cron",
             },
+            # Laravel scheduled tasks: $schedule->command/call/job/exec
+            {
+                "regex": r'\$schedule->(command|call|job|exec)\s*\(\s*[\'"]([^\'"]+)',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 2,
+                "label": "laravel_scheduled_task",
+            },
         ],
     },
 
@@ -759,6 +788,22 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "elixir_supervisor_child",
+            },
+            # Laravel queue job — classes implementing ShouldQueue
+            {
+                "regex": r'class\s+(\w+).*implements\s+.*ShouldQueue',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_queue_job",
+            },
+            # Laravel dispatch() calls
+            {
+                "regex": r'\bdispatch\s*\(\s*(?:new\s+)?(\w+)',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_dispatch",
             },
         ],
     },
@@ -967,6 +1012,8 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
+    start_time = time.time()
+    timed_out = False
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -976,6 +1023,17 @@ def map_entrypoints(
             continue
 
         for filename in filenames:
+            # File count limit
+            if files_scanned >= MAX_FILES_ENTRYPOINTS:
+                logger.warning(f"Max files limit ({MAX_FILES_ENTRYPOINTS}) reached for entrypoints, truncating results")
+                break
+
+            # Timeout check
+            if time.time() - start_time > ENTRYPOINTS_TIMEOUT_SEC:
+                timed_out = True
+                logger.warning(f"Entrypoints timeout ({ENTRYPOINTS_TIMEOUT_SEC}s) reached, truncating results")
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -1080,6 +1138,7 @@ def map_entrypoints(
         "entrypoints": entrypoints[:300],  # Cap to avoid explosion
         "execution_graph": execution_graph,
         "recommendations": recommendations,
+        "timed_out": timed_out,
     }
 
 

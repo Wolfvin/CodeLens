@@ -42,6 +42,7 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     js_files = []  # .js, .jsx, .ts, .tsx
     py_files = []  # .py
     rs_files = []  # .rs
+    php_files = []  # .php
     vue_files = []  # .vue
     svelte_files = []  # .svelte
     all_source_files = []
@@ -62,6 +63,9 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
             elif ext == '.rs':
                 rs_files.append(full_path)
                 all_source_files.append(full_path)
+            elif ext == '.php':
+                php_files.append(full_path)
+                all_source_files.append(full_path)
             elif ext == '.vue':
                 vue_files.append(full_path)
             elif ext == '.svelte':
@@ -77,6 +81,9 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     if len(rs_files) > MAX_FILES_PER_CATEGORY:
         logger.debug(f"Convention engine: sampling {MAX_FILES_PER_CATEGORY}/{len(rs_files)} Rust files")
         rs_files = rs_files[:MAX_FILES_PER_CATEGORY]
+    if len(php_files) > MAX_FILES_PER_CATEGORY:
+        logger.debug(f"Convention engine: sampling {MAX_FILES_PER_CATEGORY}/{len(php_files)} PHP files")
+        php_files = php_files[:MAX_FILES_PER_CATEGORY]
     if len(all_source_files) > MAX_FILES_PER_CATEGORY * 2:
         all_source_files = all_source_files[:MAX_FILES_PER_CATEGORY * 2]
     
@@ -103,11 +110,19 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
         if rs_naming:
             conventions["naming"]["rust"] = rs_naming
     
+    # PHP naming
+    if php_files:
+        php_naming = _detect_php_naming(php_files, workspace)
+        if php_naming:
+            conventions["naming"]["php"] = php_naming
+    
     # ─── Pattern Detection ───────────────────────────────────
     
     # Import style
     if js_files:
         conventions["patterns"]["import_style"] = _detect_js_import_style(js_files, workspace)
+    elif php_files:
+        conventions["patterns"]["import_style"] = "composer_autoload"
     
     # Component pattern (React)
     if js_files:
@@ -118,12 +133,18 @@ def detect_conventions(workspace: str, config: Optional[Dict[str, Any]] = None) 
     # Error handling
     conventions["patterns"]["error_handling"] = _detect_error_handling_basic(all_source_files, workspace)
     
+    # Override error_handling for PHP projects
+    if php_files and not js_files and not py_files:
+        conventions["patterns"]["error_handling"] = "exceptions"
+    
     # File organization
     conventions["patterns"]["file_organization"] = _detect_file_organization(workspace)
     
     # Module system
     if js_files:
         conventions["patterns"]["module_system"] = _detect_module_system(js_files, workspace)
+    elif php_files:
+        conventions["patterns"]["module_system"] = "Composer"
     
     # ─── Semantic Convention Detection ─────────────────────────
     
@@ -382,6 +403,79 @@ def _detect_rust_naming(files: List[str], workspace: str) -> Dict[str, str]:
         naming["functions"] = "non-standard"
     if type_styles["other"] > type_styles["PascalCase"] * 2:
         naming["structs"] = "non-standard"
+    
+    return naming
+
+
+def _detect_php_naming(files: List[str], workspace: str) -> Dict[str, str]:
+    """Detect PHP naming conventions by sampling files."""
+    # PHP has strong conventions: PascalCase classes, camelCase methods
+    naming = {
+        "classes": "PascalCase",
+        "methods": "camelCase",
+        "functions": "snake_case",
+        "constants": "UPPER_SNAKE_CASE",
+    }
+    
+    # Verify by sampling
+    class_styles = {"PascalCase": 0, "other": 0}
+    method_styles = {"camelCase": 0, "snake_case": 0, "other": 0}
+    
+    # Detect framework from composer.json
+    php_framework = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            import json
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            php_req = composer_data.get('require', {})
+            if 'laravel/framework' in php_req or 'laravel/laravel' in php_req:
+                php_framework = "laravel"
+            elif 'symfony/symfony' in php_req or 'symfony/framework-bundle' in php_req:
+                php_framework = "symfony"
+        except Exception:
+            pass
+    
+    if php_framework:
+        naming["framework"] = php_framework
+    
+    sample = files[:30]
+    for fpath in sample:
+        try:
+            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+        
+        # Check class names: class ClassName
+        for match in re.finditer(r'(?:class|interface|trait)\s+([a-zA-Z_][a-zA-Z0-9_]*)', content):
+            name = match.group(1)
+            case = _classify_case(name)
+            if case == "PascalCase":
+                class_styles["PascalCase"] += 1
+            else:
+                class_styles["other"] += 1
+        
+        # Check method names: function methodName( or public function methodName(
+        for match in re.finditer(r'(?:public|private|protected|static)\s+function\s+([a-zA-Z_][a-zA-Z0-9_]*)', content):
+            name = match.group(1)
+            if name[0].isupper():
+                method_styles["other"] += 1  # PascalCase method = non-standard
+            elif '_' in name:
+                method_styles["snake_case"] += 1
+            elif re.match(r'^[a-z]+[A-Z]', name):
+                method_styles["camelCase"] += 1
+            else:
+                method_styles["camelCase"] += 1  # simple lowercase counts as camelCase
+    
+    # Override if evidence contradicts PHP conventions
+    if class_styles["other"] > class_styles["PascalCase"] * 2:
+        naming["classes"] = "non-standard"
+    if method_styles["snake_case"] > method_styles["camelCase"] * 2:
+        naming["methods"] = "snake_case"
+    elif method_styles["other"] > method_styles["camelCase"] * 2:
+        naming["methods"] = "non-standard"
     
     return naming
 
