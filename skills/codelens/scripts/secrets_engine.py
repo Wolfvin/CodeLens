@@ -578,6 +578,13 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if is_test and _is_url_test_data(raw_value, line_text):
                         continue
 
+                    # Skip enum/constant definitions — strings like "IncorrectPassword" or
+                    # "missing-password" in TypeScript/JS enums are error codes, not secrets.
+                    # Pattern: EnumMember = "value-with-password-keyword" or
+                    #          ErrorCode = "some-password-error"
+                    if _is_enum_or_constant_definition(line_text, ext):
+                        continue
+
                     # Mask the value for safe reporting
                     masked = _mask_value(raw_value)
 
@@ -721,6 +728,13 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
 
         for filename in filenames:
             if not filename.startswith('.env'):
+                continue
+
+            # Skip .env.example/.env.sample/.env.template/.env.demo files —
+            # these contain placeholder values for documentation, not real secrets.
+            lower_name = filename.lower()
+            if any(lower_name.endswith(suffix) for suffix in
+                   ('.example', '.sample', '.template', '.demo', '.local.example')):
                 continue
 
             file_path = os.path.join(root, filename)
@@ -1155,6 +1169,52 @@ def _is_url_test_data(raw_value: str, line_text: str) -> bool:
     for domain in test_domain_indicators:
         if domain in value_lower or domain in line_lower:
             return True
+    return False
+
+
+def _is_enum_or_constant_definition(line_text: str, ext: str) -> bool:
+    """Check if a line is an enum member or constant definition that contains
+    password/secret keywords in its VALUE but is not an actual secret.
+
+    Common false positive patterns in TypeScript/JavaScript:
+      IncorrectEmailPassword = "incorrect-email-password",
+      IncorrectPassword = "incorrect-password",
+      UserMissingPassword = "missing-password",
+      PasswordResetToken = "password-reset-token",
+
+    These are error code enum values where the string is a machine-readable
+    identifier (kebab-case), not an actual hardcoded password.
+
+    Also handles Python enum patterns:
+      INCORRECT_PASSWORD = "incorrect-password"
+      MISSING_TOKEN = "missing-token"
+    """
+    stripped = line_text.strip()
+
+    # TypeScript/JavaScript enum pattern: Identifier = "kebab-case-value",
+    # The key insight: if the value is kebab-case (contains hyphens) AND the
+    # line starts with an identifier (PascalCase or ALL_CAPS) followed by =,
+    # it's almost certainly an enum/constant, not a real password assignment.
+    if ext in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
+        # Match: PascalCaseOrALL_CAPS = "kebab-case-or-snake-value",
+        if re.match(r'^[A-Z][A-Za-z0-9_]*\s*=\s*["\'][\w-]+["\']\s*,?\s*$', stripped):
+            # If the value contains hyphens (kebab-case), it's an identifier, not a secret
+            value_match = re.search(r'["\']([^"\']+)["\']', stripped)
+            if value_match and '-' in value_match.group(1):
+                return True
+        # Match: const Identifier: Type = { ... } with enum-like content
+        # This handles: const ErrorCode = { ... } patterns
+        if re.match(r'^(?:export\s+)?(?:const|let|var|enum)\s+Error', stripped, re.IGNORECASE):
+            return True
+
+    # Python enum/constant pattern
+    if ext == ".py":
+        # ALL_CAPS = "kebab-case-value"  or  PascalCase = "kebab-value"
+        if re.match(r'^[A-Z][A-Z0-9_]*\s*=\s*["\'][\w-]+["\']', stripped):
+            value_match = re.search(r'["\']([^"\']+)["\']', stripped)
+            if value_match and '-' in value_match.group(1):
+                return True
+
     return False
 
 

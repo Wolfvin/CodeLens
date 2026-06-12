@@ -1496,11 +1496,24 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
     """Extract routes from GraphQL schema files (.graphql/.gql)."""
     routes = []
 
+    # JS/TS reserved words that should not be treated as GraphQL field names
+    _RESERVED_WORDS = frozenset({
+        'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+        'break', 'continue', 'return', 'throw', 'try', 'catch', 'finally',
+        'new', 'delete', 'typeof', 'instanceof', 'void', 'yield', 'await',
+        'class', 'extends', 'super', 'import', 'export', 'from', 'as',
+        'const', 'let', 'var', 'function', 'async', 'of', 'in',
+        'this', 'null', 'undefined', 'true', 'false', 'with', 'debugger',
+        'static', 'get', 'set',
+    })
+
     # type Query { fieldName(args): ReturnType }
     for m in re.finditer(r'type\s+Query\s*\{([^}]+)\}', content, re.DOTALL):
         body = m.group(1)
         for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
             field_name = field_m.group(1)
+            if field_name in _RESERVED_WORDS:
+                continue
             return_type = field_m.group(2)
             line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
             routes.append({
@@ -1520,6 +1533,8 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
         body = m.group(1)
         for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
             field_name = field_m.group(1)
+            if field_name in _RESERVED_WORDS:
+                continue
             return_type = field_m.group(2)
             line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
             routes.append({
@@ -1539,6 +1554,8 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
         body = m.group(1)
         for field_m in re.finditer(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(\w+)', body):
             field_name = field_m.group(1)
+            if field_name in _RESERVED_WORDS:
+                continue
             return_type = field_m.group(2)
             line_num = content[:field_m.start() + m.start(1)].count('\n') + 1
             routes.append({
@@ -1560,6 +1577,17 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
 
+    # JS/TS reserved words that should NEVER be treated as GraphQL field names
+    JS_RESERVED_WORDS = frozenset({
+        'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+        'break', 'continue', 'return', 'throw', 'try', 'catch', 'finally',
+        'new', 'delete', 'typeof', 'instanceof', 'void', 'yield', 'await',
+        'class', 'extends', 'super', 'import', 'export', 'from', 'as',
+        'const', 'let', 'var', 'function', 'async', 'of', 'in',
+        'this', 'null', 'undefined', 'true', 'false', 'with', 'debugger',
+        'static', 'get', 'set',
+    })
+
     # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
     for m in re.finditer(
         r'(Query|Mutation|Subscription)\s*:\s*\{',
@@ -1580,6 +1608,9 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
         for field_m in re.finditer(r'(\w+)\s*[:=]\s*(?:async\s+)?\(', resolver_block):
             field_name = field_m.group(1)
+            # Skip JS/TS reserved words — "if", "else", "for", etc. are not routes
+            if field_name in JS_RESERVED_WORDS:
+                continue
             line_num = content[:m.end() + field_m.start()].count('\n') + 1
             routes.append({
                 "method": parent_type.upper(),
@@ -1667,19 +1698,33 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
 
 def _find_next_js_function(content: str, offset: int) -> str:
     """Find the next JS/TS function name after offset."""
+    # JS/TS reserved words — these are never function names
+    _JS_RESERVED = frozenset({
+        'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default',
+        'break', 'continue', 'return', 'throw', 'try', 'catch', 'finally',
+        'new', 'delete', 'typeof', 'instanceof', 'void', 'yield', 'await',
+        'class', 'extends', 'super', 'import', 'export', 'from', 'as',
+        'const', 'let', 'var', 'function', 'async', 'of', 'in',
+        'this', 'null', 'undefined', 'true', 'false', 'with', 'debugger',
+        'static', 'get', 'set',
+    })
+
     remaining = content[offset:offset + 300]
     # Named function
     m = re.search(r'(?:async\s+)?function\s+(\w+)', remaining)
     if m:
-        return m.group(1)
+        name = m.group(1)
+        return name if name not in _JS_RESERVED else "anonymous"
     # Arrow or const
     m = re.search(r'(?:const|let|var)\s+(\w+)\s*=', remaining)
     if m:
-        return m.group(1)
+        name = m.group(1)
+        return name if name not in _JS_RESERVED else "anonymous"
     # Class method
     m = re.search(r'(?:async\s+)?(\w+)\s*\(', remaining)
     if m:
-        return m.group(1)
+        name = m.group(1)
+        return name if name not in _JS_RESERVED else "anonymous"
     return "anonymous"
 
 
