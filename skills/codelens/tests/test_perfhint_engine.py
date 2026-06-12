@@ -41,7 +41,7 @@ app.get("/users", (req, res) => {
             # Should find at least one finding
             assert result["stats"]["total_hints"] >= 0
             if result["stats"]["by_category"].get("n_plus_one", 0) > 0:
-                n_plus_one = [f for f in result["findings"] if f.get("category") == "n_plus_one"]
+                n_plus_one = [f for f in result["hints"] if f.get("category") == "n_plus_one"]
                 assert len(n_plus_one) > 0
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -59,7 +59,7 @@ app.get("/data", (req, res) => {
             result = detect_perf_hints(ws)
             assert result["status"] == "ok"
             if result["stats"]["by_category"].get("sync_blocking", 0) > 0:
-                sync_findings = [f for f in result["findings"] if f.get("category") == "sync_blocking"]
+                sync_findings = [f for f in result["hints"] if f.get("category") == "sync_blocking"]
                 assert len(sync_findings) > 0
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -76,7 +76,7 @@ app.get("/data", (req, res) => {
             assert "category_filter" in result
             assert "stats" in result
             assert "risk" in result
-            assert "findings" in result
+            assert "hints" in result
             assert "recommendations" in result
             # Stats sub-keys
             stats = result["stats"]
@@ -100,7 +100,7 @@ app.get("/data", (req, res) => {
             result = detect_perf_hints(ws, severity="critical")
             assert result["status"] == "ok"
             assert result["severity_filter"] == "critical"
-            for finding in result["findings"]:
+            for finding in result["hints"]:
                 assert finding.get("severity") == "critical"
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -122,7 +122,7 @@ app.get("/users", (req, res) => {
             assert result["status"] == "ok"
             assert result["category_filter"] == "n_plus_one"
             # Only n_plus_one findings should be returned
-            for finding in result["findings"]:
+            for finding in result["hints"]:
                 assert finding.get("category") == "n_plus_one"
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -135,7 +135,7 @@ app.get("/users", (req, res) => {
             result = detect_perf_hints(ws, category="nonexistent_category")
             assert result["status"] == "ok"
             assert result["stats"]["total_hints"] == 0
-            assert len(result["findings"]) == 0
+            assert len(result["hints"]) == 0
             assert any("Unknown category" in r for r in result["recommendations"])
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -166,7 +166,7 @@ def get_users_with_orders():
             result = detect_perf_hints(ws)
             assert result["status"] == "ok"
             if result["stats"]["by_category"].get("n_plus_one", 0) > 0:
-                n_plus_one = [f for f in result["findings"] if f.get("category") == "n_plus_one"]
+                n_plus_one = [f for f in result["hints"] if f.get("category") == "n_plus_one"]
                 assert len(n_plus_one) > 0
         finally:
             shutil.rmtree(ws, ignore_errors=True)
@@ -183,7 +183,7 @@ export * from './utils';
             result = detect_perf_hints(ws)
             assert result["status"] == "ok"
             if result["stats"]["by_category"].get("large_bundle", 0) > 0:
-                bundle_findings = [f for f in result["findings"] if f.get("category") == "large_bundle"]
+                bundle_findings = [f for f in result["hints"] if f.get("category") == "large_bundle"]
                 assert len(bundle_findings) > 0
         finally:
             shutil.rmtree(ws, ignore_errors=True)

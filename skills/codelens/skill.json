@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v5.8: Rust framework detection (Cargo.toml, tokio, actix-web, axum, warp, rocket, deno_core), Rust HTTP route extraction, Cargo workspace monorepo detection, is_generated_file utility, state-map __dunder runtime helper filtering, smell health_score at top-level. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8+ detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect. Tested on denoland/deno (5400+ files Rust+TS polyglot) and elizaOS/eliza (5300+ files AI agent framework).",
+  "version": "5.10.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v5.10: Fixed perf-hint crash, scan/handbook WARNING, max_files param across 6 engines, pyproject.toml syntax, Rust parser regex, lockfile/monorepo/has_rust_backend detection, Tauri monorepo paths, tRPC/Zustand/Vite signatures. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8+ detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect. Tested on Redis, RethinkDB, Axios, Got, HTTPie, Reqwest, LevelDB.",
   "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",

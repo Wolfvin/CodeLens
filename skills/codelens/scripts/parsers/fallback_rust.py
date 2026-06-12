@@ -68,7 +68,7 @@ def parse_rust_fallback(content: str, file_path: str) -> Dict[str, Any]:
 
         # ─── Impl blocks ───────────────────────────────
         impl_match = re.search(
-            r'\bimpl\s+(?:(?<trait>\w+)(?:\s*<[^>]*>)?\s+for\s+)?(?<target>\w+)(?:\s*<[^>]*>)?',
+            r'\bimpl\s+(?:(?P<trait>\w+)(?:\s*<[^>]*>)?\s+for\s+)?(?P<target>\w+)(?:\s*<[^>]*>)?',
             stripped_line
         )
         if impl_match:

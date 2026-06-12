@@ -189,6 +189,21 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    "trpc": {
+        "packages": ["@trpc/server", "@trpc/client"],
+        "config_files": [],
+        "indicators": []
+    },
+    "zustand": {
+        "packages": ["zustand"],
+        "config_files": [],
+        "indicators": []
+    },
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
+        "indicators": []
+    },
 }
 
 
@@ -241,6 +256,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_rust_backend": False,
+        "is_monorepo": False,
+        "lockfile": None,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -264,8 +282,31 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
+                # Detect npm/yarn workspaces (monorepo indicator)
+                if "workspaces" in pkg:
+                    detected["is_monorepo"] = True
         except (json.JSONDecodeError, IOError):
             pass
+
+    # Detect pnpm-workspace.yaml (another monorepo indicator)
+    pnpm_workspace_path = os.path.join(workspace, "pnpm-workspace.yaml")
+    if os.path.exists(pnpm_workspace_path):
+        detected["is_monorepo"] = True
+
+    # Detect lerna.json (yet another monorepo indicator)
+    lerna_path = os.path.join(workspace, "lerna.json")
+    if os.path.exists(lerna_path):
+        detected["is_monorepo"] = True
+
+    # Detect lockfile type
+    if os.path.exists(os.path.join(workspace, "pnpm-lock.yaml")):
+        detected["lockfile"] = "pnpm"
+    elif os.path.exists(os.path.join(workspace, "yarn.lock")):
+        detected["lockfile"] = "yarn"
+    elif os.path.exists(os.path.join(workspace, "bun.lock")):
+        detected["lockfile"] = "bun"
+    elif os.path.exists(os.path.join(workspace, "package-lock.json")):
+        detected["lockfile"] = "npm"
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -462,6 +503,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for crate_name in cargo_crates:
                 if crate_name.lower() in cargo_deps:
                     detected["frameworks"].append(fw_name)
+                    if fw_name in ("axum", "actix", "rocket"):
+                        detected["has_rust_backend"] = True
                     break
 
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
@@ -480,6 +523,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                     break
             if detected["has_tauri"]:
                 break
@@ -498,6 +542,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                     break
 
     # 5. Check file patterns (for Vue, Svelte)
@@ -607,6 +652,7 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "watch": True,
         "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
         "frameworks": fw["frameworks"],
+        "is_monorepo": fw.get("is_monorepo", False),
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
         "vue_mode": False,
@@ -657,16 +703,26 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_tauri"):
         config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
         config["frontend_paths"].append("src/")
+        # For Tauri, src/ is the frontend — remove it from backend_paths if present
+        config["backend_paths"] = [p for p in config["backend_paths"] if p != "src/"]
         # Find and add app-specific src-tauri paths
         for app_dir in ('apps', 'packages'):
             app_path = os.path.join(workspace, app_dir)
             if os.path.isdir(app_path):
                 try:
                     for entry in os.listdir(app_path):
-                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
-                        if os.path.isdir(tauri_src):
-                            rel = os.path.relpath(tauri_src, workspace)
-                            config["backend_paths"].append(rel + "/")
+                        entry_path = os.path.join(app_path, entry)
+                        if not os.path.isdir(entry_path):
+                            continue
+                        rel_app = os.path.relpath(entry_path, workspace)
+                        # Add apps/<name>/src/ as frontend path
+                        config["frontend_paths"].append(rel_app + "/src/")
+                        # Check for src-tauri directory
+                        sub_tauri = os.path.join(entry_path, "src-tauri")
+                        if os.path.isdir(sub_tauri):
+                            # Add apps/<name>/src-tauri/ and apps/<name>/src-tauri/src/ as backend paths
+                            config["backend_paths"].append(rel_app + "/src-tauri/")
+                            config["backend_paths"].append(rel_app + "/src-tauri/src/")
                 except OSError:
                     pass
 

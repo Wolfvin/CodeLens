@@ -96,12 +96,19 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 0
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
 
     Returns a summary-level outline (not per-function detail).
+
+    Args:
+        workspace: Path to workspace root.
+        file_filter: Optional glob filter for file names.
+        config: Optional configuration dict.
+        max_files: Maximum number of files to outline (0 = unlimited).
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -116,6 +123,7 @@ def get_workspace_outline(
 
     outlines = []
     errors = []
+    files_processed = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -124,6 +132,10 @@ def get_workspace_outline(
             continue
 
         for filename in filenames:
+            # Respect max_files limit (0 = unlimited)
+            if max_files > 0 and files_processed >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in source_extensions:
                 continue
@@ -139,10 +151,14 @@ def get_workspace_outline(
                 continue
 
             result = get_file_outline(file_path, workspace, detail_level="minimal")
+            files_processed += 1
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+
+        if max_files > 0 and files_processed >= max_files:
+            break
 
     return {
         "status": "ok",

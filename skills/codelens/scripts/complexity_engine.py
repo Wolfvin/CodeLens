@@ -70,7 +70,8 @@ def compute_complexity(
     threshold: Optional[int] = None,
     config: Optional[Dict] = None,
     sort_by: Optional[str] = None,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Compute cyclomatic and cognitive complexity for all functions in the workspace.
@@ -92,7 +93,6 @@ def compute_complexity(
 
     function_results: List[Dict] = []
     files_scanned = 0
-    MAX_FILES = 5000  # v5.8: Increased from 3000 to handle large repos like deno
     MAX_FUNCTIONS = 8000  # Cap total functions to analyze
 
     for root, dirs, filenames in os.walk(workspace):
@@ -102,7 +102,7 @@ def compute_complexity(
             continue
 
         for filename in filenames:
-            if files_scanned >= MAX_FILES:
+            if files_scanned >= max_files:
                 break
 
             ext = os.path.splitext(filename)[1].lower()

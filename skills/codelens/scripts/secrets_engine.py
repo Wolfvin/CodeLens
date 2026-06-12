@@ -405,7 +405,8 @@ ENTROPY_EXCLUSION_PATTERNS = [
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -417,6 +418,7 @@ def detect_secrets(
         workspace: Absolute path to workspace
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
+        max_files: Maximum number of files to scan (default: 5000)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -436,6 +438,9 @@ def detect_secrets(
             continue
 
         for filename in filenames:
+            if files_scanned >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue

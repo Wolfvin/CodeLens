@@ -5,6 +5,43 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] — 2026-06-12
+
+### Tested against database & network-themed repos
+
+Real-world testing on 7 repos across C, C++, Python, JS/TS, and Rust:
+- **Redis** (C, 30MB, 1842 files) — 19,025 backend nodes, 4,523 edges
+- **LevelDB** (C++, 1.9MB, 181 files) — 1,557 backend nodes, 778 edges
+- **RethinkDB** (C++, 39MB, 1930 files) — 21,477 backend nodes, 25,647 edges
+- **Axios** (JS/TS, 5.5MB, 478 files) — HTTP client library
+- **Got** (JS/TS, 2.6MB, 149 files) — Node.js HTTP request library
+- **HTTPie** (Python, 4.4MB, 294 files) — Modern HTTP client
+- **Reqwest** (Rust, 1.9MB, 123 files) — Rust HTTP client
+
+### Fixed
+
+- **CRITICAL: `perf-hint` command crash**: `detect_perf_hints()` did not accept `max_files` parameter but the command passed it, causing TypeError crash. Added `max_files` parameter to `detect_perf_hints()` with default value of `MAX_FILES_TO_SCAN` (5000). Now uses the parameter instead of hardcoded constant.
+- **CRITICAL: `scan` and `handbook` WARNING on every run**: `get_workspace_outline()` did not accept `max_files` parameter but `write_output_files()` and `handbook` both passed it, causing TypeError WARNING on every scan and handbook execution. Added `max_files` parameter to `get_workspace_outline()` with proper file limiting logic.
+- **CRITICAL: `perf-hint` early return used `findings` key**: When an unknown category was passed, the early return dict used `findings` key instead of the current `hints` key. Updated to `hints` for API consistency.
+- **`max_files` parameter missing from 4 engine functions**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` all lacked `max_files` parameter despite their command handlers passing it via `**kwargs`. Added `max_files` parameter to all four engines with proper file scan limiting.
+- **`pyproject.toml` syntax error**: Missing newlines between `description`, `readme`, and `requires-python` fields on line 8-9 caused `tomllib` parse failure. Fixed formatting.
+- **`has_rust_backend` key missing from framework detection**: Tests expected this key but it was never set. Added `has_rust_backend` field to detected dict, set to `True` when Tauri or Rust web frameworks (axum, actix, rocket) are detected.
+- **`is_monorepo` key missing from framework detection**: Tests expected this key but it was never set. Added `is_monorepo` field with detection for npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
+- **`lockfile` key missing from framework detection**: Tests expected lockfile type detection. Added `lockfile` field that detects pnpm-lock.yaml, yarn.lock, bun.lock, and package-lock.json.
+- **Tauri monorepo config paths**: For Tauri monorepo projects, `src/` was incorrectly added to `backend_paths` by the Rust handler. Now properly removed and placed in `frontend_paths`. Monorepo sub-app paths like `apps/<name>/src/` are now correctly added to frontend paths.
+- **Rust parser regex syntax**: `fallback_rust.py` used `?<name>` named group syntax (Perl/JS style) but Python's `re` module requires `?P<name>`. Caused `re.error` crash on any Rust impl block parsing.
+- **Missing framework signatures**: Added `trpc`, `zustand`, and `vite` framework signatures that tests expected but were not in `FRAMEWORK_SIGNATURES`.
+- **Perf-hint test API mismatch**: Tests used `findings` key but engine returns `hints`. Updated tests to match the current API.
+
+### Added
+
+- **Lockfile type detection**: `detect_frameworks()` now returns `lockfile` field with values: `"pnpm"`, `"yarn"`, `"bun"`, or `"npm"`.
+- **Monorepo detection**: `detect_frameworks()` now returns `is_monorepo` field. Detects npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
+- **`has_rust_backend` detection**: `detect_frameworks()` returns `has_rust_backend: true` when Tauri or Rust web frameworks (axum, actix, rocket) are detected via Cargo.toml.
+- **tRPC, Zustand, Vite framework signatures**: New framework signatures for popular JS/TS tools.
+- **`max_files` support in outline engine**: `get_workspace_outline()` now accepts and respects `max_files` parameter (0 = unlimited) to prevent timeout on huge repos.
+- **File limiting in 4 engines**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` now all respect `max_files` parameter for consistent behavior across commands.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

@@ -49,7 +49,8 @@ def detect_smells(
     workspace: str,
     categories: Optional[List[str]] = None,
     severity_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Detect code smells across the workspace.
@@ -62,6 +63,7 @@ def detect_smells(
                     duplicate_pattern, inconsistent)
         severity_filter: Optional filter: "info", "warning", "critical"
         config: CodeLens config
+        max_files: Maximum number of files to scan (default: 5000)
 
     Returns:
         Dict with smells found, categorized and prioritized
@@ -90,6 +92,9 @@ def detect_smells(
             continue
 
         for filename in filenames:
+            if files_scanned >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
