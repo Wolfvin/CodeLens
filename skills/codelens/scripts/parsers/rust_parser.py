@@ -19,35 +19,12 @@ Handles:
 from typing import Dict, List, Any, Optional
 from tree_sitter import Node
 
-from base_parser import BaseParser
+from base_parser import BaseParser, RUST_SKIP_NAMES
 from grammar_loader import get_grammar_loader
 
 
-# Rust builtins and macros to skip
-SKIP_NAMES = {
-    'if', 'else', 'for', 'while', 'loop', 'match', 'return', 'break', 'continue',
-    'let', 'mut', 'pub', 'fn', 'struct', 'enum', 'impl', 'trait', 'use', 'mod',
-    'crate', 'super', 'self', 'Self', 'where', 'type', 'const', 'static',
-    'true', 'false', 'as', 'in', 'ref', 'move', 'dyn', 'async', 'await',
-    'Some', 'None', 'Ok', 'Err',
-    # Standard macros
-    'println', 'eprintln', 'print', 'eprint', 'format', 'format_args',
-    'vec', 'boxed', 'slice', 'array',
-    'panic', 'assert', 'assert_eq', 'assert_ne', 'debug_assert', 'debug_assert_eq',
-    'todo', 'unimplemented', 'unreachable', 'compile_error',
-    'write', 'writeln', 'read_line',
-    'derive', 'test', 'cfg', 'allow', 'warn', 'doc', 'feature',
-    'include', 'include_str', 'include_bytes',
-    'concat', 'env', 'option_env', 'file', 'line', 'column', 'module_path',
-    'thread_local', 'lazy_static',
-    # Common std types
-    'String', 'Vec', 'Box', 'Rc', 'Arc', 'Cell', 'RefCell',
-    'HashMap', 'HashSet', 'BTreeMap', 'BTreeSet',
-    'Result', 'Option', 'Cow', 'Duration', 'Instant',
-    'Default', 'Display', 'Debug', 'Clone', 'Copy', 'From', 'Into',
-    'FromStr', 'ToString', 'Iterator', 'IntoIterator',
-    'new', 'default', 'from', 'into', 'clone', 'drop',
-}
+# Rust builtins and macros to skip — imported from base_parser (single source of truth)
+SKIP_NAMES = RUST_SKIP_NAMES
 
 
 class RustParser(BaseParser):

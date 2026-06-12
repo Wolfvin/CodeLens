@@ -406,7 +406,8 @@ def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = 5000
+    max_files: int = 5000,
+    max_results: int = 200
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -419,6 +420,7 @@ def detect_secrets(
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
         max_files: Maximum number of files to scan (default: 5000)
+        max_results: Maximum findings to return (default: 200, prevents runaway)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -476,6 +478,10 @@ def detect_secrets(
                 entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
                 findings.extend(entropy_findings)
 
+            # Early termination: stop scanning once we have enough findings
+            if len(findings) >= max_results * 2:  # 2x buffer for dedup
+                break
+
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
     for env_f in env_files:
@@ -506,7 +512,7 @@ def detect_secrets(
         "severity_filter": severity,
         "stats": stats,
         "risk": risk,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "findings": findings[:max_results],  # Cap to avoid explosion
         "env_exposed": env_exposed,
         "recommendations": recommendations,
     }

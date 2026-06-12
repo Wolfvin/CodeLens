@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timezone
 
 
-def validate_registry(workspace: str) -> Dict[str, Any]:
+def validate_registry(workspace: str, max_results: int = 200, max_files: int = 10000) -> Dict[str, Any]:
     """
     Validate the CodeLens registry against the actual file system.
 
@@ -23,6 +23,11 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
     2. Source files that exist but aren't in the registry
     3. Stale references (line numbers that don't match actual content)
     4. Orphan entries (entries with no valid file references)
+
+    Args:
+        workspace: Absolute path to workspace
+        max_results: Maximum issues per category (prevents runaway on huge repos)
+        max_files: Maximum disk files to enumerate (prevents slow os.walk)
 
     Returns categorized issues with counts.
     """
@@ -58,6 +63,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
 
     # ─── Check 1: Missing files ────────────────────────
     for rel_path in registry_files:
+        if len(issues["missing_files"]) >= max_results:
+            break
         if not rel_path:
             continue
         abs_path = os.path.join(workspace, rel_path)
@@ -85,6 +92,7 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             ignore_dirs.add(p.rstrip("/"))
 
     disk_files: Set[str] = set()
+    files_walked = 0
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         if '.codelens' in root:
@@ -92,13 +100,20 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             continue
 
         for filename in filenames:
+            files_walked += 1
+            if files_walked > max_files:
+                break
             ext = os.path.splitext(filename)[1].lower()
             if ext in source_extensions:
                 rel_path = os.path.relpath(os.path.join(root, filename), workspace)
                 disk_files.add(rel_path)
+        if files_walked > max_files:
+            break
 
     unregistered = disk_files - registry_files
     for rel_path in sorted(unregistered):
+        if len(issues["unregistered_files"]) >= max_results:
+            break
         # Skip empty __init__.py files — they have no symbols to register
         if rel_path.endswith('__init__.py'):
             abs_init = os.path.join(workspace, rel_path)
@@ -159,6 +174,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
     # ─── Check 4: Orphan entries ───────────────────────
     # Frontend entries where ALL referenced files are missing
     for cls in frontend.get("classes", []):
+        if len(issues["orphan_entries"]) >= max_results:
+            break
         all_refs = cls.get("css", []) + cls.get("js", [])
         if all_refs and all(
             not os.path.exists(os.path.join(workspace, r.get("path", "__nonexistent__")))
@@ -172,6 +189,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     for id_entry in frontend.get("ids", []):
+        if len(issues["orphan_entries"]) >= max_results:
+            break
         all_refs = (id_entry.get("defined_in_html", []) +
                     id_entry.get("css", []) +
                     id_entry.get("js", []))
@@ -187,6 +206,8 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     for node in backend.get("nodes", []):
+        if len(issues["orphan_entries"]) >= max_results:
+            break
         if node.get("file"):
             if not os.path.exists(os.path.join(workspace, node["file"])):
                 issues["orphan_entries"].append({

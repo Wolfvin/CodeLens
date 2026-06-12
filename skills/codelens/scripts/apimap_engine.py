@@ -254,11 +254,43 @@ def map_api_routes(
 
     # ─── Post-processing ──────────────────────────────────────
 
-    # Attach middleware to routes
+    # Attach middleware to routes — but only from the same framework family.
+    # Previously ALL global middleware was attached to ALL routes, causing
+    # cross-contamination (e.g., Python Django false-positives on Express routes).
+    _FRAMEWORK_FAMILY = {
+        "express", "fastify", "koa", "hono", "nextjs", "nuxt",  # JS/TS
+        "graphql", "grpc", "trpc", "orpc",  # API specs (multi-lang)
+    }
+    _PYTHON_FAMILY = {"flask", "fastapi", "django"}
+    _PHP_FAMILY = {"laravel", "symfony", "slim"}
+
+    def _same_framework_family(mw_file: str, route: Dict) -> bool:
+        """Check if middleware and route belong to the same framework family."""
+        route_fw = route.get("framework", "unknown")
+        route_file = route.get("file", "")
+        # Same-file middleware always applies
+        if mw_file == route_file:
+            return True
+        # JS/TS middleware → JS/TS routes
+        if route_fw in _FRAMEWORK_FAMILY and any(mw_file.endswith(e) for e in ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx')):
+            return True
+        # Python middleware → Python routes
+        if route_fw in _PYTHON_FAMILY and mw_file.endswith('.py'):
+            return True
+        # PHP middleware → PHP routes
+        if route_fw in _PHP_FAMILY and mw_file.endswith('.php'):
+            return True
+        # SvelteKit routes
+        if route_fw == "sveltekit" and any(mw_file.endswith(e) for e in ('.js', '.ts', '.svelte')):
+            return True
+        return False
+
     for mw in global_middleware:
         scope = mw.get("scope", "global")
         if scope == "global":
             for route in routes:
+                if not _same_framework_family(mw["file"], route):
+                    continue
                 route.setdefault("middleware_chain", []).append({
                     "name": mw["name"],
                     "type": mw.get("type", "unknown"),
@@ -461,7 +493,10 @@ def _extract_inline_middleware(
     middleware = []
 
     # Find the arguments section
-    paren_start = content.find('(', start_pos - 1)
+    # Search BACKWARD from start_pos to find the opening '(' of the current
+    # route call. Forward search (content.find) would find the '(' of the
+    # NEXT route call, extracting the wrong arguments.
+    paren_start = content.rfind('(', 0, start_pos)
     if paren_start < 0:
         return middleware
 
@@ -553,7 +588,10 @@ def _infer_handler_name(content: str, offset: int) -> str:
 
 def _infer_handler_name_from_args(content: str, start_pos: int) -> str:
     """Infer handler name from the last argument of a route call."""
-    paren_start = content.find('(', start_pos - 1)
+    # Search BACKWARD from start_pos to find the opening '(' of the current
+    # route call. Forward search (content.find) would find the '(' of the
+    # NEXT route call, extracting the wrong arguments.
+    paren_start = content.rfind('(', 0, start_pos)
     if paren_start < 0:
         return "anonymous"
 
@@ -1358,6 +1396,33 @@ def _extract_python_decorator_middleware(
     return middleware
 
 
+def _is_inside_middleware_list(lines: List[str], current_line_idx: int) -> bool:
+    """Check if the current line is inside a Django MIDDLEWARE = [...] or (...) block.
+
+    Walks backward from the current line to find a line like 'MIDDLEWARE = [' or
+    'MIDDLEWARE = (' and ensures we haven't closed the bracket/paren yet.
+    This prevents false positives from files that merely mention 'MIDDLEWARE'
+    as a variable name (e.g., skip-name sets in engine code).
+    """
+    depth = 0  # bracket/paren depth
+    for i in range(current_line_idx, -1, -1):
+        line = lines[i].strip()
+        # If we hit a closing bracket/paren before finding the opener, we're outside
+        if i < current_line_idx:
+            if line.endswith(']') or line.endswith(')'):
+                # Check if this closes the MIDDLEWARE list
+                # Simple heuristic: if the line is just ']' or ')', it closes
+                if line in (']', ')', '],', '),'):
+                    return False
+        # Check if this line starts a MIDDLEWARE assignment
+        if re.match(r'^MIDDLEWARE\s*=\s*[\[(]', line):
+            return True
+        # If we hit a class/function def or another assignment, we're outside
+        if re.match(r'^(class |def |[A-Z_]+\s*=\s*[\[(])', line) and i < current_line_idx:
+            return False
+    return False
+
+
 def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
     """Extract middleware declarations from Python files (Flask/Django/FastAPI)."""
     middleware = []
@@ -1379,17 +1444,25 @@ def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
             })
 
         # Django MIDDLEWARE list entries
-        m = re.match(r"[\'\"](\w[\w.]+)[\'\"]\s*,", stripped)
-        if m and 'MIDDLEWARE' in content[:content.find(stripped) + len(stripped)]:
-            mw_name = m.group(1).split('.')[-1]
-            mw_type = _classify_middleware(mw_name)
-            middleware.append({
-                "name": mw_name,
-                "type": mw_type,
-                "scope": "global",
-                "file": rel_path,
-                "line": i + 1,
-            })
+        # Only match if we're inside a MIDDLEWARE = [...] or MIDDLEWARE = (...) block.
+        # The naive check 'MIDDLEWARE in content[:offset]' caused massive false positives
+        # in any file that merely mentions the word "MIDDLEWARE" (e.g., skip-name lists).
+        # Instead, track whether we're inside a MIDDLEWARE assignment block.
+        if _is_inside_middleware_list(lines, i):
+            m = re.match(r"[\'\"](\w[\w.]+)[\'\"]\s*,?", stripped)
+            if m:
+                mw_name = m.group(1).split('.')[-1]
+                # Skip names that look like Python/JS constants, not Django middleware paths
+                if mw_name.isupper() or '_' not in m.group(1) and not m.group(1).startswith('django.'):
+                    continue
+                mw_type = _classify_middleware(mw_name)
+                middleware.append({
+                    "name": mw_name,
+                    "type": mw_type,
+                    "scope": "global",
+                    "file": rel_path,
+                    "line": i + 1,
+                })
 
         # FastAPI: app.add_middleware(...)
         m = re.match(r'app\s*\.\s*add_middleware\s*\(\s*(\w+)', stripped)
