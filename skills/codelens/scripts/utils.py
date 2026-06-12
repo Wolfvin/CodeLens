@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
@@ -389,7 +390,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.9.3"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -403,6 +404,285 @@ GENERATED_FILE_PATTERNS = frozenset({
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
 
+
+# ─── Tauri Artifact Scanning ──────────────────────────────
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and IPC mapping.
+
+    Analyzes:
+    - Tauri IPC commands from Rust source (#[tauri::command])
+    - tauri.conf.json configuration
+    - Capabilities/permissions in src-tauri/capabilities/
+    - Tauri plugin usage
+    - Sidecar configuration
+    - Deep-link schemes
+    - CSP and WebView security settings
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with Tauri analysis, or None if not a Tauri project.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Find src-tauri directory (could be at root or in a subdirectory)
+    tauri_dir = None
+    candidates = [os.path.join(workspace, 'src-tauri')]
+    # Also check subdirectories (monorepo pattern like apps/app/src-tauri)
+    for root, dirs, _ in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for d in dirs:
+            if d == 'src-tauri':
+                candidate = os.path.join(root, d)
+                if os.path.isfile(os.path.join(candidate, 'tauri.conf.json')):
+                    candidates.append(candidate)
+    for c in candidates:
+        if os.path.isdir(c):
+            tauri_dir = c
+            break
+
+    if not tauri_dir:
+        return None
+
+    result = {
+        "tauri_dir": os.path.relpath(tauri_dir, workspace),
+        "ipc_commands": [],
+        "ipc_command_count": 0,
+        "config": {},
+        "capabilities": [],
+        "plugins": [],
+        "sidecars": [],
+        "deep_links": [],
+        "security": {},
+    }
+
+    # 1. Parse tauri.conf.json
+    conf_path = os.path.join(tauri_dir, 'tauri.conf.json')
+    tauri_version = 2  # default assumption for new projects
+    if os.path.isfile(conf_path):
+        try:
+            with open(conf_path, 'r', encoding='utf-8') as f:
+                conf = json.load(f)
+            result["config"] = _extract_tauri_config(conf)
+            # Detect Tauri version from config structure
+            if 'tauri' in conf:
+                tauri_version = 1  # v1 has nested 'tauri' key
+            # Extract sidecars
+            sidecars = conf.get('tauri', {}).get('bundle', {}).get('externalBin', [])
+            if not sidecars:
+                sidecars = conf.get('bundle', {}).get('externalBin', [])
+            result["sidecars"] = sidecars
+            # Extract deep-link schemes
+            plugins = conf.get('plugins', {})
+            if isinstance(plugins, dict):
+                deep_link = plugins.get('deep-link', {})
+                if isinstance(deep_link, dict):
+                    schemes = deep_link.get('schemes', deep_link.get('desktop', {}).get('schemes', []))
+                    result["deep_links"] = schemes if isinstance(schemes, list) else []
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # 2. Scan Rust source for #[tauri::command] functions
+    rust_src_dir = os.path.join(tauri_dir, 'src')
+    ipc_commands = []
+    if os.path.isdir(rust_src_dir):
+        ipc_commands = _scan_rust_tauri_commands(rust_src_dir, workspace)
+    # Also check plugins directory
+    plugins_dir = os.path.join(tauri_dir, 'plugins')
+    if os.path.isdir(plugins_dir):
+        for entry in os.listdir(plugins_dir):
+            plugin_src = os.path.join(plugins_dir, entry, 'src')
+            if os.path.isdir(plugin_src):
+                ipc_commands.extend(_scan_rust_tauri_commands(plugin_src, workspace))
+    result["ipc_commands"] = ipc_commands[:100]
+    result["ipc_command_count"] = len(ipc_commands)
+
+    # 3. Scan capabilities directory
+    caps_dir = os.path.join(tauri_dir, 'capabilities')
+    if os.path.isdir(caps_dir):
+        for cap_file in os.listdir(caps_dir):
+            if cap_file.endswith('.json'):
+                try:
+                    with open(os.path.join(caps_dir, cap_file), 'r', encoding='utf-8') as f:
+                        cap_data = json.load(f)
+                    result["capabilities"].append({
+                        "file": cap_file,
+                        "identifier": cap_data.get('identifier', ''),
+                        "windows": cap_data.get('windows', []),
+                        "permissions": cap_data.get('permissions', [])[:20],
+                    })
+                except (json.JSONDecodeError, IOError):
+                    pass
+
+    # 4. Detect Tauri plugins from Cargo.toml dependencies
+    cargo_path = os.path.join(tauri_dir, 'Cargo.toml')
+    if os.path.isfile(cargo_path):
+        result["plugins"] = _detect_tauri_plugins(cargo_path)
+
+    # 5. Security analysis
+    result["security"] = _analyze_tauri_security(result)
+
+    return result
+
+
+def _extract_tauri_config(conf: dict) -> dict:
+    """Extract key configuration from tauri.conf.json."""
+    # Handle both v1 (nested 'tauri' key) and v2 (flat) config formats
+    tauri_conf = conf.get('tauri', conf)
+    result = {
+        "app_name": conf.get('productName', conf.get('identifier', '')),
+        "identifier": conf.get('identifier', ''),
+        "version": conf.get('version', ''),
+    }
+    # Security settings
+    security = tauri_conf.get('security', {})
+    if security:
+        result["csp"] = security.get('csp', None)
+        result["dangerous_disable_asset_csp_modification"] = security.get('dangerousDisableAssetCspModification', None)
+        result["asset_protocol"] = security.get('assetProtocol', {}).get('enable', False) if isinstance(security.get('assetProtocol'), dict) else None
+    # Window settings
+    windows = tauri_conf.get('windows', [])
+    if windows:
+        result["window_count"] = len(windows)
+    return result
+
+
+def _scan_rust_tauri_commands(rust_src_dir: str, workspace: str) -> list:
+    """Scan Rust source files for #[tauri::command] annotated functions."""
+    import re
+    commands = []
+    # Also match the two-line pattern
+    attr_pattern = re.compile(r'#\[tauri::command')
+    fn_pattern = re.compile(r'(?:pub\s+)?(?:async\s+)?fn\s+(\w+)')
+
+    for root, dirs, filenames in os.walk(rust_src_dir):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for filename in filenames:
+            if not filename.endswith('.rs'):
+                continue
+            file_path = os.path.join(root, filename)
+            content = safe_read_file(file_path)
+            if not content:
+                continue
+            rel_path = os.path.relpath(file_path, workspace)
+            lines = content.split('\n')
+            for i, line in enumerate(lines):
+                if attr_pattern.search(line):
+                    # Look for fn declaration in next few lines
+                    for offset in range(0, 6):
+                        target = i + offset
+                        if target >= len(lines):
+                            break
+                        fn_match = fn_pattern.search(lines[target])
+                        if fn_match:
+                            fn_name = fn_match.group(1)
+                            ipc_name = _snake_to_camel(fn_name)
+                            commands.append({
+                                "rust_name": fn_name,
+                                "ipc_name": ipc_name,
+                                "file": rel_path,
+                                "line": target + 1,
+                            })
+                            break
+    return commands
+
+
+def _snake_to_camel(name: str) -> str:
+    """Convert snake_case to camelCase (Tauri IPC naming convention)."""
+    if '_' not in name:
+        return name
+    parts = name.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:] if p)
+
+
+def _detect_tauri_plugins(cargo_path: str) -> list:
+    """Detect Tauri plugins from Cargo.toml dependencies."""
+    plugins = []
+    try:
+        with open(cargo_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        for line in content.split('\n'):
+            stripped = line.strip()
+            if 'tauri-plugin-' in stripped:
+                # Extract plugin name
+                match = re.search(r'tauri-plugin-([\w-]+)', stripped)
+                if match:
+                    plugin_name = match.group(1)
+                    if plugin_name not in [p['name'] for p in plugins]:
+                        plugins.append({"name": plugin_name})
+    except IOError:
+        pass
+    return plugins
+
+
+def _analyze_tauri_security(analysis: dict) -> dict:
+    """Analyze Tauri security posture from collected data."""
+    issues = []
+    config = analysis.get('config', {})
+
+    # Check CSP
+    if not config.get('csp'):
+        issues.append({
+            "severity": "medium",
+            "message": "No Content Security Policy (CSP) configured",
+            "suggestion": "Add a CSP header in tauri.conf.json to prevent XSS attacks"
+        })
+
+    # Check asset protocol
+    if config.get('asset_protocol'):
+        issues.append({
+            "severity": "high",
+            "message": "Asset protocol is enabled — allows reading arbitrary files",
+            "suggestion": "Restrict asset protocol scope to specific directories"
+        })
+
+    # Check dangerous CSP modification
+    if config.get('dangerous_disable_asset_csp_modification'):
+        issues.append({
+            "severity": "critical",
+            "message": "dangerousDisableAssetCspModification is enabled",
+            "suggestion": "This allows loading remote code. Disable in production."
+        })
+
+    # Check IPC commands without capability restrictions
+    cap_permissions = set()
+    for cap in analysis.get('capabilities', []):
+        for perm in cap.get('permissions', []):
+            if isinstance(perm, str):
+                cap_permissions.add(perm)
+            elif isinstance(perm, dict):
+                cap_permissions.add(perm.get('identifier', ''))
+
+    unrestricted_cmds = []
+    for cmd in analysis.get('ipc_commands', []):
+        ipc_name = cmd.get('ipc_name', '')
+        # Check if any capability explicitly allows this command
+        cmd_allowed = any(
+            f'allow-{ipc_name}' in cap_permissions or
+            f'allow-{cmd.get("rust_name", "")}' in cap_permissions or
+            'core:default' in cap_permissions
+            for _ in [1]
+        )
+        if not cmd_allowed and cap_permissions:
+            unrestricted_cmds.append(ipc_name or cmd.get('rust_name', ''))
+
+    if unrestricted_cmds:
+        issues.append({
+            "severity": "low",
+            "message": f"{len(unrestricted_cmds)} IPC command(s) not explicitly restricted by capabilities",
+            "commands": unrestricted_cmds[:10],
+            "suggestion": "Add explicit 'allow-<command>' permissions in capabilities"
+        })
+
+    return {
+        "issues": issues,
+        "issue_count": len(issues),
+    }
+
+
+# ─── Generated File Detection ───────────────────────────────
 
 def is_generated_file(filename: str) -> bool:
     """Check if a filename looks like a generated or lock file that should be skipped.

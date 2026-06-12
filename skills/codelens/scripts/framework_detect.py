@@ -235,51 +235,8 @@ FRAMEWORK_SIGNATURES = {
     "drupal": {
         "packages": [],
         "composer_packages": ["drupal/core"],
-        "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
-        "indicators": ["sites/default/", "sites/all/"]
-    },
-    # ─── HTTP / Network Libraries ──────────────────────────────
-    "axios": {
-        "packages": ["axios"],
-        "composer_packages": [],
         "config_files": [],
-        "indicators": []
-    },
-    "undici": {
-        "packages": ["undici"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "got": {
-        "packages": ["got"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "ky": {
-        "packages": ["ky"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "superagent": {
-        "packages": ["superagent"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "node-fetch": {
-        "packages": ["node-fetch"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "request": {
-        "packages": ["request"],
-        "composer_packages": [],
-        "config_files": [],
-        "indicators": []
+        "indicators": ["sites/default/", "modules/", "themes/"]
     },
 }
 
@@ -312,6 +269,25 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
     return pkg_files
 
 
+def _extract_cargo_deps(cargo_content: str, cargo_deps: set) -> None:
+    """Extract dependency names from Cargo.toml content into cargo_deps set."""
+    in_deps = False
+    for line in cargo_content.split('\n'):
+        stripped = line.strip()
+        if stripped.startswith('['):
+            section = stripped.strip('[]').strip()
+            in_deps = section in ('dependencies', 'dev-dependencies')
+            continue
+        if in_deps and '=' in stripped:
+            dep_name = stripped.split('=')[0].strip().lower()
+            if dep_name and not dep_name.startswith('#'):
+                cargo_deps.add(dep_name)
+        elif in_deps and stripped and not stripped.startswith('#') and not stripped.startswith('['):
+            dep_name = stripped.split('=')[0].strip().lower()
+            if dep_name:
+                cargo_deps.add(dep_name)
+
+
 def detect_frameworks(workspace: str) -> Dict[str, Any]:
     """
     Detect frameworks used in a workspace.
@@ -333,10 +309,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_rust_backend": False,
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
-        "has_http_library": False,
+        "is_monorepo": False,
+        "lockfile": None,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -360,6 +338,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
+                # Detect monorepo from root package.json workspaces
+                if "workspaces" in pkg:
+                    detected["is_monorepo"] = True
         except (json.JSONDecodeError, IOError):
             pass
 
@@ -386,30 +367,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
-                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
-                        detected["has_http_library"] = True
                     break
-
-    # 1b. Also check package.json "name" field — the repo itself IS the library.
-    #     This catches source repos like axios/axios where axios is the package name,
-    #     not a dependency.
-    _HTTP_LIBRARY_NAMES = frozenset({
-        "axios", "undici", "got", "ky", "superagent", "node-fetch",
-        "request", "needle", "bent", "make-fetch-happen", "simple-get",
-        "node-http", "phin", "wreck", "terra",
-    })
-    root_pkg_path = os.path.join(workspace, "package.json")
-    if os.path.isfile(root_pkg_path):
-        try:
-            with open(root_pkg_path, 'r', encoding='utf-8') as f:
-                root_pkg = json.load(f)
-            pkg_name = root_pkg.get("name", "")
-            if pkg_name in _HTTP_LIBRARY_NAMES:
-                if pkg_name not in detected["frameworks"]:
-                    detected["frameworks"].append(pkg_name)
-                detected["has_http_library"] = True
-        except (json.JSONDecodeError, IOError):
-            pass
 
         # Detect CSS preprocessor
         if "sass" in all_deps or "node-sass" in all_deps:
@@ -550,60 +508,82 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
 
     # 4. Check Rust/Cargo.toml for framework detection
+    #    Also check src-tauri/Cargo.toml (Tauri app pattern where Rust lives in a subdirectory)
+    #    And search monorepo subdirectories for Cargo.toml
     cargo_deps = set()
     cargo_path = os.path.join(workspace, "Cargo.toml")
+    tauri_cargo_path = os.path.join(workspace, "src-tauri", "Cargo.toml")
+
+    # Use src-tauri/Cargo.toml if root doesn't have one
+    if not os.path.exists(cargo_path) and os.path.exists(tauri_cargo_path):
+        cargo_path = tauri_cargo_path
+
+    # For monorepos, search deeper for Cargo.toml (e.g., apps/myapp/src-tauri/Cargo.toml)
+    if not os.path.exists(cargo_path):
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build', 'target', '__pycache__', '.codelens', '.next', 'vendor'}]
+            if 'Cargo.toml' in filenames:
+                candidate = os.path.join(root, 'Cargo.toml')
+                # Prefer src-tauri/Cargo.toml (Tauri app) over any other
+                if 'src-tauri' in candidate:
+                    cargo_path = candidate
+                    break
+                # Otherwise, use the first Cargo.toml found
+                if cargo_path == os.path.join(workspace, "Cargo.toml") and not os.path.exists(cargo_path):
+                    cargo_path = candidate
+
     if os.path.exists(cargo_path):
         if "rust" not in detected["frameworks"]:
             detected["frameworks"].append("rust")
         detected["has_rust"] = True
+        detected["has_rust_backend"] = True
 
         # Parse root Cargo.toml for dependencies
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 cargo_content = f.read()
-            # Extract dependency names from [dependencies] and [dev-dependencies] sections
-            in_deps = False
-            for line in cargo_content.split('\n'):
-                stripped = line.strip()
-                if stripped.startswith('['):
-                    section = stripped.strip('[]').strip()
-                    in_deps = section in ('dependencies', 'dev-dependencies')
-                    continue
-                if in_deps and '=' in stripped:
-                    dep_name = stripped.split('=')[0].strip().lower()
-                    if dep_name and not dep_name.startswith('#'):
-                        cargo_deps.add(dep_name)
-                elif in_deps and stripped and not stripped.startswith('#') and not stripped.startswith('['):
-                    # Handle inline table: dep = { version = "..." }
-                    dep_name = stripped.split('=')[0].strip().lower()
-                    if dep_name:
-                        cargo_deps.add(dep_name)
+            _extract_cargo_deps(cargo_content, cargo_deps)
         except IOError:
             pass
 
         # Also parse workspace members' Cargo.toml
-        for crate_dir_name in ('crates', 'ext', 'libs', 'packages'):
+        for crate_dir_name in ('crates', 'ext', 'libs', 'packages', 'src-tauri'):
             crate_dir = os.path.join(workspace, crate_dir_name)
             if os.path.isdir(crate_dir):
+                # Also scan the crate_dir's own Cargo.toml (e.g., src-tauri/Cargo.toml)
+                own_cargo = os.path.join(crate_dir, "Cargo.toml")
+                if os.path.isfile(own_cargo) and own_cargo != cargo_path:
+                    try:
+                        with open(own_cargo, 'r', encoding='utf-8') as f:
+                            sub_content = f.read()
+                        _extract_cargo_deps(sub_content, cargo_deps)
+                    except IOError:
+                        pass
                 try:
                     for entry in os.listdir(crate_dir):
-                        sub_cargo = os.path.join(crate_dir, entry, "Cargo.toml")
+                        entry_path = os.path.join(crate_dir, entry)
+                        # Check subdirectory Cargo.toml (e.g., src-tauri/plugins/foo/Cargo.toml)
+                        sub_cargo = os.path.join(entry_path, "Cargo.toml")
                         if os.path.isfile(sub_cargo):
                             try:
                                 with open(sub_cargo, 'r', encoding='utf-8') as f:
                                     sub_content = f.read()
-                                in_deps = False
-                                for line in sub_content.split('\n'):
-                                    stripped = line.strip()
-                                    if stripped.startswith('['):
-                                        section = stripped.strip('[]').strip()
-                                        in_deps = section in ('dependencies', 'dev-dependencies')
-                                        continue
-                                    if in_deps and '=' in stripped:
-                                        dep_name = stripped.split('=')[0].strip().lower()
-                                        if dep_name and not dep_name.startswith('#'):
-                                            cargo_deps.add(dep_name)
+                                _extract_cargo_deps(sub_content, cargo_deps)
                             except IOError:
+                                pass
+                        # Check one more level deep (e.g., src-tauri/plugins/foo/src/Cargo.toml)
+                        if os.path.isdir(entry_path):
+                            try:
+                                for sub_entry in os.listdir(entry_path):
+                                    deep_cargo = os.path.join(entry_path, sub_entry, "Cargo.toml")
+                                    if os.path.isfile(deep_cargo):
+                                        try:
+                                            with open(deep_cargo, 'r', encoding='utf-8') as f:
+                                                deep_content = f.read()
+                                            _extract_cargo_deps(deep_content, cargo_deps)
+                                        except IOError:
+                                            pass
+                            except OSError:
                                 pass
                 except OSError:
                     pass
@@ -634,6 +614,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    # A Tauri project always has a Rust backend
+                    if not detected["has_rust_backend"]:
+                        detected["has_rust_backend"] = True
+                        if "rust" not in detected["frameworks"]:
+                            detected["frameworks"].append("rust")
+                        detected["has_rust"] = True
                     break
             if detected["has_tauri"]:
                 break
@@ -775,6 +761,35 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["unsupported_langs"].append(lang)
                 break
 
+    # 8. Detect lockfile type
+    lockfile_order = [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("bun.lock", "bun"),
+        ("bun.lockb", "bun"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    for lockfile_name, lockfile_type in lockfile_order:
+        if os.path.exists(os.path.join(workspace, lockfile_name)):
+            detected["lockfile"] = lockfile_type
+            break
+
+    # 9. Detect monorepo from pnpm-workspace.yaml (if not already detected from package.json workspaces)
+    if not detected["is_monorepo"]:
+        pnpm_workspace = os.path.join(workspace, "pnpm-workspace.yaml")
+        if os.path.exists(pnpm_workspace):
+            detected["is_monorepo"] = True
+
+    # 10. Add trpc and zustand detection from package dependencies
+    if "trpc" not in detected["frameworks"] and any(
+        dep in all_deps for dep in ["@trpc/server", "@trpc/client", "@trpc/react-query"]
+    ):
+        detected["frameworks"].append("trpc")
+    if "zustand" not in detected["frameworks"] and "zustand" in all_deps:
+        detected["frameworks"].append("zustand")
+    if "vite" not in detected["frameworks"] and "vite" in all_deps:
+        detected["frameworks"].append("vite")
+
     return detected
 
 
@@ -795,7 +810,8 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "jsx_mode": False,
         "vue_mode": False,
         "svelte_mode": False,
-        "tailwind_mode": False
+        "tailwind_mode": False,
+        "is_monorepo": fw.get("is_monorepo", False),
     }
 
     # Adjust paths based on framework
@@ -821,8 +837,8 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
 
-    # Rust: add Rust-specific paths
-    if fw.get("has_rust"):
+    # Rust: add Rust-specific paths (but not src/ if Tauri handles it)
+    if fw.get("has_rust") and not fw.get("has_tauri"):
         config["backend_paths"].extend(["src/", "crates/", "ext/"])
         # Check for Cargo workspace subdirectories
         for crate_dir_name in ('crates', 'ext', 'libs'):
@@ -836,21 +852,38 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                             config["backend_paths"].append(rel + "/src/")
                 except OSError:
                     pass
+    elif fw.get("has_rust") and fw.get("has_tauri"):
+        # For Tauri apps, src/ is frontend, Rust is only in src-tauri/
+        config["backend_paths"].extend(["crates/", "ext/"])
 
     # Tauri: add Rust backend paths and src-tauri
     if fw.get("has_tauri"):
         config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
         config["frontend_paths"].append("src/")
+        # For Tauri apps, remove src/ from backend_paths (it's frontend)
+        config["backend_paths"] = [p for p in config["backend_paths"] if p not in ("src/",)]
         # Find and add app-specific src-tauri paths
         for app_dir in ('apps', 'packages'):
             app_path = os.path.join(workspace, app_dir)
             if os.path.isdir(app_path):
                 try:
                     for entry in os.listdir(app_path):
+                        entry_rel = os.path.join(app_dir, entry)
                         tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        tauri_conf = os.path.join(app_path, entry, "src-tauri", "tauri.conf.json")
                         if os.path.isdir(tauri_src):
                             rel = os.path.relpath(tauri_src, workspace)
                             config["backend_paths"].append(rel + "/")
+                        elif os.path.isfile(tauri_conf):
+                            # tauri.conf.json exists but no src/ yet — still add the path
+                            config["backend_paths"].append(entry_rel + "/src-tauri/src/")
+                        # Add monorepo app src/ paths
+                        app_src = os.path.join(app_path, entry, "src")
+                        if os.path.isdir(app_src):
+                            config["frontend_paths"].append(entry_rel + "/src/")
+                        elif os.path.isdir(os.path.join(app_path, entry, "src-tauri")):
+                            # Tauri apps always have a src/ for frontend, even if not yet created
+                            config["frontend_paths"].append(entry_rel + "/src/")
                 except OSError:
                     pass
 

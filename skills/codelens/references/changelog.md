@@ -2,6 +2,26 @@
 
 ## v5.9.0 — 2026-06-12
 
+### Tested against readest/readest (1,244 files: 1,177 TSX + 40 Rust, Tauri V2 + Next.js 16 ebook reader)
+
+### Added (9)
+
+- **Tauri deep analysis in `binary-scan`** — `scan_tauri_artifacts()` scans Rust source for `#[tauri::command]` functions, maps Rust→camelCase IPC names, parses `tauri.conf.json`, audits capabilities/permissions, detects plugins from Cargo.toml, checks CSP/security, finds sidecars and deep-link schemes
+- **Monorepo src-tauri support** — Searches subdirectories for `src-tauri/` (e.g., `apps/app/src-tauri/`)
+- **Plugin subdirectory scanning** — Scans `src-tauri/plugins/*/src/` for additional Tauri commands
+- **Tauri security analysis** — Checks for missing CSP, enabled asset protocol, dangerous CSP modification, unrestricted IPC commands
+- **`src-tauri/Cargo.toml` fallback for Rust detection** — `framework_detect.py` now checks `src-tauri/Cargo.toml` when root has none
+- **Deep Cargo.toml scanning** — Recursively scans `src-tauri/plugins/` subdirectories for dependencies
+- **`_extract_cargo_deps()` helper** — Eliminates code duplication in Cargo.toml dependency parsing
+- **Tauri IPC name conversion** — `_snake_to_camel()` converts Rust snake_case command names to JavaScript camelCase IPC names
+
+### Fixed (4)
+
+- **`binary-scan` crash (ImportError)** — `scan_tauri_artifacts` was imported from `utils` but never implemented, causing every invocation to fail
+- **`has_rust: false` for Tauri apps** — Cargo.toml only checked at workspace root, missing `src-tauri/Cargo.toml`
+- **Missing Tauri plugin dependencies** — `src-tauri/` was not in the Cargo.toml scan list
+- **Regex error in `_scan_rust_tauri_commands`** — Malformed `[\s\n.*?\]` pattern caused `re.error: unterminated character set`
+
 ### Tested against BurntSushi/ripgrep (100 Rust files, pure Rust CLI monorepo, 3,749 nodes, 9,449 edges)
 
 ### Fixed (7)

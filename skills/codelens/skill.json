@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.3",  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
-  "tags": [    "code-analysis",
+  "version": "5.9.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.0: Tauri deep analysis (IPC command mapping, capabilities/permissions audit, plugin detection, CSP/security analysis, sidecar detection, deep-link scheme analysis), fix binary-scan crash (missing scan_tauri_artifacts), fix has_rust=false when Cargo.toml in src-tauri/ (Tauri app pattern), deep Cargo.toml scanning for Tauri plugins, monorepo src-tauri support, refactor _extract_cargo_deps helper. Tested on readest/readest (1.2K TSX + 40 Rust Tauri V2 ebook reader with Next.js 16 frontend).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",    "rust",
