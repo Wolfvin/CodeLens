@@ -2,20 +2,24 @@
 
 ## v6.4.0 — 2026-06-12
 
-### Tested against redis/redis (1,844 files: 471 C + 311 H + 20 Lua + 46 Python + 228 TCL + 69 Shell, in-memory database)
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 
-### Fixed (5)
+### Fixed (4)
 
-- **`is_bundled_file()` missing from `utils.py`** — Broke 4 commands: `ask`, `complexity`, `context`, `perf-hint`. Added function with detection for `deps/`, `vendor/`, `third_party/`, etc.
-- **Drupal false positive from `modules/` indicator** — Replaced with `sites/default/` and `sites/all/` which are truly unique to Drupal
-- **C/C++ function name false positives** — `void`, `const`, `unsigned`, etc. detected as function names in `smell_engine.py` and `fallback_c.py`
-- **C/C++ incorrectly listed as `unsupported_langs`** — Removed since fallback parsers work
+- **CRITICAL: `is_bundled_file` missing from `utils.py`** — `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function never existed. This caused `ImportError` during command registration, silently breaking `complexity`, `perf-hint`, `ask`, and `context` commands (4 of 45 commands non-functional). Added `is_bundled_file()` to `utils.py`.
+- **CRITICAL: `analyze` command env check used wrong API** — `_detect_env()` called `audit_environment()` which doesn't exist — the correct function is `check_env_vars()`. Also used wrong return keys. The `env_issues` category was always skipped in analysis output.
+- **`analyze` command hardcoded version** — Output showed `codelens_version: "6.0"` instead of using `CODELENS_VERSION` constant.
+- **`pyproject.toml` formatting error** — Missing newlines caused TOML parse failure.
 
-### Added (3)
+### Added (7)
 
-- **C/C++ project framework detection** — `c_project` detected via Makefile/CMakeLists.txt + C source files
-- **C/C++ project identity in handbook** — `c-database`, `c-infrastructure`, `c-project` types with Makefile version/name extraction
-- **`c_type` in polyglot detection** — C projects included in combined type strings like `c-python-polyglot`
+- **Python tooling framework detection** — Added 7 new Python framework signatures: `pytest`, `poetry`, `setuptools`, `tox`, `sphinx`, `nox`, `hatch`. Added `has_pytest`, `has_poetry`, `has_python` flags.
+- **Pipfile dependency parsing** — Now parses `[packages]` and `[dev-packages]` sections.
+- **Improved pyproject.toml Poetry dependency parsing** — Section-aware TOML parsing for Poetry and PEP 621 dependency formats.
+- **Python project identity fallback** — Detects Python projects from `requirements.txt`, `setup.py`/`setup.cfg`, and `.py` file existence. No more `type: "unknown"` for pure Python repos.
+- **`scan_tauri_artifacts()` implementation** — Parses `tauri.conf.json` for IPC commands, security settings, sidecar binaries, and warns about dangerous patterns.
+- **Command import error logging level** — Changed from `WARNING` to `ERROR` so broken command modules are more discoverable.
+- **`.py` file detection in framework walk** — Added Python file detection alongside `.vue`, `.svelte`, `.php`.
 
 ## v5.9.0 — 2026-06-12
 

@@ -120,11 +120,7 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {
-    '.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte',
-    '.java', '.kt', '.go', '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.ex', '.exs',
-    '.dart', '.swift', '.scala', '.sh', '.bash', '.zsh', '.gd', '.lua', '.php',
-}
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
 
 
 # ─── Performance Safeguards ────────────────────────────────
@@ -185,33 +181,6 @@ def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SE
         True if the budget has expired.
     """
     return (time.time() - start_time) > budget_sec
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative file path looks like a bundled/compiled output file.
-
-    Matches files in dist/, build/, .output/ directories, or files with
-    common bundled extensions (.min.js, .bundle.js, .chunk.js, .global.js)
-    that are not meaningful for code analysis.
-
-    Args:
-        rel_path: Relative file path from workspace root.
-
-    Returns:
-        True if the file appears to be a bundled/compiled output.
-    """
-    normalized = rel_path.replace('\\', '/')
-    # Check directory prefixes
-    for prefix in ('dist/', 'build/', '.output/', '.bundle/', 'out/'):
-        if normalized.startswith(prefix) or '/' + prefix in normalized:
-            return True
-    # Check filename patterns
-    filename = os.path.basename(rel_path).lower()
-    if filename.endswith(('.min.js', '.min.css', '.bundle.js', '.chunk.js', '.global.js', '.global.css')):
-        return True
-    if '.bundle.' in filename or '.chunk.' in filename:
-        return True
-    return False
 
 
 def is_file_path(name: str) -> bool:
@@ -436,37 +405,48 @@ GENERATED_FILE_PATTERNS = frozenset({
 
 
 def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file path looks like a bundled, vendored, or third-party file.
+    """Check if a file is a bundled, minified, or generated output file.
 
-    Bundled/vendor files should be skipped during analysis because they are
-    not part of the project's own source code (e.g., deps/ directories,
-    vendor/ directories, or bundled minified files).
+    These files are typically build artifacts that should be skipped during
+    code analysis (complexity, performance hints, etc.) because they are
+    not hand-written source code.
+
+    Checks:
+    1. Whether the path contains dist/build/vendor bundle output directories
+    2. Whether the filename matches known bundled extensions
+       (.min.js, .min.css, .map, .bundle.js, .chunk.js, .d.ts)
+    3. Whether filename ends with .global.js or similar bundled-file patterns
 
     Args:
-        rel_path: Relative path from workspace root (e.g., 'deps/hiredis/hiredis.c')
+        rel_path: Relative path from workspace root.
 
     Returns:
-        True if the file appears to be bundled/vendored.
+        True if the file appears to be a bundled/generated output file.
     """
-    if not rel_path:
-        return False
     # Normalize path separators
     normalized = rel_path.replace('\\', '/')
-    lower = normalized.lower()
+    parts = normalized.split('/')
 
-    # Common bundled/vendor directory prefixes
-    _BUNDLED_PREFIXES = (
-        'deps/', 'vendor/', 'third_party/', 'thirdparty/',
-        'external/', 'ext/', 'submodules/', 'packages/',
-        'node_modules/',
-    )
-    for prefix in _BUNDLED_PREFIXES:
-        if lower.startswith(prefix) or ('/' + prefix) in lower:
+    # Check if any path segment indicates a build output directory
+    bundle_dirs = {'dist', 'build', 'out', 'vendor', 'bundle', 'bundles',
+                   '.output', '.nuxt', '.next', 'storybook-static'}
+    for part in parts[:-1]:  # Skip the filename itself
+        if part in bundle_dirs:
             return True
 
-    # Minified/bundled file patterns
-    if '.min.' in lower or '.bundle.' in lower or '.chunk.' in lower:
+    # Check the filename against known bundled extensions
+    filename = parts[-1].lower()
+    for ext in DEFAULT_IGNORE_EXTENSIONS:
+        if filename.endswith(ext):
+            return True
+
+    # Check for common bundled-file naming patterns
+    if '.global.js' in filename or '.global.min.js' in filename:
         return True
+    if '.umd.' in filename or '.cjs.' in filename or '.esm.' in filename:
+        # Only if also minified
+        if '.min.' in filename:
+            return True
 
     return False
 
@@ -499,44 +479,90 @@ def is_generated_file(filename: str) -> bool:
     return False
 
 
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative path points to a bundled/compiled/generated file.
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and configuration.
 
-    Detects:
-    - Files in build output directories (dist/, build/, out/, .next/, .nuxt/, .output/)
-    - Minified files (.min.js, .min.css)
-    - Bundled/chunked files (.bundle.js, .chunk.js, .global.js)
-    - Source maps (.map)
-    - TypeScript declaration files (.d.ts, .d.ts.map)
-    - Common CJS/ESM build output patterns
+    Analyzes:
+    1. tauri.conf.json for IPC commands, permissions, and security config
+    2. Cargo.toml for Tauri dependencies and sidecar configs
+    3. WebView security settings (CSP, asset protocol)
 
     Args:
-        rel_path: Relative path from workspace root, e.g. 'dist/main.bundle.js'
+        workspace: Absolute path to workspace
 
     Returns:
-        True if the file appears to be bundled/compiled output.
+        Dict with Tauri analysis results, or None if no Tauri artifacts found.
     """
-    normalized = rel_path.replace('\\', '/')
-    lower = normalized.lower()
+    import json as _json
 
-    # Directory-based: files in build output directories
-    BUNDLED_DIRS = frozenset({
-        'dist', 'build', 'out', '.next', '.nuxt', '.output',
-        'storybook-static', '.cache',
-    })
-    parts = normalized.split('/')
-    if any(p in BUNDLED_DIRS for p in parts):
-        return True
+    workspace = os.path.abspath(workspace)
 
-    # Extension/pattern-based checks
-    if lower.endswith(('.min.js', '.min.css', '.min.mjs', '.min.cjs')):
-        return True
-    if lower.endswith(('.bundle.js', '.chunk.js', '.global.js',
-                       '.bundle.mjs', '.chunk.mjs')):
-        return True
-    if lower.endswith('.map'):
-        return True
-    if lower.endswith(('.d.ts', '.d.ts.map', '.d.cts', '.d.mts')):
-        return True
+    # Find tauri.conf.json — could be in root or src-tauri/
+    tauri_conf_paths = [
+        os.path.join(workspace, "src-tauri", "tauri.conf.json"),
+        os.path.join(workspace, "tauri.conf.json"),
+    ]
 
-    return False
+    tauri_conf = None
+    tauri_conf_path = None
+    for conf_path in tauri_conf_paths:
+        if os.path.isfile(conf_path):
+            tauri_conf_path = conf_path
+            try:
+                with open(conf_path, 'r', encoding='utf-8') as f:
+                    tauri_conf = _json.load(f)
+                break
+            except (json.JSONDecodeError, IOError):
+                pass
+
+    if tauri_conf is None:
+        return None
+
+    result = {
+        "status": "ok",
+        "tauri_conf_path": os.path.relpath(tauri_conf_path, workspace),
+        "security": {},
+        "ipc_commands": [],
+        "sidecars": [],
+    }
+
+    # Extract security settings
+    security = tauri_conf.get("security", {})
+    if security:
+        csp = security.get("csp", None)
+        asset_protocol = security.get("assetProtocol", {})
+        result["security"] = {
+            "csp_configured": csp is not None,
+            "csp_value": csp if csp else "not_set",
+            "asset_protocol_enable": asset_protocol.get("enable", False),
+            "asset_protocol_scope": asset_protocol.get("scope", []),
+        }
+
+    # Extract IPC commands from Tauri plugins
+    plugins = tauri_conf.get("plugins", {})
+    if plugins:
+        for plugin_name, plugin_conf in plugins.items():
+            if isinstance(plugin_conf, dict) and "commands" in plugin_conf:
+                for cmd in plugin_conf["commands"]:
+                    result["ipc_commands"].append({
+                        "plugin": plugin_name,
+                        "command": cmd,
+                    })
+
+    # Extract sidecar configs
+    bundle = tauri_conf.get("bundle", {})
+    external_bin = bundle.get("externalBin", [])
+    if external_bin:
+        result["sidecars"] = external_bin
+
+    # Check for dangerous patterns
+    warnings = []
+    if result["security"].get("asset_protocol_enable") is True:
+        warnings.append("Asset protocol is enabled — ensure scope is restricted")
+    if result["security"].get("csp_configured") is False:
+        warnings.append("No CSP configured — consider adding Content-Security-Policy")
+    if result["sidecars"]:
+        warnings.append(f"Found {len(result['sidecars'])} sidecar binaries — verify their source and integrity")
+    result["warnings"] = warnings
+
+    return result

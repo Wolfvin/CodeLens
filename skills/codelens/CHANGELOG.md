@@ -3,7 +3,31 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
+
+## [6.4.0] — 2026-06-12
+
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
+
+Real-world test on a pure Python project with no web frameworks — exposed multiple blind spots
+in framework detection, project identity classification, and broken command imports.
+
+### Fixed
+
+- **`is_bundled_file` missing from `utils.py`** (CRITICAL): `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function never existed. This caused `ImportError` during command registration, silently breaking `complexity`, `perf-hint`, `ask`, and `context` commands (4 of 45 commands non-functional). Added `is_bundled_file()` to `utils.py` with detection for dist/build/vendor dirs, minified files, source maps, and common bundled naming patterns.
+- **`analyze` command env check used wrong API** (CRITICAL): `_detect_env()` called `audit_environment()` which doesn't exist — the correct function is `check_env_vars()`. Also used wrong return keys (`total_issues`, `issues` instead of `total_vars`, `required_without_fallback`). The `env_issues` category was always skipped in analysis output.
+- **`analyze` command hardcoded version**: Output showed `codelens_version: "6.0"` instead of using `CODELENS_VERSION` constant (was `6.3.0`). Now imports from `utils.py`.
+- **`pyproject.toml` formatting error**: Missing newlines between `description`/`readme` and `requires-python`/`authors` caused TOML parse failure.
+
+### Added
+
+- **Python tooling framework detection**: Added 7 new Python framework signatures: `pytest`, `poetry`, `setuptools`, `tox`, `sphinx`, `nox`, `hatch`. Includes `pip_packages`, `config_files`, and `indicators` for each. Added `has_pytest`, `has_poetry`, `has_python` flags to detection output.
+- **Pipfile dependency parsing**: Comment said "Check Python dependency files (requirements.txt, pyproject.toml, Pipfile)" but Pipfile was never actually parsed. Now parses `[packages]` and `[dev-packages]` sections.
+- **Improved pyproject.toml Poetry dependency parsing**: Poetry uses list-style deps like `dependencies = ["requests>=2.0", "flask"]` and section-scoped deps under `[tool.poetry.dependencies]`. Added section-aware TOML parsing for Poetry and PEP 621 dependency formats.
+- **Python project identity fallback**: `_extract_project_identity()` now detects Python projects from `requirements.txt` (with content analysis: web framework → `backend-api`, testing → `python-test-suite`, else → `python-project`), `setup.py`/`setup.cfg` → `python-library`, and `.py` file existence → `python-project`. No more `type: "unknown"` for pure Python repos.
+- **`scan_tauri_artifacts()` implementation**: `binary_scan.py` imported `scan_tauri_artifacts` from `utils` but it didn't exist (gracefully caught by try/except). Now implemented: parses `tauri.conf.json` for IPC commands, security settings (CSP, asset protocol), sidecar binaries, and warns about dangerous patterns.
+- **Command import error logging level**: Changed from `WARNING` to `ERROR` in `commands/__init__.py` so broken command modules are more discoverable.
+- **`.py` file detection in framework walk**: Added Python file detection alongside `.vue`, `.svelte`, `.php` in the file pattern walking loop, setting `has_python: True`.
 
 ## [6.4.0] — 2026-06-12
 

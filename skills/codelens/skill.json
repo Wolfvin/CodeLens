@@ -1,19 +1,13 @@
 {
   "name": "codelens",
   "version": "6.4.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on styled-components/styled-components (521 files, TS/TSX pnpm monorepo, CSS-in-JS). CRITICAL fix: is_bundled_file() missing from utils.py — broke ask, complexity, context, perf-hint commands (4 commands + 3 analyze engines). Dataflow false positive fixes: .pipe() pattern narrowed (Node.js stream.pipe() != file write); innerHTML='' safe DOM reset skipped; textContent= skipped (no HTML parsing); production violations prioritized over test file violations in analyze. Monorepo identity: auto-detects main sub-package name/version from packages/* (was placeholder styled-components-project/0.0.0, now styled-components/6.4.1).",
-  "author": "codelens",
-  "tags": [
-    "code-analysis",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Critical bugfixes — is_bundled_file missing (broke complexity+perf-hint commands), analyze env check used wrong API (audit_environment→check_env_vars), hardcoded version 6.0→6.3.0. Framework detection now includes Python tooling (pytest, poetry, setuptools, tox, sphinx, nox, hatch) and Pipfile parsing. Identity detection fallback for Python-only projects (requirements.txt, setup.py, .py files). scan_tauri_artifacts implemented. Improved pyproject.toml Poetry dependency parsing. Command import errors now logged at ERROR level.",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
-    "duplicate-detection",
-    "frontend",
-    "backend",
+    "duplicate-detection",    "frontend",    "backend",
     "rust",
     "html",
-    "css",
-    "javascript",
+    "css",    "javascript",
     "typescript",
     "tsx",
     "jsx",
@@ -176,6 +170,4 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection"
-  ]
-}
+    "timeout-protection"  ]}
