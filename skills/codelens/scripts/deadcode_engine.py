@@ -173,6 +173,18 @@ def detect_dead_code(
             elif ext in {".sh", ".bash", ".zsh"}:
                 _collect_shell_exports_imports(content, rel_path, all_exports, all_imports)
 
+            # ─── Collect name references (usages) for improved cross-file analysis ───
+            # For JS/TS/Python, import statements directly name what's imported, so
+            # the imports dict already captures usage. For Go, Rust, C, Lua, PHP,
+            # Elixir, Ruby etc., the import mechanism brings in packages/modules and
+            # names are used via qualified access (pkg.Func) or direct calls.
+            # This step collects those usage references so _detect_unused_exports
+            # can check if an exported name is actually used anywhere.
+            if ext in {".go", ".rs", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                       ".lua", ".php", ".ex", ".exs", ".rb", ".java", ".cs", ".swift",
+                       ".scala", ".sc", ".dart", ".nim", ".nims", ".sh", ".bash", ".zsh"}:
+                _collect_name_references(content, ext, rel_path, all_imports)
+
         if truncated:
             break
 
@@ -277,6 +289,9 @@ def detect_dead_code(
         removal_safety = "clean"
         recommended_action = "No dead code detected"
 
+    # Build categories dict (same as results, for API compatibility)
+    categories_dict = {k: v for k, v in results.items() if v}
+
     return {
         "status": "ok",
         "workspace": workspace,
@@ -288,6 +303,7 @@ def detect_dead_code(
             "by_source": by_source
         },
         "results": {k: v for k, v in results.items() if v},
+        "categories": categories_dict,
         "categories_checked": list(categories),
         "removal_safety": removal_safety,
         "recommended_action": recommended_action,
@@ -336,7 +352,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     brace_depth -= 1
 
         # Skip empty lines and comments
-        if not stripped or stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*'):
+        # Elixir: comments start with #
+        # Ruby: comments start with #
+        # Lua: comments start with --
+        if ext in {".ex", ".exs", ".rb"}:
+            if not stripped or stripped.startswith('#'):
+                if found_terminal:
+                    continue
+                continue
+        elif not stripped or stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('/*') or stripped.startswith('--'):
             if found_terminal:
                 continue
             continue
@@ -387,10 +411,34 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
                 function_start_depth = brace_depth
+        elif ext in {".ex", ".exs"}:
+            # Elixir: def/defp/defmacro start a function; they end at the next end
+            if re.match(r'\s*(?:def|defp|defmacro|defmacrop)\s+\w+', stripped):
+                in_function = True
+                found_terminal = False
+        elif ext == ".rb":
+            # Ruby: def starts a method; ends at the next end
+            if re.match(r'\s*def\s+\w+', stripped):
+                in_function = True
+                found_terminal = False
 
         # Detect terminal statements
         if in_function:
-            if re.match(r'(?:return|throw|break|continue)\s', stripped):
+            # Elixir: raise is a terminal statement
+            if ext in {".ex", ".exs"}:
+                if re.match(r'(?:return|raise|throw|exit)\b', stripped):
+                    found_terminal = True
+                    terminal_line = i + 1
+                    terminal_type = stripped.split()[0]
+                    terminal_depth = brace_depth
+            # Ruby: raise/return/throw are terminal
+            elif ext == ".rb":
+                if re.match(r'(?:return|raise|throw|fail|exit)\b', stripped):
+                    found_terminal = True
+                    terminal_line = i + 1
+                    terminal_type = stripped.split()[0]
+                    terminal_depth = brace_depth
+            elif re.match(r'(?:return|throw|break|continue)\s', stripped):
                 # v5.10: In Rust match arms, terminal statements are normal —
                 # the next arm is NOT unreachable. Skip reporting if we're in a match.
                 if ext == ".rs" and in_match:
@@ -421,7 +469,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
             #     This avoids resetting on every '}' (e.g. if-blocks inside functions).
-            if ext not in {".py", ".lua"} and brace_depth < function_start_depth:
+            if ext not in {".py", ".lua", ".ex", ".exs", ".rb"} and brace_depth < function_start_depth:
                 in_function = False
                 found_terminal = False
                 in_match = False
@@ -429,6 +477,18 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
 
             # Lua: detect function end via 'end' keyword
             if ext == ".lua" and stripped == 'end':
+                in_function = False
+                found_terminal = False
+                continue
+
+            # Elixir: detect function end via 'end' keyword
+            if ext in {".ex", ".exs"} and stripped == 'end':
+                in_function = False
+                found_terminal = False
+                continue
+
+            # Ruby: detect method end via 'end' keyword
+            if ext == ".rb" and stripped == 'end':
                 in_function = False
                 found_terminal = False
                 continue
@@ -450,7 +510,13 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     continue
 
             # If we found a terminal statement and this is the next real code
-            if found_terminal and i > terminal_line and not stripped.startswith(('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#')):
+            _skip_prefixes = ('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#', 'end', '--')
+            # Elixir/Ruby: also skip 'rescue', 'after'
+            if ext in {".ex", ".exs"}:
+                _skip_prefixes = ('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#', 'end', 'rescue', 'after')
+            elif ext == ".rb":
+                _skip_prefixes = ('}', 'catch', 'except', 'elif', 'else', 'finally', '//', '#', 'end', 'rescue', 'ensure', 'elsif')
+            if found_terminal and i > terminal_line and not stripped.startswith(_skip_prefixes):
                 items.append({
                     "file": rel_path,
                     "line": i + 1,
@@ -659,6 +725,77 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
                     "suggestion": f"Remove unused variable '${var_name}'."
                 })
 
+    elif ext == ".rs":
+        # Rust: let bindings and let mut bindings
+        # Find: let name = ... and let mut name = ...
+        for m in re.finditer(r'\blet\s+(?:mut\s+)?(\w+)\s*(?::|=\s*)', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'err', 'ok', 'e', 'ctx', 'req', 'res', 'buf', 'cfg', 'result', 'input', 'output', 'ret'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name.isupper():
+                continue
+            # Skip common Rust patterns
+            if var_name in {'self', 'Self', 'true', 'false', 'None', 'Some', 'Ok', 'Err'}:
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' declared but never used",
+                    "suggestion": f"Remove unused variable '{var_name}' or prefix with '_'."
+                })
+
+    elif ext in {".ex", ".exs"}:
+        # Elixir: variable assignments (name starts with lowercase)
+        for m in re.finditer(r'\b([a-z]\w*)\s*=\s*(?!=)', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'e', 'err', 'error', 'result', 'response', 'state', 'socket', 'conn', 'params', 'assigns'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            # Skip Elixir special forms and common patterns
+            if var_name in {'def', 'defp', 'defmodule', 'do', 'end', 'true', 'false', 'nil', 'when', 'fn', 'use', 'import', 'alias', 'require'}:
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' assigned but never used",
+                    "suggestion": f"Remove or prefix with '_'."
+                })
+
+    elif ext == ".rb":
+        # Ruby: local variable assignments (name = value)
+        for m in re.finditer(r'\b([a-z_]\w*)\s*=\s*', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'e', 'err', 'error', 'result', 'response', 'request', 'params', 'session'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name in {'def', 'class', 'module', 'do', 'end', 'if', 'else', 'elsif', 'unless', 'true', 'false', 'nil', 'return', 'require', 'include', 'extend'}:
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' assigned but never used",
+                    "suggestion": f"Remove or prefix with '_'."
+                })
+
     return items[:100]  # Cap to avoid noise
 
 def _collect_js_exports_imports(
@@ -749,14 +886,18 @@ def _collect_go_exports_imports(
     content: str, rel_path: str,
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
 ):
-    """Collect Go exports (capitalized functions/types) and imports."""
+    """Collect Go exports (capitalized functions/types/vars) and imports."""
     # Go: capitalized names are exported by convention
     for m in re.finditer(r'func\s+(?:\([^)]+\)\s+)?([A-Z]\w+)\s*\(', content):
         name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
+        # Determine if this is a test/benchmark/example function
+        export_type = "go_exported_func"
+        if name.startswith('Test') or name.startswith('Benchmark') or name.startswith('Example') or name.startswith('Fuzz'):
+            export_type = "go_test_func"
         exports[rel_path].append({
             "name": name,
-            "type": "go_exported_func",
+            "type": export_type,
             "line": line_num
         })
 
@@ -767,6 +908,16 @@ def _collect_go_exports_imports(
         exports[rel_path].append({
             "name": name,
             "type": "go_exported_type",
+            "line": line_num
+        })
+
+    # Go: exported variables and constants (capitalized)
+    for m in re.finditer(r'(?:var|const)\s+([A-Z]\w+)\s', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "go_exported_var",
             "line": line_num
         })
 
@@ -805,9 +956,24 @@ def _collect_rust_exports_imports(
         })
 
     # Rust use statements
-    for m in re.finditer(r'use\s+([\w:]+)', content):
+    # Handle simple: use path::to::item;
+    for m in re.finditer(r'use\s+([\w:]+)\s*;', content):
         name = m.group(1).split('::')[-1]
         imports[rel_path].add(name)
+
+    # Handle grouped: use path::{item1, item2, module::item3};
+    for m in re.finditer(r'use\s+[\w:]+\s*\{([^}]+)\}', content):
+        group_content = m.group(1)
+        for item_match in re.finditer(r'([\w:]+)', group_content):
+            name = item_match.group(1).split('::')[-1]
+            imports[rel_path].add(name)
+
+    # Handle use with glob: use path::*;  (we can't resolve these, skip)
+    # Handle use with self: use path::{self, item};  (add the last segment)
+
+    # Rust mod declarations — these make child module items available
+    for m in re.finditer(r'\bmod\s+(\w+)\s*;', content):
+        imports[rel_path].add(m.group(1))
 
 def _collect_c_exports_imports(
     content: str, rel_path: str,
@@ -1136,6 +1302,300 @@ def _collect_shell_exports_imports(
         })
 
 
+def _collect_name_references(
+    content: str, ext: str, rel_path: str,
+    imports: Dict[str, Set[str]]
+):
+    """Collect name references (usages) in a file to improve unused export detection.
+
+    For JS/TS/Python, import statements directly name what's imported, so the
+    imports dict already captures usage.  For Go, Rust, C, Lua, PHP, Elixir,
+    Ruby etc., the import mechanism brings in packages/modules and names are
+    used via qualified access (pkg.Func) or direct calls.  This function
+    collects those usage references so that _detect_unused_exports can check
+    whether an exported name is actually used anywhere in the codebase.
+
+    References are added to the ``imports`` dict (keyed by rel_path) so they
+    are automatically included in ``all_imported_names`` during the unused-
+    exports check.
+    """
+    # Strip comments to avoid false references from comment text
+    clean = re.sub(r'//.*$', '', content, flags=re.MULTILINE)
+    clean = re.sub(r'/\*[\s\S]{0,50000}?\*/', '', clean)
+    # Strip string literals to avoid false refs from string content
+    # For most languages, strip both double and single quoted strings
+    # For Rust/Lua, single quotes are also used for char literals and lifetimes,
+    # so we need to be careful — only strip character literals ('x', '\n'), not lifetimes
+    # IMPORTANT: Use re.DOTALL so that \\. matches backslash + newline (Rust multi-line strings)
+    clean = re.sub(r'"(?:[^"\\]|\\.)*"', '""', clean, flags=re.DOTALL)
+    if ext == ".rs":
+        # Rust: only strip char literals ('x', '\n', etc.), not lifetime annotations ('a)
+        clean = re.sub(r"'(?:[^'\\]|\\.){1,2}'", "''", clean, flags=re.DOTALL)
+    elif ext == ".lua":
+        # Lua: single-quoted strings are common
+        clean = re.sub(r"'(?:[^'\\]|\\.)*'", "''", clean, flags=re.DOTALL)
+    else:
+        # For other languages, strip single-quoted strings
+        clean = re.sub(r"'(?:[^'\\]|\\.)*'", "''", clean, flags=re.DOTALL)
+
+    if ext == ".go":
+        # Go: pkg.FuncName(), FuncName(), StructName{}, &StructName{}
+        # Uppercase names are exported in Go
+        for m in re.finditer(r'\.([A-Z]\w+)\s*[\({]', clean):
+            imports[rel_path].add(m.group(1))
+        # Standalone exported function calls (not definitions)
+        # Match: FuncName( but NOT: func FuncName(
+        for m in re.finditer(r'(?<!func\s)(?<![.\w])([A-Z]\w+)\s*\(', clean):
+            name = m.group(1)
+            _go_kw = {'func', 'type', 'var', 'const', 'import', 'package',
+                      'return', 'defer', 'go', 'select', 'switch', 'if',
+                      'for', 'range', 'map', 'chan', 'interface', 'struct',
+                      'true', 'false', 'nil', 'error', 'string', 'bool',
+                      'int', 'int64', 'float64', 'byte', 'rune', 'make',
+                      'new', 'len', 'cap', 'append', 'copy', 'delete',
+                      'close', 'panic', 'recover', 'print', 'println'}
+            if name not in _go_kw:
+                imports[rel_path].add(name)
+        # Struct/interface instantiation: Name{ or &Name{
+        for m in re.finditer(r'(?:&|)\b([A-Z]\w+)\s*\{', clean):
+            name = m.group(1)
+            if name not in {'struct', 'interface', 'map', 'func'}:
+                imports[rel_path].add(name)
+        # Type assertion / conversion: .(TypeName), TypeName(expr)
+        for m in re.finditer(r'\.\(([A-Z]\w+)\)', clean):
+            imports[rel_path].add(m.group(1))
+        # Type references in declarations, parameters, return types:
+        # var x TypeName, func foo() TypeName, x TypeName{, Field TypeName
+        # Catch all uppercase identifiers used as types/references (not just in call position)
+        for m in re.finditer(r'\b([A-Z]\w{2,})\b', clean):
+            name = m.group(1)
+            _go_type_kw = {'Append', 'Copy', 'Delete', 'Close', 'Panic',
+                           'Recover', 'Print', 'Println', 'Complex', 'Real',
+                           'Imag', 'Make', 'New', 'Len', 'Cap', 'Errorf'}
+            if name not in _go_type_kw:
+                imports[rel_path].add(name)
+
+    elif ext == ".rs":
+        # Rust: function calls, struct instantiation, enum variants
+        # Function calls: name(
+        _rs_kw = {'fn', 'pub', 'let', 'if', 'while', 'for', 'match', 'return',
+                  'use', 'mod', 'struct', 'enum', 'impl', 'trait', 'type',
+                  'where', 'unsafe', 'async', 'await', 'self', 'Self', 'super',
+                  'crate', 'true', 'false', 'as', 'break', 'continue', 'else',
+                  'loop', 'move', 'mut', 'ref', 'static', 'const', 'extern',
+                  'dyn', 'ref', 'in', 'ref'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _rs_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Qualified access: module::name or Type::method
+        for m in re.finditer(r'(\w+)::(\w+)', clean):
+            name = m.group(2)
+            if name not in _rs_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Struct instantiation: Name { field: value, ... }
+        for m in re.finditer(r'(?:^|[^\w.])([A-Z]\w+)\s*\{', clean):
+            name = m.group(1)
+            if name not in {'Some', 'None', 'Ok', 'Err', 'Self'}:
+                imports[rel_path].add(name)
+
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+        # C/C++: function calls, type usage
+        _c_kw = {'if', 'for', 'while', 'switch', 'return', 'sizeof', 'typeof',
+                 'catch', 'class', 'struct', 'enum', 'union', 'namespace',
+                 'template', 'typename', 'new', 'delete', 'void', 'int',
+                 'char', 'float', 'double', 'long', 'short', 'unsigned',
+                 'signed', 'const', 'static', 'extern', 'inline', 'virtual',
+                 'override', 'final', 'public', 'private', 'protected',
+                 'true', 'false', 'nullptr', 'NULL', 'auto', 'register',
+                 'volatile', 'typedef', 'using'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _c_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Qualified names: Class::method
+        for m in re.finditer(r'(\w+)::(\w+)', clean):
+            name = m.group(2)
+            if name not in _c_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".lua":
+        # Lua: function calls, module.func(), module:method()
+        _lua_kw = {'function', 'local', 'if', 'then', 'else', 'elseif',
+                   'for', 'while', 'do', 'return', 'end', 'repeat', 'until',
+                   'not', 'and', 'or', 'nil', 'true', 'false', 'in',
+                   'break', 'goto'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _lua_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Method calls: module.func( or obj:method(
+        for m in re.finditer(r'[.:](\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _lua_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".php":
+        # PHP: function calls, class usage, method calls
+        _php_kw = {'if', 'else', 'elseif', 'for', 'while', 'switch', 'return',
+                   'function', 'class', 'new', 'public', 'private', 'protected',
+                   'static', 'abstract', 'final', 'try', 'catch', 'throw',
+                   'foreach', 'isset', 'unset', 'echo', 'print', 'list',
+                   'array', 'namespace', 'use', 'require', 'include',
+                   'require_once', 'include_once', 'true', 'false', 'null',
+                   'as', 'extends', 'implements', 'interface', 'trait',
+                   'const', 'var', 'case', 'break', 'continue', 'default',
+                   'do', 'global'}
+        # Function calls (not preceded by $)
+        for m in re.finditer(r'(?<!\$)\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _php_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Class instantiation: new ClassName
+        for m in re.finditer(r'\bnew\s+(\w+)', clean):
+            imports[rel_path].add(m.group(1))
+        # Method calls: ->method( and ::method(
+        for m in re.finditer(r'(?:->|::)(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _php_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext in {".ex", ".exs"}:
+        # Elixir: function calls, Module.func()
+        _ex_kw = {'def', 'defp', 'defmodule', 'defmacro', 'defmacrop',
+                  'do', 'end', 'if', 'else', 'cond', 'case', 'receive',
+                  'after', 'try', 'catch', 'rescue', 'raise', 'throw',
+                  'for', 'unless', 'fn', 'when', 'use', 'import', 'alias',
+                  'require', 'quote', 'unquote', 'nil', 'true', 'false',
+                  'with', 'and', 'or', 'not', 'in', 'as'}
+        for m in re.finditer(r'\b(\w+)\s*(?:\(|\[)', clean):
+            name = m.group(1)
+            if name not in _ex_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Remote function calls: Module.func(
+        for m in re.finditer(r'\.(\w+)\s*(?:\(|\[)', clean):
+            name = m.group(1)
+            if name not in _ex_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".rb":
+        # Ruby: method calls, Class.new, Module.method
+        _rb_kw = {'def', 'class', 'module', 'if', 'else', 'elsif', 'unless',
+                  'while', 'until', 'for', 'do', 'begin', 'rescue', 'ensure',
+                  'raise', 'return', 'yield', 'nil', 'true', 'false',
+                  'require', 'include', 'extend', 'attr', 'attr_accessor',
+                  'attr_reader', 'attr_writer', 'new', 'end', 'then',
+                  'and', 'or', 'not', 'in', 'case', 'when', 'break',
+                  'next', 'redo', 'retry', 'super', 'self', 'defined?',
+                  'lambda', 'proc', 'puts', 'print', 'p', 'pp'}
+        # Method calls: name( or name (
+        for m in re.finditer(r'(?:^|[\s.])([a-z_]\w*)\s*\(', clean):
+            name = m.group(1)
+            if name not in _rb_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Class instantiation: ClassName.new
+        for m in re.finditer(r'\b([A-Z]\w*)\s*\.new\b', clean):
+            imports[rel_path].add(m.group(1))
+        # Class constant/method: ClassName.method
+        for m in re.finditer(r'\b([A-Z]\w*)\s*\.\s*(\w+)', clean):
+            imports[rel_path].add(m.group(1))
+            imports[rel_path].add(m.group(2))
+
+    elif ext == ".java":
+        # Java: method calls, Class references
+        _java_kw = {'if', 'else', 'for', 'while', 'switch', 'return', 'new',
+                    'class', 'interface', 'extends', 'implements', 'import',
+                    'package', 'public', 'private', 'protected', 'static',
+                    'final', 'abstract', 'void', 'int', 'long', 'double',
+                    'float', 'boolean', 'char', 'byte', 'short', 'true',
+                    'false', 'null', 'this', 'super', 'try', 'catch',
+                    'throw', 'throws', 'finally', 'synchronized'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _java_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        # Qualified: Class.method or Class.field
+        for m in re.finditer(r'\.(\w+)\s*[\(]', clean):
+            name = m.group(1)
+            if name not in _java_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".cs":
+        # C#: method calls, type references
+        _cs_kw = {'if', 'else', 'for', 'while', 'switch', 'return', 'new',
+                  'class', 'struct', 'interface', 'enum', 'using', 'namespace',
+                  'public', 'private', 'protected', 'internal', 'static',
+                  'void', 'int', 'long', 'double', 'float', 'bool', 'string',
+                  'true', 'false', 'null', 'this', 'base', 'try', 'catch',
+                  'throw', 'finally', 'async', 'await', 'var', 'const',
+                  'override', 'virtual', 'abstract', 'sealed'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _cs_kw and len(name) > 1:
+                imports[rel_path].add(name)
+        for m in re.finditer(r'\.(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _cs_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".swift":
+        # Swift: function calls, type references
+        _swift_kw = {'if', 'else', 'for', 'while', 'switch', 'return', 'func',
+                     'class', 'struct', 'enum', 'protocol', 'import', 'let',
+                     'var', 'guard', 'typealias', 'public', 'private', 'fileprivate',
+                     'internal', 'open', 'static', 'override', 'true', 'false',
+                     'nil', 'self', 'Self', 'super', 'init', 'deinit', 'try',
+                     'catch', 'throw', 'throws', 'async', 'await'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _swift_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext in {".scala", ".sc"}:
+        _scala_kw = {'if', 'else', 'for', 'while', 'match', 'return', 'def',
+                     'class', 'object', 'trait', 'import', 'val', 'var',
+                     'new', 'override', 'sealed', 'abstract', 'case',
+                     'true', 'false', 'null', 'this', 'super', 'try',
+                     'catch', 'throw', 'finally', 'yield', 'lazy', 'implicit'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _scala_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext == ".dart":
+        _dart_kw = {'if', 'else', 'for', 'while', 'switch', 'return', 'class',
+                    'import', 'void', 'int', 'double', 'bool', 'String',
+                    'var', 'final', 'const', 'true', 'false', 'null',
+                    'this', 'super', 'new', 'try', 'catch', 'throw',
+                    'async', 'await', 'static', 'override', 'abstract'}
+        for m in re.finditer(r'\b(\w+)\s*\(', clean):
+            name = m.group(1)
+            if name not in _dart_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext in {".nim", ".nims"}:
+        _nim_kw = {'if', 'else', 'elif', 'for', 'while', 'case', 'return',
+                   'proc', 'func', 'method', 'template', 'macro', 'import',
+                   'var', 'let', 'const', 'type', 'true', 'false', 'nil',
+                   'block', 'break', 'continue', 'when', 'discard'}
+        for m in re.finditer(r'\b(\w+)\s*[\(\[]', clean):
+            name = m.group(1)
+            if name not in _nim_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+    elif ext in {".sh", ".bash", ".zsh"}:
+        # Shell: function calls (command names)
+        _sh_kw = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do',
+                  'done', 'case', 'esac', 'return', 'exit', 'function',
+                  'local', 'export', 'readonly', 'declare', 'typeset',
+                  'true', 'false', 'echo', 'printf', 'read', 'set',
+                  'shift', 'test', 'cd', 'source'}
+        for m in re.finditer(r'(?:^|;|&&|\|\|)\s*([a-zA-Z_]\w*)\s', clean):
+            name = m.group(1)
+            if name not in _sh_kw and len(name) > 1:
+                imports[rel_path].add(name)
+
+
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
     all_imports: Dict[str, Set[str]],
@@ -1165,12 +1625,48 @@ def _detect_unused_exports(
         # For Python packages, skip __init__.py — these are re-export entry points
         if file_path.endswith('__init__.py') or file_path.endswith('__init__.pyi'):
             continue
+        # Go: skip test files entirely — functions in _test.go are called by the test runner
+        if file_path.endswith('_test.go'):
+            continue
+        # Go: skip magefile.go — mage targets are called by the build tool
+        if file_path.endswith('magefile.go'):
+            continue
 
         for export in exports:
             name = export["name"]
+            export_type = export.get("type", "")
 
             # Skip common entry-point exports
             if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
+                continue
+
+            # ─── Language-specific entry-point / framework skipping ───
+            # Go: Test/Benchmark/Example/Fuzz functions are called by the test runner
+            if export_type == "go_test_func":
+                continue
+            # Go: main function is the entry point
+            if export_type.startswith("go_") and name == "Main":
+                continue
+            # Go: init functions are auto-called by the runtime
+            if export_type.startswith("go_") and name == "Init":
+                continue
+            # Rust: main function is the entry point
+            if export_type.startswith("rust_") and name == "main":
+                continue
+            # Rust: new is a conventional constructor, almost always used
+            if export_type.startswith("rust_") and name == "new":
+                continue
+            # C/C++: main/winmain/dllmain are entry points
+            if export_type.startswith("c_") and name in {'main', 'WinMain', 'DllMain', 'wmain', '_tmain'}:
+                continue
+            # Ruby: initialize is the constructor
+            if export_type == "ruby_method" and name in {'initialize', 'to_s', 'to_str', 'inspect', 'hash', 'eql?', 'equal?', 'respond_to_missing?'}:
+                continue
+            # Elixir: init/1 is a callback
+            if export_type == "elixir_def" and name in {'init', 'handle_call', 'handle_cast', 'handle_info', 'terminate', 'code_change', 'child_spec'}:
+                continue
+            # PHP: __construct, __destruct etc are magic methods
+            if export_type == "php_public_method" and name.startswith('__'):
                 continue
 
             # Skip names that are clearly public API (capitalized classes, common patterns)
