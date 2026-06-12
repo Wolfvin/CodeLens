@@ -5,73 +5,52 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.0] — 2026-06-12
+## [6.1.0] — 2026-06-12
 
-### Deep Nim Integration — Tested on nim-lang/Nim (3,707 .nim files, 30,984 nodes, 79,548 edges)
+### Tested against bevyengine/bevy (2896 source files: 1809 Rust + 199 WGSL + 102 TOML, 149MB Rust game engine ECS monorepo)
 
-Continued testing on the self-hosting Nim compiler. This release deepens Nim support
-across all analysis engines, adds Nim-specific CVEs to the vulnerability database,
-and fixes a critical framework detection bug that affected all repos with "target" in
-their path name.
-
-### Added
-
-- **`debugEcho()` detection in debug-leak**: Nim's `debugEcho()` is a debug-only print that should never appear in production. Now flagged as a `print_statement` with medium severity. Unlike regular `echo()` (which is standard Nim output), `debugEcho()` is always flagged.
-- **`doAssert()` and `doAssertRaises()` in debug-leak debugger category**: Nim's debug assertions crash in production. Flagged as high-severity `debugger` findings in non-test files. Skipped in test files where assertions are expected.
-- **`assert()` detection for Nim and Python**: Debug assertions (`assert()`) flagged in non-test `.nim`/`.nims`/`.py` files. Skipped in test files.
-- **Nim dev_only guard patterns**: Added 4 new `DEV_ONLY_PATTERNS` for Nim:
-  - `when defined(debug):` — flagged with `should_remove=True`
-  - `when not defined(release):` — flagged with `should_remove=True`
-  - `when defined(testing):` — flagged as dev-only guard
-  - `when isMainModule:` — flagged as low severity, `should_remove=False` (legitimate, equivalent to `if __name__ == "__main__"`)
-- **Nim smell detection**: `_detect_long_functions()` now detects Nim `proc`/`func`/`method`/`iterator`/`template`/`macro` declarations and calculates their body length using indentation-based block tracking. `_detect_many_params()` detects Nim procs with excessive parameters. `_find_function_end()` supports Nim's indentation-based syntax.
-- **Nim HTTP handler entrypoints**: Added Jester (`get @"path"`, `match @"path"`), Prologue (`app.get("path"`), and HappyX (`get @{path}`) route patterns to `entrypoints_engine.py`.
-- **Nimble CVE database**: Added 7 Nim-specific vulnerabilities to `VULN_DB`:
-  - Nim compiler: CVE-2023-2630 (code injection), CVE-2022-28589 (path traversal)
-  - Jester: CSRF protection missing
-  - Norm: SQL injection via string interpolation
-  - nimcrypto: timing side-channel in HMAC
-  - Karax: XSS via unescaped HTML
-  - Prologue: session fixation vulnerability
-
-### Fixed
-
-- **CRITICAL: `framework_detect.py` substring matching bug**: The `if ignore in root` check in framework detection used Python's `in` operator for substring matching, which caused false positives. For example, a workspace at `/home/user/test-target-nim/` would match the `target` ignore directory, preventing ALL framework detection, Nim file discovery, and Tailwind CSS analysis. Fixed by replacing substring matching with path-segment-aware matching (same algorithm used in `scan.py`'s `should_ignore()`). Affected 4 file walk loops: nimble detection (4b), Tauri detection (5), file pattern detection (5), and Tailwind CSS detection (6).
-- **`has_nim: False` for Nim repos with "target" in path**: Consequence of the substring matching bug. Now correctly reports `has_nim: True` and detects `nim`/`jester` frameworks.
-
-### Changed
-
-- **Version bump**: 5.8.2 → 5.9.0
-
-## [5.8.2] — 2026-06-12
-
-### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)
-
-Real-world test on a self-hosting Nim compiler — the language writes itself!
-Only 40/3734 source files were parsed before this release (1.1% coverage).
-After adding Nim support: 3,710 files parsed, 99.6% coverage.
+Real-world test on a massive Rust game engine with 41,076 backend nodes and 99,513 edges.
+Confirmed: 11,144 smells (health score 50), 203 dead items, 200 circular deps, 1,556 debug leaks,
+8,687 entrypoints, 0 secrets, 0 CVEs, 2,823 ECS routes (972 Components, 828 Systems,
+704 Resources, 253 Plugins, 38 Events, 28 States), 11 env vars, 100 state stores.
 
 ### Added
 
-- **Nim fallback parser** (`fallback_nim.py`): Regex-based parser that extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Handles Nim's `*` export marker, backtick-quoted identifiers, and indentation-based block tracking.
-- **Nim framework detection**: `detect_frameworks()` now detects `nim` (via `.nim`/`.nims`/`.nimble` files), `nimble` (package manager), `jester` (web framework), `prologue` (web framework), `karax` (SPA framework), `happyx` (web framework), `norm` (ORM), `nimcrypto` (crypto library). Parses `.nimble` files for `requires "package"` dependencies.
-- **`has_nim` field in framework detection**: `detect_frameworks()` now includes `has_nim: true` when Nim source files are found.
-- **Handbook Nim identity**: `handbook` now parses `.nimble` files for project name, version, and description. Classifies Nim projects as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project` based on name and dependencies.
-- **Nim entrypoints**: `entrypoints` command now detects `when isMainModule:` (Nim's equivalent of `if __name__ == "__main__"`) and `proc main()`.
-- **Nimble manifest parsing in vuln-scan**: `vuln-scan` now parses `.nimble` files for dependency versions and checks against the vulnerability database. Supports `requires "pkg >= version"` patterns.
-- **Nim code indicators for debug-leak commented_code**: Added `code_indicators_nim` with Nim-specific patterns (`proc`, `func`, `method`, `iterator`, `template`, `macro`, `type`, `const`, `let`, `var`, `import`, `from`, `export`, `discard`, `echo`, `new`).
-- **Nim comment prefix**: Debug-leak engine now recognizes `#` as the comment prefix for `.nim`/`.nims` files.
+- **Per-engine timeout for `analyze` command**: Engines that exceed their timeout (default 60s, configurable via `--engine-timeout`) are now skipped with a warning instead of crashing the entire analysis. Slow engines like `perf-hint` and `code_smells` get 90s by default. New `--engine-timeout` and `--max-files` CLI args.
+- **Rust ECS pattern detection in `api-map`**: Detects Bevy-specific patterns — Plugin implementations (`impl Plugin for X`), system registrations (`.add_systems(Update, my_system)`), Component definitions (`#[derive(Component)]`), Resource definitions (`#[derive(Resource)]`), Event definitions (`#[derive(Event)]`), and State definitions (`#[derive(States)]`). These are reported as non-HTTP routes with methods like `PLUGIN`, `SYSTEM`, `COMPONENT`, `RESOURCE`, `EVENT`, `STATE`. On bevyengine/bevy, this detected 2,823 ECS patterns vs. the previous 0 routes.
+- **WGSL shader file support**: `.wgsl` files are now recognized in scan, smell detection, and language statistics. Essential for Rust game engine projects.
+- **Rust compile-time env var filtering**: `env-check` now distinguishes between Rust runtime env vars (`std::env::var()`) and compile-time macros (`env!()`, `option_env!()`). Cargo build-system vars (`CARGO_MANIFEST_DIR`, `CARGO_PKG_VERSION`, `OUT_DIR`, etc.) are automatically filtered out as they are NOT deployment requirements. New `is_compile_time` field in variable output.
+- **Rust `std::env::var_os()` detection**: `env-check` now also detects `std::env::var_os("X")` calls, which return `Option<OsString>` and inherently have a fallback.
+- **Rust-specific god object thresholds**: Rust impl blocks idiomatically have many methods (builder pattern, ECS types, trait implementations). New `RUST_GOD_IMPL_METHODS = 35` and `RUST_GOD_IMPL_METHODS_CRITICAL = 60` thresholds (vs. JS/TS defaults of 20/35). Reduces false positives on idiomatic Rust code.
+- **Rust commented_code false positive reduction**: Doc comments (`///` and `//!`) and attribute annotations (`#[...]`) are now skipped in debug-leak's commented code detection. Minimum consecutive lines increased to 5 for Rust (same as Go). Reduced bevy's commented_code findings from 7,888 to 308 (96% reduction).
+- **Rust circular dependency false positive filtering**: Common Rust standard library trait method names (`new`, `get`, `set`, `read`, `write`, `clone`, `drop`, `default`, etc.) that appear across many types are now classified as `'info'` severity when they form cycles across multiple files. These are almost always name-matching artifacts, not real circular dependencies.
+- **Rust project recommendation**: `analyze` command now recommends running `cargo clippy` and `cargo audit` for Rust projects.
+- **Shader language detection**: `analyze` language statistics now include `wgsl`, `glsl`, and `hlsl`.
 
 ### Fixed
 
-- **`echo()` false positive in debug-leak**: Python's `def echo(debugger, command, result, internal_dict)` in LLDB extensions was flagged as a debug print statement. Now skips: (1) Python function definitions `def echo(...)`, (2) echo calls in LLDB/debugger context, (3) Nim `echo()` calls without debug patterns (echo is standard output in Nim, like `println!` in Rust).
-- **Handbook `type: unknown` and `version: 0.0.0` for Nim projects**: Nim projects without package.json/Cargo.toml/go.mod had no identity detection. Now parses `.nimble` files for name, version, description, and type classification.
-- **Scan reports Nim as unsupported language**: Nim was silently dropped during scan (0 files parsed from 3672). Now has full parser support and is listed in the `supported` set.
+- **`api-map` route group builder crash**: `_build_route_groups()` assumed `handler_name` key existed on all routes. Now falls back to `handler` key. Fixed crash when ECS routes were present.
+- **`statemap_engine` `lazy_static!` regex performance**: Replaced `re.finditer(r'lazy_static!\s*\{[^}]*static\s+ref\s+...', content, re.DOTALL)` with line-by-line scanning. The DOTALL regex could match 100K+ characters on large Rust files, causing timeout. New approach is O(n) and avoids catastrophic backtracking.
+- **`env-check` Rust fallback detection**: Added `.is_ok()`, `.is_err()` as additional fallback indicators for `std::env::var()` calls.
 
-### Changed
+## [5.9.2] — 2026-06-12
 
-- **SOURCE_EXTENSIONS expanded**: Added `.nim` and `.nims` to all 16 engines (smell, complexity, debug-leak, entrypoints, regex-audit, side-effect, dataflow, ownership, config-drift, type-infer, secrets, env-check, test-map, state-map, dead-code, perf-hint, api-map).
-- **Version bump**: 5.8.1 → 5.8.2
+### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
+
+Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
+across all analysis engines after targeted fixes based on SWR analysis findings.
+
+### Fixed
+
+- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
+- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
+- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
+- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
+- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
+- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
+- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
+- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
+- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
 
 ## [5.8.1] — 2026-06-12
 

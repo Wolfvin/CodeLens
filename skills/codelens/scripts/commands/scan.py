@@ -730,6 +730,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "csharp": len(files["csharp"]),
             "php": len(files["php"]),
             "blade": len(files["blade"]),
+            "wgsl": len(files["wgsl"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -798,6 +799,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "csharp": [],
         "php": [],
         "blade": [],
+        "wgsl": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -863,6 +865,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
+            elif ext == '.wgsl':
+                files["wgsl"].append(file_path)
             elif ext == '.java':
                 files["java"].append(file_path)
             elif ext == '.kt':
