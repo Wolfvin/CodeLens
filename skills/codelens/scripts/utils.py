@@ -93,30 +93,6 @@ def compute_summary(workspace, outline_data, scan_result):
         for cls in inner.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
-    # v6.4: Merge scan_result's files_scanned into files_by_language for
-    # more accurate language distribution (includes fallback parser languages)
-    scan_files = scan_result.get('files_scanned', {})
-    if scan_files:
-        # Map scan keys to language names matching outline format
-        scan_lang_names = {
-            "html": "html", "css": "css", "js_frontend": "javascript",
-            "js_backend": "javascript", "tsx": "tsx", "rust": "rust",
-            "python": "python", "vue": "vue", "svelte": "svelte",
-            "java": "java", "kotlin": "kotlin", "c_cpp": "c_cpp",
-            "go": "go", "lua": "lua", "csharp": "csharp", "php": "php",
-            "blade": "blade", "ruby": "ruby", "elixir": "elixir",
-            "dart": "dart", "swift": "swift", "scala": "scala",
-            "shell": "shell", "gdscript": "gdscript", "haskell": "haskell",
-            "nim": "nim", "r": "r",
-        }
-        # Only add languages from scan that aren't already covered by outline
-        outline_langs = set(files_by_lang.keys())
-        for scan_key, count in scan_files.items():
-            if count > 0:
-                lang_name = scan_lang_names.get(scan_key, scan_key)
-                if lang_name not in outline_langs:
-                    files_by_lang[lang_name] = files_by_lang.get(lang_name, 0) + count
-
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)
     be_edges = scan_result.get('backend', {}).get('edges', 0)
     fe_classes = scan_result.get('frontend', {}).get('classes', 0)
@@ -205,33 +181,6 @@ def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SE
         True if the budget has expired.
     """
     return (time.time() - start_time) > budget_sec
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file is a bundled/compiled output that should be skipped.
-
-    Matches common patterns for bundled JavaScript, compiled CSS,
-    and other generated artifacts that are not original source code.
-
-    Args:
-        rel_path: Relative file path from workspace root.
-
-    Returns:
-        True if the file appears to be a bundled/compiled output.
-    """
-    lower = rel_path.lower()
-    bundled_patterns = [
-        '.min.js', '.min.css',
-        '.bundle.js', '.chunk.js', '.vendor.js',
-        '.bundle.css', '.chunk.css',
-        '.d.ts', '.d.ts.map',
-        '/dist/', '/build/', '/out/', '/.output/',
-        '/vendor/', '/bundled/',
-    ]
-    for pattern in bundled_patterns:
-        if pattern in lower:
-            return True
-    return False
 
 
 def is_file_path(name: str) -> bool:
@@ -458,38 +407,42 @@ GENERATED_FILE_PATTERNS = frozenset({
 def is_bundled_file(rel_path: str) -> bool:
     """Check if a relative file path looks like a bundled/compiled file.
 
-    Covers minified files, webpack/rollup bundles, declaration files,
-    source maps, and files inside dist/build output directories.
+    Detects:
+    - Files in dist/, build/, out/, bundle/ directories
+    - Minified files (.min.js, .min.css)
+    - Bundled files (.bundle.js, .chunk.js, .global.js)
+    - Vendor/third-party directories
 
     Args:
         rel_path: Relative path from workspace root (e.g., 'dist/app.min.js')
 
     Returns:
-        True if the file appears to be bundled/compiled and should be skipped.
+        True if the file appears to be bundled/compiled output.
     """
-    lower = rel_path.lower().replace('\\', '/')
-    filename = os.path.basename(lower)
+    normalized = rel_path.replace('\\', '/').lower()
+    parts = normalized.split('/')
 
-    # Check extension-based patterns
-    if lower.endswith('.min.js') or lower.endswith('.min.css'):
-        return True
-    if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
-        return True
-    if lower.endswith('.d.ts') or lower.endswith('.d.ts.map'):
-        return True
-    if lower.endswith('.map'):
-        return True
-    if lower.endswith('.global.js'):
+    # Check for bundled output directories
+    bundled_dirs = {'dist', 'build', 'out', 'bundle', 'bundles', 'compiled', '.output'}
+    if any(p in bundled_dirs for p in parts):
         return True
 
-    # Check path-based patterns (dist/, build/ output directories)
-    parts = lower.split('/')
-    if any(p in ('dist', 'build', 'out', 'output', '.output', 'storybook-static')
-           for p in parts):
+    # Check for vendor/third-party directories (but not just "vendor" as a leaf — that's common in Go)
+    vendor_dirs = {'third-party', '3rdparty', 'third_party', 'vendor-dist'}
+    if any(p in vendor_dirs for p in parts):
         return True
 
-    # Check filename-based patterns
-    if filename in GENERATED_FILE_PATTERNS:
+    # Check filename patterns
+    filename = parts[-1] if parts else ''
+    if '.min.' in filename:
+        return True
+    if '.bundle.' in filename:
+        return True
+    if '.chunk.' in filename:
+        return True
+    if '.global.' in filename and filename.endswith('.js'):
+        return True
+    if filename.endswith('.d.ts') or filename.endswith('.d.ts.map'):
         return True
 
     return False
@@ -520,56 +473,4 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
-    return False
-
-
-# ─── Bundled File Detection ─────────────────────────────────
-
-_BUNDLED_DIR_SEGMENTS = frozenset({
-    'dist', 'build', 'out', 'bundle', 'bundled', 'compiled',
-    'vendor', 'node_modules', '.output', 'lib-dist',
-})
-
-_BUNDLED_FILENAME_SUFFIXES = (
-    '.bundle.js', '.bundle.min.js', '.chunk.js', '.chunk.min.js',
-    '.global.js', '.global.min.js', '.umd.js', '.umd.min.js',
-    '.esm.js', '.esm.min.js', '.cjs.js', '.cjs.min.js',
-    '.nocompile.js', '.pack.js',
-)
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file path looks like a bundled, compiled, or vendored file.
-
-    Detects:
-    - Files inside bundled output directories (dist/, build/, vendor/, etc.)
-    - Files with bundled filename suffixes (.bundle.js, .chunk.js, .umd.js, etc.)
-    - Minified files (.min.js, .min.css)
-
-    Args:
-        rel_path: Relative file path from workspace root,
-                  e.g. 'dist/app.bundle.js' or 'src/utils.js'
-
-    Returns:
-        True if the file appears to be a bundled/compiled artifact.
-    """
-    if not rel_path:
-        return False
-
-    # Check directory segments — if any path component is a known bundled dir
-    parts = rel_path.replace('\\', '/').split('/')
-    for part in parts[:-1]:  # Skip the filename itself
-        if part in _BUNDLED_DIR_SEGMENTS:
-            return True
-
-    # Check filename suffixes
-    lower = rel_path.lower()
-    for suffix in _BUNDLED_FILENAME_SUFFIXES:
-        if lower.endswith(suffix):
-            return True
-
-    # Minified files
-    if lower.endswith('.min.js') or lower.endswith('.min.css'):
-        return True
-
     return False

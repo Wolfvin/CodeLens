@@ -262,6 +262,17 @@ def detect_smells(
         inconsistent = _detect_inconsistent_patterns(workspace)
         all_smells["inconsistent"] = inconsistent
 
+    # Downgrade smells from docs/examples/test files to "info" severity
+    # These files are not production code and their smells are expected
+    for cat in all_smells:
+        for s in all_smells[cat]:
+            fpath = s.get("file", "")
+            if _is_docs_or_example(fpath):
+                orig_severity = s.get("severity", "info")
+                if orig_severity in ("critical", "warning"):
+                    s["severity"] = "info"
+                    s["source"] = "docs_example"
+
     # Apply severity filter
     if severity_filter:
         for cat in all_smells:
@@ -705,9 +716,14 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     """
     smells = []
     
-    # Skip test/story/fixture files — deep nesting is expected there
+    # Skip test/story/fixture/docs files — deep nesting is expected there
     skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    if any(kw in rel_path for kw in skip_keywords):
+    skip_dir_prefixes = ['tests/', 'test/', 'docs_src/', 'doc_src/', 'examples/', 'documentation/']
+    skip_dir_infix = ['/tests/', '/test/', '/docs_src/', '/doc_src/', '/examples/', '/documentation/']
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    if (any(kw in rel_path for kw in skip_keywords) or
+        any(d in normalized for d in skip_dir_infix) or
+        any(rel_path.startswith(p) for p in skip_dir_prefixes)):
         return smells
     
     # v6.4: Use higher thresholds for C/C++ (idiomatic deeper nesting)
@@ -1854,6 +1870,8 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
         '/tests/', '/test/', '/__tests__/', '/spec/',
         '/fixtures/', '/fixture/', '/mocks/', '/mock/',
         '/e2e/', '/integration/',
+        '/docs_src/', '/doc_src/', '/docs/examples/', '/documentation/',
+        '/examples/', '/example/',
     ]
     for d in test_dirs:
         if d in normalized:
@@ -1946,13 +1964,16 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
     Does NOT flag:
     - Parameterized queries with placeholders (?, %s without % operator)
     - Static SQL strings without variable interpolation
+    - English sentences that happen to contain SQL keywords (e.g., "Updated {path}")
+    - SQL keywords used as part of larger English words (e.g., "execute", "created")
     """
     smells = []
     lines = content.split('\n')
 
-    # SQL keywords to detect SQL statements
-    sql_keywords = re.compile(
-        r'(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b'
+    # SQL secondary keywords that must accompany a primary keyword to confirm SQL context.
+    # This prevents false positives on English sentences like "Created {x}" or "Updated {path}".
+    SQL_SECONDARY = re.compile(
+        r'(?i)\b(?:FROM|WHERE|SET|INTO|TABLE|VALUES|JOIN|ON|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|OFFSET)\b'
     )
 
     for i, line in enumerate(lines):
@@ -1968,12 +1989,24 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
         # Check for f-string SQL injection
         # Pattern: f"SELECT ..." or f"INSERT ..." etc. with {variable} inside
         fstring_sql = re.findall(
-            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC).{0,200})["\']',
+            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE).{0,200})["\']',
             stripped, re.IGNORECASE
         )
         for sql_str in fstring_sql:
             # Check if it contains variable interpolation
             if '{' in sql_str and '}' in sql_str:
+                # Verify SQL context: must contain a secondary SQL keyword
+                # This filters out false positives like "Updated {path}", "Created PR: {num}"
+                if not SQL_SECONDARY.search(sql_str):
+                    continue
+                # Additional check: the primary keyword should be at or near the start
+                # of the string content, not embedded in a sentence
+                sql_start = re.match(
+                    r'(?i)\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b',
+                    sql_str
+                )
+                if not sql_start:
+                    continue
                 severity = "warning" if is_test else "critical"
                 smells.append({
                     "file": rel_path,
@@ -1993,15 +2026,17 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
                 stripped, re.IGNORECASE
             )
             if format_sql:
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "format_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: .format() used in SQL query",
-                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
-                })
+                sql_content = format_sql.group(1)
+                if SQL_SECONDARY.search(sql_content):
+                    severity = "warning" if is_test else "critical"
+                    smells.append({
+                        "file": rel_path,
+                        "line": i + 1,
+                        "pattern": "format_sql",
+                        "severity": severity,
+                        "message": f"Potential SQL injection: .format() used in SQL query",
+                        "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
+                    })
 
         # Check for % formatting SQL injection
         # Pattern: "SELECT ... %s ..." % variable (but not just "SELECT ... %s" alone)
@@ -2010,14 +2045,16 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
             stripped, re.IGNORECASE
         )
         if pct_sql:
-            severity = "warning" if is_test else "critical"
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "pattern": "percent_format_sql",
-                "severity": severity,
-                "message": f"Potential SQL injection: % formatting used in SQL query",
-                "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
-            })
+            sql_content = pct_sql.group(1)
+            if SQL_SECONDARY.search(sql_content):
+                severity = "warning" if is_test else "critical"
+                smells.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": "percent_format_sql",
+                    "severity": severity,
+                    "message": f"Potential SQL injection: % formatting used in SQL query",
+                    "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
+                })
 
     return smells

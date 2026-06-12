@@ -93,6 +93,7 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
+        production_only: If True, exclude routes from test/example/docs files
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -129,6 +130,7 @@ def map_api_routes(
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/docs_src/', '/docs/', '/doc_src/', '/documentation/',
             ])
 
             try:
@@ -266,6 +268,7 @@ def map_api_routes(
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/docs_src/', '/docs/', '/doc_src/', '/documentation/',
             ]) else "production"
 
     # Attach middleware to routes

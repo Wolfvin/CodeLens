@@ -39,6 +39,18 @@ TEST_FILE_PATTERNS = {
     "test_", "spec_", "_test.py", "_test.rs",
 }
 
+# Documentation/example directory patterns — files in these dirs contain
+# demo code (print statements, TODOs) that are not real debug leaks
+DOCS_EXAMPLE_PATTERNS = {
+    "/docs_src/", "/doc_src/", "/docs/examples/", "/documentation/",
+    "/examples/", "/example/", "/snippets/", "/tutorial/",
+    "/guides/", "/demos/", "/demo/",
+    # Also match paths that START with these (no leading slash)
+    "docs_src/", "doc_src/", "documentation/",
+    "examples/", "example/", "snippets/",
+    "tutorial/", "guides/", "demos/", "demo/",
+}
+
 # v6.2: Config file patterns — findings in these files are downgraded to "info"
 # severity and should_remove is set to False. Config files like jest.config.js
 # contain test-related patterns (testEnvironment, testRegex, etc.) that are
@@ -297,6 +309,11 @@ def detect_debug_leaks(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip documentation/example directories — their print/TODO/debug code
+            # is part of demo code, not leftover debug statements
+            if any(p in rel_path for p in DOCS_EXAMPLE_PATTERNS):
+                continue
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -305,6 +322,7 @@ def detect_debug_leaks(
 
             files_scanned += 1
             is_test_file = any(p in rel_path for p in TEST_FILE_PATTERNS)
+            is_docs_example = any(p in rel_path for p in DOCS_EXAMPLE_PATTERNS)
             # v6.2: Check if this is a config file
             is_config_file = any(p in rel_path for p in CONFIG_FILE_PATTERNS)
             # v7.0: Check if this is a CLI file (print() is legitimate output)
