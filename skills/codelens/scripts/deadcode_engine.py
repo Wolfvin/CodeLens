@@ -1367,7 +1367,14 @@ def _detect_library_package(workspace: str) -> bool:
 
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:
-    """Detect CSS classes defined but never used in HTML/JS/TSX."""
+    """Detect CSS classes defined but never used in HTML/JS/TSX.
+
+    A CSS class is considered "zombie" only if:
+    1. It has ref_count == 0 (not referenced in any JS/TSX code)
+    2. It is NOT used in any HTML files (classes used in HTML are not zombie)
+    3. It has an actual CSS definition (skip classes with no known CSS source)
+    4. It is not a Tailwind utility class or a JS operator/expression
+    """
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
@@ -1384,24 +1391,38 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
 
     zombie = []
 
-    # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
         name = cls["name"]
-        if cls["status"] == "dead" and not cls.get("js"):
-            # Skip Tailwind utility classes — they're framework-defined, not user-defined
-            if has_tailwind_check and is_tailwind_class(name):
-                continue
-            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
-            if not re.match(r'^[a-zA-Z_]', name):
-                continue
-            zombie.append({
-                "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
-                "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": name,
-                "severity": "info",
-                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
-            })
+        if cls["status"] != "dead":
+            continue
+
+        # Skip Tailwind utility classes — they're framework-defined, not user-defined
+        if has_tailwind_check and is_tailwind_class(name):
+            continue
+        # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
+        if not re.match(r'^[a-zA-Z_]', name):
+            continue
+        # Skip classes used in HTML — they're not zombie CSS even without JS usage
+        if cls.get("html"):
+            continue
+        # Skip classes with no CSS definition — they may be framework-generated
+        # or defined in a way that the scanner couldn't track
+        css_entries = cls.get("css", [])
+        if not css_entries:
+            # If no CSS definition exists and no JS usage, this is likely a
+            # dynamically-applied or framework-generated class, not a zombie CSS rule
+            continue
+
+        # Use the first CSS definition's path and line
+        first_css = css_entries[0] if css_entries else {}
+        zombie.append({
+            "file": first_css.get("path", "unknown"),
+            "line": first_css.get("line", 0),
+            "class": name,
+            "severity": "info",
+            "message": f"CSS class '.{name}' defined but never used in HTML or JS",
+            "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
+        })
 
     return zombie[:50]
 
