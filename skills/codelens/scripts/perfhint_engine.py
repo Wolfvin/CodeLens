@@ -25,6 +25,7 @@ developers toward the optimal fix.
 
 import os
 import re
+import signal
 import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
@@ -397,7 +398,7 @@ def detect_perf_hints(
     severity: Optional[str] = None,
     category: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = MAX_FILES_TO_SCAN
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Detect performance anti-patterns and optimization opportunities in source code.
@@ -412,7 +413,7 @@ def detect_perf_hints(
                   "expensive_renders", "large_bundle", "inefficient_iteration",
                   "unoptimized_images", "cache_miss"
         config: CodeLens config dict (optional overrides)
-        max_files: Maximum number of files to scan (default: MAX_FILES_TO_SCAN)
+        max_files: Max files to scan (default 5000, 0 for unlimited)
 
     Returns:
         Dict with findings, stats, risk level, and recommendations
@@ -446,7 +447,7 @@ def detect_perf_hints(
                     "files_scanned": 0,
                 },
                 "risk": "none",
-                "hints": [],
+                "findings": [],
                 "recommendations": [f"Unknown category '{category}'. Valid: {', '.join(sorted(PERF_HINT_CATEGORIES.keys()))}"],
             }
 
@@ -552,7 +553,6 @@ def detect_perf_hints(
         "risk": risk,
         "frameworks_detected": detected_frameworks,
         "hints": findings[:200],  # Cap to avoid explosion (key matches stats.total_hints)
-        "findings": findings[:200],  # Alias for backward compat with tests
         "recommendations": recommendations,
     }
 

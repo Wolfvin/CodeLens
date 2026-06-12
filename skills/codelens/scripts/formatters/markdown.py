@@ -2072,21 +2072,16 @@ def _md_summary(data: Dict, lines: list) -> None:
             if top_items:
                 for item in top_items[:5]:
                     if isinstance(item, dict):
-                        # Handle dataflow violation format (nested source/sink)
-                        if "source" in item and "sink" in item:
-                            src = item.get("source", {})
-                            snk = item.get("sink", {})
-                            src_file = src.get("file", "?")
-                            src_line = src.get("line", "?")
-                            src_label = src.get("label", "source")
-                            snk_file = snk.get("file", "?") if snk else "?"
-                            snk_line = snk.get("line", "?") if snk else "?"
-                            snk_label = snk.get("label", "sink") if snk else "sink"
-                            risk = item.get("risk", "")
-                            risk_tag = f"[{risk.upper()}] " if risk else ""
-                            lines.append(f"  - {risk_tag}`{src_file}:{src_line}` ({src_label}) → `{snk_file}:{snk_line}` ({snk_label})")
+                        # Handle dataflow violations (source→sink structure)
+                        source = item.get("source", {})
+                        sink = item.get("sink", {})
+                        if source and sink:
+                            src_label = source.get("match", source.get("label", ""))[:40]
+                            snk_label = sink.get("match", sink.get("label", ""))[:40]
+                            sev = item.get("sink", {}).get("severity", item.get("severity", ""))
+                            sev_tag = f"[{sev.upper()}] " if sev else ""
+                            lines.append(f"  - {sev_tag}`{source.get('file', '')}:{source.get('line', '')}` → `{sink.get('file', '')}:{sink.get('line', '')}` — {src_label} → {snk_label}")
                         else:
-                            # Standard finding format
                             file = item.get("file", "")
                             line = item.get("line", "")
                             msg = item.get("message", item.get("description", item.get("name", "")))[:80]

@@ -940,19 +940,71 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                 })
 
     elif ext == ".rs":
-        # Count impl methods
-        impl_match = re.search(r'impl\s+(?:<[^>]+>\s*)?(\w+)', content)
-        method_count = len(re.findall(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+', content))
+        # Count impl methods — only count fn inside impl blocks using brace-depth tracking
+        # This avoids counting top-level functions, test functions, etc.
+        lines = content.split('\n')
+        impl_blocks = []  # list of (impl_name, method_count)
+        in_impl = False
+        impl_name = ""
+        impl_start_depth = 0
+        brace_depth = 0
 
-        if impl_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "impl_for": impl_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Impl block for '{impl_match.group(1)}' has {method_count} methods",
-                "suggestion": "Split into multiple impl blocks or traits."
-            })
+        for line in lines:
+            stripped = line.strip()
+
+            # Track brace depth
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+
+            # Detect impl block start
+            impl_match = re.match(r'impl\s+(?:<[^>]+>\s*)?(?:(?:\w+)\s+for\s+)?(\w+)', stripped)
+            if impl_match and '{' in stripped:
+                in_impl = True
+                impl_name = impl_match.group(1)
+                impl_start_depth = brace_depth
+                impl_method_count = 0
+                continue
+            elif impl_match:
+                # impl without opening brace on same line (rare)
+                in_impl = True
+                impl_name = impl_match.group(1)
+                impl_start_depth = brace_depth + 1  # brace will be on next line
+                impl_method_count = 0
+                continue
+
+            if in_impl:
+                # Count fn inside impl block
+                if re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+', stripped):
+                    impl_method_count += 1
+
+                # End impl block when brace depth returns to start level
+                if brace_depth < impl_start_depth:
+                    in_impl = False
+                    if impl_method_count >= GOD_CLASS_METHODS:
+                        impl_blocks.append((impl_name, impl_method_count))
+
+        for name, count in impl_blocks:
+            if count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "impl_for": name,
+                    "method_count": count,
+                    "severity": "critical",
+                    "message": f"Impl block for '{name}' has {count} methods",
+                    "suggestion": "Split into multiple impl blocks or traits."
+                })
+            elif count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "impl_for": name,
+                    "method_count": count,
+                    "severity": "warning",
+                    "message": f"Impl block for '{name}' has {count} methods",
+                    "suggestion": "Consider extracting some methods into separate traits."
+                })
 
     return smells
 

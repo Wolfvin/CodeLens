@@ -212,6 +212,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     found_terminal = False
     terminal_line = 0
     terminal_type = ""
+    terminal_depth = 0         # v7: brace depth where the terminal statement was found
 
     # v5.10: Rust match arm tracking
     in_match = False
@@ -270,9 +271,16 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 if ext == ".rs" and in_match:
                     found_terminal = False  # Reset, don't flag match arm terminals
                     continue
+                # v8: Multi-line return statements in Rust/C-like languages.
+                # If the return line doesn't end with ';' or '}' or ')' or ']', the
+                # return expression continues on the next line — don't flag as terminal yet.
+                if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                    if not stripped.endswith(';') and not stripped.endswith('}') and not stripped.endswith(')') and not stripped.endswith(']'):
+                        continue  # Not a complete return statement yet
                 found_terminal = True
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
+                terminal_depth = brace_depth  # v7: record depth of terminal statement
 
             # v5.10: Rust match arm separator — new arm starts after => or pattern
             if ext == ".rs" and in_match:
@@ -292,6 +300,14 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = False
                 found_terminal = False
                 in_match = False
+                continue
+
+            # v7: If we've exited the scope where the terminal statement was found
+            #     (e.g., closing brace of an if-block that contained a return),
+            #     the code after the closing brace is still reachable.
+            #     Reset found_terminal when brace depth drops to or below terminal_depth.
+            if found_terminal and ext != ".py" and brace_depth <= terminal_depth and stripped.startswith('}'):
+                found_terminal = False
                 continue
 
             # Check if we're at a lower indentation (function ended in Python)

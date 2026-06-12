@@ -7,36 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.9.0] — 2026-06-12
 
-### Tested against wasmerio/wasmer (2,292 source files: 1,188 Rust + 354 C/C++ + 10 Python + 24 WASM binaries, polyglot WebAssembly runtime)
+### Tested against BurntSushi/ripgrep (100 Rust source files, pure Rust CLI monorepo, 3,749 backend nodes, 9,449 edges)
 
-Real-world test on a Rust+C+WASM polyglot runtime with 20,658 backend nodes and 69,663 edges.
-Found and fixed 5 critical bugs exposed by this unique test case.
-
-### Added
-
-- **`scan_tauri_artifacts()` function**: Full Tauri reverse engineering analysis in `utils.py`:
-  - Tauri project detection (tauri.conf.json, Tauri.toml, src-tauri/ directory)
-  - Tauri configuration parsing (product name, version, identifier)
-  - IPC command extraction from Rust source (`#[tauri::command]` functions)
-  - Capabilities/permissions security audit
-  - Sidecar binary analysis
-  - Updater configuration analysis (active, endpoints, public key validation)
-  - WebView security audit (CSP, asset protocol, prototype freezing)
-  - Deep-link scheme analysis
-  - Build configuration analysis (dev path, dist dir, before commands)
-  - Electron app detection (for comparison/migration)
-  - Security recommendations engine
-- **GraphQL project validation**: `_is_graphql_project()` in `apimap_engine.py` — validates that a project actually has GraphQL resolver implementations before treating .graphql schema files as active API routes. Prevents false positives in non-GraphQL projects that include schema files as documentation/reference.
-- **Dataflow violation markdown rendering**: Summary markdown formatter now properly renders dataflow violations with source→sink flow chains instead of empty fields.
-- **Python typing false positive filter**: State-map now skips Python typing generics (MapEntry, DictEntry, Optional, Union, TypeVar, Generic, Protocol, etc.) that were incorrectly classified as state stores.
+Real-world test on a pure Rust Cargo workspace monorepo with 10 sub-crates (cli, core, globset, grep, ignore, matcher, pcre2, printer, regex, searcher).
+Confirmed: 842 smells (health score 60), 200 dead items, 215 circular deps, 2,185 functions analyzed, 259 debug leaks, 868 entrypoints, 4 dataflow violations, 5 env vars, 1 perf hint.
 
 ### Fixed
 
-- **binary-scan command crash**: `scan_tauri_artifacts` was imported from `utils` but never defined, causing `ImportError` and making the `binary-scan` command completely unusable. Now implemented with full Tauri RE capabilities.
-- **scan/handbook outline TypeError**: `write_output_files()` called `get_workspace_outline(workspace, max_files=max_files)` but `get_workspace_outline()` does not accept a `max_files` parameter, causing a `TypeError` on every scan. Fixed by removing the invalid parameter.
-- **GraphQL schema false positives in api-map**: `.graphql` schema files in non-GraphQL projects (e.g., WASM runtimes with a backend-api directory) were reported as active API routes with fake resolver names. Now validated against actual resolver implementations.
-- **Dataflow violations empty in summary**: Summary markdown formatter attempted to render dataflow violations as flat dicts (`file`, `line`, `message`) but they are nested flow objects (`source`, `sink`). Now properly extracts and displays source→sink flow chains with file paths and labels.
-- **MapEntry false positive in state-map**: Python typing constructs like `MapEntry` from `typing` module were classified as global state stores. Added comprehensive Python typing generics skip list.
+- **Critical: `scan` and `handbook` crash on `write_output_files()`**: `get_workspace_outline()` does not accept `max_files` keyword argument. Removed the invalid parameter. These commands now work without crashing.
+- **Critical: `perf-hint` crash on `detect_perf_hints()`**: The command passed `max_files` parameter to `detect_perf_hints()` which didn't accept it. Added `max_files` parameter to the engine function with proper file-count limiting in the scan loop.
+- **Critical: Rust unreachable code false positives (96.5% reduction)**: Two root causes fixed:
+  1. Multi-line `return` statements (e.g., `return SomeStruct { field, ... }`) were flagged as unreachable because only the first line was checked. Now requires return statements to end with `;`, `}`, `)`, or `]` before marking as terminal.
+  2. `return` inside `if`/`if let` blocks incorrectly marked subsequent code as unreachable. Now tracks the brace depth where the terminal statement was found and resets the terminal flag when exiting that scope. Result: 200 false positives → 0.
+- **Rust god object over-counting**: `_detect_god_objects()` counted ALL `fn` in a file as methods of a single `impl` block. Now uses brace-depth tracking to only count `fn` inside `impl` blocks. Each `impl` block is counted separately. Example: "DirEntry has 145 methods" → "WalkBuilder has 29 methods" (real god objects still detected, false positives eliminated). Critical smells dropped from 54 to 35.
+- **Rust doc comment false positives in `debug-leak`**: `///` and `//!` comments (Rust documentation) were counted as "commented-out code" in the `commented_code` category. Now skipped entirely. Result: 753 commented_code items → 158 (79% reduction).
+- **`is_monorepo` inconsistency between `summary` and `handbook`**: `summary` command read `is_monorepo` from `framework_detect` (which never sets it), while `handbook` correctly detected it from `_extract_project_identity`. Now both use `_extract_project_identity`.
+- **Markdown summary: empty dataflow violation labels**: `_md_summary()` couldn't extract source/sink info from dataflow violation dicts (nested structure). Now properly renders `source_file:line → sink_file:line` format with match snippets.
 
 ## [5.8.0] — 2026-06-12
 

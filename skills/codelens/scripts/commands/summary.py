@@ -79,6 +79,7 @@ def generate_summary(
             "type": identity.get("type", "unknown"),
             "version": identity.get("version", "0.0.0"),
         }
+        result["is_monorepo"] = identity.get("is_monorepo", False)
     except Exception:
         result["identity"] = {"name": os.path.basename(workspace)}
 
@@ -87,13 +88,6 @@ def generate_summary(
         from framework_detect import detect_frameworks
         fw = detect_frameworks(workspace)
         result["frameworks"] = fw.get("frameworks", [])
-        # Use the same identity source as handbook for consistent monorepo detection
-        try:
-            from commands.handbook import _extract_project_identity
-            identity_info = _extract_project_identity(workspace)
-            result["is_monorepo"] = identity_info.get("is_monorepo", False)
-        except Exception:
-            result["is_monorepo"] = fw.get("is_monorepo", False)
     except Exception:
         result["frameworks"] = []
 

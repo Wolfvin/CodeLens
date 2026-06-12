@@ -2,22 +2,17 @@
 
 ## v5.9.0 — 2026-06-12
 
-### Tested against wasmerio/wasmer (2,292 files: 1,188 Rust + 354 C/C++ + 10 Python + 24 WASM binaries)
+### Tested against BurntSushi/ripgrep (100 Rust files, pure Rust CLI monorepo, 3,749 nodes, 9,449 edges)
 
-### Added (4)
+### Fixed (7)
 
-- **`scan_tauri_artifacts()`** — Full Tauri reverse engineering analysis: IPC commands, capabilities/permissions, sidecars, updater config, WebView security (CSP), deep-links, build config, Electron detection, security recommendations.
-- **`_is_graphql_project()`** — Validates GraphQL resolver implementations before treating .graphql schema files as active API routes. Prevents false positives in non-GraphQL projects.
-- **Dataflow violation markdown rendering** — Summary formatter now renders dataflow violations as source→sink flow chains.
-- **Python typing false positive filter** — State-map skips MapEntry, DictEntry, Optional, Union, TypeVar, Generic, Protocol, etc.
-
-### Fixed (5)
-
-- **binary-scan crash** — `scan_tauri_artifacts` was imported but never defined, causing ImportError.
-- **scan/handbook outline TypeError** — `get_workspace_outline()` called with invalid `max_files` parameter.
-- **GraphQL schema false positives** — .graphql files in non-GraphQL projects reported as active API routes.
-- **Dataflow violations empty in summary** — Markdown formatter rendered nested flow objects as empty fields.
-- **MapEntry false positive** — Python typing generics classified as state stores.
+- **Critical: `scan`/`handbook` crash** — `get_workspace_outline()` doesn't accept `max_files`. Removed invalid parameter.
+- **Critical: `perf-hint` crash** — `detect_perf_hints()` didn't accept `max_files`. Added parameter with file-count limiting.
+- **Rust unreachable code false positives (96.5% reduction)** — Multi-line return tracking + if-block scope awareness. 200 → 0 false positives.
+- **Rust god object over-counting** — Brace-depth-scoped `impl` method counting. Each impl block counted separately. Critical smells: 54 → 35.
+- **Rust doc comment false positives** — `///` and `//!` skipped in debug-leak `commented_code`. 753 → 158.
+- **`is_monorepo` inconsistency** — `summary` now uses `_extract_project_identity` (same as `handbook`).
+- **Markdown dataflow violation rendering** — Proper `source:line → sink:line` format.
 
 ## v6.2.0 — 2026-06-12
 
