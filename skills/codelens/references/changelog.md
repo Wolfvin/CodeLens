@@ -1,5 +1,19 @@
 # CodeLens Changelog
 
+## v5.9.0 — 2026-06-12
+
+### Tested against BurntSushi/ripgrep (100 Rust files, pure Rust CLI monorepo, 3,749 nodes, 9,449 edges)
+
+### Fixed (7)
+
+- **Critical: `scan`/`handbook` crash** — `get_workspace_outline()` doesn't accept `max_files`. Removed invalid parameter.
+- **Critical: `perf-hint` crash** — `detect_perf_hints()` didn't accept `max_files`. Added parameter with file-count limiting.
+- **Rust unreachable code false positives (96.5% reduction)** — Multi-line return tracking + if-block scope awareness. 200 → 0 false positives.
+- **Rust god object over-counting** — Brace-depth-scoped `impl` method counting. Each impl block counted separately. Critical smells: 54 → 35.
+- **Rust doc comment false positives** — `///` and `//!` skipped in debug-leak `commented_code`. 753 → 158.
+- **`is_monorepo` inconsistency** — `summary` now uses `_extract_project_identity` (same as `handbook`).
+- **Markdown dataflow violation rendering** — Proper `source:line → sink:line` format.
+
 ## v6.2.0 — 2026-06-12
 
 ### Added (8)

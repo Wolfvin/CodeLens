@@ -79,6 +79,7 @@ def generate_summary(
             "type": identity.get("type", "unknown"),
             "version": identity.get("version", "0.0.0"),
         }
+        result["is_monorepo"] = identity.get("is_monorepo", False)
     except Exception:
         result["identity"] = {"name": os.path.basename(workspace)}
 
@@ -87,7 +88,6 @@ def generate_summary(
         from framework_detect import detect_frameworks
         fw = detect_frameworks(workspace)
         result["frameworks"] = fw.get("frameworks", [])
-        result["is_monorepo"] = fw.get("is_monorepo", False)
     except Exception:
         result["frameworks"] = []
 

@@ -510,6 +510,9 @@ def _detect_commented_code(
     if not comment_prefix:
         return
 
+    # Rust doc comments (/// and //!) are legitimate documentation, not commented-out code
+    is_rust = ext == ".rs"
+
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
@@ -519,14 +522,27 @@ def _detect_commented_code(
             i += 1
             continue
 
-        # Count consecutive commented lines
+        # Skip Rust doc comments (/// and //!) — they are legitimate documentation
+        if is_rust and (stripped.startswith('///') or stripped.startswith('//!')):
+            i += 1
+            continue
+
+        # Count consecutive commented lines (excluding Rust doc comments)
         block_start = i
-        while i < len(lines) and lines[i].strip().startswith(comment_prefix):
+        non_doc_count = 0
+        while i < len(lines):
+            s = lines[i].strip()
+            if not s.startswith(comment_prefix):
+                break
+            # Skip Rust doc comments — they break the consecutive block
+            if is_rust and (s.startswith('///') or s.startswith('//!')):
+                break
+            non_doc_count += 1
             i += 1
         block_end = i
 
-        # Need at least 3 consecutive commented lines
-        if block_end - block_start < 3:
+        # Need at least 3 consecutive non-doc commented lines
+        if non_doc_count < 3:
             continue
 
         # Check if the block looks like code

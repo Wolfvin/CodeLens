@@ -5,6 +5,25 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.0] — 2026-06-12
+
+### Tested against BurntSushi/ripgrep (100 Rust source files, pure Rust CLI monorepo, 3,749 backend nodes, 9,449 edges)
+
+Real-world test on a pure Rust Cargo workspace monorepo with 10 sub-crates (cli, core, globset, grep, ignore, matcher, pcre2, printer, regex, searcher).
+Confirmed: 842 smells (health score 60), 200 dead items, 215 circular deps, 2,185 functions analyzed, 259 debug leaks, 868 entrypoints, 4 dataflow violations, 5 env vars, 1 perf hint.
+
+### Fixed
+
+- **Critical: `scan` and `handbook` crash on `write_output_files()`**: `get_workspace_outline()` does not accept `max_files` keyword argument. Removed the invalid parameter. These commands now work without crashing.
+- **Critical: `perf-hint` crash on `detect_perf_hints()`**: The command passed `max_files` parameter to `detect_perf_hints()` which didn't accept it. Added `max_files` parameter to the engine function with proper file-count limiting in the scan loop.
+- **Critical: Rust unreachable code false positives (96.5% reduction)**: Two root causes fixed:
+  1. Multi-line `return` statements (e.g., `return SomeStruct { field, ... }`) were flagged as unreachable because only the first line was checked. Now requires return statements to end with `;`, `}`, `)`, or `]` before marking as terminal.
+  2. `return` inside `if`/`if let` blocks incorrectly marked subsequent code as unreachable. Now tracks the brace depth where the terminal statement was found and resets the terminal flag when exiting that scope. Result: 200 false positives → 0.
+- **Rust god object over-counting**: `_detect_god_objects()` counted ALL `fn` in a file as methods of a single `impl` block. Now uses brace-depth tracking to only count `fn` inside `impl` blocks. Each `impl` block is counted separately. Example: "DirEntry has 145 methods" → "WalkBuilder has 29 methods" (real god objects still detected, false positives eliminated). Critical smells dropped from 54 to 35.
+- **Rust doc comment false positives in `debug-leak`**: `///` and `//!` comments (Rust documentation) were counted as "commented-out code" in the `commented_code` category. Now skipped entirely. Result: 753 commented_code items → 158 (79% reduction).
+- **`is_monorepo` inconsistency between `summary` and `handbook`**: `summary` command read `is_monorepo` from `framework_detect` (which never sets it), while `handbook` correctly detected it from `_extract_project_identity`. Now both use `_extract_project_identity`.
+- **Markdown summary: empty dataflow violation labels**: `_md_summary()` couldn't extract source/sink info from dataflow violation dicts (nested structure). Now properly renders `source_file:line → sink_file:line` format with match snippets.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)
