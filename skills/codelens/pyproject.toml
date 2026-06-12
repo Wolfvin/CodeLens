@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codelens"
 version = "6.1.0"
-description = "Live Codebase Reference Intelligence — 45 commands for AI-powered code analysis, security auditing, and quality scoring. v6.1: Rust ECS/Bevy support, per-engine timeout, WGSL shaders, compile-time macro filtering."readme = "README.md"
+description = "Live Codebase Reference Intelligence — 45 commands for AI-powered code analysis, security auditing, and quality scoring. v6.1: Rust ECS/Bevy support, per-engine timeout, WGSL shaders, compile-time macro filtering."
+readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [    {name = "Wolfvin"},]

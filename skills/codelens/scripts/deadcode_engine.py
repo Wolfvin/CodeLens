@@ -22,8 +22,10 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
-    ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
+    ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
     ".lua", ".java", ".cs", ".php", ".zig",
+    ".rb", ".ex", ".exs", ".swift", ".scala", ".sc",
+    ".nim", ".nims", ".sh", ".bash", ".zsh", ".dart",
 }
 
 # Performance limits for large codebases

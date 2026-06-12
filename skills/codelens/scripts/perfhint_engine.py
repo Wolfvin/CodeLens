@@ -47,11 +47,15 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".html", ".vue", ".svelte",
     ".nim", ".nims",
+    ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+    ".java", ".cs", ".php", ".lua",
+    ".rb", ".ex", ".exs", ".swift", ".scala", ".sc",
+    ".sh", ".bash", ".zsh", ".dart", ".zig",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)
 FRONTEND_EXTENSIONS = {".jsx", ".tsx", ".vue", ".svelte", ".html"}
-BACKEND_EXTENSIONS = {".py", ".rs", ".go"}
+BACKEND_EXTENSIONS = {".py", ".rs", ".go", ".java", ".php", ".rb", ".ex", ".exs", ".c", ".cpp"}
 JS_TS_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
 
 # Test directory / file indicators
@@ -489,6 +493,7 @@ def detect_perf_hints(
                     "files_scanned": 0,
                 },
                 "risk": "none",
+                "hints": [],
                 "findings": [],
                 "recommendations": [f"Unknown category '{category}'. Valid: {', '.join(sorted(PERF_HINT_CATEGORIES.keys()))}"],
             }
