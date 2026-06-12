@@ -404,6 +404,55 @@ GENERATED_FILE_PATTERNS = frozenset({
 })
 
 
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file path looks like a bundled, compiled, or generated artifact.
+
+    Detects files that should be skipped during code analysis because they
+    are produced by build tools, bundlers, or compilers — not written by humans.
+
+    Checks both directory segments and filename patterns:
+    - Directory segments: dist/, build/, out/, .output/, .nuxt/, .next/
+    - Filename patterns: .min.js, .min.css, .bundle.js, .chunk.js, .global.js,
+      .d.ts, .d.ts.map, vendor-*.js, vendors~*.js
+
+    Args:
+        rel_path: Relative file path from workspace root (e.g., 'dist/app.min.js')
+
+    Returns:
+        True if the file appears to be a bundled/generated artifact.
+    """
+    normalized = rel_path.replace('\\', '/')
+
+    # Check directory segments for build output directories
+    parts = normalized.split('/')
+    bundled_dirs = frozenset({
+        'dist', 'build', 'out', '.output', '.nuxt', '.next',
+        'storybook-static', '.storybook',
+    })
+    for part in parts[:-1]:  # Skip the filename itself
+        if part.lower() in bundled_dirs:
+            return True
+
+    # Check filename patterns
+    lower = normalized.lower()
+    bundled_patterns = (
+        '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+        '.global.js', '.global.css', '.d.ts', '.d.ts.map',
+        '.d.mts', '.d.cts',
+    )
+    for pattern in bundled_patterns:
+        if lower.endswith(pattern):
+            return True
+
+    # Webpack/Vite vendor chunks: vendors~*.js, vendor-*.js
+    filename = parts[-1].lower()
+    if filename.startswith('vendors~') or filename.startswith('vendor-'):
+        if filename.endswith('.js') or filename.endswith('.css'):
+            return True
+
+    return False
+
+
 def is_generated_file(filename: str) -> bool:
     """Check if a filename looks like a generated or lock file that should be skipped.
 

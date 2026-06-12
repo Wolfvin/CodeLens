@@ -15,9 +15,10 @@ timeout on very large codebases (100k+ files).
 import os
 import re
 import json
+import time
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, logger
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, logger, time_budget_expired
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -67,6 +68,10 @@ def detect_dead_code(
     results: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     truncated = False
+    TIMEOUT_BUDGET = 90  # seconds — prevent hanging on huge repos
+
+    start_time = time.time()
+    timed_out = False
 
     # Collect all exports and imports for cross-file analysis
     all_exports: Dict[str, List[Dict]] = defaultdict(list)   # file → exports
@@ -85,6 +90,12 @@ def detect_dead_code(
 
             # File-count limit to prevent timeout on huge repos
             if files_scanned >= max_files:
+                truncated = True
+                break
+
+            # Time budget check — bail out before hanging
+            if time_budget_expired(start_time, TIMEOUT_BUDGET):
+                timed_out = True
                 truncated = True
                 break
 
@@ -244,7 +255,9 @@ def detect_dead_code(
         "results": {k: v for k, v in results.items() if v},
         "categories_checked": list(categories),
         "removal_safety": removal_safety,
-        "recommended_action": recommended_action
+        "recommended_action": recommended_action,
+        "timed_out": timed_out,
+        "duration_ms": int((time.time() - start_time) * 1000),
     }
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:

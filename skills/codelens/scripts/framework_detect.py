@@ -263,6 +263,37 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
+    # Embedded / IoT frameworks
+    "micropython": {
+        "packages": [],
+        "pip_packages": ["micropython", "mpremote"],
+        "config_files": [],
+        "indicators": ["py/pyconfig.h", "py/micropython.h", "ports/"]
+    },
+    # C/C++ build systems (not frameworks per se, but useful to detect)
+    "make": {
+        "packages": [],
+        "config_files": ["Makefile", "makefile", "GNUmakefile"],
+        "indicators": []
+    },
+    # Nim
+    "nim": {
+        "packages": [],
+        "config_files": ["nimble.toml"],
+        "indicators": [".nimble"]
+    },
+    # Elixir/Phoenix
+    "phoenix": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["lib/__*_web.ex", "config/config.exs"]
+    },
+    # Ruby on Rails
+    "rails": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["app/controllers/", "app/models/", "config/routes.rb"]
+    },
 }
 
 
@@ -390,6 +421,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_deno": False,
+        "has_micropython": False,
+        "has_c": False,
+        "has_cpp": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -874,17 +908,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect unsupported languages and C/C++ presence
+    # Note: C/C++ have fallback parser support, so they are NOT listed as unsupported.
+    # Go also has fallback parser support and is not listed as unsupported.
+    # Only truly unsupported languages (no parser at all) are listed here.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
+        "scala": ["build.sbt"],
+        "haskell": ["stack.yaml", "cabal.file"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -892,6 +927,66 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 7b. Detect C/C++ source code presence (these have fallback parser support)
+    # Count C/C++ files to set has_c / has_cpp flags
+    c_count = 0
+    cpp_count = 0
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in {'.c', '.h'}:
+                c_count += 1
+            elif ext in {'.cpp', '.cxx', '.cc', '.hpp', '.hxx'}:
+                cpp_count += 1
+        # Early exit once we have enough counts to determine presence
+        if c_count > 50 and cpp_count > 50:
+            break
+
+    if c_count > 10:
+        detected["has_c"] = True
+        if "c" not in detected["frameworks"]:
+            detected["frameworks"].append("c")
+    if cpp_count > 10:
+        detected["has_cpp"] = True
+        if "cpp" not in detected["frameworks"]:
+            detected["frameworks"].append("cpp")
+
+    # 7c. Detect MicroPython — combination of Python + C codebase with
+    # distinctive directory structure (py/, ports/) or pyproject.toml reference
+    if not detected["has_micropython"]:
+        # Check pyproject.toml for micropython reference
+        pyproject_path = os.path.join(workspace, "pyproject.toml")
+        if os.path.exists(pyproject_path):
+            try:
+                with open(pyproject_path, 'r', encoding='utf-8') as f:
+                    pyproject_content = f.read().lower()
+                if 'micropython' in pyproject_content or 'mpremote' in pyproject_content:
+                    detected["has_micropython"] = True
+                    if "micropython" not in detected["frameworks"]:
+                        detected["frameworks"].append("micropython")
+            except IOError:
+                pass
+
+        # Check for MicroPython source tree structure
+        if not detected["has_micropython"]:
+            mp_indicators = [
+                os.path.exists(os.path.join(workspace, "py", "micropython.h")),
+                os.path.exists(os.path.join(workspace, "py", "pyconfig.h")),
+                os.path.isdir(os.path.join(workspace, "ports")),
+            ]
+            # If at least 2 of 3 indicators match, it's likely MicroPython
+            if sum(mp_indicators) >= 2:
+                detected["has_micropython"] = True
+                if "micropython" not in detected["frameworks"]:
+                    detected["frameworks"].append("micropython")
 
     return detected
 

@@ -24,9 +24,10 @@ Languages: JS/TS/JSX/TSX, Python, Rust
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, is_bundled_file
+from utils import DEFAULT_IGNORE_DIRS, is_bundled_file, time_budget_expired
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -97,6 +98,10 @@ def compute_complexity(
     function_results: List[Dict] = []
     files_scanned = 0
     MAX_FUNCTIONS = 8000  # Cap total functions to analyze
+    TIMEOUT_BUDGET = 90   # seconds — bail out before hanging on huge repos
+
+    start_time = time.time()
+    timed_out = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -138,10 +143,19 @@ def compute_complexity(
             if len(function_results) >= MAX_FUNCTIONS:
                 break
 
+            # Early exit if time budget exceeded (prevents hanging on huge repos)
+            if time_budget_expired(start_time, TIMEOUT_BUDGET):
+                timed_out = True
+                break
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
+                continue
+
+            # Skip very large files (functions with 5000+ lines are rare and slow to parse)
+            if content.count('\n') > 5000:
                 continue
 
             files_scanned += 1
@@ -264,6 +278,8 @@ def compute_complexity(
         "functions": displayed_functions,
         "hotspots": hotspots,
         "recommendations": recommendations,
+        "timed_out": timed_out,
+        "duration_ms": int((time.time() - start_time) * 1000),
     }
 
 
