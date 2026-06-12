@@ -27,7 +27,12 @@ def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
         m = re.match(r'\s*#\s*define\s+(\w+)', line)
         if m:
             name = m.group(1)
-            if name.startswith('_') and name.endswith('_H'):
+            # Skip include guard macros (e.g., _NGX_ATOMIC_H_INCLUDED_, _HEADER_H_)
+            if (name.startswith('_') and name.endswith('_')) or \
+               re.match(r'^_?[A-Z0-9_]+_H(_INCLUDED_)?$', name) or \
+               name.endswith('_H') or name.endswith('_H_') or \
+               name.endswith('_INCLUDED') or name.endswith('_INCLUDED_') or \
+               name.endswith('_INCLUDED__'):
                 continue
             nodes.append({
                 "id": f"{rel_path}:{name}", "type": "macro", "name": name, "fn": name,

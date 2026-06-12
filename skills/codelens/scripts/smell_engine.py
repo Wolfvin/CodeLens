@@ -28,7 +28,9 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
+    ".py", ".rs", ".vue", ".svelte",
+    ".php", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
+    ".go", ".lua", ".java", ".cs"
 }
 
 # Thresholds
@@ -350,6 +352,55 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
+    elif ext == ".php":
+        for i, line in enumerate(lines):
+            # PHP function declarations
+            m = re.match(r'\s*(?:public|private|protected|static)\s+function\s+(\w+)', line.strip())
+            if m:
+                fn_starts.append((i, m.group(1)))
+                continue
+            m = re.match(r'\s*function\s+(\w+)', line.strip())
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext in {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"}:
+        for i, line in enumerate(lines):
+            # C/C++ function definitions
+            m = re.match(
+                r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+                r'(?:[\w:*&<>,\s]+?)\s+'
+                r'(\w+(?:::\w+)*)\s*\([^)]*\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?\{',
+                line
+            )
+            if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return',
+                                         'class', 'struct', 'enum', 'union', 'namespace'}:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".go":
+        for i, line in enumerate(lines):
+            m = re.match(r'\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(', line)
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".lua":
+        for i, line in enumerate(lines):
+            # Lua function declarations
+            m = re.match(r'\s*(?:local\s+)?function\s+[\w.:]+(\w+)\s*\(', line.strip())
+            if m:
+                fn_starts.append((i, m.group(1)))
+                continue
+            # Lua local function name = function()
+            m = re.match(r'\s*local\s+(\w+)\s*=\s*function\s*\(', line.strip())
+            if m:
+                fn_starts.append((i, m.group(1)))
+
+    elif ext == ".java":
+        for i, line in enumerate(lines):
+            m = re.match(r'\s*(?:(?:public|private|protected|static|final|abstract|synchronized)\s+)*'
+                        r'(?:[\w<>\[\]?,\s]+)\s+(\w+)\s*\([^)]*\)\s*(?:throws\s+[\w,\s]+)?\s*\{', line)
+            if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'class', 'interface'}:
+                fn_starts.append((i, m.group(1)))
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -393,8 +444,20 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
+    elif ext == ".lua":
+        # Lua: function ends with matching 'end'
+        depth = 0
+        for i in range(start, min(start + 300, len(lines))):
+            stripped = lines[i].strip()
+            if re.match(r'(?:local\s+)?function\b', stripped):
+                depth += 1
+            elif stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
+                depth -= 1
+                if depth <= 0:
+                    return i + 1
+        return min(start + 300, len(lines))
     else:
-        # JS/TS/Rust: count braces
+        # JS/TS/Rust/PHP/C/C++/Go/Java: count braces
         brace_count = 0
         for i in range(start, min(start + 300, len(lines))):
             for ch in lines[i]:
@@ -450,9 +513,12 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
-        elif ext == ".rs":
-            # Rust: 4 spaces per level
+        elif ext in {".rs", ".go", ".php", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".java"}:
+            # Rust/Go/PHP/C/C++/Java: 4 spaces per level
             level = indent // 4
+        elif ext == ".lua":
+            # Lua: 2 spaces per level (common convention)
+            level = indent // 2
         else:
             # JS/TS: 2 spaces per level
             level = indent // 2
@@ -617,6 +683,102 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
+                })
+
+    elif ext == ".php":
+        for m in re.finditer(r'function\s+\w+\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an associative array or DTO class for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider grouping related parameters."
+                })
+
+    elif ext in {".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"}:
+        for m in re.finditer(r'(?:[\w:*&<>,\s]+?)\s+(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:\{|;)', content):
+            params_str = m.group(2).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use a struct for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a struct or config object."
+                })
+
+    elif ext == ".go":
+        for m in re.finditer(r'func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)', content):
+            params_str = m.group(2).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options struct for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an options struct."
+                })
+
+    elif ext == ".lua":
+        for m in re.finditer(r'(?:local\s+)?function\s+[\w.:]+[\w.]*\s*\(([^)]*)\)', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip() and p.strip() != 'self']
+            param_count = len(params)
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use a table for grouping parameters."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path, "line": line_num, "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using a table for grouping."
                 })
 
     return smells

@@ -1009,6 +1009,15 @@ def _detect_language(ext: str) -> str:
         '.rs': 'rust', '.py': 'python', '.go': 'go', '.php': 'php',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
-        '.vue': 'vue', '.svelte': 'svelte'
+        '.vue': 'vue', '.svelte': 'svelte',
+        '.c': 'c', '.h': 'c',
+        '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.hxx': 'cpp',
+        '.lua': 'lua',
+        '.java': 'java',
+        '.cs': 'csharp',
+        '.rb': 'ruby',
+        '.swift': 'swift',
+        '.kt': 'kotlin',
+        '.blade': 'blade',
     }
     return mapping.get(ext, 'unknown')
