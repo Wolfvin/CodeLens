@@ -147,19 +147,35 @@ def cmd_ask(question: str, workspace: str) -> Dict[str, Any]:
             "confidence": args.pop("_confidence", "medium")
         }
 
-    # Fallback: if context returned not_found, try symbol search instead
+    # Fallback: if context returned not_found, try symbol search, then code search
     if (command == "context" and isinstance(result, dict)
             and result.get("status") == "not_found"):
         symbol = args.get("name", "")
         if symbol:
+            # First try: fuzzy symbol search in registry
             search_result = search_symbols(workspace, symbol, domain="all", fuzzy=True)
             if search_result.get("results"):
                 search_result["query_interpretation"] = {
                     "question": question,
-                    "interpreted_as": "search (fallback from context)",
+                    "interpreted_as": "symbol search (fallback from context)",
                     "confidence": "low"
                 }
                 return search_result
+            # Second try: full-text code search (catches conceptual/keyword queries)
+            try:
+                from search_engine import search_workspace
+                code_result = search_workspace(workspace, symbol, max_results=15, case_sensitive=False, whole_word=False)
+                # search_workspace uses 'matches' key, not 'results'
+                code_matches = code_result.get("matches", [])
+                if code_matches:
+                    code_result["query_interpretation"] = {
+                        "question": question,
+                        "interpreted_as": "code search (fallback from context+symbols)",
+                        "confidence": "low"
+                    }
+                    return code_result
+            except Exception:
+                pass
 
     return result
 

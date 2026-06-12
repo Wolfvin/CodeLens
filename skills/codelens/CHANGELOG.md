@@ -7,43 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.3.0] — 2026-06-12
 
-### Tested against neovim/neovim (3,826 source files: 822 Lua + 506 C/C++ + 8 Python, C+Lua polyglot)
+### Tested against screenpipe/screenpipe (1,933 source files: 639 Rust + 582 TS/JS + 218 TSX, Tauri desktop app)
 
-Real-world test on a C+Lua editor (neovim) with CMake + Zig build system.
-Confirmed: 16,802 backend nodes, 9,913 edges, 5,535 functions outlined,
-29,860 code smells across C/Lua/Zig files, polyglot project identity
-(c-cpp-lua-zig-polyglot), framework detection from file extensions.
-
-### Added
-
-- **C/C++ outline parser** (`_outline_c_cpp`): Full regex-based outline for C/C++ files extracting functions, classes, structs, enums, macros, includes, typedefs. Properly skips preprocessor directives (#ifdef, #ifndef, #endif, #if, #else, #elif, #pragma) — they are no longer misidentified as functions.
-- **Lua outline parser** (`_outline_lua`): Regex-based outline for Lua files extracting functions (global, local, method, exported), tables, requires.
-- **Java/Kotlin outline parser** (`_outline_java`): Regex-based outline extracting classes, interfaces, enums, methods, imports, packages.
-- **PHP outline parser** (`_outline_php`): Regex-based outline extracting functions, classes, interfaces, traits, enums, includes.
-- **Zig outline parser** (`_outline_zig`): Regex-based outline extracting functions (pub/private), constants, imports.
-- **Polyglot project identity** (`_extract_project_identity`): Now detects C/C++ (CMakeLists.txt), Lua (.lua files), and Zig (build.zig) project types. Combined type string for polyglot projects (e.g., "c-cpp-lua-zig-polyglot"). Extracts project name and version from CMakeLists.txt (project() command) and Makefile (VERSION variable).
-- **Framework detection from file extensions** (`detect_frameworks`): New step 8 counts source files by language extension and adds language frameworks (c, cpp, lua, java, golang, csharp, php, zig) when files exist. Also detects CMake and Zig build systems. Includes `language_file_counts` and `is_polyglot`/`project_type` in output.
-- **Language detection in outline** (`_detect_language`): Now recognizes 16+ languages including C, C++, Lua, Java, Kotlin, C#, PHP, Zig.
+Real-world test on a 19.3k-star Tauri app with real-time screen/audio capture and ML inference.
+Confirmed: 15,436 backend nodes, 94,374 edges, 7 frameworks detected (React, Next.js, Tailwind,
+Tauri, Rust, Tokio, Axum), 108 API routes (37 IPC_HANDLER, 16 IPC, 37 GET, 18 POST),
+121 secrets, 514 dataflow violations, 269 circular deps, 581 dead code items.
 
 ### Fixed
 
-- **CRITICAL: `get_workspace_outline()` crash** — The function didn't accept `max_files` parameter but `utils.py` passed it, causing TypeError after every scan. Added `max_files` parameter (default: 5000) with proper iteration limiting.
-- **C/C++ preprocessor directives misidentified as functions** — `#ifdef WIN32`, `#ifndef MSWIN`, `#define ENABLE_ASAN_UBSAN` etc. were incorrectly parsed as function definitions in `fallback_c.py`. Now properly skips all lines starting with `#`. Also added preprocessor keywords to the exclusion list.
-- **Outline engine missing language support** — `get_workspace_outline()` only included JS/TS/Rust/Python/Go/HTML/CSS/Vue/Svelte extensions. Now includes C, C++, Lua, Java, Kotlin, C#, PHP, Zig extensions.
-- **Smell engine only analyzed Python/JS/TS/Rust** — `SOURCE_EXTENSIONS` in `smell_engine.py` excluded C, C++, Lua, Java, Go, Zig. Now includes all 16+ languages.
-- **Complexity engine only analyzed Python/JS/TS/Rust** — Same issue as smell engine. Fixed by adding all language extensions.
-- **Dead code engine missing language support** — Added `.lua`, `.java`, `.cs`, `.php`, `.zig` to `SOURCE_EXTENSIONS`.
-- **Dead code false positives for C entry points** — Functions like `nvim_main`, `WinMain`, `DllMain`, and functions ending with `_init`, `_start`, `_entry` in C/C++ files were marked as dead. Now properly skipped.
-- **Project identity "unknown" for C/Lua/Zig projects** — `_extract_project_identity()` only checked package.json, pyproject.toml, and Cargo.toml. Now also checks CMakeLists.txt, Makefile, build.zig, and .lua file presence.
-- **Framework detection missed C, Lua, Zig** — Only detected cmake from config files. Now detects all languages from actual source file extensions.
-- **Version mismatch** — skill.json (5.8.0), pyproject.toml (5.9.0), utils.py (5.8.0) were all different. Now unified to 6.3.0.
-
-### Changed
-
-- `outline_engine.py` source_extensions expanded from 15 → 25+ extensions
-- `framework_detect.py` now includes `language_file_counts` and `is_polyglot`/`project_type` in output
-- `skill.json` description updated to reflect v6.3 capabilities
-- `skill.json` tags expanded with lua, zig, cmake, c, java, csharp, polyglot, etc.
+- **God object false positives (critical)**: JS/TS `_detect_god_objects()` now uses brace-depth tracking to scope method counts to actual class bodies. Previously counted ALL function-like patterns in the entire file as methods of the first `class` found via `re.search()`. This caused error classes like `CliError` to be reported with 136 methods and `BackendDownError` with 549 methods (10-500x inflation). The new implementation handles multiple classes per file and properly excludes non-method patterns (`if`, `for`, `while`, etc.). Rust impl blocks also use brace-depth tracking instead of counting all `fn` definitions file-wide.
+- **`write_output_files` crash**: Removed invalid `max_files` keyword argument from `get_workspace_outline()` call in `utils.py`. This TypeError was silently caught but prevented outline.json and summary.json from being generated after every scan.
+- **Monorepo detection inconsistency**: `summary` command now uses `_extract_project_identity()` (same source as `handbook`) for `is_monorepo` detection. Previously sourced from `detect_frameworks()` which does not return `is_monorepo`, causing `summary` to always report `false` while `handbook` correctly reported `true`.
+- **`ask` command fallback chain**: Three-tier fallback now implemented: `context` → `symbol search` → `code search`. Previously only tried symbol search, which fails for conceptual queries like "where is authentication handled" where no exact symbol exists. The code search fallback uses `search_workspace()` with case-insensitive matching to find relevant code patterns.
 
 ## [5.8.0] — 2026-06-12
 
