@@ -164,7 +164,7 @@ SINK_PATTERNS = {
     # Command execution
     "command_exec": {
         "patterns": [
-            r"eval\s*\(",
+            r"(?:^|[^\w.$])eval\s*\(",  # v5.9.3: word boundary — avoids page.$$eval(), page.$eval()
             r"(?:^|[^\w.])Function\s*\(",  # v5.9.2: word boundary — avoids isFunction(), createFunction()
             r"setTimeout\s*\(\s*[\"']",
             r"setInterval\s*\(\s*[\"']",

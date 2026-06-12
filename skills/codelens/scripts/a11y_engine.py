@@ -234,7 +234,11 @@ def audit_accessibility(
             rel_path = os.path.relpath(file_path, workspace)
 
             # v5.9.2: Skip test/story/fixture files — a11y issues in test fixtures are not actionable
-            _skip_keywords = ['.test.', '.spec.', '.stories.', '.story.', '__tests__']
+            # v5.9.3: Added /tests/, /test/, /__tests__/, /e2e/ directory patterns
+            # Also skip Svelte validator sample paths like /tests/validator/samples/
+            _skip_keywords = ['.test.', '.spec.', '.stories.', '.story.', '__tests__',
+                              '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
+                              '/fixtures/', '/fixture/', '/mocks/', '/samples/']
             if any(kw in rel_path for kw in _skip_keywords):
                 continue
 

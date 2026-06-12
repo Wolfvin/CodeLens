@@ -346,7 +346,10 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     # v5.9.2: Skip test/story/fixture files — long functions are expected there
-    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
+    # v5.9.3: Expanded with directory patterns for better coverage
+    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__',
+                      '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
+                      '/fixtures/', '/fixture/', '/mocks/', '/samples/']
     if any(kw in rel_path for kw in _skip_keywords):
         return smells
 
@@ -471,7 +474,10 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
     
     # Skip test/story/fixture files — deep nesting is expected there
-    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
+    # v5.9.3: Expanded with directory patterns
+    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__',
+                     '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
+                     '/fixtures/', '/fixture/', '/mocks/', '/samples/']
     if any(kw in rel_path for kw in skip_keywords):
         return smells
     
@@ -792,11 +798,14 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     lines = content.split('\n')
 
     # Skip magic number detection entirely for config/framework config files
+    # v5.9.3: Added directory patterns for test fixtures
     config_file_keywords = [
         'config', 'eslint', 'prettier', 'vitest', 'jest',
         'playwright', 'postcss', 'next.config', 'tsconfig',
         '.fixture.', '.stories.', '.story.', '.test.', '.spec.',
         'constants', 'const.py', 'consts', 'enums',
+        '/tests/', '/test/', '/__tests__/', '/e2e/', '/spec/',
+        '/fixtures/', '/fixture/', '/mocks/', '/samples/',
     ]
     rel_lower = rel_path.lower()
     if any(kw in rel_lower for kw in config_file_keywords):
