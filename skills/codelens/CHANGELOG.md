@@ -5,6 +5,39 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [6.5.0] — 2026-06-12
+
+### Tested against nim-lang/Nim (3,707 .nim files, 15 .nimble files, self-hosting Nim compiler)
+
+Real-world test on the Nim programming language's own compiler — a unique self-hosting, indentation-based
+language with 3,707 .nim source files and 35 .nims config files. This exposed critical gaps in Nim language
+support: the Nim parser existed but was never wired into the scan pipeline, framework detection used
+substring matching that incorrectly excluded directories containing "target", and multiple engines had
+Nim function extraction bugs.
+
+### Fixed
+
+- **Nim parser not wired into scan pipeline** (CRITICAL): `fallback_nim.py` existed in `parsers/` but was never imported by `scan.py`. Added import, file category, parsing block, and stats reporting. Scan now detects 3,707 Nim files producing 30,987 nodes + 80,405 edges (previously: 529 nodes / 1,485 edges from non-Nim files only).
+- **Framework detection substring matching false positives** (CRITICAL): `framework_detect.py` used `if ignore in root` for directory exclusion, causing "target" to match "test-target-nim", silently skipping the entire workspace. Replaced with `_should_skip_dir()` using path-segment-aware matching. Now correctly detects `has_nim: True`.
+- **Smell engine Nim regex double-escaped** (BUG): `_extract_function_starts` used `\\s+` instead of `\s+`, so Nim function declarations were never matched. Fixed and added `method`/`iterator` to the pattern.
+- **Smell engine Nim function end detection missing** (BUG): `_find_function_end()` had no Nim case, falling through to brace-counting. Added indentation-based function end detection.
+- **Complexity engine Nim function extraction missing** (BUG): `_extract_functions()` found 0 Nim functions. Added `_extract_nim_functions()` and `_get_nim_function_body()`. Now finds 1,109+ functions.
+- **`echo()` false positive as debug leak in Nim** (FALSE POSITIVE): In Nim, `echo()` is standard output. Added Nim-specific filtering — only flagged with debug patterns. `debugEcho()` always flagged.
+
+### Added
+
+- **Nim framework detection**: `detect_frameworks()` now detects `.nim` files and parses `.nimble` files for jester, prologue, karax, happyx, norm, nimcrypto.
+- **Nim entrypoints detection**: `entrypoints_engine.py` now detects `when isMainModule:` and `proc main()`. Found 273 Nim entrypoints (previously: 2).
+- **Nim debug leak patterns**: Added `debugEcho()` to PRINT_PATTERNS, `doAssert()`/`assert()` to DEBUGGER_PATTERNS.
+- **Nim project identity in handbook**: Parses `.nimble` files for name/version/description. Classifies as nim-compiler, nim-web-service, nim-database, nim-frontend-app, or nim-project.
+- **`.nim`/`.nims` in engine SOURCE_EXTENSIONS**: Added to 3 engines that were missing it.
+- **Nim directory hints**: Added `compiler/` and `nimble/` to handbook directory map.
+
+### Changed
+
+- **`lang_note` message updated**: Changed to "regex-based fallback extraction", added Nim to well-supported languages.
+- **Nim no longer listed as unsupported** since it now has a dedicated fallback parser.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

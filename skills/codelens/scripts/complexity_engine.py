@@ -329,6 +329,8 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_php_functions(lines, content)
     elif ext in {".ex", ".exs"}:
         functions = _extract_elixir_functions(lines, content)
+    elif ext in {".nim", ".nims"}:
+        functions = _extract_nim_functions(lines, content)
 
     return functions
 
@@ -654,7 +656,47 @@ def _extract_elixir_functions(lines: List[str], content: str) -> List[Dict]:
     return functions
 
 
-# ─── Function Body Extraction ──────────────────────────────────
+def _extract_nim_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract Nim function/proc/method/template/macro/iterator definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: proc/func/method/iterator/template/macro name[*](params)
+        m = re.match(
+            r'(proc|func|method|iterator|template|macro)\s+(\w+)\s*\*?\s*[\(\<]',
+            stripped
+        )
+        if m:
+            kind = m.group(1)
+            name = m.group(2)
+            # Extract params from the rest of the line
+            rest = stripped[m.end()-1:]  # from ( or <
+            params_m = re.search(r'\(([^)]*)\)', rest)
+            params_str = params_m.group(1) if params_m else ""
+            functions.append({
+                "name": name,
+                "line": i + 1,
+                "type": kind,
+                "params_str": params_str,
+                "start_col": len(line) - len(line.lstrip()),
+            })
+            continue
+
+        # Simple proc without params: proc name* =
+        m = re.match(r'(proc|func|method|iterator|template|macro)\s+(\w+)\s*\*?\s*=', stripped)
+        if m:
+            kind = m.group(1)
+            name = m.group(2)
+            functions.append({
+                "name": name,
+                "line": i + 1,
+                "type": kind,
+                "params_str": "",
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
 
 def _get_function_body_and_end(
     lines: List[str], fn_info: Dict, ext: str
@@ -669,6 +711,8 @@ def _get_function_body_and_end(
 
     if ext == ".py":
         return _get_py_function_body(lines, start)
+    elif ext in {".nim", ".nims"}:
+        return _get_nim_function_body(lines, start)
     elif ext == ".lua":
         return _get_lua_function_body(lines, start)
     elif ext in {".ex", ".exs"}:
@@ -699,6 +743,45 @@ def _get_py_function_body(lines: List[str], start: int) -> Tuple[str, int]:
 
         body_lines.append(line)
 
+    return '\n'.join(body_lines), start + len(body_lines)
+
+
+def _get_nim_function_body(lines: List[str], start: int) -> Tuple[str, int]:
+    """Extract Nim function body using indentation-based block tracking.
+    
+    Nim uses indentation for blocks (like Python). A proc body starts
+    after the = sign and continues at a deeper indentation level.
+    The body ends when indentation returns to the same or lower level
+    AND the line is a new top-level declaration.
+    """
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    body_lines = [lines[start]]
+    
+    # Find the = sign — body starts from there
+    found_equals = '=' in lines[start]
+    
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+        
+        # Empty lines are part of the function
+        if not stripped:
+            body_lines.append(line)
+            continue
+        
+        current_indent = len(line) - len(line.lstrip())
+        
+        # If we return to same or lower indentation as the proc line
+        if current_indent <= base_indent and stripped:
+            # Check if this is a new top-level declaration
+            if re.match(r'(proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|include|when\s+isMainModule)\s', stripped):
+                break
+            # Also break for when/if/for/while/case at top level (not inside the proc)
+            if current_indent < base_indent:
+                break
+        
+        body_lines.append(line)
+    
     return '\n'.join(body_lines), start + len(body_lines)
 
 

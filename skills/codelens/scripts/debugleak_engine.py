@@ -30,6 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
     ".php", ".dart", ".lua", ".java", ".cs",
+    ".nim", ".nims",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -112,6 +113,7 @@ PRINT_PATTERNS = [
     (r'\bpprint\.pprint\s*\(', "pprint.pprint()"),
     (r'\bpprint\s*\(', "pprint()"),
     (r'\becho\s*\(', "echo()"),
+    (r'\bdebugEcho\s*\(', "debugEcho()"),  # Nim debug-only echo
     (r'\bfmt\.Println\s*\(', "fmt.Println()"),
     (r'\bfmt\.Printf\s*\(', "fmt.Printf()"),
     (r'\bprintln!\s*\(', "println!()"),
@@ -161,6 +163,9 @@ DEBUGGER_PATTERNS = [
     (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
     (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
     (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
+    # Nim debug assertions
+    (r'\bdoAssert\s*\(', "doAssert()"),   # Nim: debug-only assertion
+    (r'\bassert\s*\(', "assert()"),       # Nim/Python: assertion (debug guard)
 ]
 
 # Rust logging macros from the `log` crate — these are NOT debugger statements.
@@ -571,6 +576,19 @@ def _detect_print_statements(
                 ))
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
+
+            # Nim: echo() is the standard output function (like println! in Rust),
+            # NOT a debug leak. debugEcho() is the debug-specific variant and
+            # should be flagged. echo() is only flagged in test files or with
+            # debug-specific patterns.
+            if ext in (".nim", ".nims") and label == "echo()":
+                # Check if the line contains debug-specific patterns
+                has_debug_pattern = bool(re.search(
+                    r'\bdebug\b|\bdbg\b|\btodo\b|\bfixme\b|\bhack\b|\btemp\b|\btrace\b|\bdump\b|\bFIXME\b|\bTODO\b|\bHACK\b',
+                    stripped, re.IGNORECASE
+                ))
+                if not is_test_file and not has_debug_pattern:
+                    continue  # Standard Nim output, not a debug leak
 
             severity = "medium"
             should_remove = True

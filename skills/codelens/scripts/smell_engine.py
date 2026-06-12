@@ -508,8 +508,8 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     elif ext in {".nim", ".nims"}:
         for i, line in enumerate(lines):
             stripped = line.strip()
-            # Nim: proc name(), func name(), template name(), macro name()
-            m = re.match(r'(?:proc|func|template|macro)\\s+(\w+)', stripped)
+            # Nim: proc name(), func name(), method name(), template name(), macro name(), iterator name()
+            m = re.match(r'(?:proc|func|method|template|macro|iterator)\s+(\w+)', stripped)
             if m:
                 fn_starts.append((i, m.group(1)))
 
@@ -628,6 +628,21 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             current_indent = len(lines[i]) - len(lines[i].lstrip())
             if current_indent <= base_indent and stripped:
                 return i
+        return len(lines)
+    elif ext in {".nim", ".nims"}:
+        # Nim: like Python, indentation-based blocks.
+        # Function ends when indentation returns to same or lower level
+        # AND the line is a new top-level declaration (proc/func/type/etc.)
+        base_indent = len(lines[start]) - len(lines[start].lstrip())
+        for i in range(start + 1, len(lines)):
+            stripped = lines[i].rstrip()
+            if not stripped or stripped.startswith('#'):
+                continue
+            current_indent = len(lines[i]) - len(lines[i].lstrip())
+            if current_indent <= base_indent and stripped:
+                # Check if this looks like a new top-level declaration
+                if re.match(r'(proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|include|when|if|for|while|case)\s', stripped):
+                    return i
         return len(lines)
     elif ext in {".ex", ".exs"}:
         # Elixir: count do/end pairs

@@ -112,6 +112,21 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "go_main_fn",
             },
+            # Nim — when isMainModule guard
+            {
+                "regex": r'when\s+isMainModule\s*:',
+                "language": {".nim", ".nims"},
+                "extract": "none",
+                "label": "nim_isMainModule",
+            },
+            # Nim — proc main()
+            {
+                "regex": r'proc\s+main\s*\(',
+                "language": {".nim", ".nims"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "nim_main_proc",
+            },
             # PHP — artisan command signatures
             {
                 "regex": r'protected\s+\$signature\s*=\s*[\'"]([^\'"]+)[\'"]',

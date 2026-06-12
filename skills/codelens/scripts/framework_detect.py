@@ -13,6 +13,18 @@ _logger = logging.getLogger("codelens.framework_detect")
 from utils import DEFAULT_IGNORE_DIRS
 
 
+def _should_skip_dir(root: str) -> bool:
+    """Check if a directory should be skipped during file walking.
+    
+    Uses path-segment-aware matching to avoid false positives.
+    For example, 'target' should match '/target/' but NOT '/test-target-nim/'.
+    """
+    root_norm = root.replace('\\', '/')
+    # Split path into segments for proper matching
+    segments = set(root_norm.split('/'))
+    return bool(segments & DEFAULT_IGNORE_DIRS)
+
+
 # Known framework signatures
 FRAMEWORK_SIGNATURES = {
     "react": {
@@ -429,6 +441,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
+        "has_nim": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -785,11 +798,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
+            skip = _should_skip_dir(root)
             if skip or '.codelens' in root:
                 continue
             for f in files:
@@ -804,11 +813,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Also check for src-tauri directory
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
-                skip = False
-                for ignore in DEFAULT_IGNORE_DIRS:
-                    if ignore in root:
-                        skip = True
-                        break
+                skip = _should_skip_dir(root)
                 if skip or '.codelens' in root:
                     continue
                 if 'src-tauri' in dirs:
@@ -825,11 +830,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
+        skip = _should_skip_dir(root)
         if skip:
             continue
 
@@ -846,6 +847,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            elif f.endswith('.nim') and not detected["has_nim"]:
+                if "nim" not in detected["frameworks"]:
+                    detected["frameworks"].append("nim")
+                detected["has_nim"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -873,11 +878,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
+            skip = _should_skip_dir(root)
             if skip:
                 continue
             for f in files:
@@ -924,6 +925,37 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
+    # 6c. Detect Nim frameworks from .nimble files
+    # Parse .nimble files for dependency/framework detection
+    if detected["has_nim"]:
+        _NIM_FRAMEWORK_INDICATORS = {
+            "jester": ["jester"],
+            "prologue": ["prologue"],
+            "karax": ["karax"],
+            "happyx": ["happyx"],
+            "norm": ["norm"],
+            "nimcrypto": ["nimcrypto"],
+        }
+        for root, dirs, fnames in os.walk(workspace):
+            skip = _should_skip_dir(root)
+            if skip or '.codelens' in root:
+                continue
+            for fn in fnames:
+                if fn.endswith('.nimble'):
+                    try:
+                        nimble_path = os.path.join(root, fn)
+                        with open(nimble_path, 'r', encoding='utf-8') as f:
+                            nimble_content = f.read()
+                        # Check for Nim framework deps in requires clause
+                        for fw_name, indicators in _NIM_FRAMEWORK_INDICATORS.items():
+                            if fw_name in detected["frameworks"]:
+                                continue
+                            for indicator in indicators:
+                                if indicator in nimble_content:
+                                    detected["frameworks"].append(fw_name)
+                                    break
+                    except IOError:
+                        pass
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
@@ -1050,6 +1082,14 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
+
+    # Nim: add Nim-specific paths
+    if fw.get("has_nim"):
+        config["backend_paths"].extend(["src/", "lib/", "nimble/"])
+        # For self-hosting compilers like nim-lang/Nim, also add compiler/ path
+        compiler_dir = os.path.join(workspace, "compiler")
+        if os.path.isdir(compiler_dir):
+            config["backend_paths"].append("compiler/")
 
     # Monorepo: add sub-directory paths
     if fw.get("is_monorepo"):

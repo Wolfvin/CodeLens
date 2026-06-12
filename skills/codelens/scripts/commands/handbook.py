@@ -641,8 +641,73 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
+    # v6.5: Detect Nim projects from .nimble files
+    nim_type = None
+    nimble_files = []
+    if os.path.isdir(workspace):
+        for fn in os.listdir(workspace):
+            if fn.endswith('.nimble'):
+                nimble_files.append(fn)
+    if nimble_files:
+        nimble_path = os.path.join(workspace, nimble_files[0])
+        try:
+            with open(nimble_path, 'r', encoding='utf-8') as f:
+                nimble_content = f.read()
+            # Extract name, version, description from .nimble file
+            name_match = re.search(r'(?:name|packageName)\s*(?::\s*|=\s*)["\']?([\w-]+)', nimble_content)
+            ver_match = re.search(r'(?:version)\s*(?::\s*|=\s*)["\']?([\d.]+)', nimble_content)
+            desc_match = re.search(r'(?:description)\s*(?::\s*|=\s*)["\'](.+?)["\']', nimble_content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
+            # Classify Nim project type
+            nimble_lower = nimble_content.lower()
+            if 'jester' in nimble_lower or 'prologue' in nimble_lower:
+                nim_type = "nim-web-service"
+            elif 'norm' in nimble_lower or 'sqlite' in nimble_lower:
+                nim_type = "nim-database"
+            elif 'karax' in nimble_lower or 'happyx' in nimble_lower:
+                nim_type = "nim-frontend-app"
+            else:
+                # Check if it's a self-hosting compiler (has compiler/ dir with .nim files)
+                compiler_dir = os.path.join(workspace, 'compiler')
+                if os.path.isdir(compiler_dir):
+                    nim_src_count = 0
+                    for root, dirs, fnames in os.walk(compiler_dir):
+                        for fn in fnames:
+                            if fn.endswith('.nim'):
+                                nim_src_count += 1
+                        if nim_src_count >= 5:
+                            break
+                    if nim_src_count >= 5:
+                        nim_type = "nim-compiler"
+                    else:
+                        nim_type = "nim-project"
+                else:
+                    nim_type = "nim-project"
+        except Exception:
+            logger.warning(".nimble parsing failed", exc_info=True)
+            nim_type = "nim-project"
+    elif os.path.isdir(workspace):
+        # No .nimble file, but check for .nim files
+        nim_count = 0
+        for root, dirs, fnames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for fn in fnames:
+                if fn.endswith('.nim'):
+                    nim_count += 1
+                if nim_count >= 10:
+                    break
+            if nim_count >= 10:
+                break
+        if nim_count >= 10:
+            nim_type = "nim-project"
+
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, nim_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -661,6 +726,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
+        if nim_type:
+            type_parts.append("nim")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -721,6 +788,9 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
+        'compiler': 'Nim compiler source',
+        'nimble': 'Nimble package files',
+        'lib': 'Shared libraries and utilities',
     }
     dir_map = {}
     try:
