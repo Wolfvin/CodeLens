@@ -276,7 +276,12 @@ def audit_accessibility(
                 _check_semantic_html(content, lines, rel_path, template_type, issues)
 
             # ─── Color Contrast ──────────────────────────
-            if "color_contrast" in categories and len(issues) < MAX_ISSUES_TOTAL:
+            # v5.9: Skip color contrast checks in test files — color contrast
+            # in test files is meaningless as they render in jsdom for assertions.
+            _is_test_file = any(x in rel_path for x in
+                ['.test.', '.spec.', '_test.', '__tests__', '__mocks__',
+                 '.stories.', '.story.', 'fixtures/'])
+            if "color_contrast" in categories and len(issues) < MAX_ISSUES_TOTAL and not _is_test_file:
                 _check_color_contrast(content, lines, rel_path, template_type, issues)
 
             # ─── Heading Order (collect for later) ───────

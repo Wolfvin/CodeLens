@@ -103,7 +103,7 @@ def find_changed_files(
 
     # Find changed files
     for rel_path in current_rel_paths & cached_rel_paths:
-        if current[rel_path] != cached[rel_path]:
+        if abs(current[rel_path] - cached[rel_path]) > 0.001:
             abs_path = os.path.join(workspace, rel_path)
             changed.append(abs_path)
 

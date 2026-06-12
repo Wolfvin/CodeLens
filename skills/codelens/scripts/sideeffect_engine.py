@@ -180,6 +180,28 @@ SIDE_EFFECT_PATTERNS = {
         "label": "external_service",
         "severity": "high"
     },
+    # ── VSCode Extension API ──────────────────────────────────────
+    # The `vscode` module is an ambient API provided at runtime by the
+    # extension host. Calls to vscode.window.*, vscode.commands.*, etc.
+    # are all side-effecting (register providers, show UI, write output).
+    "vscode_api": {
+        "patterns": [
+            r"vscode\.window\.(?:createOutputChannel|showInformationMessage|showWarningMessage|showErrorMessage|showInputBox|showQuickPick|createTerminal|createWebviewPanel|showTextDocument|activeTextEditor|createStatusBarItem)",
+            r"vscode\.commands\.(?:registerCommand|registerTextEditorCommand|executeCommand)",
+            r"vscode\.workspace\.(?:registerFileSystemProvider|registerTextDocumentContentProvider|registerTaskProvider|createFileSystemWatcher|findFiles|openTextDocument)",
+            r"vscode\.languages\.(?:registerCompletionItemProvider|registerHoverProvider|registerDefinitionProvider|registerReferenceProvider|registerCodeLensProvider|registerCodeActionsProvider|registerDocumentSymbolProvider|registerWorkspaceSymbolProvider|registerDocumentFormattingEditProvider|registerDocumentRangeFormattingEditProvider|registerOnTypeFormattingEditProvider|registerRenameProvider|registerDocumentLinkProvider|registerColorProvider|registerFoldingRangeProvider|registerImplementationProvider|registerTypeDefinitionProvider|registerSignatureHelpProvider|registerDocumentHighlightProvider|setLanguageConfiguration)",
+            r"vscode\.debug\.(?:registerDebugConfigurationProvider|registerDebugAdapterTrackerFactory|startDebugging)",
+            r"vscode\.extensions\.(?:createStatusBarItem|registerTreeDataProvider)",
+            r"vscode\.treeDataProvider",
+            r"vscode\. notebooks\.",
+            r"vscode\.tests\.(?:createTestController|registerTestProvider)",
+            # Webview IPC: postMessage is side-effecting (sends data to host)
+            r"(?:vsCodeApi|vscodePostMessage)\.postMessage\s*\(",
+            r"acquireVsCodeApi\s*\(",  # acquiring the API object itself is side-effecting
+        ],
+        "label": "vscode_extension_api",
+        "severity": "high"
+    },
 }
 
 

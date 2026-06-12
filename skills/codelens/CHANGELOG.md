@@ -5,35 +5,28 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.8.2] — 2026-06-12
+## [5.9.0] — 2026-06-12
 
-### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)
+### Tested against gitlab-org/gitlab-vscode-extension (882 files: 763 TS + 82 JS + 18 Vue, VSCode extension with webview IPC)
 
-Real-world test on a self-hosting Nim compiler — the language writes itself!
-Only 40/3734 source files were parsed before this release (1.1% coverage).
-After adding Nim support: 3,710 files parsed, 99.6% coverage.
-
-### Added
-
-- **Nim fallback parser** (`fallback_nim.py`): Regex-based parser that extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Handles Nim's `*` export marker, backtick-quoted identifiers, and indentation-based block tracking.
-- **Nim framework detection**: `detect_frameworks()` now detects `nim` (via `.nim`/`.nims`/`.nimble` files), `nimble` (package manager), `jester` (web framework), `prologue` (web framework), `karax` (SPA framework), `happyx` (web framework), `norm` (ORM), `nimcrypto` (crypto library). Parses `.nimble` files for `requires "package"` dependencies.
-- **`has_nim` field in framework detection**: `detect_frameworks()` now includes `has_nim: true` when Nim source files are found.
-- **Handbook Nim identity**: `handbook` now parses `.nimble` files for project name, version, and description. Classifies Nim projects as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project` based on name and dependencies.
-- **Nim entrypoints**: `entrypoints` command now detects `when isMainModule:` (Nim's equivalent of `if __name__ == "__main__"`) and `proc main()`.
-- **Nimble manifest parsing in vuln-scan**: `vuln-scan` now parses `.nimble` files for dependency versions and checks against the vulnerability database. Supports `requires "pkg >= version"` patterns.
-- **Nim code indicators for debug-leak commented_code**: Added `code_indicators_nim` with Nim-specific patterns (`proc`, `func`, `method`, `iterator`, `template`, `macro`, `type`, `const`, `let`, `var`, `import`, `from`, `export`, `discard`, `echo`, `new`).
-- **Nim comment prefix**: Debug-leak engine now recognizes `#` as the comment prefix for `.nim`/`.nims` files.
+Real-world test on a VSCode extension with unusual hybrid architecture (TypeScript extension host + Vue 2/3 webview subprojects).
+Confirmed: 1,014 nodes, 12,102 edges, 796 smells, 58 circular deps, 44 dataflow violations, 119 VSCode API side effects.
 
 ### Fixed
 
-- **`echo()` false positive in debug-leak**: Python's `def echo(debugger, command, result, internal_dict)` in LLDB extensions was flagged as a debug print statement. Now skips: (1) Python function definitions `def echo(...)`, (2) echo calls in LLDB/debugger context, (3) Nim `echo()` calls without debug patterns (echo is standard output in Nim, like `println!` in Rust).
-- **Handbook `type: unknown` and `version: 0.0.0` for Nim projects**: Nim projects without package.json/Cargo.toml/go.mod had no identity detection. Now parses `.nimble` files for name, version, description, and type classification.
-- **Scan reports Nim as unsupported language**: Nim was silently dropped during scan (0 files parsed from 3672). Now has full parser support and is listed in the `supported` set.
+- **CRITICAL: JS/TS god object detection counts control flow as methods**: `smell_engine.py` regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched `if(`, `for(`, `while(`, `return(`, `super(`, `console.log(`, etc. — 10-30x inflation on typical files. Added negative lookahead for control flow keywords and property accesses. Method counts now match real methods only.
+- **HIGH: perf-hint large_bundle false positives for Node.js built-ins**: `import * as path from 'node:path'` and `import * as fs from 'node:fs'` flagged as "prevents tree-shaking" — these are never bundled and have zero tree-shaking implications. Now skipped for `node:*` protocol imports.
+- **HIGH: perf-hint large_bundle false positives for VSCode extension API**: `import * as vscode from 'vscode'` flagged as "prevents tree-shaking" — the module is provided at runtime by the extension host and never bundled. Now skipped.
+- **HIGH: perf-hint memory_leak false positives for process signal handlers**: `process.on('exit')` and `process.on('SIGINT')` flagged as "listener accumulates over time" — these are intentionally permanent process-level signal handlers. Now skipped for exit/SIGINT/SIGTERM/SIGHUP/uncaughtException/unhandledRejection events.
+- **HIGH: side-effect engine misses VSCode extension API calls**: `activate()` function classified as "pure" despite calling `vscode.window.createOutputChannel()`, `vscode.commands.registerCommand()`, etc. Added `vscode_api` side-effect category with patterns for `vscode.window.*`, `vscode.commands.*`, `vscode.workspace.*`, `vscode.languages.*`, `vscode.debug.*`, `acquireVsCodeApi()`, and `postMessage()` webview IPC. Now correctly classifies 119 VSCode API side effects in the GitLab extension test target.
+- **HIGH: config-drift reports `vscode` as missing dependency**: The `vscode` module is an ambient API provided at runtime by the extension host, declared as `@types/vscode` in devDependencies — standard VSCode extension practice. Added `vscode` and `electron` to builtins set. False positive count dropped from 24 to 2.
+- **HIGH: config-drift false positives in monorepo structures**: Only root `package.json` was scanned; nested `webviews/vue2/package.json`, `webviews/vue3/package.json`, etc. were invisible. Added `_merge_nested_package_jsons()` that discovers and merges dependencies from subproject package.json files (Lerna/Nx/Turborepo/VSCode webview workspaces). Validates subprojects by checking for "name" field.
+- **MEDIUM: regex-audit flags URL strings as "unescaped dot"**: Strings like `gitlab.com`, `example.org`, `www.w3.org` in CSP allowlists, test fixtures, and SVG namespaces flagged as having unescaped dots. Now skips patterns that contain no regex metacharacters (`+*?^$|\\[]{}()`) — these are plain strings, not regex patterns.
+- **MEDIUM: a11y color contrast warnings in test files**: Color contrast checks in `*.test.js` files are meaningless — tests render in jsdom for assertion purposes. Now skips color contrast checks in files matching test indicators (`.test.`, `.spec.`, `__tests__`, `__mocks__`, `.stories.`, `fixtures/`).
 
 ### Changed
 
-- **SOURCE_EXTENSIONS expanded**: Added `.nim` and `.nims` to all 16 engines (smell, complexity, debug-leak, entrypoints, regex-audit, side-effect, dataflow, ownership, config-drift, type-infer, secrets, env-check, test-map, state-map, dead-code, perf-hint, api-map).
-- **Version bump**: 5.8.1 → 5.8.2
+- **pyproject.toml formatting fix**: Merged `description` and `readme` fields on the same line — separated onto their own lines for valid TOML parsing.
 
 ## [5.8.1] — 2026-06-12
 

@@ -84,6 +84,54 @@ def _detect_project_type(workspace: str) -> str:
     else:
         return "unknown"
 
+
+def _merge_nested_package_jsons(workspace: str, declared: Dict) -> None:
+    """Merge dependencies from nested package.json files into declared.
+
+    This handles monorepo structures (e.g., VSCode extensions with webview
+    subprojects, Lerna/Nx/Turborepo workspaces, etc.) where each subproject
+    has its own package.json with its own dependencies.
+
+    Only merges from directories that look like real subprojects:
+    - Must have a "name" field in their package.json
+    - Must not be node_modules or .git directories
+    - Skips the root package.json (already loaded)
+    """
+    root_pkg = os.path.join(workspace, "package.json")
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        # Skip ignored directories
+        dirnames[:] = [d for d in dirnames if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if 'node_modules' in dirpath or '.codelens' in dirpath:
+            dirnames.clear()
+            continue
+
+        if 'package.json' not in filenames:
+            continue
+
+        pkg_path = os.path.join(dirpath, 'package.json')
+        # Skip the root package.json (already loaded)
+        if os.path.abspath(pkg_path) == os.path.abspath(root_pkg):
+            continue
+
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            # Only merge if this looks like a real subproject (has a name)
+            if not pkg.get("name"):
+                continue
+            # Merge dependencies from this subproject
+            for dep_name, dep_version in pkg.get("dependencies", {}).items():
+                if dep_name not in declared["dependencies"]:
+                    declared["dependencies"][dep_name] = dep_version
+            for dep_name, dep_version in pkg.get("devDependencies", {}).items():
+                if dep_name not in declared["dev_dependencies"]:
+                    declared["dev_dependencies"][dep_name] = dep_version
+            for dep_name, dep_version in pkg.get("peerDependencies", {}).items():
+                if dep_name not in declared["peer_dependencies"]:
+                    declared["peer_dependencies"][dep_name] = dep_version
+        except (json.JSONDecodeError, IOError):
+            pass
+
 def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
     """Load declared dependencies from config files."""
     declared = {
@@ -102,7 +150,14 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
                 declared["dev_dependencies"] = pkg.get("devDependencies", {})
                 declared["peer_dependencies"] = pkg.get("peerDependencies", {})
             except (json.JSONDecodeError, IOError):
-                logger.debug("Config drift: failed to parse file", exc_info=True)
+                logger.debug("Config drift: failed to parse root package.json", exc_info=True)
+
+        # v5.9: Monorepo / nested package.json support
+        # Scan for nested package.json files (e.g., webviews/vue2/package.json,
+        # packages/core/package.json) and merge their declared dependencies.
+        # This prevents false "missing dependency" reports for packages that
+        # are declared in subproject package.json files, not the root.
+        _merge_nested_package_jsons(workspace, declared)
 
     elif project_type == "rust":
         cargo_path = os.path.join(workspace, "Cargo.toml")
@@ -130,9 +185,15 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
 
                     if in_deps and '=' in stripped:
                         name = stripped.split('=')[0].strip()
+                        # Handle workspace inheritance: name.workspace = true → just "name"
+                        if '.workspace' in name:
+                            name = name.split('.')[0].strip()
                         declared["dependencies"][name] = stripped
                     elif in_dev_deps and '=' in stripped:
                         name = stripped.split('=')[0].strip()
+                        # Handle workspace inheritance: name.workspace = true → just "name"
+                        if '.workspace' in name:
+                            name = name.split('.')[0].strip()
                         declared["dev_dependencies"][name] = stripped
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
@@ -665,6 +726,13 @@ def _compute_drift(
         'node:assert', 'node:cluster', 'node:dgram', 'node:dns',
         'node:perf_hooks', 'node:process', 'node:readline', 'node:repl',
         'node:timers', 'node:worker_threads', 'node:zlib', 'node:test',
+        # ── VSCode Extension API ──
+        # The `vscode` module is an ambient API provided at runtime by the
+        # extension host. It's declared as @types/vscode in devDependencies,
+        # NOT as a direct dependency. This is standard VSCode extension practice.
+        'vscode',
+        # ── Electron runtime APIs ──
+        'electron',
         # ── Python stdlib (comprehensive, Python 3.8+) ──
         '__future__', '_thread', '_io', 'abc', 'argparse', 'array', 'ast',
         'asyncio', 'atexit', 'audioop', 'base64', 'binascii', 'binhex',

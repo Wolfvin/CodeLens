@@ -233,7 +233,7 @@ def _bfs_trace_indexed(
 
         # Use edge_resolver's cached index for O(1) lookup
         if direction_label == "caller":
-            neighbors_raw = get_callers(current_id, edges)
+            neighbors_raw = get_callers(current_id, edges, nodes)
             neighbors = [{"node_id": n["from"]} for n in neighbors_raw]
         else:
             neighbors_raw = get_callees(current_id, edges, nodes)

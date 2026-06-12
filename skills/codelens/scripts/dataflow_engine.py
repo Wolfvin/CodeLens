@@ -49,7 +49,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"\.value\b(?!\s*\()",  # .value but NOT .values() — Map/Array method
+            r"(?:getElementById|querySelector|querySelectorAll)\s*\([^)]*\)\.value",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -165,10 +165,10 @@ SINK_PATTERNS = {
     "command_exec": {
         "patterns": [
             r"eval\s*\(",
-            r"(?:^|[^\w.])Function\s*\(",  # v5.9.2: word boundary — avoids isFunction(), createFunction()
+            r"Function\s*\(",
             r"setTimeout\s*\(\s*[\"']",
             r"setInterval\s*\(\s*[\"']",
-            r"(?:^|[^\w.])exec(?:Sync)?\s*\(",  # v5.9.2: word boundary — avoids execQuery(), execSql()
+            r"exec(?:Sync)?\s*\(",
             r"spawn(?:Sync)?\s*\(",
             r"child_process\.",
             r"os\.system\s*\(",
@@ -295,7 +295,7 @@ PROPAGATOR_PATTERNS = [
 
 # ─── Ignore dirs ──────────────────────────────────────────────
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
 
 def trace_dataflow(
@@ -740,7 +740,7 @@ def _check_sanitizer(
     # Check same-file sanitizers
     for san in sanitizers_by_file.get(source["file"], []):
         # Sanitizer must be between source and sink
-        if san["line"] > source["line"] and san["line"] < sink["line"]:
+        if san["line"] >= source["line"] and san["line"] < sink["line"]:
             if sink_key in san.get("sanitizes_for", set()):
                 return True
 
