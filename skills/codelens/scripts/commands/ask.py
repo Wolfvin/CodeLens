@@ -68,6 +68,9 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "frontend backend relationship": 3, "frontend backend communication": 3,
     "rust frontend": 3, "native bridge": 3, "ipc channel": 3,
     "command binding": 3, "exposed function": 3, "plugin command": 3,
+    # Individual frontend/backend/rust keywords (weight 2) — helps when words are non-adjacent
+    "frontend": 2, "backend": 2, "rust": 2, "communicate": 2,
+    "native layer": 2, "sidecar": 2, "invoke command": 2,
 
     # Summary/overview terms (v6.2)
     "summary": 3, "overview": 3, "quick summary": 3, "brief": 3,
@@ -318,7 +321,9 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
           "command handler", "ipc channel", "command binding", "exposed function",
           "plugin command", "native bridge",
           "frontend backend", "frontend-backend", "frontend backend relationship",
-          "frontend backend communication", "rust frontend"],
+          "frontend backend communication", "rust frontend",
+          "frontend", "backend", "communicate", "sidecar", "native layer",
+          "invoke command"],
          "api-map", {}, "high"),
 
         # How does the frontend talk to the backend / Tauri invoke patterns

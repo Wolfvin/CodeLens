@@ -507,6 +507,51 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_rust_backend"] = True
                     break
 
+    # 4b. If no root Cargo.toml, search nested dirs for Cargo.toml (monorepo support)
+    if not detected["has_rust"]:
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            if 'Cargo.toml' in files:
+                if "rust" not in detected["frameworks"]:
+                    detected["frameworks"].append("rust")
+                detected["has_rust"] = True
+                # Also parse this Cargo.toml for dependencies
+                try:
+                    sub_cargo = os.path.join(root, 'Cargo.toml')
+                    with open(sub_cargo, 'r', encoding='utf-8') as f:
+                        sub_content = f.read()
+                    in_deps = False
+                    for line in sub_content.split('\n'):
+                        stripped = line.strip()
+                        if stripped.startswith('['):
+                            section = stripped.strip('[]').strip()
+                            in_deps = section in ('dependencies', 'dev-dependencies')
+                            continue
+                        if in_deps and '=' in stripped:
+                            dep_name = stripped.split('=')[0].strip().lower()
+                            if dep_name and not dep_name.startswith('#'):
+                                cargo_deps.add(dep_name)
+                except IOError:
+                    pass
+                break  # Found one, no need to search further
+
+        # Match any newly found cargo deps against framework signatures
+        if detected["has_rust"]:
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                cargo_crates = sig.get("cargo_crates", [])
+                for crate_name in cargo_crates:
+                    if crate_name.lower() in cargo_deps:
+                        detected["frameworks"].append(fw_name)
+                        break
+
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']

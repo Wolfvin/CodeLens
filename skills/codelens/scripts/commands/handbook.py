@@ -256,6 +256,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         "pnpm-workspace.yaml": "pnpm-workspace",
         "lerna.json": "lerna",
         "nx.json": "nx",
+        ".yarnrc.yml": "yarn-workspace",
     }
     for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
         if os.path.isfile(os.path.join(workspace, indicator_file)):
@@ -294,6 +295,22 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 if "cargo-workspace" not in identity["monorepo_tools"]:
                     identity["monorepo_tools"].append("cargo-workspace")
 
+    # v5.9: Check for packages/ directory with multiple package.json (Yarn/pnpm monorepo pattern)
+    packages_dir = os.path.join(workspace, 'packages')
+    if os.path.isdir(packages_dir):
+        sub_pkgs = 0
+        try:
+            for entry in os.listdir(packages_dir):
+                entry_path = os.path.join(packages_dir, entry)
+                if os.path.isdir(entry_path) and os.path.isfile(os.path.join(entry_path, 'package.json')):
+                    sub_pkgs += 1
+        except OSError:
+            pass
+        if sub_pkgs >= 2:
+            identity["is_monorepo"] = True
+            if "yarn-workspace" not in identity["monorepo_tools"] and "pnpm-workspace" not in identity["monorepo_tools"]:
+                identity["monorepo_tools"].append("yarn-workspace")
+
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
@@ -302,7 +319,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
             identity["name"] = pkg.get("name", identity["name"])
-            identity["version"] = pkg.get("version", identity["version"])
+            pkg_version = pkg.get("version", "0.0.0")
+            if pkg_version and pkg_version != "0.0.0":
+                identity["version"] = pkg_version
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             if "next" in deps:
@@ -315,6 +334,33 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 js_type = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
+
+    # v5.9: Try tauri.conf.json for version (Tauri apps often have version there)
+    if identity["version"] == "0.0.0":
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore_dir in DEFAULT_IGNORE_DIRS:
+                if ignore_dir in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            if 'tauri.conf.json' in files:
+                try:
+                    tauri_conf_path = os.path.join(root, 'tauri.conf.json')
+                    with open(tauri_conf_path, 'r', encoding='utf-8') as f:
+                        tauri_conf = json.load(f)
+                    pkg_info = tauri_conf.get("package", {})
+                    tauri_version = pkg_info.get("version", "0.0.0")
+                    if tauri_version and tauri_version != "0.0.0":
+                        identity["version"] = tauri_version
+                    # Also get product name if identity name is still default
+                    product_name = pkg_info.get("productName", "")
+                    if product_name and identity["name"] in ("", "unknown"):
+                        identity["name"] = product_name
+                    break
+                except Exception:
+                    pass
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]

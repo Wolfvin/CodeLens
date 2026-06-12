@@ -32,11 +32,18 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
+    '.yarn',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.min.js', '.min.css', '.map', '.bundle.js',
     '.chunk.js', '.d.ts',  # declaration files
+})
+
+DEFAULT_IGNORE_FILES = frozenset({
+    '.pnp.cjs', '.pnp.loader.mjs',  # Yarn PNP generated files
+    'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'bun.lock',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock',
 })
 
 # ─── Output File Generation ─────────────────────────────────
@@ -675,6 +682,8 @@ GENERATED_FILE_PATTERNS = frozenset({
     'composer.lock', 'mix.lock', 'Podfile.lock',
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
+    # Yarn PNP generated files
+    '.pnp.cjs', '.pnp.loader.mjs',
 })
 
 
