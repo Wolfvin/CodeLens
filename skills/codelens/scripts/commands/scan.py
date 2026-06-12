@@ -25,6 +25,7 @@ from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
 from parsers.fallback_java import parse_java_fallback
+from parsers.fallback_kotlin import parse_kotlin_fallback
 from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
@@ -508,7 +509,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
-    # Parse Java/Kotlin files
+    # Parse Java files
     java_data = []
     if files["java"]:
         for path in files["java"]:
@@ -525,6 +526,24 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 })
             except IOError:
                 logger.debug(f"Failed to read Java file: {path}")
+
+    # Parse Kotlin files
+    kotlin_data = []
+    if files["kotlin"]:
+        for path in files["kotlin"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_kotlin_fallback(content, os.path.relpath(path, workspace))
+                kotlin_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Kotlin file: {path}")
 
     # Parse C/C++ files
     c_cpp_data = []
@@ -704,6 +723,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
             "java": len(files["java"]),
+            "kotlin": len(files["kotlin"]),
             "c_cpp": len(files["c_cpp"]),
             "go": len(files["go"]),
             "lua": len(files["lua"]),
@@ -713,6 +733,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
+        "kotlin_parsed": len(kotlin_data),
         "c_cpp_parsed": len(c_cpp_data),
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
@@ -740,7 +761,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade"}
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade", "kotlin"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -771,6 +792,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "vue": [],
         "svelte": [],
         "java": [],
+        "kotlin": [],
         "c_cpp": [],
         "go": [],
         "lua": [],
@@ -830,8 +852,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
-            elif ext in ('.java', '.kt'):
+            elif ext == '.java':
                 files["java"].append(file_path)
+            elif ext == '.kt':
+                files["kotlin"].append(file_path)
             elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
                 files["c_cpp"].append(file_path)
             elif ext == '.go':

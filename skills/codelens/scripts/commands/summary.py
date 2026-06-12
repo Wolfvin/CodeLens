@@ -13,9 +13,77 @@ overwhelmed with thousands of findings, most of which are low-priority.
 """
 
 import os
+import re
 from typing import Dict, Any, List
 from commands import register_command
 from utils import logger
+
+
+def _detect_android_identity(workspace: str) -> Dict[str, Any]:
+    """Detect Android project identity from AndroidManifest.xml and build.gradle."""
+    identity = {}
+
+    # Extract app name from AndroidManifest.xml
+    manifest_paths = [
+        os.path.join(workspace, "app", "src", "main", "AndroidManifest.xml"),
+        os.path.join(workspace, "src", "main", "AndroidManifest.xml"),
+        os.path.join(workspace, "AndroidManifest.xml"),
+    ]
+    for manifest_path in manifest_paths:
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                # Look for android:label in <application> tag
+                label_match = re.search(
+                    r'<application[^>]*android:label=["\']([^"\']+)["\']', content
+                )
+                if not label_match:
+                    label_match = re.search(
+                        r'android:label=["\']([^"\']+)["\']', content
+                    )
+                if label_match:
+                    label = label_match.group(1)
+                    # Skip resource references like @string/app_name
+                    if not label.startswith("@"):
+                        identity["name"] = label
+            except Exception:
+                logger.debug(f"Failed to read AndroidManifest.xml at {manifest_path}")
+            break
+
+    # Extract version from build.gradle or build.gradle.kts
+    gradle_paths = [
+        os.path.join(workspace, "app", "build.gradle.kts"),
+        os.path.join(workspace, "app", "build.gradle"),
+        os.path.join(workspace, "build.gradle.kts"),
+        os.path.join(workspace, "build.gradle"),
+    ]
+    for gradle_path in gradle_paths:
+        if os.path.isfile(gradle_path):
+            try:
+                with open(gradle_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                # Extract versionName (Groovy and Kotlin DSL syntax)
+                version_match = re.search(
+                    r'versionName\s+["\']([^"\']+)["\']', content
+                )
+                if not version_match:
+                    version_match = re.search(
+                        r'versionName\s*=\s*["\']([^"\']+)["\']', content
+                    )
+                if version_match:
+                    identity["version"] = version_match.group(1)
+                # Extract versionCode
+                version_code_match = re.search(r'versionCode\s+(\d+)', content)
+                if not version_code_match:
+                    version_code_match = re.search(r'versionCode\s*=\s*(\d+)', content)
+                if version_code_match:
+                    identity["versionCode"] = int(version_code_match.group(1))
+            except Exception:
+                logger.debug(f"Failed to read gradle file at {gradle_path}")
+            break
+
+    return identity
 
 
 def add_args(parser):
@@ -90,6 +158,29 @@ def generate_summary(
         result["frameworks"] = fw.get("frameworks", [])
     except Exception:
         result["frameworks"] = []
+
+    # ─── 2b. Android identity refinement ───────────────────
+    frameworks = result.get("frameworks", [])
+    if "android" in frameworks or "android_ndk" in frameworks:
+        android_info = _detect_android_identity(workspace)
+        # Override type based on framework
+        if "android_ndk" in frameworks:
+            result["identity"]["type"] = "android_app_native"
+        elif "android" in frameworks:
+            result["identity"]["type"] = "android_app"
+        # Use detected app name if available
+        if android_info.get("name"):
+            result["identity"]["name"] = android_info["name"]
+        # Use detected version if available
+        if android_info.get("version"):
+            result["identity"]["version"] = android_info["version"]
+        # Store versionCode if available
+        if android_info.get("versionCode"):
+            result["identity"]["versionCode"] = android_info["versionCode"]
+        # Check for Android NDK monorepo pattern (app/ + native/)
+        if os.path.isdir(os.path.join(workspace, "app")) and \
+           os.path.isdir(os.path.join(workspace, "native")):
+            result["is_monorepo"] = True
 
     # ─── 3. Registry Stats (from existing scan) ──────────
     registry_stats = {}

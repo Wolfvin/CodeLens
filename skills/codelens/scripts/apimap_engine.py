@@ -18,6 +18,8 @@ Framework Detection & Route Extraction:
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
 14. SvelteKit — file-based routes (+page, +server, +layout, +error)
+15. Android IPC — ContentProvider URIs, AIDL methods, BroadcastReceiver actions,
+                  Service binding, Messenger/Handler patterns
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -39,6 +41,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql", ".php",
+    ".kt", ".java", ".aidl",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -235,6 +238,20 @@ def map_api_routes(
                         fw = r.get("framework", "")
                         if fw:
                             frameworks_detected.add(fw)
+
+            # ─── Android IPC Routes ────────────────────────────
+            if ext in {".kt", ".java"}:
+                android_routes = _extract_android_ipc_routes(content, rel_path)
+                if android_routes:
+                    frameworks_detected.add("android")
+                    routes.extend(android_routes)
+
+            # ─── AIDL Interface Definitions ─────────────────────
+            elif ext == ".aidl":
+                aidl_routes = _extract_android_ipc_routes(content, rel_path)
+                if aidl_routes:
+                    frameworks_detected.add("android")
+                    routes.extend(aidl_routes)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -2361,6 +2378,295 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
                     "request_type": "path_filter",
                     "response_type": None,
                 })
+
+    return routes
+
+
+# ─── Android IPC Route Extraction ────────────────────────────
+
+def _extract_android_ipc_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Android IPC routes from .kt, .java, and .aidl files.
+
+    Detects:
+    - ContentProvider URI operations: content://authority/path,
+      UriMatcher.addURI(), @UriPath annotations
+    - AIDL interface method definitions: void methodName(...),
+      Type methodName(...) inside .aidl files
+    - BroadcastReceiver intent actions: IntentFilter.addAction(),
+      registerReceiver() calls
+    - Android Service binding: bindService(), ServiceConnection
+      implementations
+    - Android Messenger/Handler patterns for IPC
+    """
+    routes = []
+    ext = os.path.splitext(rel_path)[1].lower()
+
+    # ─── ContentProvider URI detection ──────────────────────────
+    # Pattern 1: content://authority/path string literals
+    for m in re.finditer(
+        r'["\'](content://[\w./]+)["\']',
+        content
+    ):
+        uri = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "IPC",
+            "path": uri,
+            "handler_name": None,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "content_provider_uri",
+            "response_type": None,
+        })
+
+    # Pattern 2: UriMatcher.addURI("authority", "path", code)
+    for m in re.finditer(
+        r'(?:sUriMatcher|uriMatcher|UriMatcher)?\s*\.addURI\s*\(\s*["\']([^"\']+)["\']\s*,\s*["\']([^"\']*)["\']',
+        content
+    ):
+        authority = m.group(1)
+        path_segment = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+        full_uri = f"content://{authority}/{path_segment}" if path_segment else f"content://{authority}"
+        routes.append({
+            "method": "IPC",
+            "path": full_uri,
+            "handler_name": "UriMatcher.addURI",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "content_provider",
+            "response_type": None,
+        })
+
+    # Pattern 3: @UriPath annotation (Spring-style Android annotations)
+    for m in re.finditer(
+        r'@UriPath\s*\(\s*["\']([^"\']+)["\']\s*\)',
+        content
+    ):
+        uri_path = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "IPC",
+            "path": f"content://*/{uri_path}",
+            "handler_name": None,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "content_provider_uri_path",
+            "response_type": None,
+        })
+
+    # ─── AIDL method definitions ────────────────────────────────
+    # In .aidl files: void methodName(paramType param, ...);
+    #                 Type methodName(paramType param, ...);
+    if ext == ".aidl":
+        # Detect AIDL interface declaration
+        aidl_interface_name = None
+        iface_match = re.search(r'(?:oneway\s+)?interface\s+(\w+)', content)
+        if iface_match:
+            aidl_interface_name = iface_match.group(1)
+
+        # Match AIDL method definitions:
+        #   void methodName(Type param, ...);
+        #   List<Type> methodName(Type param, ...);
+        #   oneway void methodName(...);
+        for m in re.finditer(
+            r'(?:oneway\s+)?(?:(?:void|int|long|boolean|float|double|String|List|Map|Parcel|IBinder|Bundle|CharSequence|byte\[\])[\s<>\[\]]*|\w+(?:<[^>]+>)?)\s+(\w+)\s*\([^)]*\)\s*;',
+            content
+        ):
+            method_name = m.group(1)
+            line_num = content[:m.start()].count('\n') + 1
+            # Skip keywords that aren't method names
+            if method_name in {"interface", "class", "package", "import", "in", "out", "inout"}:
+                continue
+            handler = f"{aidl_interface_name}.{method_name}" if aidl_interface_name else method_name
+            routes.append({
+                "method": "IPC",
+                "path": f"aidl://{aidl_interface_name or 'unknown'}/{method_name}",
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "android",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "aidl_method",
+                "response_type": None,
+            })
+
+    # ─── BroadcastReceiver intent actions ───────────────────────
+    # Pattern 1: IntentFilter.addAction("action.name")
+    for m in re.finditer(
+        r'(?:intentFilter|filter|IntentFilter)\s*\.addAction\s*\(\s*["\']([^"\']+)["\']\s*\)',
+        content
+    ):
+        action = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "IPC",
+            "path": f"intent://{action}",
+            "handler_name": "BroadcastReceiver",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "broadcast_receiver",
+            "response_type": None,
+        })
+
+    # Pattern 2: registerReceiver(receiver, IntentFilter(...))
+    for m in re.finditer(
+        r'registerReceiver\s*\(',
+        content
+    ):
+        line_num = content[:m.start()].count('\n') + 1
+        # Try to find action strings near the registerReceiver call
+        nearby = content[m.start():m.start() + 300]
+        action_matches = re.findall(r'["\']([\w.]+\.action\.[\w.]+|android\.intent\.action\.\w+)["\']', nearby)
+        if not action_matches:
+            # Fallback: look for any quoted action-like strings
+            action_matches = re.findall(r'["\']([\w.]+)["\']', nearby)
+            action_matches = [a for a in action_matches if '.' in a and a not in {
+                'android.content.IntentFilter', 'IntentFilter',
+                'android.content.BroadcastReceiver', 'BroadcastReceiver',
+            }]
+        for action in action_matches[:5]:  # Limit to avoid duplicates
+            routes.append({
+                "method": "IPC",
+                "path": f"intent://{action}",
+                "handler_name": "registerReceiver",
+                "file": rel_path,
+                "line": line_num,
+                "framework": "android",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "broadcast_receiver",
+                "response_type": None,
+            })
+
+    # ─── Android Service binding ────────────────────────────────
+    # Pattern 1: bindService(intent, connection, flags)
+    for m in re.finditer(
+        r'bindService\s*\(',
+        content
+    ):
+        line_num = content[:m.start()].count('\n') + 1
+        # Try to find the service class or action in the nearby code
+        nearby = content[max(0, m.start() - 200):m.start() + 300]
+        service_name = None
+        # Look for Intent with class or action
+        svc_match = re.search(r'Intent\s*\(.*?\.setClass\([^,]+,\s*(\w+)', nearby)
+        if svc_match:
+            service_name = svc_match.group(1)
+        else:
+            svc_match = re.search(r'Intent\s*\(["\']([^"\']+)["\']', nearby)
+            if svc_match:
+                service_name = svc_match.group(1)
+        path = f"service://{service_name}" if service_name else "service://bound"
+        routes.append({
+            "method": "IPC",
+            "path": path,
+            "handler_name": "bindService",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "service_binding",
+            "response_type": None,
+        })
+
+    # Pattern 2: ServiceConnection implementations
+    for m in re.finditer(
+        r'(?:class|object)\s+(\w+)\s*:\s*ServiceConnection|ServiceConnection\s*\{\s*override\s+fun\s+onServiceConnected',
+        content
+    ):
+        conn_name = m.group(1) if m.group(1) else "ServiceConnection"
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "IPC",
+            "path": f"service://connection/{conn_name}",
+            "handler_name": conn_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "service_connection",
+            "response_type": None,
+        })
+
+    # ─── Messenger/Handler IPC patterns ─────────────────────────
+    # Pattern 1: Messenger send/reply patterns
+    for m in re.finditer(
+        r'(?:Messenger|replyTo)\s*\.send\s*\(',
+        content
+    ):
+        line_num = content[:m.start()].count('\n') + 1
+        # Try to extract what message is being sent
+        nearby = content[max(0, m.start() - 100):m.start() + 200]
+        msg_match = re.search(r'what\s*=\s*(\d+)', nearby)
+        msg_what = msg_match.group(1) if msg_match else "unknown"
+        routes.append({
+            "method": "IPC",
+            "path": f"messenger://send/{msg_what}",
+            "handler_name": "Messenger.send",
+            "file": rel_path,
+            "line": line_num,
+            "framework": "android",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "messenger_ipc",
+            "response_type": None,
+        })
+
+    # Pattern 2: Handler handleMessage / callback what codes
+    for m in re.finditer(
+        r'override\s+fun\s+handleMessage\s*\(|fun\s+handleMessage\s*\(',
+        content
+    ):
+        line_num = content[:m.start()].count('\n') + 1
+        # Look for msg.what or message.what cases in the handler body
+        handler_body = content[m.start():m.start() + 1000]
+        what_matches = re.findall(r'when\s*\(.*?\.what\s*\)|switch\s*\(.*?\.what\s*\)', handler_body)
+        # Extract case values
+        case_values = re.findall(r'(?:\d+)\s*->|case\s+(\d+):', handler_body)
+        cases = [c for cv in case_values for c in cv.split() if c.isdigit()]
+        if cases:
+            for case_val in cases[:10]:  # Limit
+                routes.append({
+                    "method": "IPC",
+                    "path": f"handler://message/{case_val}",
+                    "handler_name": "handleMessage",
+                    "file": rel_path,
+                    "line": line_num,
+                    "framework": "android",
+                    "middleware": [],
+                    "auth_required": False,
+                    "request_type": "handler_message",
+                    "response_type": None,
+                })
+        else:
+            routes.append({
+                "method": "IPC",
+                "path": "handler://message/*",
+                "handler_name": "handleMessage",
+                "file": rel_path,
+                "line": line_num,
+                "framework": "android",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "handler_message",
+                "response_type": None,
+            })
 
     return routes
 
