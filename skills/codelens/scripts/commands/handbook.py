@@ -460,24 +460,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            # Extract fields from the [project] section specifically.
-            # Find the [project] section content (up to the next section or EOF).
-            project_section = ""
-            project_match = re.search(r'^\[project\]\s*\n(.*?)(?=^\[|\Z)', content, re.MULTILINE | re.DOTALL)
-            if project_match:
-                project_section = project_match.group(1)
-            else:
-                # Fallback: search the whole file (for flat pyproject.toml without sections)
-                project_section = content
-            name_match = re.search(r'^name\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
-            ver_match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
-            desc_match = re.search(r'^description\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
+            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            if desc_match and not identity["description"]:
-                identity["description"] = desc_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
                 python_type = "backend-api"
             elif "pytest" in content:
@@ -539,72 +527,64 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6.5: Try CMakeLists.txt — detect C/C++ CMake projects
-    cmake_type = None
-    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    if os.path.isfile(cmake_path):
+    # v6.4: Detect C/C++ and game engine projects
+    cpp_type = None
+    godot_type = None
+
+    # Godot project detection (project.godot file)
+    project_godot_path = os.path.join(workspace, 'project.godot')
+    if os.path.isfile(project_godot_path):
         try:
-            with open(cmake_path, 'r', encoding='utf-8') as f:
-                cmake_content = f.read()
-            # Extract project name from cmake_minimum_required / project() command
-            # project(SerenityOS VERSION 1.0)  or  project(serenity)  or  project(SerenityOS LANGUAGES CXX)
-            project_match = re.search(
-                r'project\s*\(\s*([^\s\)]+)', cmake_content, re.IGNORECASE
-            )
-            if project_match:
-                project_name = project_match.group(1)
-                if identity["type"] == "unknown":
-                    identity["name"] = project_name
-            # Extract VERSION from project() command
-            version_match = re.search(
-                r'project\s*\([^)]*VERSION\s+([0-9]+(?:\.[0-9]+)*)', cmake_content, re.IGNORECASE
-            )
-            if version_match:
-                identity["version"] = version_match.group(1)
-            # Classify CMake project type based on content
-            cmake_lower = cmake_content.lower()
-            has_kernel = os.path.isdir(os.path.join(workspace, 'Kernel'))
-            has_userland = os.path.isdir(os.path.join(workspace, 'Userland'))
-            has_ladybird = os.path.isdir(os.path.join(workspace, 'Ladybird'))
-            has_ak = os.path.isdir(os.path.join(workspace, 'AK'))
-            # Detect OS project (like SerenityOS)
-            if has_kernel and has_userland:
-                cmake_type = "cpp-operating-system"
-            # Detect browser project (like Ladybird)
-            elif has_ladybird and ('web' in cmake_lower or 'browser' in cmake_lower):
-                cmake_type = "cpp-browser-engine"
-            # Detect library/framework
-            elif any(kw in cmake_lower for kw in ('add_library', 'shared', 'static')):
-                cmake_type = "cpp-library"
-            # Detect application with GUI
-            elif any(kw in cmake_lower for kw in ('qt', 'gtk', 'sdl', 'wxwidgets')):
-                cmake_type = "cpp-gui-application"
-            # Detect embedded/firmware project
-            elif any(kw in cmake_lower for kw in ('arm', 'embedded', 'firmware', 'microcontroller', 'freertos', 'zephyr')):
-                cmake_type = "cpp-embedded"
-            else:
-                cmake_type = "cpp-project"
-            # Check for CMake monorepo (multiple add_subdirectory with distinct projects)
-            subdirs = re.findall(r'add_subdirectory\s*\(\s*([^\s\)]+)', cmake_content)
-            if len(subdirs) >= 3 and not identity["is_monorepo"]:
-                identity["is_monorepo"] = True
-                if "cmake-workspace" not in identity["monorepo_tools"]:
-                    identity["monorepo_tools"].append("cmake-workspace")
+            with open(project_godot_path, 'r', encoding='utf-8', errors='ignore') as f:
+                godot_content = f.read()
+            name_match = re.search(r'config/name\s*=\s*"([^"]+)"', godot_content)
+            ver_match = re.search(r'config/features\s*=\s*[^)]*PackedScene', godot_content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            godot_type = "godot-game"
         except Exception:
-            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
+            logger.warning("project.godot parsing failed", exc_info=True)
+
+    # C/C++ project detection (SCons, CMake, Makefile — but NOT if Godot project)
+    if not godot_type:
+        scons_path = os.path.join(workspace, 'SConstruct')
+        cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+        makefile_path = os.path.join(workspace, 'Makefile')
+        meson_path = os.path.join(workspace, 'meson.build')
+        if os.path.isfile(scons_path):
+            cpp_type = "cpp-project-scons"
+        elif os.path.isfile(cmake_path):
+            try:
+                with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    cmake_content = f.read(8192)
+                name_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
+                if name_match:
+                    identity["name"] = name_match.group(1)
+                ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+                cpp_type = "cpp-project-cmake"
+            except Exception:
+                cpp_type = "cpp-project-cmake"
+        elif os.path.isfile(meson_path):
+            cpp_type = "cpp-project-meson"
+        elif os.path.isfile(makefile_path):
+            cpp_type = "cpp-project-make"
 
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, cpp_type, godot_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if cmake_type:
-            type_parts.append("cpp")
+        if godot_type:
+            type_parts.append("godot")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if cpp_type:
+            type_parts.append("cpp")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
@@ -669,13 +649,6 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
-        'kernel': 'OS kernel code',
-        'userland': 'User-space applications and libraries',
-        'ports': 'Third-party software ports/packages',
-        'toolchain': 'Build toolchain scripts',
-        'ak': 'Core utility library',
-        'tests': 'Test files',
-        'documentation': 'Documentation',
     }
     dir_map = {}
     try:
@@ -692,9 +665,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
                         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
                         for f in filenames:
                             ext = os.path.splitext(f)[1].lower()
-                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte',
-                                        '.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx', '.go', '.java', '.kt', '.cs',
-                                        '.sh', '.bash', '.rb', '.ex', '.exs', '.swift', '.scala', '.lua', '.php', '.dart'}:
+                            if ext in {'.py', '.js', '.ts', '.tsx', '.jsx', '.rs', '.html', '.css', '.scss', '.vue', '.svelte'}:
                                 src_count += 1
                 except Exception:
                     logger.warning("Directory file counting failed", exc_info=True)

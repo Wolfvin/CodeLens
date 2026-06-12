@@ -5,27 +5,38 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.5.0] — 2026-06-12
+## [6.4.0] — 2026-06-12
 
-### Tested against SerenityOS/serenity (18,601 files: 3,725 C++ + 3,722 C headers + 1,099 JS + 1,814 HTML + 455 Shell + 26 Python, C++ OS from scratch with kernel, browser, and userspace)
+### Tested against godotengine/godot (13,978 files: 7,846 C/C++ + 690 GDScript + 155 Java + 301 C# + 53 Kotlin, game engine) and denoland/deno (20,336 files: 970 Rust + 4,009 TS + 69 TSX, runtime monorepo)
 
-Real-world test on a massive C++ monorepo (CMake-based OS project with Ladybird browser).
-This exposed critical import errors and deep nesting false positives that were invisible
-on web-tech projects.
+Real-world test on two very different repos: a C++ game engine (Godot) and a Rust+TS runtime (Deno).
+This exposed critical issues with framework detection, missing outline support, broken commands,
+and zero call-edge extraction for C/C++.
 
 ### Fixed
 
-- **`is_bundled_file` ImportError** (4 command modules + 3 engines broken): `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function was renamed to `is_generated_file` without updating callers. This caused `ask`, `complexity`, `context`, and `perf-hint` commands to fail on import, and `analyze` skipped 3 engine categories (env_issues, complexity, perf_hints). Fixed by adding `is_bundled_file = is_generated_file` backward compatibility alias in `utils.py`.
-- **`analyze` command calls non-existent `audit_environment()`**: `_detect_env()` in `analyze.py` called `envcheck_engine.audit_environment()` which doesn't exist — the actual function is `check_env_vars()`. This caused the env_issues engine to always be skipped with `ImportError`. Fixed to use `check_env_vars()` and correctly parse its output format (`variables` key instead of `issues`).
-- **Shell script deep nesting false positives** (nesting levels 22-30 reported): Indentation-based nesting detection counted visual indentation in shell scripts (e.g., `pushd`/`popd` blocks) as logical nesting, producing absurd results like "30 levels deep" for build scripts. Fixed by switching to brace-depth tracking for shell scripts and all brace-based languages (JS/TS/C/C++/Java/Go/Rust/Swift/PHP/Dart/Lua). Only indentation-based languages (Python/Ruby/Elixir/Nim) still use indentation tracking.
-- **Version mismatch across codebase**: `utils.py` reported version `6.3.0`, `analyze.py` hardcoded `6.0`, actual version was `6.5.0`. Fixed `utils.py` to `6.5.0` and `analyze.py` now imports `CODELENS_VERSION` from `utils.py`.
-- **C/C++ incorrectly listed as "unsupported_langs"**: `framework_detect.py` marked C and C++ as unsupported when `CMakeLists.txt` exists, even though the scan command successfully parses 7,000+ C/C++ files using `fallback_c.py`. Removed C/C++ from the `UNSUPPORTED_MARKERS` dict (same treatment Go already received).
+- **`is_bundled_file()` missing from utils.py** — 4 commands were completely broken (`ask`, `complexity`, `context`, `perf-hint`) because `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from utils but it was never defined. Added the function with proper detection of bundled/compiled output files (dist/, build/, .min.js, .bundle.js, etc.).
+- **`api-map` TypeError: `production_only` argument** — `commands/api_map.py` passed `production_only` kwarg to `map_api_routes()`, but the function signature didn't accept it. Added the parameter and implemented filtering of test routes.
+- **Drupal false positive on Godot engine** — `framework_detect.py` had `"modules/"` as a Drupal indicator, which matched Godot's `modules/` directory. Removed the overly generic indicator. Godot now correctly detects as `"godot"` framework.
+- **C/C++ parser had zero call edges** — `fallback_c.py` only extracted includes, macros, and function definitions but no function call relationships. Added brace-tracking body extraction and call pattern matching. Result: Godot went from 49,621 edges to 174,672 edges.
+- **Performance: C++ call edge extraction** — Added 5,000-line limit per file for call edge extraction to prevent slowdowns on massive C++ files (e.g., game engine sources).
 
 ### Added
 
-- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for project name (`project(NAME)`) and version (`project(... VERSION x.y.z)`). Detects project types: `cpp-operating-system` (Kernel+Userland dirs), `cpp-browser-engine`, `cpp-library`, `cpp-gui-application`, `cpp-embedded`, `cpp-project`. Also detects CMake monorepo pattern (3+ `add_subdirectory` entries → `cmake-workspace`).
-- **Expanded directory hints for C/C++ projects**: Added hints for `kernel`, `userland`, `ports`, `toolchain`, `ak` directories common in C++ projects.
-- **Expanded source file counting**: Directory map now counts `.c`, `.cpp`, `.h`, `.go`, `.java`, `.kt`, `.cs`, `.sh`, `.rb`, `.swift`, `.scala`, `.lua`, `.php`, `.dart` files as source (was only `.py`, `.js`, `.ts`, `.rs`, `.html`, `.css`).
+- **Godot/Unreal/Unity/dotnet framework detection** — Added framework signatures for game engines (Godot, Unreal, Unity) and .NET/C# projects. Added `has_godot` and `has_dotnet` flags to detect results.
+- **GDScript `.gd` file detection** — Files with `.gd` extension now trigger "godot" framework detection.
+- **`.csproj`/`.sln` file detection** — C# project files now trigger "dotnet" framework detection.
+- **10 new outline functions** — `_outline_java()`, `_outline_kotlin()`, `_outline_c_cpp()`, `_outline_csharp()`, `_outline_gdscript()`, `_outline_lua()`, `_outline_r()`, `_outline_haskell()`, `_outline_nim()` added to `outline_engine.py`. These provide language-specific outlines instead of falling through to generic regex.
+- **Outline routing for new languages** — `get_file_outline()` now routes Java, Kotlin, C/C++, C#, GDScript, Lua, R, Haskell, and Nim files to their specific outline functions.
+- **Workspace outline `source_extensions` expanded** — Added Java, C/C++, C#, Ruby, Elixir, Dart, Swift, Scala, Shell, Lua, R, Haskell, Nim extensions so `get_workspace_outline()` includes these files.
+- **C/C++ project type detection in handbook** — Handbook `identity.type` now detects Godot games (`godot-game`) and C++ build systems (SCons: `cpp-project-scons`, CMake: `cpp-project-cmake`, Meson: `cpp-project-meson`, Make: `cpp-project-make`). Previously, Godot was misidentified as `python-project`.
+- **`_FILE_PATH_EXTENSIONS` expanded** — Added `.java`, `.kt`, `.go`, `.c`, `.cpp`, `.h`, `.hpp`, `.cs`, `.rb`, `.ex`, `.exs`, `.dart`, `.swift`, `.scala`, `.sh`, `.bash`, `.zsh`, `.gd`, `.lua`, `.php` to the set of recognized file path extensions.
+- **`_detect_language` mapping expanded** — Added `.gd` → `gdscript` mapping.
+
+### Changed
+
+- **Removed already-supported languages from `unsupported_langs`** — Java, Kotlin, C, C++, C#, Swift, Ruby all have fallback parsers now; removed from `UNSUPPORTED_MARKERS` in `framework_detect.py`.
+- **Polyglot type detection** — Handbook combined type detection now includes `godot_type` and `cpp_type` alongside existing JS/Python/Rust/Go types.
 
 ## [5.10.0] — 2026-06-12
 

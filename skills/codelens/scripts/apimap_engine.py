@@ -82,7 +82,7 @@ def map_api_routes(
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
     config: Optional[Dict] = None,
-    production_only: bool = False,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -93,7 +93,6 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
-        production_only: If True, exclude routes from test/example files
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -1263,87 +1262,47 @@ def _extract_python_routes(
 
     # Django URL patterns
     if is_django:
-        # path('url/', view_or_include, ...) and url(r'^url/', view_or_include)
-        # The handler can be: simple_name, module.attr, View.as_view(...),
-        # include('module'), or lambda ...
-        _DJANGO_PATH_RE = re.compile(
-            r"(?:path|re_path|url)\s*\(\s*"
-            r"[r]?[\'\"]([^\'\"]+)[\'\"]\s*,\s*"       # group 1: route pattern
-            r"(\w+(?:\.\w+)*)"                          # group 2: handler name (dotted allowed)
-        )
-
-        for m in re.finditer(_DJANGO_PATH_RE, content):
+        # path('url/', view, name='...')
+        for m in re.finditer(
+            r"path\s*\(\s*[r]?[\'\"]([^\'\"]+)[\'\"]\s*,\s*(\w+)",
+            content
+        ):
             route_path = m.group(1)
             handler_name = m.group(2)
             line_num = content[:m.start()].count('\n') + 1
 
-            # Find the rest of this path()/re_path()/url() call — everything
-            # from the handler name up to the closing ')'.  This prevents the
-            # look-ahead from bleeding into the *next* route on a subsequent
-            # line and falsely matching .as_view / include / lambda there.
-            rest_of_call = _extract_until_paren_close(content, m.end())
+            routes.append({
+                "method": "ALL",
+                "path": _normalize_path('/' + route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "django",
+            })
 
-            # Detect include('module.path') — sub-router mount
-            is_include = bool(re.match(r'\s*\(\s*[\'"]', rest_of_call)) and handler_name == "include"
-            # Detect ViewClass.as_view(...) — class-based view
-            is_as_view = ".as_view" in rest_of_call or handler_name.endswith(".as_view")
-            # Detect lambda
-            is_lambda = re.match(r'\s*lambda\b', rest_of_call) is not None
+        # re_path(r'^url/', view)
+        for m in re.finditer(
+            r"re_path\s*\(\s*[r]?[\'\"]([^\'\"]+)[\'\"]\s*,\s*(\w+)",
+            content
+        ):
+            route_path = m.group(1)
+            handler_name = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
 
-            if is_include:
-                # Extract the included module path
-                inc_match = re.search(r"include\s*\(\s*[\'\"]([^\'\"]+)[\'\"]", content[m.start():m.start() + 200])
-                included_module = inc_match.group(1) if inc_match else handler_name
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path('/' + route_path),
-                    "handler_name": f"include({included_module})",
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "django",
-                })
-            elif is_as_view:
-                # Extract the class name (strip .as_view suffix if present)
-                class_name = handler_name.replace(".as_view", "")
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path('/' + route_path),
-                    "handler_name": f"{class_name}.as_view()",
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "django",
-                })
-            elif is_lambda:
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path('/' + route_path),
-                    "handler_name": "lambda",
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "django",
-                })
-            else:
-                # Regular function or dotted attribute handler
-                routes.append({
-                    "method": "ALL",
-                    "path": _normalize_path('/' + route_path),
-                    "handler_name": handler_name,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "django",
-                })
+            routes.append({
+                "method": "ALL",
+                "path": _normalize_path('/' + route_path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "django",
+            })
 
         # @api_view(['GET', 'POST'])
         for m in re.finditer(
@@ -1373,28 +1332,6 @@ def _extract_python_routes(
                 })
 
     return routes
-
-
-def _extract_until_paren_close(content: str, start: int) -> str:
-    """Extract text from *start* up to (but not including) the matching ')'.
-
-    Accounts for nested parentheses so that ``.as_view(url="/foo")`` is not
-    truncated at the first ``)``.  Returns at most 300 characters as a safety
-    measure; if no closing paren is found the whole tail is returned.
-    """
-    depth = 1          # we are already inside the outer path(… call
-    i = start
-    end = min(len(content), start + 300)
-    while i < end:
-        ch = content[i]
-        if ch == '(':
-            depth += 1
-        elif ch == ')':
-            depth -= 1
-            if depth == 0:
-                return content[start:i]
-        i += 1
-    return content[start:end]
 
 
 def _find_next_python_function(content: str, offset: int) -> str:
