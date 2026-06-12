@@ -70,6 +70,10 @@ class TSXParser(BaseParser):
                 call_info = self._parse_call(node, source, fn_declarations)
                 if call_info:
                     edges.append(call_info)
+            elif node.type == 'new_expression':
+                call_info = self._parse_new_expression(node, source, fn_declarations)
+                if call_info:
+                    edges.append(call_info)
 
         self.walk_tree(tree, source, visit)
 
@@ -502,6 +506,51 @@ class TSXParser(BaseParser):
                         return {"from": caller_id, "to_fn": ipc_cmd, "is_ipc_call": True}
 
                 return {"from": caller_id, "to_fn": method_name}
+
+        return None
+
+    def _parse_new_expression(self, node: Node, source: bytes,
+                               fn_declarations: List[Dict] = None) -> Optional[Dict]:
+        """Parse a new_expression node to extract the instantiated class name.
+
+        Handles patterns like:
+        - new ClassName(args)
+        - new ClassName()
+        """
+        constructor_node = node.child_by_field_name('constructor')
+        if not constructor_node:
+            return None
+
+        # Find which function this call is inside
+        call_line = self.get_line(node)
+        caller_id = None
+        if fn_declarations:
+            best_scope_size = float('inf')
+            for decl in fn_declarations:
+                if decl["scope_start"] <= call_line - 1 <= decl["scope_end"]:
+                    scope_size = decl["scope_end"] - decl["scope_start"]
+                    if scope_size < best_scope_size:
+                        best_scope_size = scope_size
+                        caller_id = decl["node"]["id"]
+
+        if not caller_id:
+            return None
+
+        # Direct class instantiation: new ClassName()
+        if constructor_node.type == 'identifier':
+            name = self.get_text(constructor_node, source)
+            if name in self.SKIP_NAMES:
+                return None
+            return {"from": caller_id, "to_fn": name}
+
+        # Member expression: new Namespace.ClassName()
+        if constructor_node.type == 'member_expression':
+            prop_node = constructor_node.child_by_field_name('property')
+            if prop_node:
+                class_name = self.get_text(prop_node, source)
+                if class_name in self.SKIP_NAMES:
+                    return None
+                return {"from": caller_id, "to_fn": class_name}
 
         return None
 

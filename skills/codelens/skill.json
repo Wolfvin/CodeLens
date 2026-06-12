@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "5.9.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.0: Fixed binary-scan crash (missing scan_tauri_artifacts), Drupal false positive (too-generic modules/ indicator), HTTP/network library detection (axios/undici/got/ky/superagent/node-fetch/request), new_expression parsing (class instantiation edges — new ClassName() no longer appears dead). Tested on redis/redis (30MB C database), axios/axios (JS HTTP client), libuv/libuv (C networking), undici/undici (JS HTTP/1.1 client), google/leveldb (C++ database).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -154,4 +154,16 @@
     "fiber",
     "grpc",
     "protobuf",
-    "go-database"  ]}
+    "go-database",
+    "http-library",
+    "http-client",
+    "network-library",
+    "axios",
+    "undici",
+    "fetch-api",
+    "xhr",
+    "new-expression",
+    "class-instantiation",
+    "tauri-artifacts",
+    "drupal-detection"
+  ]}

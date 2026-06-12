@@ -235,8 +235,51 @@ FRAMEWORK_SIGNATURES = {
     "drupal": {
         "packages": [],
         "composer_packages": ["drupal/core"],
+        "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
+        "indicators": ["sites/default/", "sites/all/"]
+    },
+    # ─── HTTP / Network Libraries ──────────────────────────────
+    "axios": {
+        "packages": ["axios"],
+        "composer_packages": [],
         "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "indicators": []
+    },
+    "undici": {
+        "packages": ["undici"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "got": {
+        "packages": ["got"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "ky": {
+        "packages": ["ky"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "superagent": {
+        "packages": ["superagent"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "node-fetch": {
+        "packages": ["node-fetch"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "request": {
+        "packages": ["request"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
     },
 }
 
@@ -293,6 +336,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_http_library": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -342,7 +386,30 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
+                        detected["has_http_library"] = True
                     break
+
+    # 1b. Also check package.json "name" field — the repo itself IS the library.
+    #     This catches source repos like axios/axios where axios is the package name,
+    #     not a dependency.
+    _HTTP_LIBRARY_NAMES = frozenset({
+        "axios", "undici", "got", "ky", "superagent", "node-fetch",
+        "request", "needle", "bent", "make-fetch-happen", "simple-get",
+        "node-http", "phin", "wreck", "terra",
+    })
+    root_pkg_path = os.path.join(workspace, "package.json")
+    if os.path.isfile(root_pkg_path):
+        try:
+            with open(root_pkg_path, 'r', encoding='utf-8') as f:
+                root_pkg = json.load(f)
+            pkg_name = root_pkg.get("name", "")
+            if pkg_name in _HTTP_LIBRARY_NAMES:
+                if pkg_name not in detected["frameworks"]:
+                    detected["frameworks"].append(pkg_name)
+                detected["has_http_library"] = True
+        except (json.JSONDecodeError, IOError):
+            pass
 
         # Detect CSS preprocessor
         if "sass" in all_deps or "node-sass" in all_deps:

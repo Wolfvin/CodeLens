@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.8.1"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -402,6 +402,155 @@ GENERATED_FILE_PATTERNS = frozenset({
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
+
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and configuration.
+
+    Detects:
+    1. tauri.conf.json / Tauri.toml configuration files
+    2. Tauri capabilities/permissions files
+    3. Sidecar binaries
+    4. Updater configuration
+    5. IPC command/handler mapping from Rust source
+    6. WebView security settings (CSP, asset protocol)
+    7. Deep-link schemes
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with Tauri analysis results, or None if Tauri is not detected.
+    """
+    workspace = os.path.abspath(workspace)
+
+    # Check if Tauri is present
+    tauri_config_paths = []
+    for candidate in ['src-tauri/tauri.conf.json', 'tauri.conf.json', 'src-tauri/Tauri.toml', 'Tauri.toml']:
+        full_path = os.path.join(workspace, candidate)
+        if os.path.isfile(full_path):
+            tauri_config_paths.append(candidate)
+
+    # Also check via directory walk (for deeply nested configs)
+    if not tauri_config_paths:
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for fname in filenames:
+                if fname in ('tauri.conf.json', 'Tauri.toml'):
+                    rel = os.path.relpath(os.path.join(root, fname), workspace)
+                    tauri_config_paths.append(rel)
+
+    if not tauri_config_paths:
+        return None
+
+    # Parse Tauri configuration
+    capabilities = []
+    ipc_commands = []
+    sidecars = []
+    updater_config = {}
+    security = {}
+    deep_links = []
+
+    for config_path in tauri_config_paths:
+        full_path = os.path.join(workspace, config_path)
+        try:
+            with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+                config = json.load(f)
+
+            # Extract capabilities/permissions
+            if isinstance(config.get("permissions"), list):
+                capabilities.extend(config["permissions"])
+
+            # Extract sidecar binaries
+            if isinstance(config.get("externalBin"), list):
+                sidecars.extend(config["externalBin"])
+
+            # Extract updater configuration
+            if "updater" in config:
+                updater_config = config["updater"]
+
+            # Extract security settings
+            if "security" in config:
+                security = config["security"]
+            if "app" in config and isinstance(config["app"], dict):
+                if "security" in config["app"]:
+                    security = config["app"]["security"]
+
+            # Extract deep-link schemes
+            if "deep-link" in config:
+                dl = config["deep-link"]
+                if isinstance(dl, dict) and "schemes" in dl:
+                    deep_links.extend(dl["schemes"])
+            if "app" in config and isinstance(config["app"], dict):
+                dl = config["app"].get("deep-link", {})
+                if isinstance(dl, dict) and "schemes" in dl:
+                    deep_links.extend(dl["schemes"])
+
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Scan Rust source for #[tauri::command] handlers
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for fname in filenames:
+            if fname.endswith('.rs'):
+                try:
+                    fpath = os.path.join(root, fname)
+                    with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                        content = f.read()
+                    if '#[tauri::command' in content:
+                        import re
+                        for m in re.finditer(r'#\[tauri::command[^\]]*\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?fn\s+(\w+)\s*\(', content):
+                            cmd_name = m.group(1)
+                            rel_path = os.path.relpath(fpath, workspace)
+                            ipc_commands.append({
+                                "command": cmd_name,
+                                "file": rel_path,
+                                "type": "rust_handler"
+                            })
+                except IOError:
+                    pass
+
+    # Scan capabilities directory
+    caps_dir = os.path.join(workspace, "src-tauri", "capabilities")
+    if os.path.isdir(caps_dir):
+        try:
+            for fname in os.listdir(caps_dir):
+                if fname.endswith('.json'):
+                    try:
+                        with open(os.path.join(caps_dir, fname), 'r', encoding='utf-8', errors='replace') as f:
+                            cap = json.load(f)
+                        if isinstance(cap.get("permissions"), list):
+                            capabilities.extend(cap["permissions"])
+                    except (json.JSONDecodeError, IOError):
+                        pass
+        except OSError:
+            pass
+
+    return {
+        "detected": True,
+        "config_files": tauri_config_paths,
+        "ipc_commands": ipc_commands,
+        "capabilities": list(set(capabilities)) if capabilities else [],
+        "sidecars": sidecars,
+        "updater": updater_config if updater_config else None,
+        "security": security if security else None,
+        "deep_link_schemes": deep_links,
+        "risk_assessment": {
+            "has_csp": bool(security.get("csp")),
+            "has_asset_protocol_scope": bool(security.get("assetProtocol", {}).get("scope")),
+            "updater_enabled": bool(updater_config),
+            "sidecar_count": len(sidecars),
+            "ipc_command_count": len(ipc_commands),
+            "capability_count": len(set(capabilities)) if capabilities else 0,
+        }
+    }
 
 
 def is_generated_file(filename: str) -> bool:
