@@ -278,8 +278,9 @@ def main():
                 logger.warning("Failed to save snapshot", exc_info=True)
             # Generate outline.json + summary.json
             try:
-                write_output_files(workspace, result)
-                result["outline_generated"] = True
+                summary = write_output_files(workspace, result)
+                # write_output_files returns {} on failure, or a dict with data on success
+                result["outline_generated"] = bool(summary)
             except Exception:
                 logger.warning("Failed to write output files", exc_info=True)
                 result["outline_generated"] = False

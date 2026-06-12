@@ -19,9 +19,10 @@ Each finding includes: category, file, line, match, severity, should_remove flag
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, MAX_FILE_SIZE, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -145,7 +146,8 @@ def detect_debug_leaks(
     workspace: str,
     category: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = MAX_FILES_PER_RUN
+    max_files: int = MAX_FILES_PER_RUN,
+    timeout_sec: float = 60.0
 ) -> Dict[str, Any]:
     """
     Detect leftover debug code that shouldn't be in production.
@@ -156,11 +158,15 @@ def detect_debug_leaks(
                   console_log, print_statement, debugger, todo_fixme,
                   commented_code, test_skip, mock_data, dev_only
         config: CodeLens configuration dict
+        max_files: Maximum number of files to scan (default 5000)
+        timeout_sec: Maximum seconds for the scan (default 60)
 
     Returns:
         Dict with status, stats, leaks list, cleanup priority, and recommendations
     """
     workspace = os.path.abspath(workspace)
+    start_time = time.time()
+    timed_out = False
 
     valid_categories = {
         "console_log", "print_statement", "debugger", "todo_fixme",
@@ -188,6 +194,11 @@ def detect_debug_leaks(
             continue
 
         for filename in filenames:
+            # Check time budget
+            if time.time() - start_time > timeout_sec:
+                timed_out = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -199,6 +210,13 @@ def detect_debug_leaks(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -270,7 +288,8 @@ def detect_debug_leaks(
             "files_scanned": files_scanned,
             "by_category": dict(by_category),
             "by_severity": dict(by_severity),
-            "truncated": truncated
+            "truncated": truncated,
+            "timed_out": timed_out
         },
         "leaks": leaks,
         "cleanup_priority": cleanup_priority[:50],

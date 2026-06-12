@@ -70,12 +70,17 @@ def is_tailwind_class(name: str, config: Optional[Dict] = None) -> bool:
     Uses prefix matching against known Tailwind patterns.
     Handles Tailwind !important prefix (e.g., '!bg-red-500') and
     combined state+important prefixes (e.g., 'hover:!bg-red-500').
+    Also detects UnoCSS utility patterns (e.g., 'all:font-mono', 'text-sm').
     """
     # Handle Tailwind !important prefix: !bg-red-500 → bg-red-500
     check_name = name.lstrip('!')
     if check_name != name:
         # Name had ! prefix — check the remainder
         return is_tailwind_class(check_name, config)
+
+    # Check for UnoCSS utility patterns first
+    if _is_unocss_class(check_name):
+        return True
 
     # Check against known prefixes
     for prefix in TAILWIND_PREFIXES:
@@ -107,6 +112,116 @@ def is_tailwind_class(name: str, config: Optional[Dict] = None) -> bool:
         custom_prefix = config['prefix']
         if check_name.startswith(custom_prefix):
             return True
+
+    return False
+
+
+# ─── UnoCSS Detection ──────────────────────────────────────────
+
+# UnoCSS uses bare utility names without the tw- prefix.
+# These overlap heavily with Tailwind but also include
+# additional shortcuts and variants (e.g., "all:font-mono").
+_UNOCSS_BARE_UTILITIES = {
+    # Layout
+    'flex', 'grid', 'block', 'inline', 'inline-block', 'inline-flex',
+    'hidden', 'relative', 'absolute', 'fixed', 'sticky', 'static',
+    # Flex/Grid alignment
+    'items-center', 'items-start', 'items-end', 'items-baseline',
+    'justify-center', 'justify-start', 'justify-end', 'justify-between',
+    'flex-col', 'flex-row', 'flex-wrap', 'flex-1',
+    'self-center', 'self-start', 'self-end', 'self-auto',
+    # Spacing (with values like p-4, m-2, etc.)
+    'p', 'px', 'py', 'pt', 'pr', 'pb', 'pl',
+    'm', 'mx', 'my', 'mt', 'mr', 'mb', 'ml',
+    # Sizing
+    'w', 'h', 'min-w', 'min-h', 'max-w', 'max-h',
+    # Typography
+    'text', 'font', 'leading', 'tracking', 'underline', 'line-through',
+    'uppercase', 'lowercase', 'capitalize',
+    # Backgrounds
+    'bg',
+    # Borders
+    'border', 'rounded',
+    # Effects
+    'shadow', 'opacity',
+    # Transitions
+    'transition', 'duration', 'ease',
+    # Transforms
+    'scale', 'rotate', 'translate',
+    # Interactivity
+    'cursor', 'pointer-events', 'select',
+    # Overflow
+    'overflow', 'overflow-auto', 'overflow-hidden', 'overflow-scroll',
+    'overflow-x-auto', 'overflow-y-auto',
+    # Position
+    'top', 'right', 'bottom', 'left', 'inset',
+    'z',
+    # Misc
+    'animate', 'appearance', 'outline', 'ring', 'divide',
+    'gap', 'space', 'order', 'col', 'row',
+}
+
+# UnoCSS variant prefixes (e.g., "all:font-mono", "sm:text-red", "hover:bg-blue")
+_UNOCSS_VARIANTS = {
+    'all', 'sm', 'md', 'lg', 'xl', '2xl',
+    'hover', 'focus', 'active', 'disabled', 'visited',
+    'dark', 'light',
+    'first', 'last', 'odd', 'even',
+    'group-hover', 'group-focus',
+    'peer-hover', 'peer-focus',
+    'before', 'after',
+    'placeholder',
+    'selection',
+    'marker',
+    'scrollbar',
+    'touch',
+    'motion-safe', 'motion-reduce',
+    'print',
+    'landscape', 'portrait',
+    'lt-sm', 'lt-md', 'lt-lg', 'lt-xl',
+    'at-sm', 'at-md', 'at-lg', 'at-xl',
+    'at-2xl',
+}
+
+
+def _is_unocss_class(name: str) -> bool:
+    """Check if a class name looks like a UnoCSS utility class.
+
+    UnoCSS uses variant:value syntax (e.g., "all:font-mono")
+    and bare utility names (e.g., "p-4", "text-red-500").
+    """
+    # Check for UnoCSS variant:value syntax: "all:font-mono", "sm:text-red"
+    if ':' in name:
+        parts = name.split(':', 1)
+        variant = parts[0]
+        utility = parts[1]
+        if variant in _UNOCSS_VARIANTS:
+            # Check if the utility part is a known bare utility with optional value
+            utility_prefix = re.match(r'^([a-z][a-z-]+)', utility)
+            if utility_prefix:
+                prefix = utility_prefix.group(1)
+                if prefix in _UNOCSS_BARE_UTILITIES:
+                    return True
+            # Also check if it's a Tailwind-style utility after the variant
+            for tw_prefix in TAILWIND_PREFIXES:
+                tw_clean = tw_prefix.rstrip('-')
+                if utility == tw_clean or utility.startswith(tw_clean + '-'):
+                    return True
+        return False
+
+    # Check bare utility names with values: "p-4", "text-red-500", "bg-blue-200"
+    # Extract the prefix (everything before the first digit or hyphen-value)
+    utility_prefix = re.match(r'^([a-z][a-z-]+)', name)
+    if utility_prefix:
+        prefix = utility_prefix.group(1)
+        # Match against known UnoCSS bare utilities
+        if prefix in _UNOCSS_BARE_UTILITIES:
+            return True
+        # Match against Tailwind prefixes (UnoCSS supports most Tailwind classes)
+        for tw_prefix in TAILWIND_PREFIXES:
+            tw_clean = tw_prefix.rstrip('-')
+            if prefix == tw_clean or name.startswith(tw_clean + '-'):
+                return True
 
     return False
 

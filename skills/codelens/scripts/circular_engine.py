@@ -26,7 +26,8 @@ from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
 # Performance limit: max cycles to report per detection run
-MAX_CYCLES_PER_TYPE = 100
+MAX_CYCLES_PER_TYPE = 50
+MAX_TOTAL_CYCLES = 200
 
 
 def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_CYCLES_PER_TYPE) -> Dict[str, Any]:
@@ -62,6 +63,21 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
 
     total_cycles = sum(len(v) for v in cycles.values())
 
+    # Apply global cap to prevent result explosion
+    truncated = False
+    if total_cycles > MAX_TOTAL_CYCLES:
+        truncated = True
+        for key in cycles:
+            if total_cycles <= MAX_TOTAL_CYCLES:
+                break
+            excess = total_cycles - MAX_TOTAL_CYCLES
+            if len(cycles[key]) > excess:
+                cycles[key] = cycles[key][:len(cycles[key]) - excess]
+                total_cycles = MAX_TOTAL_CYCLES
+            else:
+                total_cycles -= len(cycles[key])
+                cycles[key] = []
+
     # Count severity levels across all cycle types
     warning_count = 0
     info_count = 0
@@ -82,6 +98,7 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
         "domain": domain,
         "total_cycles": total_cycles,
         "cycles": cycles,
+        "truncated": truncated,
         "summary": {
             "function_call_cycles": len(cycles["function_calls"]),
             "import_chain_cycles": len(cycles["import_chains"]),
