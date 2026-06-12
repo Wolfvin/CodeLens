@@ -77,6 +77,8 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
+    elif ext == '.php':
+        outline = _outline_php(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -96,12 +98,19 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
 
     Returns a summary-level outline (not per-function detail).
+
+    Args:
+        workspace: Absolute path to workspace
+        file_filter: Optional filter string for file paths
+        config: Optional configuration dict
+        max_files: Maximum number of files to outline (default: 5000)
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -111,7 +120,8 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+        '.php', '.java', '.c', '.cpp', '.h', '.hpp', '.cc', '.cs', '.lua'
     }
 
     outlines = []
@@ -132,6 +142,10 @@ def get_workspace_outline(
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
+            # Enforce max_files cap
+            if len(outlines) >= max_files:
+                break
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
@@ -143,6 +157,10 @@ def get_workspace_outline(
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+
+        # Enforce max_files cap at directory level too
+        if len(outlines) >= max_files:
+            break
 
     return {
         "status": "ok",
@@ -497,6 +515,98 @@ def _outline_go(content: str, detail: str) -> Dict:
             outline["variables"].append({"name": const_name, "line": line_num, "const": True})
             if is_exported:
                 outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
+
+    return outline
+
+
+def _outline_php(content: str, detail: str) -> Dict:
+    """Outline for PHP source files."""
+    import re
+    outline = {
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "traits": [],
+        "imports": [],
+        "exports": [],
+        "variables": [],
+    }
+
+    # Namespace detection
+    ns_match = re.search(r'namespace\s+([\w\\]+)\s*;', content)
+    if ns_match:
+        outline["namespace"] = ns_match.group(1).strip('\\')
+
+    # Use statements (imports)
+    for m in re.finditer(r'use\s+(?:function\s+|const\s+)?([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
+        import_path = m.group(1)
+        alias = m.group(2) or import_path.rsplit('\\', 1)[-1]
+        line = content[:m.start()].count('\n') + 1
+        outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+
+    # Group use statements (PHP 7+)
+    for m in re.finditer(r'use\s+([\w\\]+)\\{([^}]+)}\s*;', content):
+        base_ns = m.group(1)
+        for item in re.finditer(r'([\w\\]+)(?:\s+as\s+(\w+))?', m.group(2)):
+            import_path = base_ns + '\\' + item.group(1)
+            alias = item.group(2) or item.group(1).rsplit('\\', 1)[-1]
+            line = content[:m.start()].count('\n') + 1
+            outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+
+    lines = content.split('\n')
+    in_class = False
+    class_depth = 0
+
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Interface declarations
+        m = re.match(r'(?:^|\s)interface\s+(\w+)', stripped)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": line_num})
+            continue
+
+        # Trait declarations
+        m = re.match(r'(?:^|\s)trait\s+(\w+)', stripped)
+        if m:
+            outline["traits"].append({"name": m.group(1), "line": line_num})
+            continue
+
+        # Class declarations
+        m = re.match(r'(?:^|\s)(?:abstract\s+|final\s+)?class\s+(\w+)', stripped)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": line_num, "methods": []})
+            in_class = True
+            continue
+
+        # Function declarations
+        m = re.match(r'(?:public\s+|private\s+|protected\s+)?(?:static\s+)?function\s+(\w+)', stripped)
+        if m:
+            fn_name = m.group(1)
+            is_method = in_class or stripped.startswith(('public ', 'private ', 'protected '))
+            entry = {"name": fn_name, "line": line_num, "method": is_method}
+            outline["functions"].append(entry)
+            # Add method to last class
+            if in_class and outline["classes"]:
+                outline["classes"][-1].setdefault("methods", []).append({"name": fn_name, "line": line_num})
+            continue
+
+        # Track class depth for method detection
+        if in_class:
+            class_depth += stripped.count('{') - stripped.count('}')
+            if class_depth < 0:
+                in_class = False
+                class_depth = 0
+
+        # Constants
+        m = re.match(r'(?:public\s+|private\s+|protected\s+)?const\s+(\w+)', stripped)
+        if m:
+            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
+
+        # Define constants
+        m = re.match(r"define\s*\(\s*['\"](\w+)['\"]", stripped)
+        if m:
+            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
 
     return outline
 
