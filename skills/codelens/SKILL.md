@@ -35,18 +35,21 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.1
+# CodeLens v6.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.1
+## What's New in v6.2
 
-- **JSX component usage tracking** (CRITICAL): `tsx_parser` now extracts component references from JSX syntax (`<Button>`, `<Card />`). Previously, React components appeared "dead" because their only references were through JSX syntax, not function calls. On shadcn/ui (3248 TSX files), this increased resolved edges from 8,469 to 46,176 (5.5x improvement) and reduced dead nodes from ~8,000+ to 270.
-- **Query command fuzzy-overwrite bug fix** (CRITICAL): `query` command now correctly returns exact multi-match results instead of having fuzzy matches overwrite them. Querying "Button" in a codebase with 22 exact Button definitions now returns all 22 matches, not 381 fuzzy matches.
-- **Missing import recovery**: Added `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` to `utils.py` — fixed 5 broken commands (`ask`, `env-check`, `handbook`, `scan`, `watch`) that crashed on import.
-- **Missing `resolve_tauri_ipc_from_apimap`**: Implemented the function in `edge_resolver.py` — fixed `scan`, `handbook`, and `watch` commands that imported it. Resolves cross-language Tauri IPC edges (TypeScript `invoke('cmd')` → Rust `#[tauri::command]`).
-- **Tailwind v4 expanded false-positive elimination**: `missing-refs` now recognizes container query `@container/name`, star wildcard `*:`, double-star `**:`, arbitrary variants `[&_...]`, data attribute variants `data-[slot=]:`, and negative transform prefixes `-scale-`, `-rotate-`, `-translate-`. Reduced `html_no_css` false positives on shadcn/ui from 372 to near-zero.
-- **Auto-fuzzy query**: When `query` finds no exact matches, it now automatically tries fuzzy substring matching before returning "not found". Previously, fuzzy matching only ran with `--fuzzy` flag.
+- **CRITICAL: 5 commands broken by missing imports** — `scan`, `ask`, `handbook`, `watch`, `env-check` all failed to load at startup. Root cause: `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` missing from `utils.py`, and `resolve_tauri_ipc_from_apimap` missing from `edge_resolver.py`. All fixed and verified.
+- **NEW: `summary` command (42nd command)** — Anti-overload condensed view. Runs multiple engines internally but returns only prioritized, actionable findings filtered by severity. Supports `--focus` (security/quality/architecture/all), `--detail` (minimal/standard/full), and `--max-items` per category. This is the single entry point for agents who want to understand a codebase without running 10+ commands.
+- **Trace engine case-insensitive matching** — `trace "renderElement"` previously returned 0 callers while `query` showed ref_count=9. Now trace uses case-insensitive + fuzzy lookup matching query's behavior.
+- **Entrypoints expanded config filtering** — Added 25+ config/rc file patterns (`.lintstagedrc`, `.babelrc`, `.stylelintrc`, `commitlint.`, `husky.`, `jest.config.`, etc.) and now filters ALL entrypoint types, not just `module_export`.
+- **State-map math constant filtering** — `LegendreGaussN24TValues` and similar scientific/math constants are no longer classified as "global state". Added data-constant suffix detection (`Values`, `Data`, `Entries`, `Table`, etc.) and math-pattern detection (Gauss, Legendre, Fibonacci, etc.).
+- **Perf-hint output key fix** — `stats.total_hints` was 360 but `hints` array was empty. The data was stored under `findings` key while the stat said `hints`. Unified to `hints` key.
+- **Handbook markdown comprehensive output** — Previously only ~20 lines. Now includes Key Entry Points (test-filtered), API Surface, State Management, expanded Quick Reference, and Languages sections. This is the core "auto-summary" output.
+- **`ask` command routes to `summary`** — Queries like "give me a summary", "tldr", "what matters", "auto detect" now route to the new `summary` command.
+- **Tauri IPC edge resolver implemented** — `resolve_tauri_ipc_from_apimap()` was referenced in scan code but never defined. Now properly implemented with snake_case ↔ camelCase matching.
 
 ## What's New in v6.0
 

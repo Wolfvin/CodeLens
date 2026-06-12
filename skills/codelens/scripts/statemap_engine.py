@@ -30,7 +30,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".go", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte",
 }
 
 STATE_TYPES = {"store", "context", "atom", "global", "machine"}
@@ -90,6 +90,14 @@ def map_state(
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 _collect_js_imports(content, rel_path, all_imports_by_file)
                 _collect_js_exports(content, rel_path, all_exports_by_file)
+
+            elif ext == ".vue":
+                # Extract script section from Vue SFC for import/export collection
+                script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+                if script_match:
+                    script_content = script_match.group(1)
+                    _collect_js_imports(script_content, rel_path, all_imports_by_file)
+                    _collect_js_exports(script_content, rel_path, all_exports_by_file)
 
             elif ext == ".py":
                 _collect_py_imports(content, rel_path, all_imports_by_file)
@@ -696,6 +704,60 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
+    # Setup Stores: defineStore('name', () => { ... }) — Pinia's recommended pattern since v2
+    for m in re.finditer(
+        r'defineStore\s*\(\s*[\'"](\w+)[\'"]\s*,\s*(?:\([^)]*\)\s*=>|function\s*\([^)]*\))',
+        content
+    ):
+        store_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Avoid duplicating if already matched by Options API regex above
+        if any(s["name"] == store_name and s.get("framework") == "pinia" for s in stores):
+            continue
+
+        # Extract reactive variables as state slices
+        store_body = content[m.end():m.end() + 5000]
+        store_end = _find_matching_brace(store_body)
+        store_body = store_body[:store_end]
+
+        slices = []
+        for prop_m in re.finditer(
+            r'(?:const|let)\s+(\w+)\s*=\s*(?:ref|reactive|computed)\s*\(',
+            store_body
+        ):
+            slices.append({"name": prop_m.group(1)})
+
+        # Extract return values as the public API / actions
+        actions = []
+        return_match = re.search(r'return\s*\{([^}]+)\}', store_body, re.DOTALL)
+        if return_match:
+            for prop_m in re.finditer(r'(\w+)', return_match.group(1)):
+                name = prop_m.group(1)
+                if name not in {s["name"] for s in slices} and not name.startswith('_'):
+                    actions.append(name)
+
+        # Also look for function declarations inside the setup store body (these are actions)
+        for fn_m in re.finditer(
+            r'(?:async\s+)?(?:function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>)',
+            store_body
+        ):
+            fn_name = fn_m.group(1) or fn_m.group(2)
+            if fn_name and fn_name not in actions and not fn_name.startswith('_'):
+                actions.append(fn_name)
+
+        stores.append({
+            "name": store_name,
+            "type": "store",
+            "framework": "pinia",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": slices,
+            "actions": actions,
+            "consumers": [],
+            "store_type": "setup",
+        })
+
     # useStoreName()
     for m in re.finditer(r'(use\w+Store)\s*\(\s*\)', content):
         store_hook = m.group(1)
@@ -1073,17 +1135,63 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             value_part = m.group(2).strip() if m.group(2) else ""
 
             # Skip ALL_CAPS constants — they are immutable, not state.
-            # A name like MAX_FILES, FETCH_TIMEOUT_MS is a constant.
-            if var_name == var_name.upper() and '_' in var_name:
+            # A name like MAX_FILES, FETCH_TIMEOUT_MS, COLORS, THEME, VARIANTS is a constant.
+            if var_name == var_name.upper() and len(var_name) > 2:
                 continue
 
             # Skip common non-state constants
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
                 continue
 
+            # v6: Skip PascalCase names that look like TypeScript types/enums/classes.
+            # These are type exports, not runtime state. E.g.:
+            #   const BookingReferences = ...
+            #   const CustomFieldTypeEnum = ...
+            #   const Status = ...
+            # A name is PascalCase if it starts with uppercase and contains
+            # no underscores (ALL_CAPS already skipped above).
+            if var_name[0].isupper() and '_' not in var_name and len(var_name) > 2:
+                # Heuristic: PascalCase names are type/enum/class exports
+                # Skip unless the value clearly looks like mutable state
+                # (object literal, Map, Set, new SomeClass)
+                value_is_stateful = bool(re.match(r'^(\{|\[|new\s|Map\b|Set\b|WeakMap|WeakSet)', value_part))
+                if not value_is_stateful:
+                    continue
+                # v6.2: Even if value looks stateful ([], {}), check if it's
+                # actually an immutable data constant (math tables, lookup maps).
+                # Heuristic: PascalCase names with numeric or data-like suffixes
+                # (Values, Data, Entries, Items, Table, Grid) containing only
+                # primitive arrays are constants, not state.
+                _DATA_CONSTANT_SUFFIXES = (
+                    'Values', 'Data', 'Entries', 'Items', 'Table', 'Grid',
+                    'Coefficients', 'Weights', 'Matrix', 'Vector',
+                )
+                if any(var_name.endswith(s) for s in _DATA_CONSTANT_SUFFIXES):
+                    continue
+                # v6.2: Names containing scientific/math terms are constants
+                # e.g., LegendreGaussN24TValues, FibonacciNumbers, PiDigits
+                _MATH_PATTERNS = (
+                    'Gauss', 'Legendre', 'Fibonacci', 'Fourier', 'Taylor',
+                    'Newton', 'Euler', 'Bernoulli', 'Chebyshev', 'Hermite',
+                    'Laguerre', 'Jacobi', 'Bessel', 'Riemann',
+                )
+                if any(p in var_name for p in _MATH_PATTERNS):
+                    continue
+
             # Skip names ending with config/enum suffixes
             if any(var_name.endswith(s) for s in config_suffixes):
                 continue
+
+            # v6: Skip names ending with common TypeScript/enum patterns
+            enum_type_suffixes = ('Enum', 'Type', 'Interface', 'Schema', 'Args',
+                                  'Input', 'Output', 'Result', 'Response', 'Request',
+                                  'Payload', 'Event', 'Action', 'Keys', 'Map',
+                                  'Record', 'List', 'Set', 'Dict', 'Union')
+            if any(var_name.endswith(s) for s in enum_type_suffixes):
+                # Only skip if value doesn't look like mutable state
+                is_mutable_early = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
+                if not is_mutable_early:
+                    continue
 
             # Skip React components — PascalCase + arrow function or function
             # A line like "const Logo = () =>" or "const Button = function" is NOT state.
@@ -1097,8 +1205,25 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             # Skip forwardRef, memo, styled, createStyled, etc.
             if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
                 continue
+            # Skip React.memo and React.forwardRef
+            if re.match(r'^React\.(forwardRef|memo)\s*\(', value_part):
+                continue
             # Skip JSX components: "const X = <SomeComponent"
             if value_part.startswith('<'):
+                continue
+            # Skip factory functions that return components: "const X = createX(...)"
+            if re.match(r'^[A-Z]\w+\s*\(', value_part) and '=>' not in value_part:
+                continue
+
+            # v7: Skip known config/constant suffixes — these are immutable design tokens,
+            # not mutable state. Examples: ThemeConfig, ButtonVariants, ColorMapping, etc.
+            _CONFIG_SUFFIXES = (
+                'Config', 'Options', 'Props', 'Defaults', 'Mapping', 'Registry',
+                'Theme', 'Colors', 'Variants', 'Schema', 'Meta', 'Presets',
+                'Constants', 'Definitions', 'Mappings', 'Settings', 'Params',
+                'Tokens', 'Breakpoints', 'Spacings', 'Typography', 'Palette',
+            )
+            if any(var_name.endswith(s) for s in _CONFIG_SUFFIXES):
                 continue
 
             # Skip class instantiations of known non-state patterns
@@ -1108,6 +1233,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 # Skip factories that are NOT state-related
                 pass
 
+            # v6: Skip function calls that are clearly not state
+            # e.g., const X = someFunction(), const X = z.object(), const X = t.type()
+            if re.match(r'^(z\.|t\.|zod\.|joi\.|yup\.|v\.|Type\()', value_part):
+                continue
+
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
             is_mutable = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
@@ -1116,6 +1246,17 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             if is_immutable:
                 continue
+
+            # v6: For non-mutable, non-immutable values (function calls, references),
+            # be more conservative — only include if the name suggests state.
+            # Names like "state", "cache", "store" suggest state.
+            # Names like "handler", "service", "client" suggest utilities.
+            if not is_mutable and not is_immutable:
+                state_keywords = ('state', 'cache', 'store', 'mutex', 'lock', 'queue',
+                                  'pool', 'registry', 'buffer', 'session')
+                is_likely_state = any(kw in var_name.lower() for kw in state_keywords)
+                if not is_likely_state:
+                    continue
 
             # For things that don't match either pattern, include them
             # (could be function calls that return mutable objects)

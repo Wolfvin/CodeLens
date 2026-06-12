@@ -21,14 +21,16 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".go", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte",
+    ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
+    ".go",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -76,21 +78,28 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "rust_main_fn",
             },
+            # C / C++
+            {
+                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "cpp_main_fn",
+            },
+            {
+                "regex": r'int\s+main\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "cpp_main_short",
+            },
             # Go
             {
-                "regex": r'func\s+main\s*\(',
+                "regex": r'func\s+main\s*\(\s*\)',
                 "language": {".go"},
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "go_main_fn",
-            },
-            # Go init
-            {
-                "regex": r'func\s+init\s*\(',
-                "language": {".go"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "go_init_fn",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -218,7 +227,7 @@ ENTRYPOINT_PATTERNS = {
             # Spring Boot @RequestMapping family
             {
                 "regex": r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
-                "language": {".py"},  # also matches in .java but we don't scan those
+                "language": {".java"},  # Spring Boot is Java, not Python
                 "extract": "spring_route",
                 "label": "spring_mapping",
             },
@@ -244,6 +253,45 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "trpc_procedure",
                 "path_group": 1,
                 "label": "trpc_query",
+            },
+            # Go HTTP handlers — net/http
+            {
+                "regex": r'http\.HandleFunc\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
+                "path_group": 1,
+                "label": "go_http_handlefunc",
+            },
+            {
+                "regex": r'http\.Handle\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_http_route",
+                "path_group": 1,
+                "label": "go_http_handle",
+            },
+            # Go Gin framework
+            {
+                "regex": r'(?:r|router|engine)\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_gin_route",
+                "path_group": 1,
+                "label": "go_gin_handler",
+            },
+            # Go Echo framework
+            {
+                "regex": r'e\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".go"},
+                "extract": "go_echo_route",
+                "path_group": 1,
+                "label": "go_echo_handler",
+            },
+            # C++ crow/drogon HTTP handlers
+            {
+                "regex": r'CROW_ROUTE\s*\([^,]+,\s*["\']([^"\']+)["\']',
+                "language": {".cc", ".cpp", ".cxx", ".h", ".hpp"},
+                "extract": "cpp_crow_route",
+                "path_group": 1,
+                "label": "cpp_crow_handler",
             },
         ],
     },
@@ -412,14 +460,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "structopt_parser",
-            },
-            # Go flag.String / flag.Bool / flag.Int
-            {
-                "regex": r'flag\.(?:String|Bool|Int|Int64|Uint|Uint64|Float64|Duration|Var)\s*\(',
-                "language": {".go"},
-                "extract": "handler_only",
-                "handler_group": 0,
-                "label": "go_flag",
             },
         ],
     },
@@ -693,22 +733,6 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 1,
                 "label": "rust_tokio_test",
             },
-            # Go Test\*
-            {
-                "regex": r'func\s+(Test\w+)\s*\(\s*\w+\s+\*?testing\.T\s*\)',
-                "language": {".go"},
-                "extract": "handler",
-                "handler_group": 1,
-                "label": "go_test",
-            },
-            # Go Benchmark\*
-            {
-                "regex": r'func\s+(Benchmark\w+)\s*\(\s*\w+\s+\*?testing\.B\s*\)',
-                "language": {".go"},
-                "extract": "handler",
-                "handler_group": 1,
-                "label": "go_benchmark",
-            },
         ],
     },
 }
@@ -748,8 +772,6 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
-    MAX_FILES = 3000  # Cap to prevent timeout on large repos
-    MAX_ENTRIES = 1000  # Cap total entrypoints to collect
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -759,26 +781,37 @@ def map_entrypoints(
             continue
 
         for filename in filenames:
-            if files_scanned >= MAX_FILES or len(entrypoints) >= MAX_ENTRIES:
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
-                continue
-
-            # Skip minified and declaration files
-            if any(filename.endswith(ig) for ig in ('.min.js', '.min.css', '.map', '.d.ts')):
                 continue
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # Skip large files
-            try:
-                if os.path.getsize(file_path) > 500 * 1024:
-                    continue
-            except OSError:
-                continue
+            # v6: Skip config/build files that are NOT real entry points.
+            # Files like playwright.config.ts, vitest.config.ts, turbo.json,
+            # etc. contain "export default" but are not app entry points.
+            config_file_patterns = (
+                '.config.', 'config.ts', 'config.js', 'config.mjs',
+                'vitest.', 'playwright.', 'jest.', 'eslint.', 'prettier.',
+                'tsconfig.', 'turbo.json', '.eslintrc', '.prettierrc',
+                'biome.json', 'lint-staged.', 'postcss.config',
+                'tailwind.config', 'next.config', 'vite.config',
+                'webpack.config', 'rollup.config', 'babel.config',
+                'i18n.config', 'i18n.json', 'i18n-unused.config',
+                # Additional config/rc file patterns (v6.2)
+                '.lintstagedrc', '.babelrc', '.stylelintrc',
+                '.commitlintrc', '.huskyrc', '.lintstagedrc.json',
+                '.lintstagedrc.js', '.lintstagedrc.cjs',
+                'commitlint.', 'husky.', 'stylelint.',
+                'jest.config.', 'karma.conf', 'protractor.conf',
+                'angular.json', '.browserslistrc', '.editorconfig',
+                '.nvmrc', '.npmrc', '.yarnrc', 'lerna.json',
+                'nx.json', 'workspace.json', 'tsup.config',
+                'esbuild.', 'rollup.', 'terser.config',
+                'docker-compose', 'Dockerfile', '.env.',
+            )
+            is_config_file = any(p in filename for p in config_file_patterns)
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -791,6 +824,11 @@ def map_entrypoints(
             # Check each requested entrypoint type
             for ep_type in types_to_scan:
                 if ep_type not in ENTRYPOINT_PATTERNS:
+                    continue
+
+                # v6: Skip config files — they contain "export default" and
+                # other patterns but are NOT application entry points.
+                if is_config_file:
                     continue
 
                 type_def = ENTRYPOINT_PATTERNS[ep_type]
@@ -941,7 +979,12 @@ def _extract_entrypoints(
 
             elif extract_type == "test_name":
                 name_group = pattern_def.get("name_group")
-                entrypoint["test_name"] = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
+                test_name = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
+                # Filter out empty/whitespace-only test names (e.g., it(\n...) matches)
+                if test_name.strip() and test_name.strip() not in ('\\n', '\\r', '\\t'):
+                    entrypoint["test_name"] = test_name.strip()
+                else:
+                    continue  # Skip this match — empty test name
 
             elif extract_type == "click_command":
                 command_group = pattern_def.get("command_group")

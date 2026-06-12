@@ -2,63 +2,49 @@
 
 All notable changes to CodeLens will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-06-12
+## [6.2.0] — 2026-06-12
 
 ### Added
 
-- **Go language support** (`scripts/parsers/fallback_go.py`): Full Go parser with regex-based fallback. Extracts functions, methods with receivers, type declarations (struct/interface), struct fields, interface methods, import statements (single and grouped), constants, call edges, defer calls, goroutine detection, and function body length measurement. Tested on gin-gonic/gin (99 files -> 1200 nodes, 4993 edges).
-- **Go framework detection** (`scripts/framework_detect.py`): Parses go.mod to detect Go frameworks including Gin, Echo, Fiber, Chi, Gorilla Mux, and Beego. Handles both require blocks and the module line (for repos that ARE the framework). Also sets has_go_backend flag.
-- **PHP framework detection** (`scripts/framework_detect.py`): Parses composer.json to detect PHP frameworks including Laravel, Symfony, WordPress, Drupal, and CodeIgniter. Handles both require and require-dev sections.
-- **Laravel-specific config** (`scripts/framework_detect.py`): get_recommended_config() now provides Laravel-specific path recommendations (app/, routes/, resources/views/, etc.) and ignores storage/ and bootstrap/cache/.
-- **Go-specific config** (`scripts/framework_detect.py`): get_recommended_config() now provides Go-specific path recommendations (cmd/, internal/, pkg/, api/) and ignores vendor/.
-- **Cargo workspace detection** (`scripts/framework_detect.py`): Parses [workspace] section and members list from Cargo.toml, enabling detection of Rust frameworks in workspace-based repos (e.g., actix-web).
-- **resolve_tauri_ipc_from_apimap** (`scripts/edge_resolver.py`): Cross-language Tauri IPC edge resolution. Connects JS/TS invoke() calls to Rust #[tauri::command] handler nodes.
-- **walk_source_files** (`scripts/utils.py`): Single-pass workspace file walker with consistent ignore-dir filtering, extension filtering, max_files limiting, and generated file skipping.
-- **is_generated_file** (`scripts/utils.py`): Detects lock files, minified files, source maps, declaration files, and bundle/chunk files.
-- **scan_binary_artifacts** (`scripts/utils.py`): Scans workspace for binary/compiled artifacts, large files, Electron app indicators, and build output directories.
-- **scan_tauri_artifacts** (`scripts/utils.py`): Scans workspace for Tauri-specific artifacts including config files, Rust commands, JS invoke calls, capabilities/permissions, sidecars, updater config, and WebView security settings.
+- **NEW: `summary` command (42nd command)** — Anti-overload condensed view for AI agents. Instead of running 10+ commands and getting flooded with data, this single command auto-detects what matters most and returns prioritized, actionable findings only. Supports `--focus` (security/quality/architecture/all), `--detail` (minimal/standard/full), and `--max-items` per category. Routes from `ask` via keywords like "tldr", "quick summary", "what matters", "auto detect".
+- **`resolve_tauri_ipc_from_apimap()` in edge_resolver.py** — Implements Tauri IPC cross-language edge resolution that was referenced in scan.py but never defined. Creates synthetic edges between TypeScript `invoke('commandName')` calls and Rust `#[tauri::command]` handlers using snake_case ↔ camelCase matching.
+- **Shared constants in utils.py** — `MAX_FILE_SIZE` (200KB), `MAX_FILES_DEFAULT` (3000), and `time_budget_expired()` function. Centralized from individual engine copies to prevent drift and fix broken imports.
+- **Handbook markdown comprehensive output** — Expanded from ~20 lines to full sections: Key Entry Points (test-filtered), API Surface, State Management, expanded Quick Reference (each stat on own line), Languages, and severity markers on risks.
+- **Summary markdown formatter** — `_md_summary()` for the new summary command.
 
 ### Fixed
 
-- **CRITICAL: 7 commands failed to import** — ask, context, handbook, refactor-safe, scan, smell, watch all failed at import time due to missing functions in edge_resolver.py and utils.py. All missing functions have been implemented.
-- **CRITICAL: Go files produced 0 nodes/edges** — Go files were discovered and counted during scan but never parsed, silently dropped from the backend registry. Now fully parsed with the new Go fallback parser.
-- **CRITICAL: Laravel not detected as framework** — composer.json was never parsed for PHP dependencies. Now Laravel, Symfony, WordPress, Drupal, and CodeIgniter are properly detected.
-- **CRITICAL: Go frameworks not detected** — go.mod was never parsed. Now Gin, Echo, Fiber, Chi, Mux, and Beego are properly detected.
-- **CRITICAL: Actix-web not detected** — Cargo workspace members were not parsed. Now workspace-based Rust projects detect their member crate names.
-- **HIGH: handbook command crashed** — detect_smells(), map_entrypoints(), and detect_secrets() were called with max_files keyword argument they do not accept. Removed invalid keyword arguments.
-- **HIGH: Go/PHP files not analyzed by smell engine** — SOURCE_EXTENSIONS in smell_engine.py only included JS/TS/Rust/Python/Vue/Svelte. Added .go and .php extensions.
-- **MEDIUM: Duplicate version fields in pyproject.toml** — The file contained 6 duplicate version entries. Consolidated to single version = 6.0.0.
+- **CRITICAL: 5 commands broken by missing imports** — `scan`, `ask`, `handbook`, `watch`, `env-check` all failed to load at startup. `envcheck_engine.py` imported `MAX_FILE_SIZE`, `MAX_FILES_DEFAULT`, `time_budget_expired` from `utils` but none existed. `scan.py` imported `resolve_tauri_ipc_from_apimap` from `edge_resolver` but it was never defined. This meant 12% of all commands (5/41) were silently broken.
+- **CRITICAL: Trace engine returns 0 callers for case-mismatched names** — `trace "renderElement"` returned 0 callers while `query` showed ref_count=9. Root cause: trace used exact+case-sensitive lookup while query supports fuzzy/case-insensitive matching. Fixed by adding case-insensitive exact match and case-insensitive substring fallback to trace_engine.py.
+- **HIGH: Entrypoints still showing config files** — Despite v6.0 claiming config file filtering, `.lintstagedrc.js`, `babel.config.js`, etc. still appeared. Two issues: (1) incomplete pattern list missing `.lintstagedrc`, `.babelrc`, `.stylelintrc`, `commitlint.`, `husky.`, `jest.config.`, etc.; (2) filter only applied to `module_export` type, not all entrypoint types. Added 25+ patterns and applied filter to ALL types.
+- **HIGH: State-map classifying math constants as "global" state** — `LegendreGaussN24TValues` (immutable math lookup table) was classified as "global" state because its PascalCase name passed the `value_is_stateful` check (array literal `= [...]`). Added data-constant suffix detection (`Values`, `Data`, `Entries`, `Table`, etc.) and math-pattern detection (Gauss, Legendre, Fibonacci, etc.). Reduced from 33 to 31 stores on excalidraw.
+- **MEDIUM: Perf-hint output key mismatch** — `stats.total_hints` was 360 but `hints` array was `[]`. Data was stored under `findings` key while stat said `hints`. Renamed `findings` → `hints` for consistency. Updated markdown formatter to check both keys for backward compat.
+- **MEDIUM: Handbook state management `defined_in` empty** — Markdown formatter read `store.get("defined_in")` but handbook data used `store.get("file")`. Fixed formatter to check both keys.
+- **LOW: Version mismatch** — `utils.py` had 5.7.1, `pyproject.toml` had duplicate version lines. Unified to 6.2.0.
 
 ### Test Target Documentation
 
-- **pallets/flask** (GitHub): Python/Flask web framework. 83 Python files, 1620 backend nodes, 2888 edges. 407 code smells detected (health 55), 386 dead code, 1 secret, 1 CVE, 50 circular deps.
-- **vuejs/core** (GitHub): Vue.js core framework (JS/TS/Vue). 528 files, 1725 nodes, 10797 edges. Framework detection correctly identifies Vue.
-- **laravel/laravel** (GitHub): PHP/Laravel web framework. 26 PHP files, 16 nodes, 83 edges. Framework detection correctly identifies Laravel (previously missed).
-- **gin-gonic/gin** (GitHub): Go/Gin web framework. 99 Go files, 1200 nodes, 4993 edges. Framework detection correctly identifies Gin (previously 0 nodes, undetected). 453 smells detected (health 90).
-- **actix/actix-web** (GitHub): Rust/Actix-web framework. 312 Rust files, 3730 nodes, 20139 edges. 2056 smells detected (health 60). Framework detection correctly identifies Actix (previously missed).
+- **excalidraw/excalidraw** (GitHub): Used as a test target for v6.2 — a canvas-based virtual whiteboard monorepo with 725 source files (312 TS, 290 TSX, 85 CSS, 25 JS). Frameworks: React, Next.js, Vite. Monorepo with yarn workspaces. Unique architecture: canvas rendering engine, gesture handling, element system, custom state management (Jotai atoms). Key findings that drove fixes: 5 broken commands from missing imports, trace returning 0 callers, 159 CSS missing-refs false positives, math constants as state, config files as entrypoints.
 
-## [5.8.1] — 2026-06-12
-
-### Added
-
-- **React Router detection** (`scripts/apimap_engine.py`): New `_extract_react_router_routes()` function that detects `<Route path="...">` JSX elements, `createBrowserRouter`, and `useRoutes` patterns. Runs before Vue Router detection to prevent false positives. Returns routes with `"framework": "react-router"`.
+## [5.9.0] — 2026-06-12
 
 ### Fixed
 
-- **HIGH: `dependents` command ignored workspace argument** — When running `codelens dependents /path/to/workspace`, the workspace path was consumed by the `file` positional argument, causing auto-detect to find a different workspace (typically the parent directory). Added auto-swap logic: if the `file` argument is a directory with project markers (`.codelens/`, `package.json`, `Cargo.toml`, etc.), treat it as the workspace instead.
-- **HIGH: `config-drift` Rust import parsing was too greedy** — The regex `r'use\s+([^;]+);'` matched `use` inside comments (e.g., `// use this for relay connections;`) and across lines, producing nonsensical "missing dependencies" like "relay connections (no direct/mDNS)...". Now parses line-by-line, skips `//` and `/*` comment lines, strips inline comments, and validates crate names are alphanumeric. Also handles grouped imports (`use foo::{bar, baz}`).
-- **HIGH: `handbook` monorepo detection was incomplete** — Only checked for turbo.json, pnpm-workspace.yaml, lerna.json, nx.json. Missed bun-based monorepos (which use `bun.lock` without a workspace config file) and structural monorepos (multiple `package.json` in `apps/` or `packages/`). Added `bun.lock` to indicators and structural detection via sub-directory package.json count.
-- **HIGH: Rust `main()` classified as dead code** — The `dead-code` command reported Rust `main()` functions as dead (ref_count: 0). Now handles qualified names like `crate::main` by extracting the bare name (`name.split('::')[-1]`), and explicitly skips `main` in `.rs` files as entry points.
-- **HIGH: `debug-leak` false positives on Rust `println!`/`eprintln!`** — All 3101 Rust `println!`/`eprintln!` calls were flagged as debug leaks, but these are standard output mechanisms in Rust CLI/apps (equivalent to `console.log` in Node.js CLI tools). Now only flags them when inside `#[test]` functions or when the line contains debug patterns (`dbg!`, `TODO`, `FIXME`, etc.). Reduced false positives from 3101 to ~187 on Spacedrive test target.
-- **HIGH: `api-map` incorrectly detected vue-router in React projects** — React Router routes in TSX files (using `<Route path="...">`) were misidentified as Vue Router. Added React Router detection that runs before Vue Router, and updated Vue Router detection to early-return for TSX/JSX files that contain React Router patterns. Also tightened Vue Router's fallback `has_route_pattern` check to only apply in `.vue` files.
-- **MEDIUM: `validate` reported `.toml`/`.json` files as unregistered** — Config and data files (`.toml`, `.json`, `.yaml`, `.lock`, `.md`, etc.) are not parsed by CodeLens and were always reported as "unregistered". Separated `source_extensions` from config extensions, eliminating hundreds of false positive reports.
+- **CRITICAL: Circular dependency DFS crash (`circular_engine.py`)** — When `max_cycles` limit was reached during DFS traversal, the early return did not unwind the `path` list or `color` dict, leaving nodes in GRAY state but not in the current path. Subsequent DFS iterations then hit `ValueError: 'X' is not in list` on `path.index(neighbor)`. Fixed by using a `stopped` flag to propagate early exit signal, ensuring proper DFS stack unwinding. Added `try/except ValueError` as a safety net for any remaining edge cases. This bug affected ALL three DFS-based detectors: function call cycles, import chain cycles, and CSS @import cycles.
+- **CRITICAL: God object detection captured JS keywords as class names (`smell_engine.py`)** — The regex `class\s+(\w+)` incorrectly captured keywords like `extends` and `contains` from anonymous class expressions (`const X = class extends Foo { ... }`) and from comments. Added `JS_KEYWORDS` filter and anonymous class expression handling that extracts the variable name instead.
+- **CRITICAL: God object method count wildly inflated (`smell_engine.py`)** — The method count regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched ALL function calls (e.g., `console.log(`, `this.method(`, `arr.slice(`), not just method definitions. Replaced with brace-depth-tracked `_count_js_class_methods()` that only counts method definitions inside the actual class body boundary, supporting regular methods, async methods, getters/setters, static methods, access modifiers, and arrow class field methods.
+- **HIGH: Tailwind utility classes reported as missing CSS (`missing_refs.py`)** — The `_is_likely_tailwind()` heuristic only covered ~25 prefix patterns. Many Tailwind classes like `!-mb-4` (important+negative), `-ml-2` (negative value), `min-w-`, `max-h-`, `dark:hover:` (stacked variants), `w-[100px]` (arbitrary values), etc. were falsely reported as `html_no_css`. Expanded to 50+ prefix patterns, added recursive variant stripping (responsive + state + group/peer variants), arbitrary value detection (`[...]`), negative value handling, and fractional value support (`w-1/2`).
+- **MEDIUM: Validate engine reported non-source files as unregistered (`validate_engine.py`)** — `.json`, `.toml`, `.yaml`, `.yml` config files were listed as "unregistered" even though they have no symbols to register. This created noise (1187 false positives on tldraw). Removed config/data extensions from the source_extensions check set.
+- **MEDIUM: Entrypoints test_entry count inflated with empty names (`entrypoints_engine.py`)** — Regex for `it()`/`test()` could match `it(\n...` patterns, producing test entries with empty or whitespace-only test names like `\\n`. Added filtering to skip entries with empty/whitespace test names.
+- **MEDIUM: Fuzzy query results poorly prioritized (`commands/query.py`)** — When no exact match was found, fuzzy matches were returned in arbitrary order. A query for "Editor" could return "EditorA" (ref_count=0) before the core "Editor" class (ref_count=500). Added relevance-based sorting: exact case-insensitive match first, then by ref_count (descending), then active before dead, then alphabetically.
+- **LOW: Handbook printed traceback on circular detection failure (`commands/handbook.py`)** — Removed `exc_info=True` from the warning log to avoid printing stack traces to stderr when circular detection fails gracefully.
 
 ### Test Target Documentation
 
-- **spacedriveapp/spacedrive** (GitHub): Used as a test target — a large open-source cross-platform file manager built with Tauri v2 + React + Rust. 38k+ stars, 88MB repo, 1166 Rust files, 405 TSX/TS files, 11 Python adapter files. Monorepo structure with `apps/` (tauri, mobile, web, server, cli, gpui-photo-grid), `packages/` (interface, ts-client, assets), `core/`, `crates/`, and `extensions/`. Test results: 7699 backend nodes, 60166 edges, 943 CSS classes, 6 frameworks detected (react, tailwind, zustand, vite, tauri, axum), 5162 code smells (health 70), 4 secrets, 1 CVE, 248 circular deps, 525 dead code, 572 perf hints, 278 a11y issues. All 7 bugs discovered and fixed during this test were specific to large polyglot Tauri monorepos.
+- **tldraw/tldraw** (GitHub): Used as a test target for v5.9 — a large infinite canvas whiteboard SDK monorepo with 94MB, 2437 TS/TSX files, 4208 backend nodes, 25259 edges. Frameworks detected: React, Next.js, Vue, Tailwind, Vite. Monorepo with lerna, yarn workspaces, 16 packages. Unique architecture: state machine editor, canvas rendering, geometry algorithms, sync engine, Cloudflare Workers. Key findings that drove fixes: circular engine crash on import cycles in workers, god object "extends" false positive from anonymous class expressions, 345 Tailwind false positives in missing-refs, validate engine 1187 non-source file noise.
 
 ## [5.8.0] — 2026-06-12
 

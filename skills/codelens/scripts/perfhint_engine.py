@@ -43,8 +43,7 @@ WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".go", ".html", ".vue", ".svelte",
-    ".json", ".yaml", ".yml",
+    ".py", ".rs", ".html", ".vue", ".svelte",
 }
 
 # File extensions that are primarily frontend / markup (for category-specific scans)
@@ -133,11 +132,13 @@ PERF_HINT_CATEGORIES = {
                 "fix_suggestion": "Add a dependency array: useEffect(() => {...}, [deps]).",
             },
             # Large component without React.memo export
+            # v6: Only match EXPORTED components — internal helpers don't need memo
             {
-                "regex": r'(?:function|const)\s+[A-Z]\w+\s*(?:=\s*\(|\()\s*(?:props|{)',
+                "regex": r'export\s+(?:default\s+)?(?:function|const)\s+[A-Z]\w+\s*(?:=\s*\(|\()\s*(?:props|{)',
                 "negative_regex": r'React\.memo|memo\(',
-                "hint": "Component is not wrapped in React.memo — may re-render even when props are unchanged",
-                "fix_suggestion": "Wrap the component export with React.memo() if props are shallow-comparable.",
+                "negative_scope": "file",
+                "hint": "Exported component is not wrapped in React.memo — may re-render even when props are unchanged",
+                "fix_suggestion": "Wrap the component export with React.memo() if props are shallow-comparable. Note: React.memo is not always beneficial — only use when props are shallow-comparable and the component is expensive to re-render.",
             },
         ],
     },
@@ -242,75 +243,41 @@ PERF_HINT_CATEGORIES = {
     "memory_leak": {
         "severity": "high",
         "category": "memory_leak",
-        "description": "Event listeners, intervals, or resources that are never cleaned up",
+        "description": "Event listeners or intervals that are never cleaned up",
         "patterns": [
-            # addEventListener without matching removeEventListener (JS/TS only)
+            # addEventListener without matching removeEventListener
             {
                 "regex": r'\.addEventListener\s*\(\s*["\'](\w+)["\']',
                 "negative_regex": r'\.removeEventListener\s*\(\s*["\']\1["\']',
                 "hint": "addEventListener without corresponding removeEventListener — potential memory leak",
                 "fix_suggestion": "Store the handler reference and call removeEventListener in the cleanup phase (useEffect return / componentWillUnmount).",
-                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # setInterval without clearInterval (JS/TS only)
+            # setInterval without clearInterval
             {
                 "regex": r'(?:const|let|var)?\s*\w*\s*=\s*setInterval\s*\(',
                 "negative_regex": r'clearInterval\s*\(',
                 "hint": "setInterval without clearInterval — interval runs forever, causing memory/CPU leak",
                 "fix_suggestion": "Store the interval ID and call clearInterval() in the cleanup phase (useEffect return / componentWillUnmount).",
-                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # setTimeout without clearTimeout (JS/TS only)
+            # setTimeout without clearTimeout (less severe but still a leak source)
             {
                 "regex": r'(?:const|let|var)?\s*\w*\s*=\s*setTimeout\s*\(',
                 "negative_regex": r'clearTimeout\s*\(',
                 "hint": "setTimeout assigned but no clearTimeout seen — timeout may fire after component unmounts",
                 "fix_suggestion": "Store the timeout ID and call clearTimeout() in the cleanup phase to prevent stale updates.",
-                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
             },
-            # Closures retaining large objects (JS/TS/Python)
+            # Closures retaining large objects (heuristic: large buffer assigned then used in closure)
             {
                 "regex": r'(?:const|let|var)\s+\w+\s*=\s*(?:new\s+(?:Array|Buffer|Uint8Array)|Array\s*\(\s*\d{4,}\s*\)|Buffer\.alloc\s*\(\s*\d{5,})',
                 "hint": "Large buffer/array allocation — ensure it is not captured by a long-lived closure",
                 "fix_suggestion": "Null out the reference after use, or use a WeakRef / scoped allocator to allow GC.",
-                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py"},
             },
-            # EventEmitter .on() without .off() or .removeListener() (JS/TS only)
+            # EventEmitter .on() without .off() or .removeListener()
             {
                 "regex": r'\.(?:on|addListener)\s*\(\s*["\'](\w+)["\']',
                 "negative_regex": r'\.(?:off|removeListener|removeAllListeners)\s*\(\s*["\']\1["\']',
                 "hint": "EventEmitter .on() without matching .off() — listener accumulates over time",
                 "fix_suggestion": "Call .off() or .removeListener() when the subscriber is done (e.g., in cleanup / destructor).",
-                "applies_to_ext": {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"},
-            },
-            # Rust: Box::leak() — intentionally or accidentally leaks memory
-            {
-                "regex": r'Box::leak\s*\(',
-                "hint": "Box::leak() — memory is intentionally leaked and will never be reclaimed",
-                "fix_suggestion": "If intentional, consider using Box::into_raw/Box::from_raw for explicit lifecycle management. If not, use Box without leak.",
-                "applies_to_ext": {".rs"},
-            },
-            # Rust: Rc/Arc cycle — potential reference cycle leak
-            {
-                "regex": r'(?:Rc|Arc)::new\s*\((?:Rc|Arc)::new',
-                "hint": "Nested Rc/Arc — potential reference cycle that prevents deallocation",
-                "fix_suggestion": "Use Weak<T> for back-references to break reference cycles, or restructure with owned data.",
-                "applies_to_ext": {".rs"},
-            },
-            # Rust: mem::forget — prevents Drop from running
-            {
-                "regex": r'mem::forget\s*\(',
-                "hint": "mem::forget() — prevents Drop from running, potentially leaking resources",
-                "fix_suggestion": "Only use mem::forget when intentionally transferring ownership to FFI. Otherwise, let Drop handle cleanup.",
-                "applies_to_ext": {".rs"},
-            },
-            # Rust: Unbounded channel — can grow without limit
-            {
-                "regex": r'(?:mpsc|broadcast)::channel\s*\(\s*\)',
-                "negative_regex": r'(?:bounded|sync_channel)',
-                "hint": "Unbounded channel — can grow without limit under high load, causing memory pressure",
-                "fix_suggestion": "Use bounded channels (mpsc::sync_channel or tokio::sync::mpsc::channel with capacity) for backpressure.",
-                "applies_to_ext": {".rs"},
             },
         ],
     },
@@ -524,6 +491,21 @@ def detect_perf_hints(
     # ─── Deduplicate findings ─────────────────────────────────
     findings = _deduplicate_findings(findings)
 
+    # v6: Per-category cap — if a single category dominates the findings,
+    # emit a summary instead of overwhelming the output.
+    MAX_PER_CATEGORY = 100
+    category_counts = {}
+    capped_findings = []
+    category_overflow = {}
+    for f in findings:
+        cat = f.get("category", "unknown")
+        category_counts[cat] = category_counts.get(cat, 0) + 1
+        if category_counts[cat] <= MAX_PER_CATEGORY:
+            capped_findings.append(f)
+        else:
+            category_overflow[cat] = category_overflow.get(cat, 0) + 1
+    findings = capped_findings
+
     # ─── Apply severity filter ────────────────────────────────
     if severity:
         findings = [f for f in findings if f.get("severity") == severity]
@@ -534,17 +516,21 @@ def detect_perf_hints(
     # ─── Compute risk ─────────────────────────────────────────
     risk = _compute_risk(findings)
 
+    # ─── Detect frameworks for adaptive recommendations ──────
+    detected_frameworks = _detect_frameworks_lightweight(workspace)
+
     # ─── Generate recommendations ─────────────────────────────
-    recommendations = _generate_recommendations(findings, stats)
+    recommendations = _generate_recommendations(findings, stats, detected_frameworks)
 
     return {
         "status": "ok",
         "workspace": workspace,
         "severity_filter": severity,
         "category_filter": category,
-        "stats": stats,
+        "stats": {**stats, "truncated_categories": category_overflow if category_overflow else None},
         "risk": risk,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "frameworks_detected": detected_frameworks,
+        "hints": findings[:200],  # Cap to avoid explosion (key matches stats.total_hints)
         "recommendations": recommendations,
     }
 
@@ -573,12 +559,6 @@ def _scan_file_hints(
                 if elapsed > PER_FILE_TIMEOUT_SEC:
                     logger.debug(f"Per-file timeout ({PER_FILE_TIMEOUT_SEC}s) reached for {rel_path}, skipping remaining patterns")
                     return findings
-
-            # Per-pattern extension gating (e.g., JS-only patterns should not run on .rs files)
-            applies_to = pattern_def.get("applies_to_ext")
-            if applies_to and ext not in applies_to:
-                continue
-
             # Handle special pattern types
             if pattern_def.get("self_call_regex"):
                 # Recursive function detection: find function defs that call themselves
@@ -619,13 +599,18 @@ def _scan_file_hints(
                     line_num = content[:match.start()].count('\n') + 1
 
                     # Apply negative regex: if the negative pattern exists in the
-                    # matched region (expanded to a reasonable context window),
-                    # skip this match.
+                    # matched region, skip this match.
                     if negative_regex:
-                        # Expand context to a ~20-line window around the match
-                        context_start = max(0, match.start() - 2000)
-                        context_end = min(len(content), match.end() + 2000)
-                        context_window = content[context_start:context_end]
+                        # v6: Check scope for negative regex
+                        # 'file' scope = check entire file content (for patterns like memo)
+                        # default = check ~20-line window around the match
+                        neg_scope = pattern_def.get('negative_scope', 'window')
+                        if neg_scope == 'file':
+                            context_window = content
+                        else:
+                            context_start = max(0, match.start() - 2000)
+                            context_end = min(len(content), match.end() + 2000)
+                            context_window = content[context_start:context_end]
 
                         # For backreference patterns like \1, we need to resolve them
                         resolved_neg = negative_regex
@@ -794,9 +779,9 @@ def _category_applies_to_file(category: str, ext: str) -> bool:
     if category == "large_bundle":
         return ext in JS_TS_EXTENSIONS
 
-    # Memory leak: JS/TS + Python + Rust (with per-pattern extension gating)
+    # Memory leak: JS/TS + Python
     if category == "memory_leak":
-        return ext in JS_TS_EXTENSIONS or ext == ".py" or ext == ".rs"
+        return ext in JS_TS_EXTENSIONS or ext == ".py"
 
     # Default: allow for known source extensions
     return ext in SOURCE_EXTENSIONS
@@ -901,12 +886,71 @@ def _compute_risk(findings: List[Dict[str, Any]]) -> str:
 
 # ─── Recommendations ───────────────────────────────────────────
 
+def _detect_frameworks_lightweight(workspace: str) -> List[str]:
+    """Lightweight framework detection for adaptive recommendations.
+
+    Only checks package.json and file patterns — does NOT import the
+    heavy framework_detect module to keep perf-hint fast.
+    """
+    frameworks = []
+    pkg_path = os.path.join(workspace, "package.json")
+    deps = {}
+    if os.path.exists(pkg_path):
+        try:
+            import json
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            deps.update(pkg.get("dependencies", {}))
+            deps.update(pkg.get("devDependencies", {}))
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Check frameworks from deps
+    if "react" in deps or "react-dom" in deps:
+        frameworks.append("react")
+    if "next" in deps:
+        frameworks.append("next.js")
+    if "vue" in deps:
+        frameworks.append("vue")
+    if "svelte" in deps or "@sveltejs/kit" in deps:
+        frameworks.append("svelte")
+    if "angular" in deps or "@angular/core" in deps:
+        frameworks.append("angular")
+
+    # Check file patterns
+    if not frameworks:
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for f in filenames:
+                if f.endswith('.svelte') and 'svelte' not in frameworks:
+                    frameworks.append("svelte")
+                if f.endswith('.vue') and 'vue' not in frameworks:
+                    frameworks.append("vue")
+            if frameworks:
+                break
+
+    return frameworks
+
+
 def _generate_recommendations(
     findings: List[Dict[str, Any]],
-    stats: Dict[str, Any]
+    stats: Dict[str, Any],
+    frameworks: Optional[List[str]] = None
 ) -> List[str]:
-    """Generate actionable recommendations based on findings."""
+    """Generate actionable recommendations based on findings.
+
+    Adapts recommendations to the detected framework (React, Svelte,
+    Vue, Angular) instead of always suggesting React-specific fixes.
+    """
     recs = []
+    frameworks = frameworks or []
+    has_react = "react" in frameworks or "next.js" in frameworks
+    has_svelte = "svelte" in frameworks
+    has_vue = "vue" in frameworks
+    has_angular = "angular" in frameworks
 
     if not findings:
         recs.append("No performance anti-patterns detected. Codebase looks clean!")
@@ -936,20 +980,64 @@ def _generate_recommendations(
     # ── High: Memory leaks ──
     memory_leak = by_category.get("memory_leak", 0)
     if memory_leak:
-        recs.append(
-            f"MEMORY LEAKS: Found {memory_leak} potential memory leak(s). "
-            f"Missing removeEventListener / clearInterval / clearTimeout causes listeners "
-            f"and intervals to accumulate. Always clean up in useEffect return / componentWillUnmount."
-        )
+        if has_svelte:
+            recs.append(
+                f"MEMORY LEAKS: Found {memory_leak} potential memory leak(s). "
+                f"Missing removeEventListener / clearInterval / clearTimeout causes listeners "
+                f"and intervals to accumulate. In Svelte, clean up in the onDestroy() lifecycle "
+                f"callback or use the on:destroy event on components."
+            )
+        elif has_vue:
+            recs.append(
+                f"MEMORY LEAKS: Found {memory_leak} potential memory leak(s). "
+                f"Missing removeEventListener / clearInterval / clearTimeout causes listeners "
+                f"and intervals to accumulate. In Vue, clean up in the onUnmounted() composition "
+                f"API hook or the beforeUnmount / unmounted options API lifecycle."
+            )
+        elif has_angular:
+            recs.append(
+                f"MEMORY LEAKS: Found {memory_leak} potential memory leak(s). "
+                f"Missing removeEventListener / clearInterval / clearTimeout causes listeners "
+                f"and intervals to accumulate. In Angular, implement OnDestroy and clean up "
+                f"in ngOnDestroy(). Consider using takeUntil pattern with RxJS."
+            )
+        else:
+            recs.append(
+                f"MEMORY LEAKS: Found {memory_leak} potential memory leak(s). "
+                f"Missing removeEventListener / clearInterval / clearTimeout causes listeners "
+                f"and intervals to accumulate. Always clean up in useEffect return / componentWillUnmount."
+            )
 
     # ── High: Expensive renders ──
     expensive_renders = by_category.get("expensive_renders", 0)
     if expensive_renders:
-        recs.append(
-            f"EXPENSIVE RENDERS: Found {expensive_renders} React re-render anti-pattern(s). "
-            f"Inline objects/functions in JSX props and missing React.memo cause unnecessary "
-            f"child re-renders. Extract constants, use useCallback/useMemo, wrap with React.memo."
-        )
+        if has_svelte:
+            recs.append(
+                f"EXPENSIVE RENDERS: Found {expensive_renders} re-render anti-pattern(s). "
+                f"In Svelte, reactivity is compile-time — use $: reactive declarations "
+                f"instead of manual state updates. Avoid creating new objects/arrays in "
+                f"reactive statements. Use the {{#key}} block for conditional re-rendering."
+            )
+        elif has_vue:
+            recs.append(
+                f"EXPENSIVE RENDERS: Found {expensive_renders} re-render anti-pattern(s). "
+                f"In Vue, use computed() for derived state, v-once for static content, "
+                f"and v-memo for conditional re-rendering. Avoid inline objects/functions "
+                f"in template props — extract them to reactive() or ref() declarations."
+            )
+        elif has_angular:
+            recs.append(
+                f"EXPENSIVE RENDERS: Found {expensive_renders} re-render anti-pattern(s). "
+                f"In Angular, use OnPush change detection strategy, trackBy with *ngFor, "
+                f"and pure pipes instead of method calls in templates. Consider using "
+                f"the async pipe with Observables for efficient data binding."
+            )
+        else:
+            recs.append(
+                f"EXPENSIVE RENDERS: Found {expensive_renders} re-render anti-pattern(s). "
+                f"Inline objects/functions in JSX props and missing React.memo cause unnecessary "
+                f"child re-renders. Extract constants, use useCallback/useMemo, wrap with React.memo."
+            )
 
     # ── Medium: Large bundle ──
     large_bundle = by_category.get("large_bundle", 0)
@@ -981,11 +1069,24 @@ def _generate_recommendations(
     # ── Low: Cache miss ──
     cache_miss = by_category.get("cache_miss", 0)
     if cache_miss:
-        recs.append(
-            f"CACHE MISSES: Found {cache_miss} repeated computation without caching. "
-            f"Add response caching (ETag, Cache-Control), memoization (lru_cache, useMemo), "
-            f"or a data-fetching library (SWR, React Query) to avoid redundant work."
-        )
+        if has_svelte:
+            recs.append(
+                f"CACHE MISSES: Found {cache_miss} repeated computation without caching. "
+                f"Add response caching (ETag, Cache-Control), memoization (lru_cache), "
+                f"or use SvelteKit's load function caching and page stores to avoid redundant work."
+            )
+        elif has_vue:
+            recs.append(
+                f"CACHE MISSES: Found {cache_miss} repeated computation without caching. "
+                f"Add response caching (ETag, Cache-Control), memoization (lru_cache, computed), "
+                f"or use Vue's computed() and Pinia getters for derived state caching."
+            )
+        else:
+            recs.append(
+                f"CACHE MISSES: Found {cache_miss} repeated computation without caching. "
+                f"Add response caching (ETag, Cache-Control), memoization (lru_cache, useMemo), "
+                f"or a data-fetching library (SWR, React Query) to avoid redundant work."
+            )
 
     # ── General advice ──
     critical_count = stats.get("by_severity", {}).get("critical", 0)

@@ -75,13 +75,23 @@ def trace_symbol(
                     "edge": edge
                 })
 
-        # Find starting node(s)
+        # Find starting node(s) — case-insensitive + fuzzy matching
         start_nodes = node_by_fn.get(name, [])
 
         if not start_nodes:
-            # Also check if name matches a node_id pattern
+            # Case-insensitive exact match
+            name_lower = name.lower()
+            for fn_key, fn_nodes in node_by_fn.items():
+                if fn_key.lower() == name_lower:
+                    start_nodes.extend(fn_nodes)
+                    break
+
+        if not start_nodes:
+            # Case-insensitive substring match
+            name_lower = name.lower()
             for node in nodes:
-                if name in node.get("fn", "") or name in node.get("id", ""):
+                fn_lower = node.get("fn", "").lower()
+                if name_lower in fn_lower or name in node.get("id", ""):
                     start_nodes.append(node)
 
         for start_node in start_nodes:

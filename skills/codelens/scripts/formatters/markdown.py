@@ -122,179 +122,13 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_regex_audit(data, lines)
     elif command == "ask":
         _md_ask(data, lines)
-    elif command == "binary-scan":
-        _md_binary_scan(data, lines)
+    elif command == "summary":
+        _md_summary(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
-
-
-def _md_binary_scan(data: Dict, lines: list) -> None:
-    """Markdown formatter for binary-scan command with Tauri RE analysis."""
-    lines.append("## Binary Scan")
-    lines.append("")
-
-    # Build system
-    build_system = data.get("build_system", {})
-    detected = build_system.get("detected", [])
-    if detected:
-        lines.append(f"**Build System:** {', '.join(detected)}")
-        lines.append("")
-
-    # Binary stats
-    stats = data.get("stats", {})
-    if stats.get("total_artifacts", 0) > 0:
-        lines.append("### Binary Artifacts")
-        lines.append("")
-        lines.append(f"| Type | Count | Size |")
-        lines.append(f"|------|-------|------|")
-        lines.append(f"| Executables | {stats.get('executables', 0)} | - |")
-        lines.append(f"| Shared Libraries | {stats.get('shared_libraries', 0)} | - |")
-        lines.append(f"| Compiled Objects | {stats.get('compiled_objects', 0)} | - |")
-        lines.append(f"| **Total** | **{stats.get('total_artifacts', 0)}** | **{stats.get('total_binary_size_human', '0 B')}** |")
-        lines.append("")
-    else:
-        lines.append("No binary artifacts found in workspace source tree.")
-        lines.append("")
-
-    # Tauri analysis
-    tauri = data.get("tauri_analysis")
-    if tauri:
-        lines.append("### Tauri Reverse Engineering Analysis")
-        lines.append("")
-
-        summary = tauri.get("summary", {})
-        risk = summary.get("risk_level", "unknown")
-        risk_emoji = {"critical": "🔴", "high": "🟠", "moderate": "🟡", "low": "🟢"}.get(risk, "⚪")
-        lines.append(f"**Risk Level:** {risk_emoji} {risk.upper()}")
-        lines.append("")
-
-        # Summary table
-        lines.append("| Category | Count |")
-        lines.append("|----------|-------|")
-        lines.append(f"| IPC Commands | {summary.get('ipc_commands_count', 0)} |")
-        lines.append(f"| Capabilities | {summary.get('capabilities_count', 0)} |")
-        lines.append(f"| Permissions | {summary.get('total_permissions', 0)} |")
-        lines.append(f"| Sidecar Binaries | {summary.get('sidecars_count', 0)} |")
-        lines.append(f"| Deep Links | {summary.get('deep_links_count', 0)} |")
-        lines.append(f"| Security Findings | {summary.get('security_findings', 0)} |")
-        lines.append("")
-
-        # Security findings by severity
-        by_sev = summary.get("security_findings_by_severity", {})
-        if by_sev:
-            lines.append("**Security Findings by Severity:**")
-            lines.append("")
-            for sev in ("critical", "high", "medium", "info"):
-                count = by_sev.get(sev, 0)
-                if count > 0:
-                    lines.append(f"- **{sev.upper()}**: {count}")
-            lines.append("")
-
-        # Sidecars
-        sidecars = tauri.get("sidecars", [])
-        if sidecars:
-            lines.append("#### Sidecar Binaries")
-            lines.append("")
-            for sc in sidecars:
-                risk_badge = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(sc.get("risk", "low"), "⚪")
-                lines.append(f"- {risk_badge} `{sc.get('name')}` — {sc.get('note', '')}")
-            lines.append("")
-
-        # WebView security
-        wv = tauri.get("webview_security")
-        if wv:
-            lines.append("#### WebView Security")
-            lines.append("")
-            csp = wv.get("csp")
-            lines.append(f"- **CSP:** {'Not set (null) ⚠️' if csp is None else f'`{csp}`'}")
-            lines.append(f"- **Asset Protocol:** {'Enabled ✅' if wv.get('asset_protocol_enabled') else 'Disabled'}")
-            if wv.get('asset_protocol_enabled'):
-                scope = wv.get('asset_protocol_scope', {})
-                allow = scope.get('allow', [])
-                if '**' in str(allow):
-                    lines.append(f"  - **Scope:** `**` (wildcard — can read any file) ⚠️")
-                else:
-                    lines.append(f"  - **Scope:** `{allow}`")
-            lines.append("")
-
-        # Updater
-        updater = tauri.get("updater")
-        if updater:
-            lines.append("#### Updater Configuration")
-            lines.append("")
-            lines.append(f"- **Signed:** {'Yes ✅' if updater.get('pubkey') else 'No ⚠️'}")
-            endpoints = updater.get("endpoints", [])
-            if endpoints:
-                lines.append(f"- **Endpoints:** {len(endpoints)}")
-                for ep in endpoints:
-                    is_http = 'http://' in ep and 'https://' not in ep
-
-                    lines.append(f"  - {'⚠️ ' if is_http else ''}`{ep}`")
-            lines.append("")
-
-        # Deep links
-        deep_links = tauri.get("deep_links", [])
-        if deep_links:
-            lines.append("#### Deep-Link Schemes")
-            lines.append("")
-            for dl in deep_links:
-                lines.append(f"- `{dl.get('scheme')}://`")
-            lines.append("")
-
-        # Security audit
-        audit = tauri.get("security_audit", [])
-        if audit:
-            lines.append("#### Security Audit")
-            lines.append("")
-            # Show critical and high first
-            for sev in ("critical", "high"):
-                findings = [f for f in audit if f.get("severity") == sev]
-                if findings:
-                    lines.append(f"**{sev.upper()} Findings:**")
-                    lines.append("")
-                    for f in findings:
-                        lines.append(f"- **{f.get('category')}** — {f.get('message')}")
-                        if f.get('file'):
-                            lines.append(f"  - File: `{f.get('file')}`")
-                    lines.append("")
-            # Medium findings summary
-            medium = [f for f in audit if f.get("severity") == "medium"]
-            if medium:
-                lines.append(f"**MEDIUM Findings:** {len(medium)}")
-                lines.append("")
-                for f in medium[:5]:
-                    lines.append(f"- **{f.get('category')}** — {f.get('message')[:120]}")
-                if len(medium) > 5:
-                    lines.append(f"- ... and {len(medium) - 5} more")
-                lines.append("")
-
-        # IPC commands
-        ipc_cmds = tauri.get("ipc_commands", [])
-        if ipc_cmds:
-            lines.append("#### IPC Commands")
-            lines.append("")
-            lines.append(f"Found {len(ipc_cmds)} Tauri IPC command(s):")
-            lines.append("")
-            for cmd in ipc_cmds[:20]:
-                async_badge = " (async)" if cmd.get("is_async") else ""
-                callers = cmd.get("called_from", [])
-                caller_info = f" ← called from {len(callers)} frontend file(s)" if callers else ""
-                lines.append(f"- `{cmd.get('name')}`{async_badge} — `{cmd.get('file')}:{cmd.get('line')}`{caller_info}")
-            if len(ipc_cmds) > 20:
-                lines.append(f"- ... and {len(ipc_cmds) - 20} more")
-            lines.append("")
-
-    # Recommendations
-    recs = data.get("recommendations", [])
-    if recs:
-        lines.append("### Recommendations")
-        lines.append("")
-        for rec in recs:
-            lines.append(f"- {rec}")
-        lines.append("")
 
 
 def _md_generic(data: Dict, lines: list) -> None:
@@ -662,7 +496,7 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     stats = data.get("stats", {})
     lines.append("## Dead Code Analysis")
     lines.append("")
-    lines.append(f"- Total dead: {stats.get('total_dead_code', 0)}")
+    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
     by_cat = stats.get("by_category", {})
     parts = []
     if by_cat.get("unreachable", 0):
@@ -715,23 +549,6 @@ def _md_circular(data: Dict, lines: list) -> None:
     lines.append(f"**Found:** {total} circular chain(s)")
     lines.append("")
 
-    # Severity breakdown summary
-    sev = data.get("severity_breakdown", {})
-    if sev:
-        genuine = sev.get("genuine_warning", 0)
-        false_pos = sev.get("likely_false_positive_info", 0)
-        critical = sev.get("critical", 0)
-        parts = []
-        if critical:
-            parts.append(f"{critical} critical cycle(s)")
-        if genuine:
-            parts.append(f"{genuine} genuine cycle(s) (warning)")
-        if false_pos:
-            parts.append(f"{false_pos} likely false positive(s) from trait impls (info)")
-        if parts:
-            lines.append("**Summary:** " + " | ".join(parts))
-            lines.append("")
-
     # Summary per category
     summary = data.get("summary", {})
     if summary:
@@ -779,7 +596,13 @@ def _md_circular(data: Dict, lines: list) -> None:
 
 
 def _md_handbook(data: Dict, lines: list) -> None:
-    """Markdown for handbook command."""
+    """Markdown for handbook command — comprehensive agent-friendly output.
+
+    This is the primary "auto-summary" entry point for AI agents. It should
+    provide enough context for an agent to start working without running
+    additional commands. Includes: identity, health, structure, entry points,
+    API surface, state management, risks, conventions, and quick reference.
+    """
     identity = data.get("identity", {})
     meta = data.get("meta", {})
     health = data.get("health", {})
@@ -787,6 +610,7 @@ def _md_handbook(data: Dict, lines: list) -> None:
     conventions = data.get("conventions", {})
     risks = data.get("risks", [])
     qr = data.get("quick_reference", {})
+    files_by_lang = data.get("files_by_language", {})
 
     lines.append(f"# Project Handbook: {identity.get('name', 'unknown')}")
     lines.append("")
@@ -800,7 +624,10 @@ def _md_handbook(data: Dict, lines: list) -> None:
     lines.append(f"Type: **{identity.get('type', 'unknown')}** | Version: {identity.get('version', '0.0.0')} | Frameworks: {', '.join(fws) if fws else 'none'}")
     lines.append("")
 
-    lines.append(f"## Health: {health.get('score', 0)}/100")
+    # Health Score
+    score = health.get("score", 0)
+    score_emoji = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
+    lines.append(f"## Health: {score_emoji} {score}/100")
     lines.append(f"- Smells: {health.get('smells_count', 0)} | Critical: {health.get('critical', 0)} | Warning: {health.get('warning', 0)}")
     lines.append("")
 
@@ -809,13 +636,88 @@ def _md_handbook(data: Dict, lines: list) -> None:
     if dir_map:
         lines.append("## Structure")
         for dir_path, desc in dir_map.items():
-            lines.append(f"- `{dir_path}` — {desc}")
+            lines.append(f"- `{dir_path}/` — {desc}")
         lines.append("")
 
-    # Quick Reference
+    # Key Entry Points (critical for agent orientation)
+    entrypoints = structure.get("entrypoints", [])
+    if entrypoints:
+        lines.append("## Key Entry Points")
+        # Prioritize non-test, non-config entry points
+        shown = 0
+        for ep in entrypoints:
+            if shown >= 15:
+                break
+            etype = ep.get("type", "")
+            label = ep.get("label", "")
+            file = ep.get("file", "")
+            line = ep.get("line", "")
+            handler = ep.get("handler", "")
+            # Skip test entries — they're not useful for orientation
+            if etype in ("test_entry", "jest_it", "jest_describe", "vitest_it", "vitest_describe"):
+                continue
+            handler_info = f" → `{handler}`" if handler and handler != "anonymous" else ""
+            lines.append(f"- `{file}:{line}` — {label} ({etype}){handler_info}")
+            shown += 1
+        if shown == 0:
+            # Fallback: show first 10 regardless of type
+            for ep in entrypoints[:10]:
+                etype = ep.get("type", "")
+                file = ep.get("file", "")
+                line = ep.get("line", "")
+                label = ep.get("label", "")
+                lines.append(f"- `{file}:{line}` — {label} ({etype})")
+        lines.append("")
+
+    # API Surface
+    api_routes = structure.get("api_routes", [])
+    if api_routes:
+        lines.append("## API Surface")
+        for route in api_routes[:20]:
+            method = route.get("method", "")
+            path = route.get("path", "")
+            handler = route.get("handler", "")
+            lines.append(f"- `{method} {path}` → `{handler}`")
+        if len(api_routes) > 20:
+            lines.append(f"- _... and {len(api_routes) - 20} more routes_")
+        lines.append("")
+
+    # State Management
+    state_mgmt = structure.get("state_management", [])
+    # state_management can be a list of stores or a dict with "stores" key
+    stores = state_mgmt if isinstance(state_mgmt, list) else state_mgmt.get("stores", [])
+    if stores:
+        lines.append("## State Management")
+        for store in stores[:15]:
+            name = store.get("name", "")
+            stype = store.get("type", "")
+            framework = store.get("framework", "")
+            defined_in = store.get("defined_in", store.get("file", ""))
+            lines.append(f"- `{name}` ({stype}, {framework}) — `{defined_in}`")
+        if len(stores) > 15:
+            lines.append(f"- _... and {len(stores) - 15} more stores_")
+        lines.append("")
+
+    # Quick Reference (expanded — each stat on its own line)
     lines.append("## Quick Reference")
-    lines.append(f"- Files: {qr.get('total_files', 0)} | Functions: {qr.get('total_functions', 0)} | Classes: {qr.get('total_classes', 0)} | Exports: {qr.get('total_exports', 0)}")
+    lines.append(f"- **Files:** {qr.get('total_files', 0)}")
+    lines.append(f"- **Functions:** {qr.get('total_functions', 0)}")
+    lines.append(f"- **Classes:** {qr.get('total_classes', 0)}")
+    lines.append(f"- **Exports:** {qr.get('total_exports', 0)}")
+    lines.append(f"- **Backend nodes:** {qr.get('backend_nodes', qr.get('total_backend_nodes', 0))}")
+    lines.append(f"- **Edges:** {qr.get('backend_edges', qr.get('total_edges', 0))}")
+    lines.append(f"- **Frontend classes:** {qr.get('frontend_classes', 0)}")
+    lines.append(f"- **Frontend IDs:** {qr.get('frontend_ids', 0)}")
     lines.append("")
+
+    # Languages
+    if files_by_lang:
+        lines.append("## Languages")
+        lang_parts = []
+        for lang, count in sorted(files_by_lang.items(), key=lambda x: -x[1]):
+            lang_parts.append(f"{lang}: {count}")
+        lines.append(", ".join(lang_parts))
+        lines.append("")
 
     # Risks
     if risks:
@@ -824,10 +726,12 @@ def _md_handbook(data: Dict, lines: list) -> None:
             rtype = r.get("type", "")
             count = r.get("count", 0)
             desc = r.get("description", "")
+            severity = r.get("severity", "")
+            sev_marker = f"[{severity.upper()}] " if severity else ""
             if count:
-                lines.append(f"- {rtype.replace('_', ' ')}: {count}")
+                lines.append(f"- {sev_marker}{rtype.replace('_', ' ')}: {count}")
             elif desc:
-                lines.append(f"- {desc}")
+                lines.append(f"- {sev_marker}{desc}")
         lines.append("")
 
     # Conventions
@@ -902,7 +806,7 @@ def _md_secrets(data: Dict, lines: list) -> None:
     lines.append("")
     lines.append(f"- Total secrets: {stats.get('total_secrets', 0)}")
     lines.append("")
-    findings = data.get("findings", [])
+    findings = data.get("findings", data.get("hints", []))
     if findings:
         lines.append("### Findings")
         for finding in findings[:15]:
@@ -1792,13 +1696,11 @@ def _md_state_map(data: Dict, lines: list) -> None:
             slices = store.get("slices", [])
             if slices:
                 for s in slices[:3]:
-                    s_name = s.get("name", "") if isinstance(s, dict) else str(s)
-                    lines.append(f"  - slice: `{s_name}`")
+                    lines.append(f"  - slice: `{s.get('name', '')}`")
             actions = store.get("actions", [])
             if actions:
                 for a in actions[:3]:
-                    a_name = a.get("name", "") if isinstance(a, dict) else str(a)
-                    lines.append(f"  - action: `{a_name}`")
+                    lines.append(f"  - action: `{a.get('name', '')}`")
         if len(stores) > 15:
             lines.append(f"- ... and {len(stores) - 15} more")
         lines.append("")
@@ -1835,7 +1737,7 @@ def _md_vuln_scan(data: Dict, lines: list) -> None:
         parts = [f"{k}: {v}" for k, v in by_eco.items() if v > 0]
         lines.append(f"- By ecosystem: {', '.join(parts)}")
     lines.append("")
-    findings = data.get("findings", [])
+    findings = data.get("findings", data.get("hints", []))
     if findings:
         lines.append("### Findings")
         for f in findings[:15]:
@@ -1882,7 +1784,7 @@ def _md_perf_hint(data: Dict, lines: list) -> None:
         parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
         lines.append(f"- By severity: {', '.join(parts)}")
     lines.append("")
-    findings = data.get("findings", [])
+    findings = data.get("findings", data.get("hints", []))
     if findings:
         lines.append("### Findings")
         for f in findings[:15]:
@@ -1922,7 +1824,7 @@ def _md_css_deep(data: Dict, lines: list) -> None:
         lines.append(f"- By severity: {', '.join(parts)}")
     lines.append(f"- CSS files: {stats.get('css_files_scanned', 0)} | HTML/JS files: {stats.get('html_js_files_scanned', 0)}")
     lines.append("")
-    findings = data.get("findings", [])
+    findings = data.get("findings", data.get("hints", []))
     if findings:
         lines.append("### Findings")
         for f in findings[:15]:
@@ -2003,7 +1905,7 @@ def _md_regex_audit(data: Dict, lines: list) -> None:
         parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
         lines.append(f"- By severity: {', '.join(parts)}")
     lines.append("")
-    findings = data.get("findings", [])
+    findings = data.get("findings", data.get("hints", []))
     if findings:
         lines.append("### Vulnerable Patterns")
         for f in findings[:15]:
@@ -2101,3 +2003,99 @@ def _md_ask(data: Dict, lines: list) -> None:
         formatter(sub_data, lines)
     else:
         _md_generic(sub_data, lines)
+
+
+def _md_summary(data: Dict, lines: list) -> None:
+    """Markdown for summary command — condensed anti-overload view."""
+    identity = data.get("identity", {})
+    frameworks = data.get("frameworks", [])
+    registry_stats = data.get("registry_stats", {})
+    findings = data.get("findings", [])
+    actions = data.get("actions", [])
+    recommendations = data.get("recommendations", [])
+
+    lines.append(f"# Codebase Summary: {identity.get('name', 'unknown')}")
+    lines.append("")
+
+    # Identity
+    lines.append(f"**Type:** {identity.get('type', 'unknown')} | **Version:** {identity.get('version', '0.0.0')}")
+    if frameworks:
+        lines.append(f"**Frameworks:** {', '.join(frameworks)}")
+    if data.get("is_monorepo"):
+        lines.append("**Monorepo:** Yes")
+    lines.append("")
+
+    # Registry stats
+    if registry_stats:
+        lines.append("## Scale")
+        active = registry_stats.get("active_nodes", 0)
+        dead = registry_stats.get("dead_nodes", 0)
+        total = active + dead
+        lines.append(f"- **Backend:** {registry_stats.get('backend_nodes', 0)} nodes, {registry_stats.get('backend_edges', 0)} edges")
+        lines.append(f"- **Frontend:** {registry_stats.get('frontend_classes', 0)} classes, {registry_stats.get('frontend_ids', 0)} IDs")
+        if total > 0:
+            dead_pct = round(dead / total * 100, 1)
+            lines.append(f"- **Dead code:** {dead} nodes ({dead_pct}%)")
+        lines.append("")
+
+    # Prioritized findings
+    if findings:
+        lines.append("## Priority Findings")
+        for f in findings:
+            cat = f.get("category", "").replace("_", " ").title()
+            total = f.get("total", 0)
+            action = f.get("action", "")
+            health = f.get("health_score")
+
+            # Header
+            header = f"### {cat}: {total} issue(s)"
+            if health is not None:
+                header += f" (health: {health}/100)"
+            lines.append(header)
+
+            # By severity/category breakdown
+            by_sev = f.get("by_severity", {})
+            if by_sev:
+                parts = [f"{k}: {v}" for k, v in by_sev.items() if v > 0]
+                lines.append(f"- Breakdown: {', '.join(parts)}")
+
+            by_cat = f.get("by_category", {})
+            if by_cat:
+                parts = [f"{k}: {v}" for k, v in by_cat.items() if v > 0]
+                lines.append(f"- Categories: {', '.join(parts)}")
+
+            # Top items
+            top_items = f.get("top_items", [])
+            if top_items:
+                for item in top_items[:5]:
+                    if isinstance(item, dict):
+                        file = item.get("file", "")
+                        line = item.get("line", "")
+                        msg = item.get("message", item.get("description", item.get("name", "")))[:80]
+                        sev = item.get("severity", "")
+                        sev_tag = f"[{sev.upper()}] " if sev else ""
+                        lines.append(f"  - {sev_tag}`{file}:{line}` — {msg}")
+                    elif isinstance(item, (str, list)):
+                        lines.append(f"  - {item}")
+
+            if action:
+                lines.append(f"- **Action:** {action}")
+            lines.append("")
+
+    # Actions (condensed)
+    if actions:
+        lines.append("## Action Items")
+        for a in actions:
+            lines.append(f"- {a}")
+        lines.append("")
+
+    # Recommendations
+    if recommendations:
+        lines.append("## Recommendations")
+        for r in recommendations:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    # Detail/focus info
+    lines.append(f"_Focus: {data.get('focus', 'all')} | Detail: {data.get('detail', 'standard')}_")
+
