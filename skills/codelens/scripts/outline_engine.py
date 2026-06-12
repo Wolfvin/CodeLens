@@ -98,10 +98,18 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
+
+    Args:
+        workspace: Absolute path to workspace root
+        file_filter: Optional substring filter for file paths
+        config: CodeLens config dict
+        max_files: Maximum number of files to outline (default 3000).
+                   Use 0 for unlimited. Prevents timeout on huge repos.
 
     Returns a summary-level outline (not per-function detail).
     """
@@ -118,6 +126,7 @@ def get_workspace_outline(
 
     outlines = []
     errors = []
+    file_count = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -126,6 +135,10 @@ def get_workspace_outline(
             continue
 
         for filename in filenames:
+            # Honor max_files limit
+            if max_files and max_files > 0 and file_count >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in source_extensions:
                 continue
@@ -141,6 +154,7 @@ def get_workspace_outline(
                 continue
 
             result = get_file_outline(file_path, workspace, detail_level="minimal")
+            file_count += 1
             if result["status"] == "ok":
                 outlines.append(result)
             else:
@@ -151,7 +165,8 @@ def get_workspace_outline(
         "workspace": workspace,
         "files_outlined": len(outlines),
         "outlines": outlines,
-        "errors": errors if errors else None
+        "errors": errors if errors else None,
+        "truncated": max_files > 0 and file_count >= max_files
     }
 
 

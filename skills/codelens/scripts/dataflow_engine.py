@@ -19,9 +19,10 @@ If data reaches a sink without a sanitizer, it's a taint violation.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict, deque
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger, MAX_FILE_SIZE
 
 
 # ─── Source Patterns (where data enters) ───────────────────────
@@ -302,7 +303,9 @@ def trace_dataflow(
     source: Optional[str] = None,
     sink: Optional[str] = None,
     max_depth: int = 15,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000,
+    timeout_sec: float = 60.0
 ) -> Dict[str, Any]:
     """
     Trace data flow from sources to sinks across the workspace.
@@ -317,17 +320,22 @@ def trace_dataflow(
         sink: Optional sink filter (e.g., "db_query", "html_output")
         max_depth: Maximum data flow chain depth
         config: CodeLens config
+        max_files: Maximum number of files to scan (default 5000, 0=unlimited)
+        timeout_sec: Maximum seconds for the scan (default 60)
 
     Returns:
         Dict with taint flows, violations, and safe paths
     """
     workspace = os.path.abspath(workspace)
+    start_time = time.time()
+    timed_out = False
 
     # Scan all source files for sources, sinks, and sanitizers
     source_hits = []  # Where data enters
     sink_hits = []    # Where data could be dangerous
     sanitizer_hits = []  # Where data gets cleaned
     propagator_hits = []  # Where data flows through
+    files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -336,6 +344,15 @@ def trace_dataflow(
             continue
 
         for filename in filenames:
+            # Check time budget
+            if time.time() - start_time > timeout_sec:
+                timed_out = True
+                break
+
+            # Check file count budget
+            if max_files and max_files > 0 and files_scanned >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -343,11 +360,20 @@ def trace_dataflow(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip large files
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             except IOError:
                 continue
+
+            files_scanned += 1
 
             lines = content.split('\n')
 
@@ -455,7 +481,9 @@ def trace_dataflow(
             "sanitizers_found": len(sanitizer_hits),
             "violations": len(violations),
             "safe_paths": len(safe_paths),
-            "untraced_sources": len(untraced_sources)
+            "untraced_sources": len(untraced_sources),
+            "files_scanned": files_scanned,
+            "timed_out": timed_out
         },
         "risk": risk,
         "violations": violations,
