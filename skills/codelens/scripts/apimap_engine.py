@@ -144,10 +144,15 @@ def map_api_routes(
             rel_path = os.path.relpath(file_path, workspace)
 
             # v5.9: Detect if this file is a test/example file for route source tagging
+            # v6.6: Expanded to include mock/fixture files
             is_test_file = any(x in rel_path for x in [
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/mocks/', '/mock/', '/fixtures/', '/__mocks__/',
+                'mockApi', 'mockServer', 'mswAPI', 'MockApi',
+                '.mock.', '_mock.', 'Mock.ts', 'Mock.js',
+                '/handlers/', 'handlers.ts', 'handlers.js',
             ])
 
             try:
@@ -288,14 +293,22 @@ def map_api_routes(
     # ─── Post-processing ──────────────────────────────────────
 
     # v5.9: Tag route source (production vs test/example) based on file path
+    # v6.6: Expanded test/mock detection to reduce false positives
+    _test_patterns = [
+        '/tests/', '/test/', '/__tests__/', '/spec/',
+        '/conftest', 'test_', '_test.', '.test.', '.spec.',
+        '/examples/', '/example/',
+        # Mock/fixture patterns — these define fake routes for testing
+        '/mocks/', '/mock/', '/fixtures/', '/__mocks__/',
+        'mockApi', 'mockServer', 'mswAPI', 'MockApi',
+        '.mock.', '_mock.', 'Mock.ts', 'Mock.js',
+        # MSW (Mock Service Worker) handlers
+        '/handlers/', 'handlers.ts', 'handlers.js',
+    ]
     for route in routes:
         route_file = route.get("file", "")
         if "source" not in route:
-            route["source"] = "test" if any(x in route_file for x in [
-                '/tests/', '/test/', '/__tests__/', '/spec/',
-                '/conftest', 'test_', '_test.', '.test.', '.spec.',
-                '/examples/', '/example/',
-            ]) else "production"
+            route["source"] = "test" if any(x in route_file for x in _test_patterns) else "production"
 
     # v6.3.1: Filter out test routes if production_only is requested
     if production_only:

@@ -5,31 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
-## [7.0.0] — 2026-06-12
+## [6.6.0] — 2026-06-12
 
-### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
+### Tested against grafana/grafana (21,850 files: 8,328 TSX + 5,873 Go + 448 JS + 93 Shell, React+Go gRPC monorepo)
 
-Real-world test on a pure Python exercise platform with no web frameworks, no pyproject.toml,
-and no package.json — exposed identity detection gaps, framework detection blind spots,
-and multiple false positive patterns in smell/dead-code/debug-leak engines.
-
-### Added
-
-- **Identity detection for Python projects without pyproject.toml**: Projects with only `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now correctly identify as `python-project` instead of `unknown`. Requires at least 1 Python project file + 5 `.py` files.
-- **Exercism-style project detection**: Projects with `config.json` containing `exercises` + `language` fields detected as `exercise-platform` type.
-- **README.md description extraction**: `_extract_readme_description()` function extracts the first paragraph from `README.md`, `README.rst`, or `README.txt`. Cleans markdown links, bold, and italic formatting. Falls back to `config.json` `blurb` field for exercism tracks.
-- **config.json identity extraction**: Exercism-style projects using `config.json` with `slug`, `language`, `version`, and `blurb` fields now correctly populate project identity.
-- **setup.py name/version extraction**: Python projects using `setup.py` instead of `pyproject.toml` now have their name and version correctly detected.
-- **pytest framework detection from config files**: `pytest.ini` and `conftest.py` at workspace root now trigger `pytest` framework detection (added to `FRAMEWORK_SIGNATURES`).
-- **Directory map hints for exercise platforms**: Added descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, and `bin/`.
+Real-world test on a massive Go+React+TypeScript polyglot monorepo with gRPC, SCSS,
+and complex monorepo structure (yarn + lerna + nx). Exposed critical false positive
+issues in api-map, dataflow, and debug-leak engines, plus a timeout bug in analyze.
 
 ### Fixed
 
-- **cron_job entrypoint false positive**: Tightened `cron_literal` regex from matching any 5 space-separated fields to requiring fields starting with `*` and at least 5 space-separated tokens. Prevents false positives like matching test assertion strings that happen to contain space-separated words.
-- **Deep nesting false positive for Python subTest**: Files using `with self.subTest()` patterns (2+ occurrences) are now skipped for deep nesting detection, as the context manager nesting is expected test structure, not a code smell.
-- **Dead code false positive for exercise stubs**: Files in `/.meta/`, `/stubs/` directories excluded from dead code detection. Exercise implementation files that are >50% `pass`/`...`/`NotImplementedError` are also excluded.
-- **Debug leak false positive for exercise stubs**: Exercise stub directories (`/.meta/`, `/stubs/`) and test data files (`_test_data.py`, `/fixtures/`) excluded from debug leak detection. Commented code in exercise test files downgraded to `info` severity.
-- **README description extraction returns HTML tags**: Added check to skip descriptions that are just HTML tags (e.g., `<br>`) with length < 20 characters.
+- **`analyze` timeout on large repos without `--skip-scan`** (CRITICAL): The scan phase could take 60-90s on repos with 20K+ files, consuming the entire engine time budget. After scan completed, the 20% remaining-budget check would skip all remaining engines. Now resets the engine time budget AFTER scan completes, so all engines get the full budget regardless of scan duration. Added `scan_elapsed_seconds` and `engine_elapsed_seconds` to output for transparency.
+
+- **`api-map` 68% test/mock false positives**: On grafana/grafana, 183 of 270 routes (68%) were from test files (.test.tsx), mock files (mockApi.ts, mswAPI.ts), and fixture directories. These are not real production routes. Expanded test/mock detection patterns to include: `/mocks/`, `/mock/`, `/fixtures/`, `/__mocks__/`, `mockApi`, `mockServer`, `mswAPI`, `MockApi`, `.mock.`, `_mock.`, `Mock.ts`, `Mock.js`, `/handlers/`, `handlers.ts`, `handlers.js` (MSW handlers). `analyze` command now passes `production_only=True` to api-map.
+
+- **Zombie CSS `file: unknown, line: 0`**: When a CSS class had an `html` reference but empty `css` list, the dead-code engine fell back to `file: "unknown"` instead of using the HTML file path. Now falls back to `html` path when `css` list is empty, providing actionable file location info for every zombie CSS finding.
+
+- **`dataflow` test file violations inflating counts in `analyze`**: The `analyze` command reported 5,303 dataflow violations, but 99%+ were from test/mock files. Now `analyze` only counts production violations in the total (test violations still visible in `total_including_tests`), and shows production violations first in `top_items`.
+
+- **`debug-leak` mock_data false positives in config files**: jest.config.js, playwright.config.ts, and similar test config files contained legitimate test configuration patterns (testEnvironment, testRegex, testDir) that were flagged as "mock_data" leaks. Now `mock_data` detection is completely skipped in config files — these patterns are never debug leaks in their context.
+
+- **`state-map` markdown rendering broken for `[module_constant]`**: Square brackets around store types (e.g., `[module_constant]`, `[context]`, `[store]`) were consumed by markdown as link references, rendering as `odule_constant]` or silently disappearing. Now brackets are escaped as `\[module_constant\]` so they render correctly in all markdown viewers.
 
 ## [6.4.0] — 2026-06-12
 

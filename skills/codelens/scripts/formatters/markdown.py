@@ -1755,7 +1755,11 @@ def _md_state_map(data: Dict, lines: list) -> None:
             defined = store.get("defined_in", "")
             line = store.get("line", "")
             fw_str = f" ({framework})" if framework else ""
-            lines.append(f"- `{name}` [{stype}]{fw_str} — `{defined}:{line}`")
+            # Escape brackets in store type to prevent markdown link reference interpretation.
+            # Without this, [module_constant] would be consumed as a link reference,
+            # rendering as "odule_constant]" instead of "[module_constant]".
+            stype_escaped = f"\\[{stype}\\]" if stype else ""
+            lines.append(f"- `{name}` {stype_escaped}{fw_str} — `{defined}:{line}`")
             slices = store.get("slices", [])
             if slices:
                 for s in slices[:3]:

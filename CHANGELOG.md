@@ -2,6 +2,18 @@
 
 All notable changes to CodeLens are documented here.
 
+## [7.3.0] — 2026-06-12
+
+### CodeLens v6.6.0 — Tested against grafana/grafana (21,850 files, Go+React gRPC monorepo)
+
+- Fixed `analyze` timeout on large repos — scan no longer consumes engine time budget
+- Fixed `api-map` 68% test/mock false positives — expanded mock detection patterns
+- Fixed zombie CSS `file: unknown, line: 0` — falls back to HTML path when CSS list empty
+- Fixed `dataflow` test violations inflating analyze counts — only counts production violations
+- Fixed `debug-leak` mock_data false positives in config files — completely skipped
+- Fixed `state-map` markdown bracket rendering — `[module_constant]` no longer consumed as link ref
+- Updated version: 6.3.1 → 6.6.0
+
 ## [7.2.0] — 2026-06-12
 
 ### CodeLens v7.2.0 — Tested against laravel/framework (2,801 PHP files)
