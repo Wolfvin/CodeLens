@@ -372,6 +372,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
+            desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', content)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
                 python_type = "backend-api"
             elif "pytest" in content:
@@ -380,6 +383,108 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 python_type = "python-project"
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
+
+    # Try setup.cfg for version/description (common in Python projects)
+    if identity["version"] == "0.0.0" or not identity["description"]:
+        setup_cfg_path = os.path.join(workspace, 'setup.cfg')
+        if os.path.isfile(setup_cfg_path):
+            try:
+                with open(setup_cfg_path, 'r', encoding='utf-8') as f:
+                    setup_cfg_content = f.read()
+                if identity["version"] == "0.0.0":
+                    ver_match = re.search(r'version\s*=\s*["\']?([^"\':\s]+)["\']?', setup_cfg_content)
+                    if ver_match:
+                        identity["version"] = ver_match.group(1)
+                if not identity["description"]:
+                    desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', setup_cfg_content)
+                    if desc_match:
+                        identity["description"] = desc_match.group(1)
+                    else:
+                        # Try long_description or summary from setup.cfg
+                        summary_match = re.search(r'(?:long_description|summary)\s*=\s*["\']([^"\']+)["\']', setup_cfg_content)
+                        if summary_match:
+                            identity["description"] = summary_match.group(1)
+            except Exception:
+                logger.debug("setup.cfg parsing failed")
+
+    # Try __version__.py, _version.py, or __init__.py for version (common Python patterns)
+    if identity["version"] == "0.0.0":
+        version_file_paths = [
+            os.path.join(workspace, '__version__.py'),
+            os.path.join(workspace, '_version.py'),
+        ]
+        # Scan for __version__.py and __init__.py in top-level subdirectories
+        # Many Python packages define __version__ in their package's __init__.py
+        try:
+            for entry in os.listdir(workspace):
+                subdir = os.path.join(workspace, entry)
+                if os.path.isdir(subdir) and not entry.startswith('.') and entry not in ('tests', 'docs', '.git', 'venv', '.venv', 'env', '.tox', '__pycache__'):
+                    # Check __version__.py first (explicit version file)
+                    for vf_name in ('__version__.py', '_version.py', '__init__.py'):
+                        version_file = os.path.join(subdir, vf_name)
+                        if os.path.isfile(version_file):
+                            version_file_paths.append(version_file)
+        except OSError:
+            pass
+
+        for vf_path in version_file_paths:
+            if os.path.isfile(vf_path):
+                try:
+                    with open(vf_path, 'r', encoding='utf-8') as f:
+                        vf_content = f.read(2000)  # Read first 2KB — version is usually near the top
+                    ver_match = re.search(r'(?:__version__|version)\s*=\s*["\']([^"\']+)["\']', vf_content)
+                    if ver_match:
+                        identity["version"] = ver_match.group(1)
+                        break
+                except Exception:
+                    pass
+
+    # Try setup.py for version (last resort for Python projects)
+    if identity["version"] == "0.0.0":
+        setup_py_path = os.path.join(workspace, 'setup.py')
+        if os.path.isfile(setup_py_path):
+            try:
+                with open(setup_py_path, 'r', encoding='utf-8') as f:
+                    setup_py_content = f.read()
+                # Look for version= in setup() call
+                ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', setup_py_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+            except Exception:
+                logger.debug("setup.py parsing failed")
+
+    # Fallback: extract description from README
+    if not identity["description"]:
+        for readme_name in ('README.md', 'README.rst', 'README.txt', 'README'):
+            readme_path = os.path.join(workspace, readme_name)
+            if os.path.isfile(readme_path):
+                try:
+                    with open(readme_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        readme_content = f.read(2000)  # Read first 2KB
+                    # Look for first paragraph after the title
+                    lines = readme_content.split('\n')
+                    for i, line in enumerate(lines):
+                        # Skip title lines (start with # or are underlined)
+                        if line.startswith('#'):
+                            # Get next non-empty, non-heading line
+                            for j in range(i + 1, min(i + 10, len(lines))):
+                                desc_line = lines[j].strip()
+                                if desc_line and not desc_line.startswith('#') and not desc_line.startswith('..'):
+                                    identity["description"] = desc_line[:200]
+                                    break
+                            break
+                        # RST title: next line is all === or ---
+                        if i + 1 < len(lines) and re.match(r'^[=\-~^]+$', lines[i + 1].strip()):
+                            for j in range(i + 2, min(i + 12, len(lines))):
+                                desc_line = lines[j].strip()
+                                if desc_line and not desc_line.startswith('..') and not desc_line.startswith(':'):
+                                    identity["description"] = desc_line[:200]
+                                    break
+                            break
+                    if identity["description"]:
+                        break
+                except Exception:
+                    pass
 
     # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')

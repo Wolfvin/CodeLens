@@ -283,6 +283,11 @@ SAFE_VALUE_PATTERNS = [
     # Regex/syntax patterns that look like secrets but aren't
     r'^[\[\(]',  # Starts with bracket (regex, array)
     r'(?i)^rfc822msgid',
+    # Common placeholder password patterns used in example/sample configs
+    r'(?i)^(SuperSecret|MySecret|SecretKey|Password123|ChangeMe|MyPassword|AdminPassword|TestPassword|DefaultPassword)',
+    r'(?i)^(your[_-]?password|your[_-]?secret|your[_-]?key|your[_-]?token)',
+    # Angle-bracket placeholders (broader version): <YOUR_API_KEY_HERE>, <replace-me>
+    r'(?i)^<[^>]+>$',
 ]
 
 # ─── Template Expression Patterns (line-level) ──────────────────
@@ -461,6 +466,10 @@ def detect_secrets(
 
             # Skip documentation/example directories (contain fake credentials)
             if _is_docs_or_example_file(rel_path):
+                continue
+
+            # Skip example/sample config files (contain placeholder credentials)
+            if _is_example_config_file(rel_path):
                 continue
 
             # Skip credential template files (e.g., n8n /credentials/ with template syntax)
@@ -887,6 +896,9 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         # i18n / locale directories — contain translated UI labels, NOT real secrets
         '/locales/', '/locale/', '/i18n/', '/lang/', '/translations/',
         '/intl/', '/localization/',
+        # Example/sample config directories — contain placeholder credentials
+        '/config_examples/', '/config_samples/',
+        '/sample_configs/', '/sample_config/',
     ]
     # Also match paths that START with these directory names
     start_indicators = [
@@ -898,9 +910,24 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'changelog/', 'changes/', 'news/',
         'locales/', 'locale/', 'i18n/', 'lang/', 'translations/',
         'intl/', 'localization/',
+        'config_examples/', 'config_samples/',
+        'sample_configs/', 'sample_config/',
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
+
+def _is_example_config_file(rel_path: str) -> bool:
+    """Check if a file is an example/sample config file by filename pattern.
+
+    Files like config.example.json, settings.sample.yaml, etc. contain
+    placeholder credentials and are not security risks.
+    """
+    basename = os.path.basename(rel_path).lower()
+    example_indicators = [
+        '.example.', '.sample.', '.template.', '.demo.',
+        '.example', '.sample',  # file ends with these
+    ]
+    return any(indicator in basename for indicator in example_indicators)
 
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""

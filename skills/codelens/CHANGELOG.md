@@ -5,7 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.8.1] — 2026-06-12
+## [7.0.0] — 2026-06-12
+
+### Tested against freqtrade/freqtrade (480 Python files, crypto trading bot)
+
+Real-world test on a Python/FastAPI crypto trading bot with 4,678 backend nodes and 29,176 edges.
+Confirmed significant false positive reduction and improved agent usability across all analysis engines.
+
+### Added
+
+- **Secrets engine: example config file exclusion** — Files in `config_examples/`, `config_samples/`, `sample_configs/` directories are now excluded from secret scanning. These directories contain placeholder credentials for documentation purposes, not real secrets. Additionally, files with `.example.`, `.sample.`, `.template.`, or `.demo.` in their filename (e.g., `config.example.json`, `settings.sample.yaml`) are now recognized as non-security-relevant.
+- **Secrets engine: common placeholder password patterns** — Values like "SuperSecret", "MySecret", "SecretKey", "Password123", "ChangeMe", "AdminPassword", "TestPassword", and "DefaultPassword" are now recognized as safe placeholder values. Also added "your_password", "your_secret", "your_key", "your_token" patterns and broader angle-bracket placeholder support.
+- **Dataflow engine: test file violation separation** — Data flow violations in test files are now automatically detected and downgraded to severity "low" with `in_test_file: true` marker. Stats now include `test_violations` and `production_violations` counts. Risk assessment only considers production violations, preventing test noise from inflating risk levels.
+- **Entrypoints engine: priority-based sorting** — Entrypoints are now sorted by importance: `main` > `http_handler` > `cli_command` > `event_handler` > `worker` > `cron_job` > `module_export` > `test_entry`. This ensures handbook, summary, and analyze commands show real application entrypoints first, making them immediately useful for agents orienting themselves in a new codebase.
+- **Project version detection: multi-source fallback** — Version is now extracted from `pyproject.toml` → `setup.cfg` → `__version__.py`/`_version.py`/`__init__.py` → `setup.py`, covering virtually all Python project versioning conventions. The engine scans both the workspace root and top-level package subdirectories for version files.
+- **Project description extraction** — Description is now extracted from `pyproject.toml` `description` field and `setup.cfg`, with README fallback that parses the first paragraph after the title (supports both Markdown and RST formats).
+- **API map: FastAPI router-level auth propagation** — When a FastAPI app uses `include_router(sub_router, dependencies=[Depends(auth_func)])`, all routes defined in the sub-router's source file are now correctly marked as `auth_protected: true`. The engine traces import aliases (e.g., `from api_trading import router as api_trading`) back to source files and propagates auth middleware chains. This is especially important for projects like freqtrade that apply auth at the router level.
+- **Debug leak: CLI module context awareness** — `print()` and `pprint()` statements in Python CLI modules are no longer flagged as debug leaks. A file is considered a CLI module if it contains `if __name__ == "__main__"`, uses `argparse`, `click`, `typer`, or `rich`, or is in a `commands/`, `cli/`, `cmd/`, `scripts/`, or `bin/` directory. Findings in CLI modules are downgraded to severity "info" with a note explaining the context.
+
+### Fixed
+
+- **Secrets: config_examples false positives** (100% reduction: 3 critical findings → 0) — `config_examples/config_binance.example.json`, `config_kraken.example.json`, and `config_full.example.json` with placeholder password "SuperSecret" were incorrectly flagged as critical severity secrets.
+- **Dataflow: test file noise** (93% noise reduction: 245 total → 17 production violations) — Test files with `rc.json()` (API response assertions) and file writes in different test functions created false positive intra-file violations.
+- **Entrypoints: test entries dominating output** — Handbook and summary commands listed hundreds of test entries before real application entrypoints, making the output useless for project orientation.
+- **Version: always "0.0.0" for Python projects** — Projects using `__init__.py`, `setup.cfg`, or `setup.py` for versioning showed "0.0.0" because only `pyproject.toml` was checked.
+- **API map: all routes marked as public** — FastAPI projects using `include_router(..., dependencies=[Depends(http_basic_or_jwt_token)])` showed 0 auth-protected routes instead of the correct count.
+- **Debug leak: print() noise in CLI tools** — Every `print()` in Python CLI tools was flagged as a debug leak, creating hundreds of false positives in command-line applications.
+
+## [5.9.2] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
 

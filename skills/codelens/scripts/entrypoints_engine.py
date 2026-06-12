@@ -910,6 +910,19 @@ def map_entrypoints(
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)
 
+    # ─── Phase 6: Sort by importance (real entrypoints first, tests last) ─
+    ENTRYPOINT_PRIORITY = {
+        "main": 0,
+        "http_handler": 1,
+        "cli_command": 2,
+        "event_handler": 3,
+        "worker": 4,
+        "cron_job": 5,
+        "module_export": 6,
+        "test_entry": 7,
+    }
+    entrypoints.sort(key=lambda e: ENTRYPOINT_PRIORITY.get(e.get("type", ""), 8))
+
     return {
         "status": "ok",
         "workspace": workspace,

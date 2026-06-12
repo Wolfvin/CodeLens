@@ -297,6 +297,18 @@ PROPAGATOR_PATTERNS = [
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
 
+# Test file patterns — violations in these files are downgraded
+TEST_FILE_PATTERNS = {
+    '.test.', '.spec.', '_test.', '_spec.',
+    '__tests__', '/tests/', '/test/',
+    'test_', 'spec_', '/__mocks__/',
+    '.stories.', '.story.',
+}
+
+def _is_test_file(rel_path: str) -> bool:
+    """Check if a file path indicates a test/spec/mock file."""
+    return any(pattern in rel_path for pattern in TEST_FILE_PATTERNS)
+
 
 def trace_dataflow(
     workspace: str,
@@ -460,6 +472,17 @@ def trace_dataflow(
             if has_sanitizer:
                 safe_paths.append(flow)
             else:
+                # Check if this violation originates from or lands in a test file
+                source_file = flow.get("source", {}).get("file", "")
+                sink_file = flow.get("sink", {}).get("file", "")
+                source_is_test = _is_test_file(source_file)
+                sink_is_test = _is_test_file(sink_file)
+                if source_is_test or sink_is_test:
+                    # Downgrade severity for test file violations
+                    flow["severity"] = "low"  # Test file violations are not real security risks
+                    flow["in_test_file"] = True
+                else:
+                    flow["in_test_file"] = False
                 violations.append(flow)
         else:
             untraced_sources.append(flow["source"])
@@ -480,6 +503,8 @@ def trace_dataflow(
             "sinks_found": len(sink_hits),
             "sanitizers_found": len(sanitizer_hits),
             "violations": len(violations),
+            "test_violations": sum(1 for v in violations if v.get("in_test_file")),
+            "production_violations": sum(1 for v in violations if not v.get("in_test_file")),
             "safe_paths": len(safe_paths),
             "untraced_sources": len(untraced_sources),
             "files_scanned": files_scanned,
@@ -755,12 +780,19 @@ def _check_sanitizer(
 
 
 def _compute_dataflow_risk(violations: List[Dict]) -> str:
-    """Compute overall risk based on violations found."""
-    if not violations:
+    """Compute overall risk based on violations found.
+
+    Only production violations (not in test files) contribute to risk level.
+    Test file violations are downgraded and should not affect the risk assessment.
+    """
+    # Filter to only production violations for risk computation
+    production_violations = [v for v in violations if not v.get("in_test_file")]
+
+    if not production_violations:
         return "none"
 
     max_severity = "low"
-    for v in violations:
+    for v in production_violations:
         sink_sev = v.get("sink", {}).get("severity", "low")
         source_sev = v.get("source", {}).get("severity", "low")
 
