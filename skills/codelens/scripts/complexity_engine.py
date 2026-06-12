@@ -27,7 +27,7 @@ import re
 import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, is_bundled_file, time_budget_expired
+from utils import DEFAULT_IGNORE_DIRS, is_bundled_file, is_generated_source_file, time_budget_expired
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -137,6 +137,10 @@ def compute_complexity(
 
             # Skip bundled/compiled files (dist/, build/, .global.js, .bundle.js, etc.)
             if is_bundled_file(rel_path):
+                continue
+
+            # Skip auto-generated source files (.gen.lua, _meta.ts, .pb.go, etc.)
+            if is_generated_source_file(rel_path):
                 continue
 
             # Skip large files

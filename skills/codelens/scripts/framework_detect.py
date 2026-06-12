@@ -933,17 +933,15 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # 7. Detect unsupported languages (Java, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # Note: C/C++ also have fallback parser support (fallback_c.py) and are no longer listed as unsupported.
+    # Note: Kotlin, Ruby, Swift, Scala, Elixir, Dart, Shell, GDScript, VimScript, Zig also have fallback parsers.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        # Languages with NO fallback parser at all:
+        # All current fallback parsers: C, C++, Go, Java, Kotlin, C#, PHP, Ruby, Elixir,
+        # Dart, Swift, Scala, Shell, GDScript, Lua, VimScript, Zig
+        # → None are truly "unsupported" anymore
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -951,6 +949,72 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 8. Detect C/C++ project from CMakeLists.txt or Makefile
+    cmake_path = os.path.join(workspace, "CMakeLists.txt")
+    makefile_path = os.path.join(workspace, "Makefile")
+    if os.path.isfile(cmake_path) or os.path.isfile(makefile_path):
+        if "cmake" not in detected["frameworks"]:
+            detected["frameworks"].append("cmake")
+        # Check if this is primarily a C project by counting C vs C++ files
+        c_count = 0
+        cpp_count = 0
+        try:
+            for root_d, _, fnames in os.walk(workspace):
+                skip = False
+                for ign in DEFAULT_IGNORE_DIRS:
+                    if ign in root_d:
+                        skip = True
+                        break
+                if skip:
+                    continue
+                for fn in fnames:
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext in ('.c', '.h'):
+                        c_count += 1
+                    elif ext in ('.cpp', '.cxx', '.cc', '.hpp', '.hxx'):
+                        cpp_count += 1
+        except OSError:
+            pass
+        if c_count > 0 or cpp_count > 0:
+            if "c-project" not in detected["frameworks"]:
+                detected["frameworks"].append("c-project")
+            detected["has_c"] = True
+
+    # 8b. Detect Lua/Vim project from runtime/lua/ structure
+    runtime_lua = os.path.join(workspace, "runtime", "lua")
+    if os.path.isdir(runtime_lua):
+        if "neovim" not in detected["frameworks"]:
+            detected["frameworks"].append("neovim")
+        detected["has_neovim"] = True
+
+    # 8c. Detect VimScript-heavy project from .vim file count
+    vim_count = 0
+    try:
+        for root_d, _, fnames in os.walk(workspace):
+            skip = False
+            for ign in DEFAULT_IGNORE_DIRS:
+                if ign in root_d:
+                    skip = True
+                    break
+            if skip:
+                continue
+            for fn in fnames:
+                if fn.endswith('.vim'):
+                    vim_count += 1
+    except OSError:
+        pass
+    if vim_count > 10:
+        if "vimscript" not in detected["frameworks"]:
+            detected["frameworks"].append("vimscript")
+        detected["has_vimscript"] = True
+
+    # 8d. Detect Zig project from build.zig
+    build_zig = os.path.join(workspace, "build.zig")
+    if os.path.isfile(build_zig):
+        if "zig" not in detected["frameworks"]:
+            detected["frameworks"].append("zig")
+        detected["has_zig"] = True
 
     return detected
 
