@@ -55,6 +55,47 @@ PYTHON_SKIP_NAMES = frozenset({
     'staticmethod', 'classmethod', 'abstractmethod',
 })
 
+# Rust keywords + builtins — common identifiers that are NOT user-defined functions
+RUST_SKIP_NAMES = frozenset({
+    'if', 'else', 'for', 'while', 'loop', 'match', 'return', 'break', 'continue',
+    'let', 'mut', 'pub', 'fn', 'struct', 'enum', 'impl', 'trait', 'use', 'mod',
+    'crate', 'super', 'self', 'Self', 'where', 'type', 'const', 'static',
+    'true', 'false', 'as', 'in', 'ref', 'move', 'dyn', 'async', 'await',
+    'Some', 'None', 'Ok', 'Err',
+    # Standard macros
+    'println', 'eprintln', 'print', 'eprint', 'format', 'format_args',
+    'vec', 'boxed', 'slice', 'array',
+    'panic', 'assert', 'assert_eq', 'assert_ne', 'debug_assert', 'debug_assert_eq',
+    'todo', 'unimplemented', 'unreachable', 'compile_error',
+    'write', 'writeln', 'read_line',
+    'derive', 'test', 'cfg', 'allow', 'warn', 'doc', 'feature',
+    'include', 'include_str', 'include_bytes',
+    'concat', 'env', 'option_env', 'file', 'line', 'column', 'module_path',
+    'thread_local', 'lazy_static',
+    # Common std types
+    'String', 'Vec', 'Box', 'Rc', 'Arc', 'Cell', 'RefCell',
+    'HashMap', 'HashSet', 'BTreeMap', 'BTreeSet',
+    'Result', 'Option', 'Cow', 'Duration', 'Instant',
+    'Default', 'Display', 'Debug', 'Clone', 'Copy', 'From', 'Into',
+    'FromStr', 'ToString', 'Iterator', 'IntoIterator',
+    'new', 'default', 'from', 'into', 'clone', 'drop',
+})
+
+# Go keywords + builtins
+GO_SKIP_NAMES = frozenset({
+    'if', 'else', 'for', 'switch', 'case', 'default', 'return', 'break', 'continue',
+    'func', 'var', 'const', 'type', 'struct', 'interface', 'map', 'chan', 'go',
+    'defer', 'range', 'select', 'fallthrough', 'goto', 'package', 'import',
+    'true', 'false', 'nil', 'iota',
+    'len', 'cap', 'make', 'new', 'append', 'copy', 'delete', 'close',
+    'panic', 'recover', 'print', 'println',
+    'error', 'string', 'int', 'int8', 'int16', 'int32', 'int64',
+    'uint', 'uint8', 'uint16', 'uint32', 'uint64',
+    'float32', 'float64', 'complex64', 'complex128',
+    'bool', 'byte', 'rune', 'uintptr',
+    'fmt', 'http', 'json', 'os', 'io', 'strings', 'strconv',
+})
+
 
 class BaseParser:
     """Base class for all tree-sitter based parsers."""

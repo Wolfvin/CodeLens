@@ -38,8 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql", ".php",
-    ".rb", ".ex", ".exs",
+    ".graphql", ".gql", ".php", ".go",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -237,15 +236,15 @@ def map_api_routes(
                         if fw:
                             frameworks_detected.add(fw)
 
-            # ─── Ruby: Rails routes ─────────────────────────────
-            elif ext == ".rb":
-                rails_routes = _extract_rails_routes(content, rel_path, frameworks_detected)
-                routes.extend(rails_routes)
-
-            # ─── Elixir: Phoenix routes ─────────────────────────
-            elif ext in (".ex", ".exs"):
-                phoenix_routes = _extract_phoenix_routes(content, rel_path, frameworks_detected)
-                routes.extend(phoenix_routes)
+            # ─── Go HTTP routes (Gin, Echo, Chi, Fiber, net/http) ─
+            if ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path)
+                if go_routes:
+                    routes.extend(go_routes)
+                    for r in go_routes:
+                        fw = r.get("framework", "")
+                        if fw:
+                            frameworks_detected.add(fw)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -255,24 +254,49 @@ def map_api_routes(
 
     # ─── Post-processing ──────────────────────────────────────
 
-    # Attach middleware to routes
-    # v5.9.3: Fix middleware cross-contamination — "global" middleware is scoped
-    # to its own FILE, not the entire workspace. In multi-app projects (e.g.,
-    # FastAPI docs_src with many tutorial apps), each file defines its own app
-    # instance, so app.add_middleware() only applies to routes in that same file.
+    # Attach middleware to routes — but only from the same framework family.
+    # Previously ALL global middleware was attached to ALL routes, causing
+    # cross-contamination (e.g., Python Django false-positives on Express routes).
+    _FRAMEWORK_FAMILY = {
+        "express", "fastify", "koa", "hono", "nextjs", "nuxt",  # JS/TS
+        "graphql", "grpc", "trpc", "orpc",  # API specs (multi-lang)
+    }
+    _PYTHON_FAMILY = {"flask", "fastapi", "django"}
+    _PHP_FAMILY = {"laravel", "symfony", "slim"}
+
+    def _same_framework_family(mw_file: str, route: Dict) -> bool:
+        """Check if middleware and route belong to the same framework family."""
+        route_fw = route.get("framework", "unknown")
+        route_file = route.get("file", "")
+        # Same-file middleware always applies
+        if mw_file == route_file:
+            return True
+        # JS/TS middleware → JS/TS routes
+        if route_fw in _FRAMEWORK_FAMILY and any(mw_file.endswith(e) for e in ('.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx')):
+            return True
+        # Python middleware → Python routes
+        if route_fw in _PYTHON_FAMILY and mw_file.endswith('.py'):
+            return True
+        # PHP middleware → PHP routes
+        if route_fw in _PHP_FAMILY and mw_file.endswith('.php'):
+            return True
+        # SvelteKit routes
+        if route_fw == "sveltekit" and any(mw_file.endswith(e) for e in ('.js', '.ts', '.svelte')):
+            return True
+        return False
+
     for mw in global_middleware:
         scope = mw.get("scope", "global")
-        mw_file = mw.get("file", "")
         if scope == "global":
             for route in routes:
-                # Only attach middleware to routes from the same file
-                if route.get("file", "") == mw_file:
-                    route.setdefault("middleware_chain", []).append({
-                        "name": mw["name"],
-                        "type": mw.get("type", "unknown"),
-                        "file": mw_file,
-                        "line": mw["line"],
-                    })
+                if not _same_framework_family(mw["file"], route):
+                    continue
+                route.setdefault("middleware_chain", []).append({
+                    "name": mw["name"],
+                    "type": mw.get("type", "unknown"),
+                    "file": mw["file"],
+                    "line": mw["line"],
+                })
 
     # Build middleware map
     for route in routes:
@@ -469,7 +493,10 @@ def _extract_inline_middleware(
     middleware = []
 
     # Find the arguments section
-    paren_start = content.find('(', start_pos - 1)
+    # Search BACKWARD from start_pos to find the opening '(' of the current
+    # route call. Forward search (content.find) would find the '(' of the
+    # NEXT route call, extracting the wrong arguments.
+    paren_start = content.rfind('(', 0, start_pos)
     if paren_start < 0:
         return middleware
 
@@ -561,7 +588,10 @@ def _infer_handler_name(content: str, offset: int) -> str:
 
 def _infer_handler_name_from_args(content: str, start_pos: int) -> str:
     """Infer handler name from the last argument of a route call."""
-    paren_start = content.find('(', start_pos - 1)
+    # Search BACKWARD from start_pos to find the opening '(' of the current
+    # route call. Forward search (content.find) would find the '(' of the
+    # NEXT route call, extracting the wrong arguments.
+    paren_start = content.rfind('(', 0, start_pos)
     if paren_start < 0:
         return "anonymous"
 
@@ -1366,6 +1396,33 @@ def _extract_python_decorator_middleware(
     return middleware
 
 
+def _is_inside_middleware_list(lines: List[str], current_line_idx: int) -> bool:
+    """Check if the current line is inside a Django MIDDLEWARE = [...] or (...) block.
+
+    Walks backward from the current line to find a line like 'MIDDLEWARE = [' or
+    'MIDDLEWARE = (' and ensures we haven't closed the bracket/paren yet.
+    This prevents false positives from files that merely mention 'MIDDLEWARE'
+    as a variable name (e.g., skip-name sets in engine code).
+    """
+    depth = 0  # bracket/paren depth
+    for i in range(current_line_idx, -1, -1):
+        line = lines[i].strip()
+        # If we hit a closing bracket/paren before finding the opener, we're outside
+        if i < current_line_idx:
+            if line.endswith(']') or line.endswith(')'):
+                # Check if this closes the MIDDLEWARE list
+                # Simple heuristic: if the line is just ']' or ')', it closes
+                if line in (']', ')', '],', '),'):
+                    return False
+        # Check if this line starts a MIDDLEWARE assignment
+        if re.match(r'^MIDDLEWARE\s*=\s*[\[(]', line):
+            return True
+        # If we hit a class/function def or another assignment, we're outside
+        if re.match(r'^(class |def |[A-Z_]+\s*=\s*[\[(])', line) and i < current_line_idx:
+            return False
+    return False
+
+
 def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
     """Extract middleware declarations from Python files (Flask/Django/FastAPI)."""
     middleware = []
@@ -1387,17 +1444,25 @@ def _extract_python_middleware(content: str, rel_path: str) -> List[Dict]:
             })
 
         # Django MIDDLEWARE list entries
-        m = re.match(r"[\'\"](\w[\w.]+)[\'\"]\s*,", stripped)
-        if m and 'MIDDLEWARE' in content[:content.find(stripped) + len(stripped)]:
-            mw_name = m.group(1).split('.')[-1]
-            mw_type = _classify_middleware(mw_name)
-            middleware.append({
-                "name": mw_name,
-                "type": mw_type,
-                "scope": "global",
-                "file": rel_path,
-                "line": i + 1,
-            })
+        # Only match if we're inside a MIDDLEWARE = [...] or MIDDLEWARE = (...) block.
+        # The naive check 'MIDDLEWARE in content[:offset]' caused massive false positives
+        # in any file that merely mentions the word "MIDDLEWARE" (e.g., skip-name lists).
+        # Instead, track whether we're inside a MIDDLEWARE assignment block.
+        if _is_inside_middleware_list(lines, i):
+            m = re.match(r"[\'\"](\w[\w.]+)[\'\"]\s*,?", stripped)
+            if m:
+                mw_name = m.group(1).split('.')[-1]
+                # Skip names that look like Python/JS constants, not Django middleware paths
+                if mw_name.isupper() or '_' not in m.group(1) and not m.group(1).startswith('django.'):
+                    continue
+                mw_type = _classify_middleware(mw_name)
+                middleware.append({
+                    "name": mw_name,
+                    "type": mw_type,
+                    "scope": "global",
+                    "file": rel_path,
+                    "line": i + 1,
+                })
 
         # FastAPI: app.add_middleware(...)
         m = re.match(r'app\s*\.\s*add_middleware\s*\(\s*(\w+)', stripped)
@@ -1485,13 +1550,28 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
 
+    # Pre-strip comment lines and string-only lines to avoid false positives
+    # from documentation/example code that contains patterns like Query: {
+    clean_lines = []
+    for line in content.split('\n'):
+        stripped = line.strip()
+        # Skip comment lines
+        if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            clean_lines.append('')
+        # Skip string-value-only lines (e.g., "Query: { field }" in a dict literal)
+        elif re.match(r'^["\']?\w+["\']?\s*:\s*["\'].*["\'],?\s*$', stripped):
+            clean_lines.append('')
+        else:
+            clean_lines.append(line)
+    clean_content = '\n'.join(clean_lines)
+
     # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
     for m in re.finditer(
         r'(Query|Mutation|Subscription)\s*:\s*\{',
-        content
+        clean_content
     ):
         parent_type = m.group(1)
-        resolver_block = content[m.end():m.end() + 2000]
+        resolver_block = clean_content[m.end():m.end() + 2000]
         # Find matching close brace
         depth = 1
         pos = 0
@@ -1505,7 +1585,7 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
         for field_m in re.finditer(r'(\w+)\s*[:=]\s*(?:async\s+)?\(', resolver_block):
             field_name = field_m.group(1)
-            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            line_num = clean_content[:m.end() + field_m.start()].count('\n') + 1
             routes.append({
                 "method": parent_type.upper(),
                 "path": f"{parent_type}.{field_name}",
@@ -1546,17 +1626,40 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
     """Extract GraphQL resolvers from Python code (Graphene, Strawberry, Ariadne)."""
     routes = []
 
+    # Pre-strip comment lines and docstring blocks to avoid false positives
+    # from documentation/example code
+    clean_lines = []
+    in_docstring = False
+    for line in content.split('\n'):
+        stripped = line.strip()
+        if in_docstring:
+            if '"""' in line or "'''" in line:
+                in_docstring = False
+            clean_lines.append('')
+            continue
+        if stripped.startswith('#'):
+            clean_lines.append('')
+        elif '"""' in line or "'''" in line:
+            # Single-line docstring or start of multi-line
+            count = line.count('"""') + line.count("'''")
+            if count < 2:
+                in_docstring = True
+            clean_lines.append('')
+        else:
+            clean_lines.append(line)
+    clean_content = '\n'.join(clean_lines)
+
     # Graphene: class Query(graphene.ObjectType): field = graphene.Field(...)
     for m in re.finditer(
         r'class\s+(\w+)\(.*graphene\.ObjectType.*\)\s*:',
-        content
+        clean_content
     ):
         class_name = m.group(1)
-        class_body = content[m.end():m.end() + 3000]
+        class_body = clean_content[m.end():m.end() + 3000]
         # Find fields
         for field_m in re.finditer(r'(\w+)\s*=\s*graphene\.(?:Field|String|Int|Float|Boolean|List)\b', class_body):
             field_name = field_m.group(1)
-            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            line_num = clean_content[:m.end() + field_m.start()].count('\n') + 1
             method_type = "QUERY" if class_name == "Query" else "MUTATION" if class_name == "Mutation" else class_name.upper()
             routes.append({
                 "method": method_type,
@@ -1571,10 +1674,10 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
             })
 
     # Strawberry: @query / @mutation decorators
-    for m in re.finditer(r'@(query|mutation)\s*', content):
+    for m in re.finditer(r'@(query|mutation)\s*', clean_content):
         op_type = m.group(1).upper()
-        handler_name = _find_next_python_function(content, m.end())
-        line_num = content[:m.start()].count('\n') + 1
+        handler_name = _find_next_python_function(clean_content, m.end())
+        line_num = clean_content[:m.start()].count('\n') + 1
         routes.append({
             "method": op_type,
             "path": f"{op_type}.{handler_name}",
@@ -2638,174 +2741,94 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
     return middleware
 
 
-# ─── Ruby: Rails route extraction ─────────────────────────────────
+# ─── Go HTTP Route Extraction ──────────────────────────────────
 
-def _extract_rails_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
-    """Extract routes from Rails routes.rb files."""
+def _extract_go_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract HTTP routes from Go source files.
+
+    Supports:
+    - Gin:  router.GET("/path", handler)  /  r.POST("/path", handler)
+    - Echo: e.GET("/path", handler)
+    - Chi:  r.Get("/path", handler)   /  r.Post("/path", handler)
+    - Fiber: app.Get("/path", handler)
+    - net/http: http.HandleFunc("/path", handler)
+    """
     routes = []
-    is_routes_file = 'routes.rb' in rel_path or 'config/routes' in rel_path
-    if not is_routes_file:
-        return routes
+    framework = None
 
-    frameworks_detected.add("rails")
+    # Detect which Go framework is in use
+    if 'gin-gonic/gin' in content or 'gin.Default()' in content or 'gin.New()' in content:
+        framework = "gin"
+    elif 'labstack/echo' in content or 'echo.New()' in content:
+        framework = "echo"
+    elif 'go-chi/chi' in content or 'chi.NewRouter()' in content or 'chi.NewMux()' in content:
+        framework = "chi"
+    elif 'gofiber/fiber' in content or 'fiber.New()' in content:
+        framework = "fiber"
+    elif 'net/http' in content and 'HandleFunc' in content:
+        framework = "net/http"
 
-    current_namespace = ""
+    if not framework:
+        return []
 
-    for i, line in enumerate(content.split('\n'), 1):
-        stripped = line.strip()
+    # Gin/Echo style: router.METHOD("/path", handler)
+    go_methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
 
-        ns_match = re.match(r'\s*namespace\s+:(\w+)\s+do', line)
-        if ns_match:
-            current_namespace = ns_match.group(1)
-            continue
-
-        if stripped == 'end' and current_namespace:
-            current_namespace = ""
-            continue
-
-        http_match = re.match(
-            r"\s*(get|post|put|patch|delete)\s+['\"]([^'\"]+)['\"]" +
-            r"(?:\s*,\s*to:\s*['\"]([^'\"]+)['\"])?",
-            line
-        )
-        if http_match:
-            method = http_match.group(1).upper()
-            path = http_match.group(2)
-            handler = http_match.group(3) or ""
-            if current_namespace:
-                path = f"/{current_namespace}{path}"
+    for method in go_methods:
+        # Gin/Echo: router.GET("/path", handler)
+        pattern = rf'\b\w+\.{method}\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)'
+        for m in re.finditer(pattern, content):
+            path = m.group(1)
+            handler = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
             routes.append({
                 "method": method,
                 "path": path,
-                "handler": handler,
-                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
+                "handler_name": handler,
                 "file": rel_path,
-                "line": i,
-                "framework": "rails",
-                "group": current_namespace or "default",
-                "auth_required": False,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": framework,
             })
-            continue
 
-        res_match = re.match(r"\s*resources\s+:(\w+)", line)
-        if res_match:
-            resource_name = res_match.group(1)
-            base_path = f"/{resource_name}"
-            if current_namespace:
-                base_path = f"/{current_namespace}{base_path}"
-            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-                action_map = {"GET": "index", "POST": "create", "PUT": "update",
-                              "PATCH": "update", "DELETE": "destroy"}
-                action = action_map.get(m, "show")
+        # Chi/Fiber style: r.Get("/path", handler)  (Title-case method)
+        if framework in ("chi", "fiber"):
+            chi_method = method.capitalize()
+            pattern = rf'\b\w+\.{chi_method}\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)'
+            for m in re.finditer(pattern, content):
+                path = m.group(1)
+                handler = m.group(2)
+                line_num = content[:m.start()].count('\n') + 1
                 routes.append({
-                    "method": m,
-                    "path": base_path,
-                    "handler": f"{resource_name}#{action}",
-                    "handler_name": action,
-                    "file": rel_path,
-                    "line": i,
-                    "framework": "rails",
-                    "group": current_namespace or "default",
-                    "auth_required": False,
-                    "resource": resource_name,
-                })
-            continue
-
-        root_match = re.match(r"\s*root\s+['\"]([^'\"]+)['\"]", line)
-        if root_match:
-            handler = root_match.group(1)
-            routes.append({
-                "method": "GET",
-                "path": "/",
-                "handler": handler,
-                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
-                "file": rel_path,
-                "line": i,
-                "framework": "rails",
-                "group": "default",
-                "auth_required": False,
-            })
-
-    return routes
-
-
-# ─── Elixir: Phoenix route extraction ──────────────────────────────
-
-def _extract_phoenix_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
-    """Extract routes from Phoenix router.ex files."""
-    routes = []
-    is_router = 'router.ex' in rel_path or 'router.exs' in rel_path
-    if not is_router:
-        return routes
-
-    frameworks_detected.add("phoenix")
-
-    current_scope = ""
-    current_pipe = ""
-
-    for i, line in enumerate(content.split('\n'), 1):
-        stripped = line.strip()
-
-        scope_match = re.match(r'\s*scope\s+"([^"]+)"', line)
-        if scope_match:
-            current_scope = scope_match.group(1)
-            continue
-
-        pipe_match = re.match(r'\s*pipe_through\s+:([\w]+)', line)
-        if pipe_match:
-            current_pipe = pipe_match.group(1)
-            continue
-
-        http_match = re.match(
-            r'\s*(get|post|put|patch|delete)\s+"([^"]+)"\s*,\s*([\w.]+)\s*,\s*:(\w+)',
-            line
-        )
-        if http_match:
-            method = http_match.group(1).upper()
-            path = http_match.group(2)
-            controller = http_match.group(3)
-            action = http_match.group(4)
-            if current_scope:
-                path = f"{current_scope}{path}"
-            routes.append({
-                "method": method,
-                "path": path,
-                "handler": f"{controller}.{action}",
-                "handler_name": action,
-                "file": rel_path,
-                "line": i,
-                "framework": "phoenix",
-                "group": current_scope or "default",
-                "middleware": [current_pipe] if current_pipe else [],
-                "auth_required": current_pipe in ("authenticate", "auth", "require_login"),
-            })
-            continue
-
-        res_match = re.match(r'\s*resources\s+"([^"]+)"\s*,\s*([\w.]+)', line)
-        if res_match:
-            path = res_match.group(1)
-            controller = res_match.group(2)
-            if current_scope:
-                path = f"{current_scope}{path}"
-            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
-                action = {"GET": "index", "POST": "create", "PUT": "update",
-                          "PATCH": "update", "DELETE": "delete"}.get(m, "show")
-                routes.append({
-                    "method": m,
+                    "method": method,
                     "path": path,
-                    "handler": f"{controller}.{action}",
-                    "handler_name": action,
+                    "handler_name": handler,
                     "file": rel_path,
-                    "line": i,
-                    "framework": "phoenix",
-                    "group": current_scope or "default",
-                    "middleware": [current_pipe] if current_pipe else [],
-                    "auth_required": False,
-                    "resource": True,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": framework,
                 })
 
-        if stripped == 'end' and current_scope:
-            current_scope = ""
-            current_pipe = ""
+    # net/http: http.HandleFunc("/path", handler)
+    if framework == "net/http":
+        for m in re.finditer(r'\bhttp\.HandleFunc\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)', content):
+            path = m.group(1)
+            handler = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": "ANY",
+                "path": path,
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "net/http",
+            })
 
     return routes
