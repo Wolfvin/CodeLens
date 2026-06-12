@@ -1,7 +1,7 @@
 """
 Framework Detector for CodeLens
 Auto-detects frameworks from package.json, pyproject.toml, requirements.txt,
-config files, and file patterns.
+config files, and file patterns.  Also detects monorepo tools and build tools.
 """
 
 import json
@@ -11,6 +11,40 @@ from typing import Dict, List, Any, Optional
 import logging
 _logger = logging.getLogger("codelens.framework_detect")
 from utils import DEFAULT_IGNORE_DIRS
+
+# ─── YAML parsing helper ──────────────────────────────────────
+
+def _parse_pnpm_workspace_yaml(workspace: str) -> List[str]:
+    """Parse pnpm-workspace.yaml and return a list of glob patterns for packages."""
+    yaml_path = os.path.join(workspace, "pnpm-workspace.yaml")
+    if not os.path.isfile(yaml_path):
+        return []
+    try:
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        # Very small YAML – just extract the 'packages:' list
+        patterns = []
+        in_packages = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            if stripped == 'packages:':
+                in_packages = True
+                continue
+            if in_packages:
+                # Stop when we hit a non-list line at the same or lower indent
+                if stripped.startswith('- '):
+                    val = stripped[2:].strip().strip('"').strip("'")
+                    patterns.append(val)
+                elif stripped and not stripped.startswith('#'):
+                    # Hit catalog: or another top-level key – stop
+                    if not line.startswith(' ') and not line.startswith('\t'):
+                        break
+        return patterns
+    except (IOError, OSError):
+        _logger.debug("Failed to parse pnpm-workspace.yaml", exc_info=True)
+        return []
 
 
 # Known framework signatures
@@ -82,13 +116,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["django"],
         "pip_packages": ["django"],
         "config_files": ["manage.py"],
-        "indicators": ["django/__init__.py", "django/apps/", "django/conf/", "django/contrib/", "django/core/"]
-    },
-    "homeassistant": {
-        "packages": ["homeassistant"],
-        "pip_packages": ["homeassistant"],
-        "config_files": [],
-        "indicators": ["homeassistant/__init__.py", "homeassistant/components/", "homeassistant/core.py", "homeassistant/bootstrap.py"]
+        "indicators": []
     },
     "celery": {
         "packages": ["celery"],
@@ -114,101 +142,286 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
-    # Desktop app frameworks
-    "tauri": {
-        "packages": ["@tauri-apps/api", "@tauri-apps/cli"],
-        "config_files": ["tauri.conf.json", "Tauri.toml"],
-        "indicators": ["src-tauri"]
+    # ── Backend / server frameworks ──────────────────────────────
+    "express": {
+        "packages": ["express"],
+        "config_files": [],
+        "indicators": ["app.get", "app.post", "router.get"]
     },
-    "electron": {
-        "packages": ["electron"],
-        "config_files": ["electron-builder.yml", "electron-builder.json"],
-        "indicators": ["main.js", "BrowserWindow"]
-    },
-    # Go frameworks (detected by config files / source presence)
-    "golang": {
-        "packages": [],
-        "config_files": ["go.mod"],
-        "indicators": [".go"]
-    },
-    "gin": {
-        "packages": [],
-        "config_files": ["go.mod"],
-        "indicators": ["gin-gonic/gin"]
-    },
-    "echo": {
-        "packages": [],
-        "config_files": ["go.mod"],
-        "indicators": ["labstack/echo"]
-    },
-    # Java/Kotlin frameworks
-    "spring": {
-        "packages": [],
-        "config_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "indicators": ["spring-boot"]
-    },
-    # C/C++ frameworks
-    "cmake": {
-        "packages": [],
-        "config_files": ["CMakeLists.txt"],
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
         "indicators": []
     },
+    "koa": {
+        "packages": ["koa"],
+        "config_files": [],
+        "indicators": []
+    },
+    "hono": {
+        "packages": ["hono"],
+        "config_files": [],
+        "indicators": []
+    },
+    "nestjs": {
+        "packages": ["@nestjs/core"],
+        "config_files": ["nest-cli.json"],
+        "indicators": ["@Module", "@Controller"]
+    },
+    "trpc": {
+        "packages": ["@trpc/server"],
+        "config_files": [],
+        "indicators": []
+    },
+    # ── ORM / database ───────────────────────────────────────────
+    "prisma": {
+        "packages": ["prisma", "@prisma/client"],
+        "config_files": ["prisma/schema.prisma"],
+        "indicators": []
+    },
+    "drizzle": {
+        "packages": ["drizzle-orm"],
+        "config_files": ["drizzle.config.ts", "drizzle.config.js"],
+        "indicators": []
+    },
+    "mongoose": {
+        "packages": ["mongoose"],
+        "config_files": [],
+        "indicators": []
+    },
+    "typeorm": {
+        "packages": ["typeorm"],
+        "config_files": [],
+        "indicators": []
+    },
+    # ── Build tools ──────────────────────────────────────────────
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mts"],
+        "indicators": []
+    },
+    "webpack": {
+        "packages": ["webpack"],
+        "config_files": ["webpack.config.js", "webpack.config.ts"],
+        "indicators": []
+    },
+    "esbuild": {
+        "packages": ["esbuild"],
+        "config_files": [],
+        "indicators": []
+    },
+    "rollup": {
+        "packages": ["rollup"],
+        "config_files": ["rollup.config.js", "rollup.config.ts"],
+        "indicators": []
+    },
+    # ── State management ─────────────────────────────────────────
+    "pinia": {
+        "packages": ["pinia"],
+        "config_files": [],
+        "indicators": []
+    },
+    "vuex": {
+        "packages": ["vuex"],
+        "config_files": [],
+        "indicators": []
+    },
+    "redux": {
+        "packages": ["@reduxjs/toolkit", "redux"],
+        "config_files": [],
+        "indicators": []
+    },
+    "zustand": {
+        "packages": ["zustand"],
+        "config_files": [],
+        "indicators": []
+    },
+    # ── Real-time ────────────────────────────────────────────────
+    "socket.io": {
+        "packages": ["socket.io"],
+        "config_files": [],
+        "indicators": []
+    }
 }
 
 
-def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
+def _find_package_jsons(workspace: str, max_depth: int = 4) -> List[str]:
     """
     Find all package.json files in the workspace, including monorepo sub-packages.
-    Limits depth to avoid scanning deeply nested node_modules.
+    Scans recursively up to *max_depth* levels inside known monorepo directories
+    and pnpm-workspace.yaml patterns.  Skips node_modules and other ignored dirs.
     """
     pkg_files = []
     root_pkg = os.path.join(workspace, "package.json")
     if os.path.exists(root_pkg):
         pkg_files.append(root_pkg)
 
-    # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
+    # Directories that typically hold monorepo sub-packages
     monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
+
+    # Dirs to skip during recursion (superset of DEFAULT_IGNORE_DIRS for speed)
+    _skip_dirs = set(DEFAULT_IGNORE_DIRS) | {
+        '.cache', '.temp', '.tmp', 'out', 'output', 'storybook-static',
+    }
+
+    # --- 1. Scan monorepo directories recursively ---
     for subdir in monorepo_dirs:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
             continue
-        try:
-            for entry in os.listdir(subdir_path):
-                entry_path = os.path.join(subdir_path, entry)
-                pkg_path = os.path.join(entry_path, "package.json")
-                if os.path.isfile(pkg_path):
+        for root, dirs, files in os.walk(subdir_path):
+            # Compute depth relative to the monorepo dir
+            rel = os.path.relpath(root, subdir_path)
+            depth = 0 if rel == '.' else rel.count(os.sep) + 1
+            if depth >= max_depth:
+                dirs.clear()  # don't recurse deeper
+                continue
+            # Prune ignored directories from traversal
+            dirs[:] = [d for d in dirs if d not in _skip_dirs and not d.startswith('.')]
+            if 'package.json' in files:
+                pkg_path = os.path.join(root, 'package.json')
+                if pkg_path not in pkg_files:
                     pkg_files.append(pkg_path)
-        except OSError:
-            pass
+
+    # --- 2. Discover packages from pnpm-workspace.yaml patterns ---
+    pnpm_patterns = _parse_pnpm_workspace_yaml(workspace)
+    import glob as glob_mod
+    for pattern in pnpm_patterns:
+        # pnpm patterns like "packages/*" or "packages/frontend/**"
+        full_pattern = os.path.join(workspace, pattern, 'package.json')
+        for match in glob_mod.glob(full_pattern, recursive=True):
+            abs_match = os.path.abspath(match)
+            if abs_match not in pkg_files:
+                pkg_files.append(abs_match)
 
     return pkg_files
+
+
+# ─── Categories for classification ─────────────────────────────
+
+_BUILD_TOOL_NAMES = frozenset({"vite", "webpack", "esbuild", "rollup"})
+
+
+def detect_monorepo_tools(workspace: str) -> Dict[str, Any]:
+    """
+    Detect monorepo tooling in the workspace.
+    Returns {"monorepo_tools": [...], "is_monorepo": bool}.
+    """
+    workspace = os.path.abspath(workspace)
+    tools = []
+
+    if os.path.isfile(os.path.join(workspace, "turbo.json")):
+        tools.append("turborepo")
+    if os.path.isfile(os.path.join(workspace, "pnpm-workspace.yaml")):
+        tools.append("pnpm-workspace")
+    if os.path.isfile(os.path.join(workspace, "lerna.json")):
+        tools.append("lerna")
+    if os.path.isfile(os.path.join(workspace, "nx.json")):
+        tools.append("nx")
+
+    return {
+        "monorepo_tools": tools,
+        "is_monorepo": len(tools) > 0,
+    }
 
 
 def detect_frameworks(workspace: str) -> Dict[str, Any]:
     """
     Detect frameworks used in a workspace.
-    Returns dict with detected frameworks and their config.
+    Returns dict with detected frameworks, build tools, monorepo tools,
+    and per-framework booleans.
     """
     workspace = os.path.abspath(workspace)
+
+    # ── Initialise result dict with all has_* booleans ────────────
     detected = {
         "frameworks": [],
+        "build_tools": [],
+        "monorepo_tools": [],
+        # Frontend
         "has_react": False,
         "has_vue": False,
         "has_svelte": False,
         "has_tailwind": False,
         "has_nextjs": False,
         "has_angular": False,
+        # Backend
+        "has_express": False,
+        "has_fastify": False,
+        "has_koa": False,
+        "has_hono": False,
+        "has_nestjs": False,
+        "has_trpc": False,
+        # ORM / DB
+        "has_prisma": False,
+        "has_drizzle": False,
+        "has_mongoose": False,
+        "has_typeorm": False,
+        # Python
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
-        "has_homeassistant": False,
-        "has_tauri": False,
-        "has_electron": False,
-        "has_golang": False,
-        "unsupported_langs": [],
+        # State management
+        "has_pinia": False,
+        "has_vuex": False,
+        "has_redux": False,
+        "has_zustand": False,
+        # Real-time
+        "has_socketio": False,
+        # Build tools
+        "has_vite": False,
+        "has_webpack": False,
+        "has_esbuild": False,
+        "has_rollup": False,
+        # Other
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "is_monorepo": False,
     }
+
+    # ── Helper: set the has_* flag for a framework name ───────────
+    _FW_TO_FLAG = {
+        "react": "has_react",
+        "next.js": "has_nextjs",
+        "vue": "has_vue",
+        "svelte": "has_svelte",
+        "tailwind": "has_tailwind",
+        "angular": "has_angular",
+        "express": "has_express",
+        "fastify": "has_fastify",
+        "koa": "has_koa",
+        "hono": "has_hono",
+        "nestjs": "has_nestjs",
+        "trpc": "has_trpc",
+        "prisma": "has_prisma",
+        "drizzle": "has_drizzle",
+        "mongoose": "has_mongoose",
+        "typeorm": "has_typeorm",
+        "fastapi": "has_fastapi",
+        "flask": "has_flask",
+        "django": "has_django",
+        "pinia": "has_pinia",
+        "vuex": "has_vuex",
+        "redux": "has_redux",
+        "zustand": "has_zustand",
+        "socket.io": "has_socketio",
+        "vite": "has_vite",
+        "webpack": "has_webpack",
+        "esbuild": "has_esbuild",
+        "rollup": "has_rollup",
+    }
+
+    def _mark_detected(fw_name: str):
+        """Record a detected framework: append to list, set flag, classify build tools."""
+        if fw_name in _BUILD_TOOL_NAMES:
+            if fw_name not in detected["build_tools"]:
+                detected["build_tools"].append(fw_name)
+        else:
+            if fw_name not in detected["frameworks"]:
+                detected["frameworks"].append(fw_name)
+        flag = _FW_TO_FLAG.get(fw_name)
+        if flag:
+            detected[flag] = True
 
     # 1. Check package.json (root + monorepo sub-packages)
     all_deps = {}
@@ -235,29 +448,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
             for pkg_name in sig["packages"]:
                 if pkg_name in all_deps:
-                    detected["frameworks"].append(fw_name)
-                    if fw_name == "react":
-                        detected["has_react"] = True
-                    elif fw_name == "next.js":
-                        detected["has_nextjs"] = True
-                    elif fw_name == "vue":
-                        detected["has_vue"] = True
-                    elif fw_name == "svelte":
-                        detected["has_svelte"] = True
-                    elif fw_name == "tailwind":
-                        detected["has_tailwind"] = True
-                    elif fw_name == "angular":
-                        detected["has_angular"] = True
-                    elif fw_name == "tauri":
-                        detected["has_tauri"] = True
-                    elif fw_name == "electron":
-                        detected["has_electron"] = True
-                    elif fw_name == "golang":
-                        detected["has_golang"] = True
+                    _mark_detected(fw_name)
                     break
 
         # Detect CSS preprocessor
-        if "sass" in all_deps or "node-sass" in all_deps:
+        if "sass" in all_deps or "node-sass" in all_deps or "sass-embedded" in all_deps:
             detected["css_preprocessor"] = "scss"
         elif "less" in all_deps:
             detected["css_preprocessor"] = "less"
@@ -266,48 +461,30 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 2. Check config files (root + subdirectories for monorepos)
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-        if fw_name in detected["frameworks"]:
+        if fw_name in detected["frameworks"] or fw_name in detected["build_tools"]:
             continue
         for cfg_file in sig.get("config_files", []):
             # Check root first
             if os.path.exists(os.path.join(workspace, cfg_file)):
-                detected["frameworks"].append(fw_name)
-                if fw_name == "tailwind":
-                    detected["has_tailwind"] = True
-                elif fw_name == "next.js":
-                    detected["has_nextjs"] = True
-                elif fw_name == "fastapi":
-                    detected["has_fastapi"] = True
-                elif fw_name == "flask":
-                    detected["has_flask"] = True
-                elif fw_name == "django":
-                    detected["has_django"] = True
-                elif fw_name == "homeassistant":
-                    detected["has_homeassistant"] = True
-                elif fw_name == "golang":
-                    detected["has_golang"] = True
+                _mark_detected(fw_name)
                 break
-            # Check one level deep for monorepo (apps/*, packages/*)
+            # Check recursively in monorepo subdirs
             found_in_subdir = False
-            for subdir in ('apps', 'packages', 'projects', 'services'):
+            for subdir in ('apps', 'packages', 'projects', 'services', 'libs', 'modules'):
                 subdir_path = os.path.join(workspace, subdir)
                 if not os.path.isdir(subdir_path):
                     continue
-                try:
-                    for entry in os.listdir(subdir_path):
-                        entry_path = os.path.join(subdir_path, entry)
-                        if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, cfg_file)):
-                            detected["frameworks"].append(fw_name)
-                            if fw_name == "tailwind":
-                                detected["has_tailwind"] = True
-                            elif fw_name == "next.js":
-                                detected["has_nextjs"] = True
-                            elif fw_name == "react":
-                                detected["has_react"] = True
-                            found_in_subdir = True
-                            break
-                except OSError:
-                    pass
+                for root, dirs, files in os.walk(subdir_path):
+                    if os.path.exists(os.path.join(root, cfg_file)):
+                        _mark_detected(fw_name)
+                        found_in_subdir = True
+                        break
+                    # Only go 2 levels deep for config search
+                    rel = os.path.relpath(root, subdir_path)
+                    depth = 0 if rel == '.' else rel.count(os.sep) + 1
+                    if depth >= 2:
+                        dirs.clear()
+                    dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
                 if found_in_subdir:
                     break
             if found_in_subdir:
@@ -328,7 +505,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         if pkg_name:
                             pip_deps.add(pkg_name)
         except IOError:
-            logger.debug("Failed to parse requirements.txt", exc_info=True)
+            _logger.debug("Failed to parse requirements.txt", exc_info=True)
 
     # 3b. pyproject.toml
     pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -343,63 +520,19 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for m in re.finditer(r'["\']([a-zA-Z0-9_-]+)[><=!~]', content):
                 pip_deps.add(m.group(1).lower())
         except IOError:
-            logger.debug("Failed to parse pyproject.toml", exc_info=True)
+            _logger.debug("Failed to parse pyproject.toml", exc_info=True)
 
     # 3c. Check pip deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-        if fw_name in detected["frameworks"]:
+        if fw_name in detected["frameworks"] or fw_name in detected["build_tools"]:
             continue
         pip_pkgs = sig.get("pip_packages", sig.get("packages", []))
         for pkg_name in pip_pkgs:
             if pkg_name.lower() in pip_deps:
-                detected["frameworks"].append(fw_name)
-                if fw_name == "fastapi":
-                    detected["has_fastapi"] = True
-                elif fw_name == "flask":
-                    detected["has_flask"] = True
-                elif fw_name == "django":
-                    detected["has_django"] = True
-                elif fw_name == "homeassistant":
-                    detected["has_homeassistant"] = True
+                _mark_detected(fw_name)
                 break
 
-    # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
-    if not detected["has_tauri"]:
-        tauri_markers = ['tauri.conf.json', 'Tauri.toml']
-        for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
-                continue
-            for f in files:
-                if f in tauri_markers:
-                    if "tauri" not in detected["frameworks"]:
-                        detected["frameworks"].append("tauri")
-                    detected["has_tauri"] = True
-                    break
-            if detected["has_tauri"]:
-                break
-
-        # Also check for src-tauri directory
-        if not detected["has_tauri"]:
-            for root, dirs, files in os.walk(workspace):
-                skip = False
-                for ignore in DEFAULT_IGNORE_DIRS:
-                    if ignore in root:
-                        skip = True
-                        break
-                if skip or '.codelens' in root:
-                    continue
-                if 'src-tauri' in dirs:
-                    if "tauri" not in detected["frameworks"]:
-                        detected["frameworks"].append("tauri")
-                    detected["has_tauri"] = True
-                    break
-
-    # 5. Check file patterns (for Vue, Svelte)
+    # 4. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -412,35 +545,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
         for f in files:
             if f.endswith('.vue') and not detected["has_vue"]:
-                if "vue" not in detected["frameworks"]:
-                    detected["frameworks"].append("vue")
-                detected["has_vue"] = True
+                _mark_detected("vue")
             elif f.endswith('.svelte') and not detected["has_svelte"]:
-                if "svelte" not in detected["frameworks"]:
-                    detected["frameworks"].append("svelte")
-                detected["has_svelte"] = True
+                _mark_detected("svelte")
 
-    # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
-    # Some frameworks have distinctive directory structures even when they're the
-    # framework source itself (not a project using the framework).
-    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-        if fw_name in detected["frameworks"]:
-            continue
-        for indicator in sig.get("indicators", []):
-            indicator_path = os.path.join(workspace, indicator)
-            if os.path.exists(indicator_path):
-                detected["frameworks"].append(fw_name)
-                if fw_name == "django":
-                    detected["has_django"] = True
-                elif fw_name == "homeassistant":
-                    detected["has_homeassistant"] = True
-                elif fw_name == "fastapi":
-                    detected["has_fastapi"] = True
-                elif fw_name == "flask":
-                    detected["has_flask"] = True
-                break
-
-    # 6. Detect Tailwind from CSS content
+    # 5. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
@@ -459,9 +568,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                             content = fh.read(4096)  # Read first 4KB
                             for indicator in tailwind_indicators:
                                 if indicator in content:
-                                    if "tailwind" not in detected["frameworks"]:
-                                        detected["frameworks"].append("tailwind")
-                                    detected["has_tailwind"] = True
+                                    _mark_detected("tailwind")
                                     break
                             if detected["has_tailwind"]:
                                 break
@@ -470,27 +577,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if detected["has_tailwind"]:
                 break
 
-    # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
-    # These languages are detected but not parsed by tree-sitter.
-    UNSUPPORTED_MARKERS = {
-        "go": ["go.mod", "go.sum"],
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
-    }
-    for lang, markers in UNSUPPORTED_MARKERS.items():
-        for marker in markers:
-            if os.path.exists(os.path.join(workspace, marker)):
-                if lang not in detected["unsupported_langs"]:
-                    detected["unsupported_langs"].append(lang)
-                if lang == "go" and "golang" not in detected["frameworks"]:
-                    detected["frameworks"].append("golang")
-                    detected["has_golang"] = True
-                break
+    # 6. Detect monorepo tools
+    monorepo_info = detect_monorepo_tools(workspace)
+    detected["monorepo_tools"] = monorepo_info["monorepo_tools"]
+    detected["is_monorepo"] = monorepo_info["is_monorepo"]
 
     return detected
 
@@ -508,11 +598,14 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "watch": True,
         "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
         "frameworks": fw["frameworks"],
+        "build_tools": fw.get("build_tools", []),
+        "monorepo_tools": fw.get("monorepo_tools", []),
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
         "vue_mode": False,
         "svelte_mode": False,
-        "tailwind_mode": False
+        "tailwind_mode": False,
+        "is_monorepo": fw.get("is_monorepo", False),
     }
 
     # Adjust paths based on framework
@@ -538,26 +631,15 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
 
-    # Home Assistant: add component/integration paths
-    if fw.get("has_homeassistant"):
-        config["backend_paths"].extend(["homeassistant/", "homeassistant/components/", "homeassistant/helpers/"])
+    if fw["has_nestjs"]:
+        config["backend_paths"].extend(["src/modules/", "src/controllers/", "src/services/"])
 
-    # Tauri: add Rust backend paths and src-tauri
-    if fw.get("has_tauri"):
-        config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
-        config["frontend_paths"].append("src/")
-        # Find and add app-specific src-tauri paths
-        for app_dir in ('apps', 'packages'):
-            app_path = os.path.join(workspace, app_dir)
-            if os.path.isdir(app_path):
-                try:
-                    for entry in os.listdir(app_path):
-                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
-                        if os.path.isdir(tauri_src):
-                            rel = os.path.relpath(tauri_src, workspace)
-                            config["backend_paths"].append(rel + "/")
-                except OSError:
-                    pass
+    if fw["has_express"]:
+        config["backend_paths"].extend(["src/routes/", "routes/", "src/middleware/"])
+
+    if fw.get("is_monorepo"):
+        config["frontend_paths"].extend(["packages/frontend/", "apps/web/", "apps/client/"])
+        config["backend_paths"].extend(["packages/backend/", "packages/cli/", "apps/api/", "apps/server/"])
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
