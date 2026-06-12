@@ -7,25 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
-### Tested against compiler-explorer/compiler-explorer (2,694 files: 813 TS + 40 CPP + 40 Python + 7 Java, multi-language web app)
+### Tested against polyglot & compiler repos: Svelte, Vercel AI SDK, Elysia
 
-Real-world test on a large multi-language project with massive test/fixture files (9.8MB JSON)
-exposed catastrophic regex backtracking in secrets_engine and timeout issues in aggregate commands.
+Round 3 real-world testing targeting compiler frameworks (Svelte), AI SDK monorepos
+(Vercel AI), and Bun HTTP frameworks (Elysia). Exposed parser gaps for TypeScript
+generic functions, export default patterns, and framework detection blind spots.
 
-### Fixed (Large Repo Reliability)
+### Fixed
 
-- **`secrets_engine` catastrophic regex backtracking** (CRITICAL): Files larger than 1MB (e.g., 9.8MB JSON test fixtures, 6.6MB asm-docs) caused regex matching to hang indefinitely. Added `MAX_FILE_SIZE_BYTES = 1_000_000` file size limit and `PER_FILE_REGEX_TIMEOUT = 5s` per-file SIGALRM timeout to prevent hangs. Files that are too large are skipped; files where regex times out are logged and skipped.
-- **Lock file false positives in secrets detection** (HIGH): `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and other lock files contain registry URLs like `"resolved": "https://registry.npmjs.org/..."` which trigger the URL-embedded-password pattern (`user:pass@host`). These are now explicitly skipped via `_is_example_config_file()`.
-- **`summary` command timeout on large repos** (CRITICAL): The summary command had a hardcoded 90s budget but `_time_left()` used the old default instead of the configurable `total_budget`. Now uses the `--timeout` flag (default 120s). Also added `--max-files` default reduction from 5000→2000, and all engine calls now pass `max_files` consistently.
-- **`analyze` command timeout on large repos** (CRITICAL): Added per-engine SIGALRM timeout (30s default per engine, capped to remaining budget) in `_run_engine()`. Added `--max-files` flag (default 2000). All engine helper functions now accept and forward `max_files` to their respective engines.
-- **`handbook` command timeout on large repos** (HIGH): Engine calls (`detect_smells`, `detect_dead_code`, `detect_secrets`) now pass `max_files` parameter. Default `--max-files` reduced from 5000→2000.
-- **Missing `logger` import in secrets_engine** (MEDIUM): After adding timeout logging, `logger` was not imported. Added to `from utils import` statement.
+- **HIGH:  files produce false positive unused exports** (`deadcode_engine.py`): TypeScript declaration files (100 false positives in Svelte) were flagged because exports in `.d.ts` are public type API consumed by type checkers, not by internal imports. Now skips `.d.ts`, `.d.mts`, and `.d.cts` files in the unused_exports analysis.
+- **HIGH: `export default class` not detected** (`ts_backend_parser.py`, `js_backend_parser.py`, `fallback_js_backend.py`): The `export default class Name` pattern was not handled by any parser. Elysia's main class `export default class Elysia<...>` was completely invisible. Now all three parsers detect `default_export_clause` and generic class declarations.
+- **HIGH: TypeScript generic functions not parsed by fallback** (`fallback_js_backend.py`): Functions like `export async function generateText<TOOLS>(` were missed because the regex required `\(` immediately after the function name, but TypeScript generics insert `<...>` in between. Added multiline generic function detection via `re.DOTALL` pattern matching.
+- **HIGH: TypeScript generic class declarations not matched** (`fallback_js_backend.py`): Regex `class\s+([a-zA-Z_]\w*)\s` failed on `class Name<Generic>` because `<` follows the name instead of whitespace. Updated to `class\s+([a-zA-Z_]\w*)\s*[{<(]` and added heritage extraction with optional generic clause.
+- **MEDIUM: Elysia/Bun HTTP frameworks not detected** (`framework_detect.py`): Elysia, Hono, and Fastify were missing from FRAMEWORK_SIGNATURES and HTTP_LIBRARY_NAMES. Added 3 new signatures and updated `has_http_library` detection. Elysia now correctly detected as `has_http_library: true`.
+- **MEDIUM: TS parser missing `_parse_class_decl`** (`ts_backend_parser.py`): The TS parser had no class declaration parser — classes in TS files were only detected by the fallback parser. Added full `_parse_class_decl` with heritage extraction, component detection, and export support.
 
-### Added
+### Test Repos Used
 
-- **Per-engine SIGALRM timeout in `_run_engine()`**: The analyze command's engine runner now sets a per-engine alarm signal. If an engine exceeds its timeout (capped to remaining budget minus 2s buffer), it's caught gracefully and marked as skipped with a reason. Falls back to no-timeout on platforms without SIGALRM (Windows).
-- **`elapsed_seconds` and `time_budget_seconds` in summary output**: Summary now reports how long it took and what the budget was.
-- **`files_skipped_oversized` and `files_skipped_regex_timeout` in secrets output**: New diagnostic fields showing how many files were skipped and why.
+| Repo | Language | Size | Theme | Key Finding |
+|------|----------|------|-------|-------------|
+| sveltejs/svelte | JS/TS | ~30MB | Compiler | 100 .d.ts false positives |
+| vercel/ai | JS/TS | ~100MB | AI SDK monorepo | generateText not parsed (TS generics) |
+| elysiajs/elysia | TS | ~5MB | Bun HTTP framework | export default class not detected |
+
+
+## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 

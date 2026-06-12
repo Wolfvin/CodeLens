@@ -1183,6 +1183,10 @@ def _detect_unused_exports(
                     pass
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
+        # Skip TypeScript declaration files (.d.ts) — these define public type APIs
+        # and are consumed externally by type checkers, not by internal imports
+        if file_path.endswith('.d.ts') or file_path.endswith('.d.mts') or file_path.endswith('.d.cts'):
+            continue
         # For Python packages, skip __init__.py — these are re-export entry points
         if file_path.endswith('__init__.py') or file_path.endswith('__init__.pyi'):
             continue

@@ -104,6 +104,17 @@ class JSBackendParser(BaseParser):
                                 decl_info = self._parse_variable_declarator(subchild, source, file_path)
                                 if decl_info:
                                     decl_info["node"]["exported"] = True
+                    elif child.type == 'default_export_clause':
+                        # export default class Name / export default function name
+                        for subchild in child.children:
+                            if subchild.type == 'class_declaration':
+                                decl_info = self._parse_class_decl(subchild, source, file_path)
+                                if decl_info:
+                                    decl_info["node"]["exported"] = True
+                            elif subchild.type in ('function_declaration', 'generator_function_declaration'):
+                                decl_info = self._parse_function_decl(subchild, source, file_path)
+                                if decl_info:
+                                    decl_info["node"]["exported"] = True
                 if decl_info:
                     declarations.append(decl_info)
                 return False  # Don't double-count by continuing walk inside export_statement
