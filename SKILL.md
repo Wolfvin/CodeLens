@@ -170,7 +170,7 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 ## Skill Location
 
 ```
-{project_path}/skills/codelens
+{project_path}
 ```
 
 ---
@@ -1637,7 +1637,7 @@ CodeLens uses **passive integration** — the AI agent calls the CLI/API manuall
 
 ```python
 import subprocess, json
-CLI = "/path/to/skills/codelens/scripts/codelens.py"
+CLI = "/path/to/codelens/scripts/codelens.py"
 
 def cl_query(name, workspace):
     r = subprocess.run(["python3", CLI, "query", name, workspace],
@@ -1648,7 +1648,7 @@ def cl_query(name, workspace):
 ### Quick Integration (Python API)
 
 ```python
-import sys; sys.path.insert(0, "/path/to/skills/codelens/scripts")
+import sys; sys.path.insert(0, "/path/to/codelens/scripts")
 from codelens import cmd_scan, cmd_query, cmd_list, cmd_init
 
 cmd_init("/workspace")                    # Once

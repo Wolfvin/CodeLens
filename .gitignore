@@ -1,15 +1,3 @@
-# Dependencies
-node_modules/
-bun.lock
-
-# Next.js
-.next/
-out/
-
-# Production
-build/
-dist/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -21,16 +9,18 @@ __pycache__/
 .venv/
 venv/
 ENV/
+dist/
+build/
 
 # CodeLens Registry Cache (auto-generated)
 .codelens/
 
+# Tree-sitter grammars (downloaded at runtime)
+grammars/
+
 # Environment variables
 .env
 .env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # IDE
 .vscode/
@@ -44,22 +34,4 @@ ENV/
 Thumbs.db
 
 # Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-dev.log
-server.log
-
-# TypeScript
-*.tsbuildinfo
-next-env.d.ts
-
-# Prisma
-prisma/migrations/
-
-# Runtime artifacts
-.zscripts/dev.pid
-.zscripts/*.log
-
-# Misc
-*.pem
+*.log

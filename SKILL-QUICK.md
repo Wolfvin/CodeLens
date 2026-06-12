@@ -171,7 +171,7 @@ $CLI smell             # Auto-detect → works!
 ## CLI Usage Pattern
 
 ```bash
-CODELENS_DIR="{project_path}/skills/codelens"
+CODELENS_DIR="{project_path}"
 CLI="python3 $CODELENS_DIR/scripts/codelens.py"
 
 # Workspace is AUTO-DETECTED if omitted (NEW in v5.1)

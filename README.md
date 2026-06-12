@@ -1,491 +1,257 @@
-# CodeLens — Live Codebase Reference Intelligence
+# CodeLens v7.0 — Live Codebase Reference Intelligence
 
-CodeLens is a backend developer tool that scans your codebase using tree-sitter AST parsing and exposes structured JSON data via a REST API and WebSocket interface. It provides 41 analysis commands covering code search, call tracing, impact analysis, security auditing, quality scoring, and refactoring safety — all powered by a Python CLI that outputs machine-readable JSON. Connect any client (AI agent, editor plugin, custom dashboard) to consume real-time codebase intelligence.
+> **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
----
+CodeLens is a CLI tool that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, and dead code by scanning the workspace and building a real-time reference registry of every class, ID, function, and their relationships.
 
-## Prerequisites
+## Features
 
-- **Python 3.10+** with `tree-sitter` and `tree-sitter-languages` installed
-- **Node.js 18+** or **Bun** (for the API server)
-- **SQLite** (bundled, no separate install needed)
-- A virtual environment with tree-sitter bindings (run `bash skills/codelens/setup.sh` once)
+- **41 CLI Commands** — From basic scan/query to vulnerability scanning and performance hints
+- **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, SCSS
+- **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, and more
+- **Incremental Scanning** — Only re-parse changed files for speed
+- **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
+- **JSON Output** — All commands output structured JSON for easy programmatic consumption
+- **Pre-write Safety** — Check if a class/id/function already exists before creating it
+- **Impact Analysis** — Predict what breaks if you modify or delete a symbol
+- **Security Auditing** — Detect hardcoded secrets, data flow taint analysis, CVE scanning
+- **Quality Scoring** — Code smells, complexity metrics, dead code detection
+- **CSS Deep Analysis** — Unused variables, orphan keyframes, specificity wars, z-index abuse
+- **Performance Hints** — N+1 queries, sync blocking, memory leaks, expensive renders
 
----
-
-## Setup
+## Quick Start
 
 ```bash
-# 1. Clone the repo
+# Install dependencies (tree-sitter grammars + watchdog)
+bash setup.sh
+
+# Initialize workspace (auto-detects frameworks)
+python3 scripts/codelens.py init /path/to/workspace
+
+# Scan workspace and build registry
+python3 scripts/codelens.py scan /path/to/workspace
+
+# Check if "btn-primary" already exists before creating it
+python3 scripts/codelens.py query "btn-primary" /path/to/workspace --domain frontend
+
+# List all dead code
+python3 scripts/codelens.py list /path/to/workspace --domain all --filter dead
+
+# Detect frameworks
+python3 scripts/codelens.py detect /path/to/workspace
+```
+
+### Workspace Auto-Detect (v5.1+)
+
+If you omit the workspace path, CodeLens auto-detects it:
+
+```bash
+python3 scripts/codelens.py scan              # Auto-detect workspace
+python3 scripts/codelens.py query "btn-primary" # Auto-detect workspace
+python3 scripts/codelens.py smell              # Auto-detect workspace
+```
+
+## Command Reference
+
+### Core Commands (P0 — Always Use)
+
+| Command | Description |
+|---------|-------------|
+| `init [workspace]` | Initialize .codelens config with auto-detected frameworks |
+| `scan [workspace] [--incremental] [--full]` | Scan workspace and build registry (`--full` forces full rescan) |
+| `query "name" [workspace] [--domain] [--file]` | Pre-write check: does this name already exist? |
+| `list [workspace] [--domain] [--filter]` | List entries with filter (dead, collision, duplicate, etc.) |
+| `detect [workspace]` | Detect frameworks and show recommended config |
+| `watch [workspace]` | Start file watcher for real-time registry updates |
+
+### Search & Understanding (P1)
+
+| Command | Description |
+|---------|-------------|
+| `search "pattern" [workspace] [--type] [--context]` | Regex search across workspace |
+| `symbols "name" [workspace] [--fuzzy]` | Search symbol in registry |
+| `trace "name" [workspace] [--direction] [--depth]` | Deep call chain tracing |
+| `impact "name" [workspace] [--action]` | Change impact analysis |
+| `context "name" [workspace]` | Rich symbol context (definition, callers, callees) |
+| `outline [workspace] [--file] [--all]` | File structure outline |
+| `missing-refs [workspace]` | Detect CSS/HTML mismatches |
+| `dependents "file" [workspace]` | Module-level import tracking |
+
+### Quality & Security (P0-P1)
+
+| Command | Description |
+|---------|-------------|
+| `secrets [workspace]` | Detect hardcoded API keys, passwords, tokens |
+| `vuln-scan [workspace]` | Scan dependencies for known CVEs |
+| `dataflow [workspace] [--source] [--sink]` | Data flow taint analysis |
+| `env-check [workspace]` | Audit environment variables |
+| `smell [workspace]` | Code smell detection with health score |
+| `complexity [workspace]` | Cyclomatic/cognitive complexity scoring |
+| `dead-code [workspace]` | Enhanced dead code detection |
+| `debug-leak [workspace]` | Detect leftover debug code |
+
+### Understanding & Architecture (P1)
+
+| Command | Description |
+|---------|-------------|
+| `entrypoints [workspace]` | Map execution entry points |
+| `api-map [workspace]` | Map REST/GraphQL routes to handlers |
+| `state-map [workspace]` | Track global state management |
+| `diff [workspace]` | Compare registry snapshots |
+| `circular [workspace]` | Detect circular dependencies |
+| `validate [workspace]` | Validate registry vs file system |
+
+### Refactoring & Analysis (P2-P3)
+
+| Command | Description |
+|---------|-------------|
+| `refactor-safe "name" [workspace]` | Pre-flight rename/move safety check |
+| `side-effect [workspace] [--name]` | Pure vs impure function analysis |
+| `stack-trace "name" [workspace]` | Error propagation simulation |
+| `test-map [workspace]` | Test coverage mapping |
+| `config-drift [workspace]` | Dependency drift detection |
+| `type-infer [workspace]` | Lightweight type inference |
+| `ownership [workspace]` | Git blame code ownership |
+| `regex-audit [workspace]` | ReDoS-vulnerable regex auditing |
+| `a11y [workspace]` | Accessibility auditing (WCAG 2.1) |
+| `perf-hint [workspace]` | Performance anti-pattern detection |
+| `css-deep [workspace]` | Deep CSS analysis |
+
+## Query Decision Rules
+
+| Query Result | Action |
+|-------------|--------|
+| `found: false` | SAFE — create new |
+| `found: true` + `status: active` | EXTEND — don't overwrite |
+| `found: true` + `status: dead` | ASK user — reuse or delete? |
+| `found: true` + `status: duplicate_ref` | LIST all referrers first |
+| `found: true` + `status: collision` | STOP — active bug, fix first |
+
+## Impact Risk Levels
+
+| Risk Level | Action |
+|-----------|--------|
+| `critical` | DO NOT change. Report to user. |
+| `high` | Warning. List all affected first. |
+| `medium` | Caution. Run tests. |
+| `low` | Safe, proceed. |
+
+## Supported Languages & Frameworks
+
+**Languages:** HTML, CSS, SCSS, Less, JavaScript, TypeScript, TSX/JSX, Rust, Python, Vue SFC, Svelte
+
+**Frameworks:** React/Next.js, Vue/Nuxt, Svelte/SvelteKit, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI
+
+**Package Managers:** npm, yarn, pnpm, bun, cargo, pip, go modules
+
+## Architecture
+
+```
+codelens/
+├── SKILL.md                    # Full documentation for AI agents
+├── SKILL-QUICK.md              # Quick reference (concise)
+├── README.md                   # This file
+├── LICENSE.txt                 # MIT License
+├── setup.sh                    # Dependency installer
+├── skill.json                  # Metadata
+├── references/                 # Detailed reference docs
+│   ├── parser-rules.md         # Parsing rules per language
+│   ├── query-examples.md       # Query usage examples
+│   ├── status-codes.md         # Status & flag reference
+│   ├── changelog.md            # Version changelog
+│   └── agent-integration.md    # AI agent integration guide
+└── scripts/
+    ├── codelens.py             # CLI entry point (41 commands)
+    ├── registry.py             # Registry read/write/build
+    ├── base_parser.py          # Base tree-sitter parser
+    ├── grammar_loader.py       # Lazy tree-sitter grammar loader
+    ├── framework_detect.py     # Framework auto-detection
+    ├── incremental.py          # Incremental scan support
+    ├── edge_resolver.py        # Cross-file edge resolution
+    ├── search_engine.py        # Regex code search
+    ├── trace_engine.py         # Call chain tracing
+    ├── impact_engine.py        # Change impact analysis
+    ├── outline_engine.py       # File structure outline
+    ├── missing_refs.py         # CSS/HTML mismatch detection
+    ├── diff_engine.py          # Registry diff/snapshots
+    ├── circular_engine.py      # Circular dependency detection
+    ├── context_engine.py       # Rich symbol context
+    ├── dependents_engine.py    # Module import tracking
+    ├── validate_engine.py      # Registry validation
+    ├── dataflow_engine.py      # Data flow taint analysis
+    ├── smell_engine.py         # Code smell detection
+    ├── sideeffect_engine.py    # Side-effect analysis
+    ├── refactor_safe_engine.py # Refactoring safety check
+    ├── deadcode_engine.py      # Enhanced dead code detection
+    ├── stacktrace_engine.py    # Error propagation simulation
+    ├── testmap_engine.py       # Test coverage mapping
+    ├── configdrift_engine.py   # Dependency drift detection
+    ├── typeinfer_engine.py     # Lightweight type inference
+    ├── ownership_engine.py     # Git blame ownership
+    ├── secrets_engine.py       # Hardcoded secret detection
+    ├── entrypoints_engine.py   # Entry point mapping
+    ├── apimap_engine.py        # API route mapping
+    ├── statemap_engine.py      # State management tracking
+    ├── envcheck_engine.py      # Environment variable audit
+    ├── debugleak_engine.py     # Debug code leak detection
+    ├── complexity_engine.py    # Complexity scoring
+    ├── regexaudit_engine.py    # Regex auditing
+    ├── a11y_engine.py          # Accessibility auditing
+    ├── vulnscan_engine.py      # Vulnerability scanning
+    ├── perfhint_engine.py      # Performance hints
+    ├── cssdeep_engine.py       # Deep CSS analysis
+    └── parsers/
+        ├── __init__.py
+        ├── html_parser.py      # Tree-sitter HTML parser
+        ├── css_parser.py       # Tree-sitter CSS parser
+        ├── js_frontend_parser.py # JS DOM selector parser
+        ├── js_backend_parser.py  # JS function call graph parser
+        ├── rust_parser.py      # Rust function call graph parser
+        ├── tsx_parser.py       # TSX/JSX React component parser
+        ├── vue_parser.py       # Vue SFC parser
+        ├── svelte_parser.py    # Svelte component parser
+        └── tailwind_detector.py # Tailwind utility analyzer
+```
+
+## Requirements
+
+- Python 3.8+
+- tree-sitter + language grammars (auto-installed by setup.sh)
+- watchdog (optional, for file watching)
+- git (optional, for ownership analysis)
+
+## Installation
+
+```bash
+# Clone the repository
 git clone https://github.com/Wolfvin/CodeLens.git
 cd CodeLens
 
-# 2. Copy and edit the environment config
-cp .env.example .env
-# Edit .env — at minimum set CODELENS_PYTHON and CODELENS_SCRIPT:
-#   CODELENS_PYTHON=/path/to/your/venv/bin/python3
-#   CODELENS_SCRIPT=./skills/codelens/scripts/codelens.py
+# Run setup
+bash setup.sh
 
-# 3. Install dependencies
-bun install   # or: npm install
-
-# 4. Install tree-sitter (one-time)
-bash skills/codelens/setup.sh
-
-# 5. Start the dev server
-bun run dev
+# Verify
+python3 scripts/codelens.py --help
 ```
 
-The API server starts on **port 3000**. The WebSocket server runs on **port 3030**.
+## Integration with AI Agents
 
----
+CodeLens is designed to be used by AI coding agents. The full integration guide is in [references/agent-integration.md](references/agent-integration.md).
 
-## API Endpoints
+**Key principle:** Before an AI writes any new class, ID, or function, it MUST query CodeLens first to check for collisions, overwrites, and dead code.
 
-### `GET /api/graph?workspace=/path/to/project`
+## Contributing
 
-Runs a full scan of the workspace and returns normalized graph data — nodes, edges, clusters, health score, coupling, and heatmap. This is the primary endpoint for fetching the complete codebase graph.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Example request:**
+## Security
 
-```bash
-curl "http://localhost:3000/api/graph?workspace=/home/user/my-project"
-```
-
-**Example response:**
-
-```json
-{
-  "nodes": [
-    {
-      "id": "be_fn_handleAuth",
-      "label": "handleAuth",
-      "type": "function",
-      "domain": "backend",
-      "status": "active",
-      "file": "src/auth.ts",
-      "line": 42,
-      "clusterId": "api",
-      "radius": 8,
-      "color": "#63b3ed",
-      "data": { "refCount": 3, "async": true }
-    }
-  ],
-  "edges": [
-    {
-      "id": "e_1_m1abc",
-      "source": "be_fn_handleAuth",
-      "target": "be_fn_validateToken",
-      "type": "calls",
-      "weight": 2,
-      "status": "active"
-    }
-  ],
-  "clusters": [
-    {
-      "id": "api",
-      "label": "API",
-      "icon": "📡",
-      "tint": "#63b3ed",
-      "nodeIds": ["be_fn_handleAuth", "be_fn_validateToken"],
-      "cohesion": 0.85
-    }
-  ],
-  "healthScore": {
-    "overall": 78,
-    "quality": 82,
-    "security": 65,
-    "coverage": 60,
-    "dependency": 90,
-    "architecture": 75,
-    "maintainability": 80
-  },
-  "coupling": [
-    { "nodeId": "be_fn_handleAuth", "inDegree": 3, "outDegree": 5, "instability": 0.63 }
-  ],
-  "heatmap": [
-    { "nodeId": "be_fn_handleAuth", "score": 0.89, "factors": ["high-fan-out", "async-complexity"] }
-  ]
-}
-```
-
-### `POST /api/command`
-
-Execute any of the 41 CodeLens CLI commands and receive a normalized `GraphEvent` in response. This is the general-purpose command endpoint.
-
-**Example request:**
-
-```bash
-curl -X POST http://localhost:3000/api/command \
-  -H "Content-Type: application/json" \
-  -d '{"command": "trace", "args": ["--direction", "up"], "workspace": "/home/user/my-project"}'
-```
-
-**Example response:**
-
-```json
-{
-  "sourceCommand": "trace",
-  "timestamp": 1749500000000,
-  "nodes": [
-    { "id": "be_fn_validateToken", "label": "validateToken", "type": "function", "domain": "backend", "status": "active", "data": {} }
-  ],
-  "edges": [
-    { "id": "e_2_m2def", "source": "be_fn_handleAuth", "target": "be_fn_validateToken", "type": "calls", "weight": 2, "status": "active" }
-  ],
-  "animation": {
-    "type": "flow",
-    "targetNodeIds": ["be_fn_validateToken"],
-    "direction": "up",
-    "speed": 1.5,
-    "intensity": "high"
-  },
-  "metadata": {
-    "riskLevel": "low",
-    "category": "trace",
-    "summary": "Traced 3 nodes from \"validateToken\""
-  }
-}
-```
-
-### `GET /api/health?workspace=/path/to/project`
-
-Returns codebase health metrics: overall score (0–100), per-dimension breakdown, coupling analysis, hotspot heatmap, and optional impact radius for a specific node.
-
-**Query parameters:**
-- `workspace` (required) — absolute path to the project
-- `nodeId` (optional) — compute impact radius for this node
-
-**Example request:**
-
-```bash
-curl "http://localhost:3000/api/health?workspace=/home/user/my-project&nodeId=be_fn_handleAuth"
-```
-
-**Example response:**
-
-```json
-{
-  "healthScore": {
-    "overall": 78,
-    "quality": 82,
-    "security": 65,
-    "coverage": 60,
-    "dependency": 90,
-    "architecture": 75,
-    "maintainability": 80
-  },
-  "coupling": [
-    { "nodeId": "be_fn_handleAuth", "inDegree": 3, "outDegree": 5, "instability": 0.63 }
-  ],
-  "heatmap": [
-    { "nodeId": "be_fn_handleAuth", "score": 0.89, "factors": ["high-fan-out"] }
-  ],
-  "impactRadius": {
-    "nodeId": "be_fn_handleAuth",
-    "directCount": 5,
-    "transitiveCount": 12,
-    "riskLevel": "medium"
-  },
-  "timestamp": 1749500000000
-}
-```
-
----
-
-## WebSocket Events
-
-The WebSocket server (socket.io on port 3030) streams real-time graph updates. Connect with any socket.io client.
-
-### `command`
-
-Send a CLI command through the WebSocket. The server executes it, normalizes the result, and broadcasts a `graph_event` to all connected clients.
-
-**Client emits:**
-
-```json
-{
-  "command": "scan",
-  "args": ["/home/user/my-project"]
-}
-```
-
-**Server responds with `command_result`:**
-
-```json
-{
-  "command": "scan",
-  "result": { "frontend": { "classes": [], "ids": [] }, "backend": { "nodes": [], "edges": [] } }
-}
-```
-
-### `graph_init`
-
-Broadcast when a scan completes or on client connection (if graph data exists). Contains the full graph state.
-
-**Payload:**
-
-```json
-{
-  "nodes": [ { "id": "be_fn_handleAuth", "label": "handleAuth", ... } ],
-  "edges": [ { "source": "be_fn_handleAuth", "target": "be_fn_validateToken", ... } ]
-}
-```
-
-### `graph_event`
-
-Broadcast after any command execution. Contains incremental updates as a `GraphEvent` with nodes, edges, animation hints, and metadata.
-
-**Payload:**
-
-```json
-{
-  "event": {
-    "sourceCommand": "impact",
-    "timestamp": 1749500000000,
-    "nodes": [ { "id": "be_fn_handleAuth", "status": "critical", ... } ],
-    "edges": [ { "source": "be_fn_handleAuth", "target": "be_fn_validateToken", ... } ],
-    "animation": { "type": "alarm", "targetNodeIds": ["be_fn_handleAuth"], "intensity": "critical" },
-    "metadata": { "riskLevel": "critical", "category": "impact", "summary": "3 nodes affected, risk=critical" }
-  }
-}
-```
-
-### `node_detail`
-
-Sent in response to a `select_node` event. Contains rich context for a specific node: callers, callees, references, side effects, complexity, and more.
-
-**Client emits:**
-
-```json
-{ "node_id": "be_fn_handleAuth" }
-```
-
-**Server responds with `node_detail`:**
-
-```json
-{
-  "node_id": "be_fn_handleAuth",
-  "detail": {
-    "node": { "id": "be_fn_handleAuth", "label": "handleAuth", "type": "function", ... },
-    "callers": [ { "fn": "main", "file": "src/index.ts", "line": 10 } ],
-    "callees": [ { "fn": "validateToken", "file": "src/auth.ts", "line": 55 } ],
-    "complexity": 7,
-    "purity": 0.4,
-    "sideEffects": ["writes: session.cookie"]
-  }
-}
-```
-
----
-
-## 41 CLI Commands
-
-### Core
-
-| Command | Description |
-|---------|-------------|
-| `init` | Initialize `.codelens` config in a workspace |
-| `scan` | Scan workspace and build the node/edge registry |
-| `query` | Look up a symbol by name and return its details |
-| `list` | List registry entries with optional domain/type filter |
-| `detect` | Auto-detect frameworks used in the workspace |
-| `watch` | Watch for file changes, re-scan with debounce, generate outline.json + summary.json |
-| `handbook` | Project handbook for AI agents (one-stop orientation) |
-| `ask` | Natural language query router |
-
-### Search & Trace (P1)
-
-| Command | Description |
-|---------|-------------|
-| `search` | Search code patterns across the workspace |
-| `symbols` | Search registry symbols by name (supports fuzzy) |
-| `trace` | Trace a symbol's call chain (up/down/bidirectional) |
-| `impact` | Analyze change impact for a symbol |
-| `dependents` | Module-level import tracking |
-| `stack-trace` | Error propagation simulation |
-
-### Outline & Diff (P2)
-
-| Command | Description |
-|---------|-------------|
-| `outline` | Get file structure outline |
-| `missing-refs` | Detect CSS/HTML selector mismatches |
-| `diff` | Compare registry snapshots |
-| `circular` | Detect circular dependencies |
-
-### Context & Analysis (P3)
-
-| Command | Description |
-|---------|-------------|
-| `context` | Get rich symbol context (callers, callees, refs) |
-| `validate` | Validate registry against file system |
-| `test-map` | Test coverage mapping |
-| `config-drift` | Dependency drift detection |
-| `type-infer` | Lightweight type inference |
-| `ownership` | Git blame code ownership analysis |
-| `entrypoints` | Map execution entry points |
-| `api-map` | Map REST/GraphQL routes to handlers |
-| `state-map` | Track global state management |
-
-### Security
-
-| Command | Description |
-|---------|-------------|
-| `secrets` | Detect hardcoded secrets and API keys |
-| `vuln-scan` | Dependency vulnerability scanning (CVE database) |
-| `dataflow` | Data flow analysis (source to sink, taint detection) |
-| `env-check` | Audit environment variables |
-| `regex-audit` | Detect ReDoS-vulnerable regex patterns |
-
-### Quality
-
-| Command | Description |
-|---------|-------------|
-| `smell` | Code smell detection (10 categories) |
-| `complexity` | Cyclomatic/cognitive complexity scoring |
-| `debug-leak` | Detect leftover debug code |
-| `dead-code` | Enhanced dead code detection |
-| `a11y` | Accessibility auditing (WCAG 2.1) |
-
-### Performance & CSS
-
-| Command | Description |
-|---------|-------------|
-| `perf-hint` | Performance anti-pattern detection |
-| `css-deep` | Deep CSS analysis (unused vars, specificity wars, z-index abuse) |
-
-### Refactoring
-
-| Command | Description |
-|---------|-------------|
-| `refactor-safe` | Pre-flight rename/move safety check |
-| `side-effect` | Function side-effect analysis (pure vs impure) |
-
----
-
-## Running Dev vs Production
-
-### Development
-
-```bash
-# Terminal 1: API server (port 3000)
-bun run dev
-
-# Terminal 2: WebSocket server (port 3030)
-cd mini-services/codelens-ws && bun run index.ts
-```
-
-### Production
-
-```bash
-# Build and start the API server
-bun run build
-bun run start
-
-# WebSocket server (background or via process manager)
-cd mini-services/codelens-ws && NODE_ENV=production bun run index.ts
-```
-
-### Reverse Proxy (Caddy)
-
-The included `Caddyfile` proxies port 81 to the Next.js server on 3000, with WebSocket support via the `XTransformPort` query parameter:
-
-```
-:81 {
-    handle {
-        reverse_proxy localhost:3000
-    }
-}
-```
-
----
-
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `CODELENS_PYTHON` | **Yes** | — | Path to Python 3 with tree-sitter installed |
-| `CODELENS_SCRIPT` | **Yes** | — | Path to `codelens.py` CLI script |
-| `CODELENS_WS_PORT` | No | `3030` | WebSocket server port |
-| `CORS_ORIGIN` | No | `*` | Allowed origin(s) for CORS |
-| `DATABASE_URL` | No | `file:./db/custom.db` | SQLite database path |
-| `NODE_ENV` | No | — | `development` or `production` |
-
----
-
-## Project Structure
-
-```
-CodeLens/
-├── src/
-│   ├── app/api/          # REST API routes (graph, command, health)
-│   │   ├── graph/route.ts
-│   │   ├── command/route.ts
-│   │   └── health/route.ts
-│   ├── lib/              # Core backend logic
-│   │   ├── commandRunner.ts   # CLI command execution + whitelist
-│   │   ├── normalizer.ts      # CLI JSON → GraphEvent normalizer
-│   │   ├── clusterEngine.ts   # Auto-clustering logic
-│   │   ├── healthScore.ts     # Health/coupling/heatmap scoring
-│   │   ├── graphStore.ts      # In-memory graph store
-│   │   ├── graphDiff.ts       # Graph diff computation
-│   │   ├── analysisStore.ts   # Analysis result cache
-│   │   ├── db.ts              # Prisma/SQLite connection
-│   │   └── utils.ts           # Shared utilities
-│   └── types/
-│       └── neural.ts          # Unified type system
-├── mini-services/
-│   └── codelens-ws/      # Socket.io WebSocket server
-│       └── index.ts
-├── skills/codelens/       # CodeLens Python CLI (v5.8)
-│   ├── scripts/           # 41 command engines + parsers
-│   │   ├── commands/      # Modular CLI commands (auto-registered)
-│   │   ├── formatters/    # Markdown/JSON output formatters
-│   │   ├── parsers/       # Tree-sitter + fallback parsers
-│   │   ├── utils.py       # Shared utilities, constants, logger
-│   │   ├── convention_engine.py  # Semantic convention detection
-│   │   └── codelens.py    # CLI entry point (~307 lines)
-│   ├── tests/             # Python unit tests
-│   └── setup.sh           # One-time tree-sitter setup
-├── __tests__/             # Backend integration tests
-├── db/                    # SQLite database
-├── .env.example           # Environment variable template
-└── next.config.ts         # Next.js config (standalone output)
-```
-
----
-
-## Watch Mode (File Watcher)
-
-The `watch` command monitors your workspace for file changes, re-scans automatically, and generates AI-friendly output files. It uses debounce to coalesce rapid changes and prints a clean one-line summary instead of raw JSON.
-
-```bash
-# Watch with default 0.5s debounce
-python3 skills/codelens/scripts/codelens.py watch /path/to/project
-
-# Custom debounce interval
-python3 skills/codelens/scripts/codelens.py watch /path/to/project --debounce 1.0
-
-# Short flag
-python3 skills/codelens/scripts/codelens.py watch /path/to/project -d 2.0
-```
-
-**Terminal output (clean one-line summary):**
-```
-[CodeLens] Scanning /path/to/project...
-[14:32:01] ✓ 87 files | 312 funcs | 45 classes | 203 nodes | 156 edges
-[CodeLens] Watching /path/to/project (debounce: 0.5s) — Press Ctrl+C to stop
-  Changed: src/auth.ts
-[14:32:15] ✓ 87 files | 314 funcs | 45 classes | 205 nodes | 158 edges | 1 changed
-```
-
-**Generated output files** (in `.codelens/`):
-- `.codelens/outline.json` — per-file detail (functions, classes, imports, exports)
-- `.codelens/summary.json` — aggregate totals (file count, function count, language breakdown, node/edge counts)
-
----
+See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
-See [skills/codelens/LICENSE.txt](skills/codelens/LICENSE.txt).
+MIT License — see [LICENSE.txt](LICENSE.txt)
+
+## Changelog
+
+See [references/changelog.md](references/changelog.md) for version history.

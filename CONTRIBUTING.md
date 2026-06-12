@@ -58,7 +58,7 @@ Commands auto-register via `commands/__init__.py` — no manual wiring needed.
 ```bash
 # Clone the repository
 git clone https://github.com/Wolfvin/CodeLens.git
-cd CodeLens/skills/codelens
+cd CodeLens
 
 # Run setup
 bash setup.sh

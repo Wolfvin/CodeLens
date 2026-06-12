@@ -220,13 +220,13 @@ The agent must set the environment variable `CODELENS_DIR` before calling the CL
 
 ```bash
 # In the agent's setup/init phase
-export CODELENS_DIR="/path/to/skills/codelens"
+export CODELENS_DIR="/path/to/codelens"
 ```
 
 Or use the full path directly:
 
 ```bash
-python3 /path/to/skills/codelens/scripts/codelens.py <command> <args>
+python3 /path/to/codelens/scripts/codelens.py <command> <args>
 ```
 
 ### 2.3 Calling from Agent Code
@@ -237,7 +237,7 @@ python3 /path/to/skills/codelens/scripts/codelens.py <command> <args>
 import subprocess
 import json
 
-CODELENS_DIR = "/path/to/skills/codelens"
+CODELENS_DIR = "/path/to/codelens"
 CODELENS_CLI = f"{CODELENS_DIR}/scripts/codelens.py"
 
 def codelens_scan(workspace: str, incremental: bool = False) -> dict:
@@ -275,7 +275,7 @@ def codelens_list(workspace: str, domain: str = "all", filter_type: str = "all")
 ```javascript
 const { execSync } = require('child_process');
 
-const CODELENS_DIR = '/path/to/skills/codelens';
+const CODELENS_DIR = '/path/to/codelens';
 const CODELENS_CLI = `${CODELENS_DIR}/scripts/codelens.py`;
 
 function codelensScan(workspace, incremental = false) {
@@ -324,7 +324,7 @@ import sys
 import os
 
 # Add CodeLens scripts to Python path
-CODELENS_DIR = "/path/to/skills/codelens"
+CODELENS_DIR = "/path/to/codelens"
 sys.path.insert(0, os.path.join(CODELENS_DIR, "scripts"))
 
 # Now import CodeLens modules
@@ -1600,7 +1600,7 @@ import os
 import sys
 
 # Add CodeLens to path
-sys.path.insert(0, "/path/to/skills/codelens/scripts")
+sys.path.insert(0, "/path/to/codelens/scripts")
 
 from codelens import cmd_scan, cmd_query, cmd_list, cmd_init, cmd_detect
 
