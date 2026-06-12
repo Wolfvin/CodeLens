@@ -5,6 +5,39 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] — 2026-06-12
+
+### Tested against Wilfred/difftastic (Rust CLI diff tool, 30K nodes, polyglot: Rust + C + JS + PHP test fixtures)
+
+Real-world test on a pure Rust CLI project with vendored tree-sitter parsers and
+sample/demo fixture directories. Identified and fixed 8 major issues caused by
+scanning non-project code (minified files, test fixtures, vendored code).
+
+### Added
+
+- **Auto-exclude minified files**: `.min.js` and `.min.css` files are now skipped during scan, entrypoints detection, and dead-code analysis. These files produce massive false positives (fake entrypoints, fake debug leaks, god objects from minified code) and contain no meaningful analysis data.
+- **Auto-exclude fixture/sample/demo directories**: `demo_files/`, `sample_files/`, `testdata/`, `test_data/`, `test-fixtures/`, `fixtures/` are now in `DEFAULT_IGNORE_DIRS`. Prevents test fixture files from polluting real codebase analysis.
+- **Auto-exclude vendored code directories**: `vendored_parsers/`, `vendored/`, `third_party/`, `thirdparty/`, `external/`, `submodules/` are now in `DEFAULT_IGNORE_DIRS`. Vendored code is not project code and should not be analyzed.
+- **File-count-weighted framework detection**: Frameworks are now validated against actual file counts. A project with only 1-2 PHP files (likely test fixtures) will no longer be classified as a "PHP project". Frameworks with <5% of total source files are pruned from detection results.
+- **Standard library method tagging**: Common Rust/Python/JS standard library methods (`.to_owned()`, `.map()`, `.clone()`, `.unwrap()`, `len()`, `str()`, `.forEach()`, etc.) are now tagged as `std_lib` instead of `unresolved` in callee analysis. This prevents agents from chasing dead ends in the standard library.
+- **Ask routing for architecture/module questions**: Natural language questions like "what are the main modules?", "architecture?", "codebase structure?", "project layout?" now route to `handbook` instead of falling through to code search.
+- **Outline shows function names**: The `outline` command in markdown format now displays actual function/class names with line numbers, not just counts. E.g., `**functions:** 10 — main (L142), diff_file (L404), ...` instead of `**functions:** 10`.
+- **Scan respects DEFAULT_IGNORE_DIRS**: The scan command's `discover_files()` now checks `DEFAULT_IGNORE_DIRS` in addition to config ignore patterns. Previously, fixture and vendored directories were excluded by engines but NOT by the scan file discovery.
+
+### Fixed
+
+- **Dead-code total display**: Markdown formatter used `stats.get('total_dead', 0)` but the actual key is `total_dead_code`. This caused "Total dead: 0" even when findings were listed. Now correctly shows the total.
+- **Query name display in markdown**: Multi-match query results stored the name in `"query"` key but the markdown formatter looked for `"name"`. This caused `Query: `` (empty name)`. Now checks both `"name"` and `"query"` keys.
+- **PHP false positive in framework detection**: A single PHP test file in a fixture directory would cause the entire project to be classified as using PHP. Now requires >=3 PHP files or significant PHP file ratio.
+- **Tailwind false positive in framework detection**: Tailwind CSS detection from test fixture HTML files no longer triggers for non-web projects.
+- **Minified JS false positives**: `asciinema-player.min.js` and similar files no longer produce fake entrypoints (set_interval, dom_event_listener, jest_it), fake debug leaks, fake god objects, or fake performance hints.
+
+### Changed
+
+- **Version bump**: 5.8.1 → 6.4.0
+- **Health score more accurate**: On difftastic, health score dropped from 60 → 40 after removing false positives from vendored/demo files. The lower score is more accurate since it reflects actual project code quality.
+- **Node count reduced**: On difftastic, backend nodes dropped from 30,022 → 606 after excluding demo_files/, sample_files/, and vendored_parsers/. All 29,416 removed nodes were from non-project code.
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

@@ -93,6 +93,10 @@ class BaseEngine:
                 if ext not in self.FILE_EXTENSIONS:
                     continue
 
+                # Skip minified files (.min.js, .min.css) — no meaningful analysis
+                if '.min.js' in filename or '.min.css' in filename:
+                    continue
+
                 file_path = os.path.join(root, filename)
                 rel_path = os.path.relpath(file_path, workspace)
 

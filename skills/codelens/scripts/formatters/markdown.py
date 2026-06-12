@@ -177,7 +177,7 @@ def _md_scan(data: Dict, lines: list) -> None:
 
 def _md_query(data: Dict, lines: list) -> None:
     """Markdown for query command."""
-    name = data.get("name", "") or data.get("node", {}).get("fn", "")
+    name = data.get("name", "") or data.get("query", "") or data.get("node", {}).get("fn", "")
     found = data.get("found", False)
     status = data.get("status", "") or data.get("node", {}).get("status", "")
     action = data.get("action", "")
@@ -305,7 +305,13 @@ def _md_context(data: Dict, lines: list) -> None:
     if callees:
         lines.append("### Callees")
         for c in callees[:10]:
-            resolved = "resolved" if c.get("resolved") else "unresolved"
+            status = c.get("status", "")
+            if status == "std_lib":
+                resolved = "std_lib"  # v6.4: standard library method
+            elif c.get("resolved"):
+                resolved = "resolved"
+            else:
+                resolved = "unresolved"
             lines.append(f"- {c.get('fn', '')} → `{c.get('file', '')}:{c.get('line', '')}` [{resolved}]")
         lines.append("")
 
@@ -333,9 +339,7 @@ def _md_outline(data: Dict, lines: list) -> None:
             lang = outline.get("language", "")
             lines.append(f"### `{file}` ({lang})")
             ol = outline.get("outline", {})
-            for key, items in ol.items():
-                if isinstance(items, list) and items:
-                    lines.append(f"- **{key}:** {len(items)}")
+            _format_outline_items(ol, lines)
             lines.append("")
     else:
         # Single file outline
@@ -343,9 +347,60 @@ def _md_outline(data: Dict, lines: list) -> None:
         lines.append(f"## Outline: `{file}`")
         lines.append("")
         ol = data.get("outline", {})
-        for key, items in ol.items():
-            if isinstance(items, list) and items:
-                lines.append(f"- **{key}:** {len(items)}")
+        _format_outline_items(ol, lines)
+
+
+def _format_outline_items(ol: Dict, lines: list) -> None:
+    """Format outline items with names, not just counts."""
+    # Key ordering for readability
+    key_order = ['imports', 'functions', 'classes', 'interfaces', 'types',
+                 'exports', 'components', 'variables', 'constants']
+    shown_keys = set()
+
+    for key in key_order:
+        items = ol.get(key)
+        if not isinstance(items, list) or not items:
+            continue
+        shown_keys.add(key)
+        names = []
+        for item in items:
+            if isinstance(item, dict):
+                name = item.get('name', item.get('fn', ''))
+                line = item.get('line', item.get('start_line', ''))
+                if name:
+                    if line:
+                        names.append(f"`{name}` (L{line})")
+                    else:
+                        names.append(f"`{name}`")
+            elif isinstance(item, str):
+                names.append(f"`{item}`")
+            if len(names) >= 15:  # Cap at 15 per category
+                remaining = len(items) - len(names)
+                if remaining > 0:
+                    names.append(f"... +{remaining} more")
+                break
+        if names:
+            lines.append(f"- **{key}:** {len(items)} — {', '.join(names)}")
+
+    # Show any remaining keys not in the order list
+    for key, items in ol.items():
+        if key in shown_keys or not isinstance(items, list) or not items:
+            continue
+        names = []
+        for item in items:
+            if isinstance(item, dict):
+                name = item.get('name', item.get('fn', ''))
+                if name:
+                    names.append(f"`{name}`")
+            elif isinstance(item, str):
+                names.append(f"`{item}`")
+            if len(names) >= 15:
+                remaining = len(items) - len(names)
+                if remaining > 0:
+                    names.append(f"... +{remaining} more")
+                break
+        if names:
+            lines.append(f"- **{key}:** {len(items)} — {', '.join(names)}")
 
 
 def _md_impact(data: Dict, lines: list) -> None:
@@ -497,7 +552,7 @@ def _md_dead_code(data: Dict, lines: list) -> None:
     stats = data.get("stats", {})
     lines.append("## Dead Code Analysis")
     lines.append("")
-    lines.append(f"- Total dead: {stats.get('total_dead', 0)}")
+    lines.append(f"- Total dead: {stats.get('total_dead_code', 0)}")
     by_cat = stats.get("by_category", {})
     parts = []
     if by_cat.get("unreachable", 0):

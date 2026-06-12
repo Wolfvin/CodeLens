@@ -304,13 +304,81 @@ def get_callees(node_id: str, edges: List[Dict], nodes: List[Dict]) -> List[Dict
             callee["status"] = node_map[to_id].get("status", "unknown")
         elif to_fn:
             callee["to_fn"] = to_fn
-            callee["resolved"] = False
+            # v6.4: Check if this is a standard library method (Rust/Python/JS)
+            if _is_std_lib_method(to_fn):
+                callee["resolved"] = True
+                callee["status"] = "std_lib"
+            else:
+                callee["resolved"] = False
         else:
             continue
 
         callees.append(callee)
 
     return callees
+
+
+# v6.4: Standard library methods that should not be flagged as "unresolved"
+_STD_LIB_METHODS = frozenset({
+    # Rust std/alloc methods
+    'to_owned', 'to_string', 'into', 'from', 'clone', 'copy', 'default',
+    'as_ref', 'as_mut', 'borrow', 'borrow_mut', 'deref', 'deref_mut',
+    'into_iter', 'iter', 'iter_mut', 'next', 'size_hint',
+    'map', 'filter', 'filter_map', 'flat_map', 'flatten', 'collect',
+    'fold', 'for_each', 'inspect', 'enumerate', 'zip', 'unzip',
+    'chain', 'take', 'skip', 'take_while', 'skip_while',
+    'find', 'find_map', 'position', 'any', 'all',
+    'count', 'sum', 'product', 'min', 'max', 'min_by', 'max_by',
+    'rev', 'peekable', 'partition', 'fuse',
+    'expect', 'unwrap', 'unwrap_or', 'unwrap_or_else', 'unwrap_or_default',
+    'ok', 'err', 'is_ok', 'is_err', 'ok_or', 'ok_or_else',
+    'is_some', 'is_none', 'some', 'none',
+    'push', 'pop', 'len', 'is_empty', 'clear', 'extend', 'append',
+    'insert', 'remove', 'contains', 'get', 'get_mut', 'entry',
+    'capacity', 'reserve', 'shrink_to_fit', 'truncate', 'resize',
+    'sort', 'sort_by', 'sort_unstable', 'sort_unstable_by', 'reverse',
+    'swap', 'split_at', 'join', 'concat', 'repeat',
+    'trim', 'trim_start', 'trim_end', 'split', 'split_whitespace',
+    'lines', 'chars', 'bytes', 'parse', 'format', 'format!',
+    'print', 'println', 'eprint', 'eprintln', 'debug_assert', 'assert',
+    'panic', 'todo', 'unimplemented', 'unreachable',
+    'hash', 'eq', 'ne', 'cmp', 'partial_cmp', 'clone_from',
+    'drop', 'new', 'with_capacity', 'spawn', 'block_on',
+    'read', 'write', 'close', 'seek', 'flush', 'open', 'create',
+    'to_vec', 'to_slice', 'as_slice', 'as_str',
+    'box', 'rc', 'arc', 'cell', 'refcell',
+    # Python builtins
+    'len', 'range', 'print', 'type', 'str', 'int', 'float', 'list',
+    'dict', 'set', 'tuple', 'bool', 'isinstance', 'issubclass',
+    'hasattr', 'getattr', 'setattr', 'delattr', 'callable',
+    'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
+    'any', 'all', 'sum', 'min', 'max', 'abs', 'round', 'pow',
+    'open', 'input', 'format', 'repr', 'id', 'hash', 'dir',
+    'super', 'property', 'staticmethod', 'classmethod',
+    # JavaScript builtins
+    'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf',
+    'toLocaleString', 'constructor', 'prototype',
+    'push', 'pop', 'shift', 'unshift', 'splice', 'slice',
+    'forEach', 'map', 'filter', 'reduce', 'find', 'findIndex',
+    'some', 'every', 'includes', 'indexOf', 'lastIndexOf',
+    'join', 'concat', 'reverse', 'sort', 'flat', 'flatMap',
+    'keys', 'values', 'entries', 'length', 'charAt', 'substring',
+    'toUpperCase', 'toLowerCase', 'trim', 'split', 'replace',
+    'match', 'search', 'test', 'exec', 'parse', 'stringify',
+    'assign', 'freeze', 'keys', 'values', 'entries',
+    'then', 'catch', 'finally', 'resolve', 'reject', 'all', 'race',
+    'JSON', 'Math', 'Date', 'RegExp', 'Error', 'Promise',
+})
+
+
+def _is_std_lib_method(fn_name: str) -> bool:
+    """Check if a function name is a standard library method (v6.4).
+
+    These are common Rust/Python/JS standard library methods that show up
+    as callees but are not defined in the project's codebase. Marking them
+    as 'std_lib' instead of 'unresolved' gives better UX for agents.
+    """
+    return fn_name in _STD_LIB_METHODS
 
 
 # ─── Case Conversion Helpers ────────────────────────────────────

@@ -588,6 +588,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
 
     # 5. Check file patterns (for Vue, Svelte)
+    # Also count files by language for weighting (v6.4)
+    lang_file_counts = {
+        ".php": 0, ".vue": 0, ".svelte": 0,
+        ".rs": 0, ".py": 0, ".js": 0, ".ts": 0,
+        ".go": 0, ".java": 0, ".c": 0, ".cpp": 0,
+    }
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -599,6 +605,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             continue
 
         for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in lang_file_counts:
+                lang_file_counts[ext] += 1
             if f.endswith('.vue') and not detected["has_vue"]:
                 if "vue" not in detected["frameworks"]:
                     detected["frameworks"].append("vue")
@@ -608,9 +617,43 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
             elif f.endswith('.php') and not detected["has_php"]:
-                if "php" not in detected["frameworks"]:
-                    detected["frameworks"].append("php")
-                detected["has_php"] = True
+                # v6.4: Only flag PHP if there are meaningful PHP files (not just 1-2 test fixtures)
+                # Count first, decide after the loop
+                pass
+
+    # v6.4: File-count-weighted framework detection
+    # Only add PHP/Tailwind as framework if the project has meaningful files
+    total_source_files = sum(lang_file_counts.values())
+    if lang_file_counts[".php"] >= 3 and not detected["has_php"]:
+        if "php" not in detected["frameworks"]:
+            detected["frameworks"].append("php")
+        detected["has_php"] = True
+    elif lang_file_counts[".php"] > 0 and not detected["has_php"]:
+        # Only 1-2 PHP files — likely test fixtures, note but don't add as framework
+        pass
+
+    # v6.4: Remove frameworks that are clearly just from test fixtures
+    # If a framework was detected but has <5% of source files, it's likely noise
+    if total_source_files > 20:
+        frameworks_to_remove = []
+        for fw in detected["frameworks"]:
+            fw_file_count = 0
+            if fw == "php":
+                fw_file_count = lang_file_counts[".php"]
+            elif fw == "rust":
+                fw_file_count = lang_file_counts[".rs"]
+            elif fw == "tailwind":
+                # Tailwind is valid even with few CSS files
+                continue
+            if fw_file_count > 0 and fw_file_count / total_source_files < 0.05:
+                frameworks_to_remove.append(fw)
+        for fw in frameworks_to_remove:
+            detected["frameworks"].remove(fw)
+            if fw == "php":
+                detected["has_php"] = False
+
+    # Store file counts for downstream use
+    detected["lang_file_counts"] = lang_file_counts
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
