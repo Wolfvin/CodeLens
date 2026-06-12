@@ -23,6 +23,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
     ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
+    ".lua", ".java", ".cs", ".php", ".zig",
 }
 
 # Performance limits for large codebases
@@ -584,6 +585,26 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
                 continue
+
+            # v6.3: Skip known C/C++ entry point function patterns
+            # These are almost never dead code — they're called by the OS/runtime
+            _c_entry_patterns = {
+                'main', 'WinMain', 'DllMain', 'wmain', '_tmain',
+                'nvim_main',  # neovim pattern
+            }
+            if name in _c_entry_patterns and file_path.endswith(('.c', '.h', '.cpp', '.hpp')):
+                continue
+
+            # v6.3: Skip functions with _main, _init, _start, _entry suffix/prefix in C files
+            # These are typically called by runtime/linker, not by other code
+            if file_path.endswith(('.c', '.h', '.cpp', '.hpp')):
+                lower_name = name.lower()
+                if any(lower_name.endswith(s) for s in ('_main', '_init', '_start', '_entry', '_begin')):
+                    continue
+                if any(lower_name.startswith(s) for s in ('main', 'init', 'start', 'entry')):
+                    # Only skip if the function is at the top level (not a method)
+                    if node_type == "function":
+                        continue
 
             display_name = f"{impl_for}::{name}" if impl_for else name
             dead_items.append({

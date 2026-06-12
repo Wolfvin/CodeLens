@@ -687,6 +687,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
     # These languages are detected but not parsed by tree-sitter.
+    # Note: fallback parsers exist for C/C++, Go, Java, Lua, C# — they ARE parsed, just not via tree-sitter.
     UNSUPPORTED_MARKERS = {
         "go": ["go.mod", "go.sum"],
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
@@ -712,6 +713,78 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("flutter")
                     detected["has_flutter"] = True
                 break
+
+    # 8. Detect additional languages and build systems from file extensions
+    _lang_file_counts = {
+        "c": 0, "cpp": 0, "lua": 0, "java": 0, "go": 0,
+        "csharp": 0, "php": 0, "zig": 0, "python": 0,
+        "rust": 0, "javascript": 0, "typescript": 0,
+    }
+    _lang_extensions = {
+        ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp",
+        ".cc": "cpp", ".cxx": "cpp", ".hh": "cpp", ".hxx": "cpp",
+        ".lua": "lua",
+        ".java": "java",
+        ".go": "go",
+        ".cs": "csharp",
+        ".php": "php",
+        ".zig": "zig",
+        ".py": "python",
+        ".rs": "rust",
+        ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+        ".ts": "typescript", ".tsx": "typescript",
+    }
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            lang = _lang_extensions.get(ext)
+            if lang:
+                _lang_file_counts[lang] = _lang_file_counts.get(lang, 0) + 1
+
+    # Add language frameworks if files exist
+    if _lang_file_counts.get("c", 0) > 0 and "c" not in detected["frameworks"]:
+        detected["frameworks"].append("c")
+    if _lang_file_counts.get("cpp", 0) > 0 and "cpp" not in detected["frameworks"]:
+        detected["frameworks"].append("cpp")
+    if _lang_file_counts.get("lua", 0) > 0 and "lua" not in detected["frameworks"]:
+        detected["frameworks"].append("lua")
+    if _lang_file_counts.get("java", 0) > 0 and "java" not in detected["frameworks"]:
+        detected["frameworks"].append("java")
+    if _lang_file_counts.get("go", 0) > 0 and "golang" not in detected["frameworks"]:
+        detected["frameworks"].append("golang")
+        detected["has_golang"] = True
+    if _lang_file_counts.get("csharp", 0) > 0 and "csharp" not in detected["frameworks"]:
+        detected["frameworks"].append("csharp")
+    if _lang_file_counts.get("php", 0) > 0 and "php" not in detected["frameworks"]:
+        detected["frameworks"].append("php")
+    if _lang_file_counts.get("zig", 0) > 0 and "zig" not in detected["frameworks"]:
+        detected["frameworks"].append("zig")
+
+    # 9. Detect CMake build system
+    if os.path.exists(os.path.join(workspace, "CMakeLists.txt")) and "cmake" not in detected["frameworks"]:
+        detected["frameworks"].append("cmake")
+
+    # 10. Detect Zig build system
+    if os.path.exists(os.path.join(workspace, "build.zig")) and "zig-build" not in detected["frameworks"]:
+        detected["frameworks"].append("zig-build")
+
+    # Store language file counts for downstream use
+    detected["language_file_counts"] = {k: v for k, v in _lang_file_counts.items() if v > 0}
+
+    # Determine polyglot project type
+    active_langs = [k for k, v in _lang_file_counts.items() if v > 0]
+    if len(active_langs) > 1:
+        detected["is_polyglot"] = True
+        detected["project_type"] = "-".join(sorted(active_langs)) + "-polyglot"
+    else:
+        detected["is_polyglot"] = False
 
     return detected
 
