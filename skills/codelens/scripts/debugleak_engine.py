@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -29,7 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger, is_bundled_file
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
-    ".php", ".dart", ".lua", ".java", ".cs",
+    ".nim", ".nims",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -37,7 +37,6 @@ TEST_FILE_PATTERNS = {
     ".test.", ".spec.", "_test.", "_spec.",
     "__tests__", "/tests/", "/test/",
     "test_", "spec_", "_test.py", "_test.rs",
-    "Test.", "/Tests/",   # PHP PHPUnit convention: *Test.php, Tests/ directory
 }
 
 # Performance limits for large codebases
@@ -59,34 +58,13 @@ PRINT_PATTERNS = [
     (r'\bpprint\.pprint\s*\(', "pprint.pprint()"),
     (r'\bpprint\s*\(', "pprint()"),
     (r'\becho\s*\(', "echo()"),
+    (r'\bdebugEcho\s*\(', "debugEcho()"),       # Nim debug-only echo
     (r'\bfmt\.Println\s*\(', "fmt.Println()"),
     (r'\bfmt\.Printf\s*\(', "fmt.Printf()"),
     (r'\bprintln!\s*\(', "println!()"),
     (r'\beprintln!\s*\(', "eprintln!()"),
     (r'\blog\.Debug\s*\(', "log.Debug()"),
     (r'\blog\.Info\s*\(', "log.Info()"),
-    # PHP debug output
-    (r'\bvar_dump\s*\(', "var_dump()"),
-    (r'\bprint_r\s*\(', "print_r()"),
-    (r'\bphpinfo\s*\(', "phpinfo()"),
-]
-
-# v5.9: CLI/framework output functions that are NOT debug leaks.
-# These are legitimate output mechanisms for CLI applications.
-CLI_OUTPUT_ALLOWLIST = [
-    r'\bclick\.echo\s*\(',
-    r'\bclick\.secho\s*\(',
-    r'\bclick\.style\s*\(',
-    r'\bsys\.stdout\.write\s*\(',
-    r'\bsys\.stderr\.write\s*\(',
-    r'\blogging\.\w+\s*\(',
-    r'\blogger\.\w+\s*\(',
-    r'\bconsole\.print\s*\(',     # Rich library
-    r'\bconsole\.log\s*\(',       # Rich library
-    r'\btyper\.echo\s*\(',        # Typer CLI
-    r'\bprint_error\s*\(',        # Common pattern
-    r'\bprint_warning\s*\(',      # Common pattern
-    r'\bprint_success\s*\(',      # Common pattern
 ]
 
 DEBUGGER_PATTERNS = [
@@ -95,50 +73,14 @@ DEBUGGER_PATTERNS = [
     (r'\bpdb\.set_trace\s*\(\s*\)', "pdb.set_trace()"),
     (r'\bpdb\s*\(\s*\)', "pdb()"),
     (r'\bipdb\s*\(\s*\)', "ipdb()"),
+    (r'\bdebug!\s*\(', "debug!()"),
     (r'\bdbg!\s*\(', "dbg!()"),
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
     (r'\bnode\s+--inspect\b', "node --inspect"),
-    # PHP debug/die statements
-    (r'\bdd\s*\(', "dd()"),               # dump and die (Laravel)
-    (r'\bdump\s*\(', "dump()"),           # Symfony VarDumper
-    (r'\bray\s*\(', "ray()"),             # Spatie Ray
-    (r'\bdpm\s*\(', "dpm()"),             # Drupal debug
-    (r'\bkint\s*\(', "kint()"),           # Kint debugger
-    (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
-    (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
-    (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
-    # v6.1: Lua debug patterns
-    (r'\bdebug\.debug\s*\(\s*\)', "debug.debug()"),  # Lua interactive debugger
-    (r'\bdebug\.traceback\s*\(\s*\)', "debug.traceback()"),  # Lua stack trace
-    (r'\bdebug\.dump\s*\(', "debug.dump()"),  # Custom debug dump
-]
-
-# Rust logging macros from the `log` crate — these are NOT debugger statements.
-# They are proper structured logging and should not be flagged as debug leaks.
-# Only `dbg!()` is a true debugger statement (it prints and returns a value for debugging).
-#
-# v5.9.3: Split into production-level (info/warn/error) and debug-level (debug/trace).
-# Production-level macros should NOT be flagged at all — they are appropriate for
-# production code and are controlled by log level at runtime.
-# Debug-level macros (debug!/trace!) are debatable but flag them as low-severity
-# since they might indicate leftover verbose logging.
-RUST_LOG_MACROS_DEBUG_ONLY = [
-    (r'\blog::debug!\s*\(', "log::debug!()"),
-    (r'\blog::trace!\s*\(', "log::trace!()"),
-    (r'\bdebug!\s*\(', "debug!()"),
-    (r'\btrace!\s*\(', "trace!()"),
-    (r'\btracing::debug!\s*\(', "tracing::debug!()"),
-    (r'\btracing::trace!\s*\(', "tracing::trace!()"),
-]
-
-# Production-level Rust logging macros — these should NEVER be flagged as debug leaks.
-# They are proper structured logging controlled by log level at runtime.
-# Checked to explicitly EXCLUDE them from debug leak results.
-RUST_LOG_MACROS_PRODUCTION = [
-    r'\blog::info!\s*\(', r'\blog::warn!\s*\(', r'\blog::error!\s*\(',
-    r'\binfo!\s*\(', r'\bwarn!\s*\(', r'\berror!\s*\(',
-    r'\btracing::info!\s*\(', r'\btracing::warn!\s*\(', r'\btracing::error!\s*\(',
+    (r'\bdoAssert\s*\(', "doAssert()"),      # Nim: debug assertion (not for production)
+    (r'\bdoAssertRaises\s*\(', "doAssertRaises()"),  # Nim: debug exception assertion
+    (r'\bassert\s*\(', "assert()"),          # Nim/Python: debug assertion
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -164,25 +106,6 @@ TEST_SKIP_PATTERNS = [
     (r'#\[ignore\]', "#[ignore]"),
     (r'\.pend\s*\(', ".pend()"),
     (r'\.todo\s*\(', ".todo()"),
-]
-
-# v6.2: PHP test framework patterns that are NOT mock data — they are the proper way to
-# write tests in PHP. These should never be flagged as mock_data leaks.
-PHP_MOCK_ALLOWLIST = [
-    r'\$this->createMock\s*\(',           # PHPUnit mock creation
-    r'\$this->getMockBuilder\s*\(',      # PHPUnit mock builder
-    r'\$this->createStub\s*\(',          # PHPUnit stub creation
-    r'\$this->mock\s*\(',                # Laravel mock helper
-    r'\$this->spy\s*\(',                 # Laravel spy helper
-    r'Mockery::mock\s*\(',               # Mockery framework
-    r'Mockery::spy\s*\(',                # Mockery spy
-    r'Event::fake\s*\(',                 # Laravel event faking
-    r'Bus::fake\s*\(',                   # Laravel bus faking
-    r'Mail::fake\s*\(',                  # Laravel mail faking
-    r'Notification::fake\s*\(',          # Laravel notification faking
-    r'Queue::fake\s*\(',                 # Laravel queue faking
-    r'Storage::fake\s*\(',               # Laravel storage faking
-    r'Event::fakeFor\s*\(',              # Laravel scoped event faking
 ]
 
 MOCK_DATA_PATTERNS = [
@@ -218,9 +141,11 @@ DEV_ONLY_PATTERNS = [
     (r'\bcfg\.Debug\b', "cfg.Debug"),
     (r'\bdebug_mode\b', "debug_mode"),
     (r'\bDEV_MODE\b', "DEV_MODE"),
-    # Rust debug-only guards
-    (r'#\[cfg\(debug_assertions\)\]', "#[cfg(debug_assertions)]"),
-    (r'#\[cfg\(debug_assertions\)\]', "cfg(debug_assertions)"),
+    # Nim: compile-time conditional debug blocks
+    (r'\bwhen\s+defined\s*\(\s*debug\s*\)\s*:', "when defined(debug)"),       # Nim debug guard
+    (r'\bwhen\s+not\s+defined\s*\(\s*release\s*\)\s*:', "when not defined(release)"),  # Nim non-release guard
+    (r'\bwhen\s+defined\s*\(\s*testing\s*\)\s*:', "when defined(testing)"),   # Nim testing guard
+    (r'\bwhen\s+isMainModule\s*:', "when isMainModule"),                      # Nim main module guard
 ]
 
 
@@ -284,10 +209,6 @@ def detect_debug_leaks(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
-
-            # v5.9.3: Skip bundled/compiled files (dist/, .global.js, etc.)
-            if is_bundled_file(rel_path):
-                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -394,43 +315,12 @@ def _detect_console_logs(
                 # Also skip if it's in a dedicated error-handling utility
                 if re.search(r'(logError|handleError|reportError|onError)', context):
                     continue
-                # v6.1: Skip console.error in guard/argument-validation patterns
-                # These are intentional runtime validation errors, not debug leaks.
-                # Pattern: console.error('X has to be a number, got ' + typeof Y)
-                # Pattern: console.error('initialValue must be...', ...)
-                # Also check next 2 lines for multi-line console.error calls
-                next_lines_start = i + 1
-                next_lines_end = min(len(lines), i + 3)
-                multi_line_context = stripped + '\n' + '\n'.join(lines[next_lines_start:next_lines_end])
-                if re.search(r"(has to be|must be|is required|got |invalid|expected )", multi_line_context, re.IGNORECASE):
-                    continue
-                # v6.1: Skip console.error inside if-conditions that check validity
-                # Pattern: if (condition) console.error(...)
-                if re.search(r'if\s*\(.+\)\s*console\.error\s*\(', stripped):
-                    continue
-                # Also check: if the previous non-empty line is an if-condition, this
-                # console.error is inside a guard block — legitimate runtime validation
-                prev_line = lines[i - 1].strip() if i > 0 else ""
-                if prev_line.startswith('if ') or prev_line.startswith('if('):
-                    # Check if it's a type/validity check (typeof, instanceof, etc.)
-                    if re.search(r'(typeof|instanceof|===|!==|>|<|>=|<=)', prev_line):
-                        continue
-                # v6.1: Skip console.error in development-only guards
-                # Pattern: if (process.env.NODE_ENV === 'development') console.error(...)
-                context_start2 = max(0, i - 1)
-                context2 = '\n'.join(lines[context_start2:i + 1])
-                if re.search(r"process\.env\.NODE_ENV\s*===?\s*['\"]development['\"]", context2):
-                    continue
 
             # console.warn in catch blocks is also somewhat legitimate
             if label == "console.warn":
                 context_start = max(0, i - 2)
                 context = '\n'.join(lines[context_start:i + 1])
                 if re.search(r'\bcatch\s*\(', context):
-                    continue
-                # v6.1: Skip console.warn in deprecation/warning patterns
-                # These are intentional user-facing warnings, not debug leaks.
-                if re.search(r"(deprecated|unsupported|not recommended|falling back|fallback)", stripped, re.IGNORECASE):
                     continue
 
             severity = "medium"
@@ -473,20 +363,11 @@ def _detect_print_statements(
                 continue
             if label in ("print()", "pprint()", "pprint.pprint()") and ext not in {".py", ".rs"}:
                 continue
+            if label == "debugEcho()" and ext not in {".nim", ".nims"}:
+                continue
 
             m = re.search(pattern, stripped)
             if not m:
-                continue
-
-            # v5.9: Skip CLI/framework output functions that are NOT debug leaks.
-            # e.g., click.echo() is the standard way to output in CLI apps,
-            # logging.info() is for structured logging, etc.
-            is_cli_output = False
-            for allow_pattern in CLI_OUTPUT_ALLOWLIST:
-                if re.search(allow_pattern, stripped):
-                    is_cli_output = True
-                    break
-            if is_cli_output:
                 continue
 
             # In Python, skip if it's inside __main__ block or a CLI entry point
@@ -513,6 +394,28 @@ def _detect_print_statements(
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
 
+            # Nim: echo() is the standard print mechanism, similar to println! in Rust.
+            # Only flag if in test context or contains debug-specific patterns.
+            if label == "echo()" and ext in {".nim", ".nims"}:
+                has_debug_pattern = bool(re.search(
+                    r'debug|todo|fixme|FIXME|TODO|hack|HACK|TEMP|temp\b|dbg|trace',
+                    stripped, re.IGNORECASE
+                ))
+                if not has_debug_pattern:
+                    continue  # Standard Nim output, not a debug leak
+
+            # Python: Skip echo() if it's a function definition (not a call)
+            # e.g. "def echo(debugger, command, result, internal_dict):" in LLDB extensions
+            if label == "echo()" and ext == ".py":
+                # Check if this is a def echo(...), not a call echo(...)
+                if re.match(r'\s*def\s+echo\s*\(', line):
+                    continue
+                # Also skip if inside an LLDB command handler context
+                context_start = max(0, i - 10)
+                context = '\n'.join(lines[context_start:i + 1])
+                if 'lldb' in context.lower() or 'debugger' in context.split():
+                    continue
+
             severity = "medium"
             should_remove = True
 
@@ -537,72 +440,38 @@ def _detect_print_statements(
 def _detect_debugger_statements(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
-    """Detect debugger; breakpoint(); pdb.set_trace(); dbg! macro.
-
-    Rust `log::debug!()`, `debug!()`, `info!()`, `warn!()`, `error!()`, `trace!()`
-    are structured logging macros from the `log` crate — NOT debugger statements.
-    They are flagged as low-severity `debug_log` instead of high-severity `debugger`.
-    Only `dbg!()` is a true debugger statement (prints value + source location for debugging).
-    """
+    """Detect debugger; breakpoint(); pdb.set_trace(); debug! macro."""
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             continue
 
-        # First check for true debugger statements
         for pattern, label in DEBUGGER_PATTERNS:
             # Language filter
-            if label == "dbg!()" and ext not in {".rs"}:
+            if label in ("debug!()", "dbg!()") and ext not in {".rs"}:
                 continue
             if label in ("pdb.set_trace()", "pdb()", "ipdb()", "breakpoint()") and ext not in {".py"}:
                 continue
             if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
                 continue
-            # v6.2: PHP debug/die patterns only apply to PHP files
-            if label in ("dd()", "dump()", "ray()", "dpm()", "kint()",
-                         "xdebug_var_dump()", "exit;", "die()") and ext != ".php":
-                continue
-            # v6.2: trap() is Delphi/JS, not PHP
-            if label == "trap()" and ext == ".php":
+            if label in ("doAssert()", "doAssertRaises()") and ext not in {".nim", ".nims"}:
                 continue
 
             m = re.search(pattern, stripped)
             if not m:
                 continue
 
-            # v6.2: For PHP, skip dd()/dump() in test files — these are normal test debugging tools.
-            # exit; and die() are too common in legitimate PHP CLI code to flag as debugger statements.
-            if ext == ".php":
-                # In PHP test files, dd() and dump() are standard debugging tools
-                if is_test_file and label in ("dd()", "dump()"):
+            # Nim: doAssert is a debug assertion that crashes in production.
+            # In test files, it's acceptable — only flag in non-test files.
+            if label in ("doAssert()", "doAssertRaises()") and is_test_file:
+                continue
+
+            # Nim/Python: assert() in test files is acceptable
+            if label == "assert()":
+                if ext not in {".nim", ".nims", ".py"}:
                     continue
-                # exit; and die() are common flow control in PHP CLI scripts,
-                # not debugger statements. Only flag them if they look like
-                # debug leftovers (e.g., die('debug') or exit('debug')).
-                if label == "exit;":
-                    continue  # Too common in legitimate PHP code
-                if label == "die()":
-                    # Only flag bare die() with no arguments or with debug-like strings
-                    # die() with a meaningful message is usually legitimate flow control
-                    die_match = re.search(r'\bdie\s*\(\s*\)', stripped)
-                    if not die_match:
-                        # die('some message') — likely legitimate, skip
-                        continue
-                    # Even bare die() is debatable, downgrade severity
-                    severity = "medium"
-                    should_remove = False
-                    leaks.append({
-                        "category": "debugger",
-                        "file": rel_path,
-                        "line": i + 1,
-                        "pattern": label,
-                        "message": f"Potential debugger leftover: {label} (common in PHP CLI scripts)",
-                        "content": stripped[:120],
-                        "match": label,
-                        "severity": severity,
-                        "should_remove": should_remove,
-                    })
-                    break
+                if is_test_file:
+                    continue
 
             severity = "high"
             should_remove = True
@@ -619,47 +488,6 @@ def _detect_debugger_statements(
                 "should_remove": should_remove,
             })
             break
-
-        # Then check for Rust logging macros (not debugger statements, but debug logging)
-        # v5.9.3: Only flag debug/trace level macros. Production macros (info/warn/error)
-        # are proper structured logging and should NOT be flagged at all.
-        if ext == ".rs":
-            # First, skip if this is a production-level log macro (info/warn/error)
-            is_production_log = False
-            for prod_pattern in RUST_LOG_MACROS_PRODUCTION:
-                if re.search(prod_pattern, stripped):
-                    is_production_log = True
-                    break
-
-            if not is_production_log:
-                # Only flag debug/trace level macros
-                for pattern, label in RUST_LOG_MACROS_DEBUG_ONLY:
-                    m = re.search(pattern, stripped)
-                    if not m:
-                        continue
-
-                    # Downgrade severity in test files — logging in tests is expected
-                    if is_test_file:
-                        severity = "low"
-                        should_remove = False
-                        message = f"Debug logging in test: {label}"
-                    else:
-                        severity = "low"
-                        should_remove = False
-                        message = f"Debug-level logging: {label} (consider using info!/warn! for production)"
-
-                    leaks.append({
-                        "category": "debug_log",
-                        "file": rel_path,
-                        "line": i + 1,
-                        "pattern": label,
-                        "message": message,
-                        "content": stripped[:120],
-                        "match": label,
-                        "severity": severity,
-                        "should_remove": should_remove,
-                    })
-                    break
 
 
 def _detect_todo_fixme(
@@ -689,17 +517,6 @@ def _detect_todo_fixme(
                 # Also check if the line itself is a comment (shebang, docstring)
                 if not (stripped.startswith('"""') or stripped.startswith("'''")):
                     continue
-
-            # Skip XXX/BODGE/TEMP when they appear inside string literals
-            # (e.g., test paths like "a/xxx/yyy" or variable names like testData)
-            if label in ("XXX", "TEMP") and not is_comment:
-                match_pos = stripped.upper().find(label)
-                # Check if the match is inside a quoted string
-                before = stripped[:match_pos]
-                single_quotes = before.count("'") - before.count("\\'")
-                double_quotes = before.count('"') - before.count('\\"')
-                if single_quotes % 2 == 1 or double_quotes % 2 == 1:
-                    continue  # Inside a string literal, skip
 
             # Severity varies by marker
             severity_map = {
@@ -750,30 +567,10 @@ def _detect_commented_code(
             i += 1
             continue
 
-        # v5.9.3: Skip Rust doc comments (/// and //!). These are legitimate
-        # documentation, NOT commented-out code. Only plain // comments can be
-        # commented-out code. This prevents massive false positives in Rust repos
-        # where doc comment blocks easily score as "code".
-        if ext == ".rs" and (stripped.startswith("///") or stripped.startswith("//!")):
-            i += 1
-            continue
-
         # Count consecutive commented lines
-        # For Rust: only count lines that are plain comments (// but not /// or //!)
         block_start = i
-        if ext == ".rs":
-            # Rust: group only plain // comments, skip doc comments
-            while i < len(lines):
-                s = lines[i].strip()
-                if s.startswith("///") or s.startswith("//!"):
-                    break  # doc comment — end the block
-                if s.startswith(comment_prefix):
-                    i += 1
-                else:
-                    break
-        else:
-            while i < len(lines) and lines[i].strip().startswith(comment_prefix):
-                i += 1
+        while i < len(lines) and lines[i].strip().startswith(comment_prefix):
+            i += 1
         block_end = i
 
         # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
@@ -868,17 +665,6 @@ def _detect_mock_data(
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             continue
 
-        # v6.2: Skip PHP test framework patterns — createMock(), Mockery::mock(), etc.
-        # are the standard way to write tests in PHP, not debug leaks.
-        if ext == ".php":
-            is_php_mock_framework = False
-            for allow_pattern in PHP_MOCK_ALLOWLIST:
-                if re.search(allow_pattern, stripped):
-                    is_php_mock_framework = True
-                    break
-            if is_php_mock_framework:
-                continue
-
         for pattern, label in MOCK_DATA_PATTERNS:
             # Skip constants that are just ALL_CAPS naming
             if label in ("MOCK_CONSTANT", "FAKE_CONSTANT", "TEST_CONSTANT"):
@@ -889,24 +675,6 @@ def _detect_mock_data(
             m = re.search(pattern, stripped)
             if not m:
                 continue
-
-            # v6.2: For PHP, skip mock patterns that are part of test framework calls
-            # e.g., $mockBuilder = $this->getMockBuilder(...) — the mockBuilder variable
-            # is part of a PHPUnit call, not a standalone mock data definition.
-            if ext == ".php":
-                # Check if the match is preceded by $this-> or part of a framework call
-                match_start = m.start()
-                before_match = stripped[:match_start]
-                if '$this->' in before_match or 'Mockery::' in before_match:
-                    continue
-                # Also skip if the line contains a framework call (even after the match)
-                is_php_framework_call = False
-                for allow_pattern in PHP_MOCK_ALLOWLIST:
-                    if re.search(allow_pattern, stripped):
-                        is_php_framework_call = True
-                        break
-                if is_php_framework_call:
-                    continue
 
             # Additional check: is this actually an assignment/declaration?
             # We want to avoid flagging function parameters like `mockData` in tests
@@ -945,10 +713,16 @@ def _detect_dev_only(
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             # But #ifdef is a comment-style preprocessor directive
+            # And Nim "when defined(debug):" starts with "when", not "#"
             if '#ifdef' not in stripped and '#if' not in stripped:
                 continue
 
         for pattern, label in DEV_ONLY_PATTERNS:
+            # Language filter for Nim-specific patterns
+            if label in ("when defined(debug)", "when not defined(release)",
+                         "when defined(testing)", "when isMainModule") and ext not in {".nim", ".nims"}:
+                continue
+
             m = re.search(pattern, stripped)
             if not m:
                 continue
@@ -958,9 +732,16 @@ def _detect_dev_only(
 
             # Some dev-only checks are legitimate (feature flags)
             # But hardcoded DEBUG checks in production code are suspect
-            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode"):
+            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode",
+                         "when defined(debug)", "when not defined(release)"):
                 should_remove = True
                 severity = "medium"
+
+            # Nim: when isMainModule is legitimate (equivalent to if __name__ == "__main__")
+            # Don't suggest removal, just note it as a dev-only guard
+            if label == "when isMainModule":
+                should_remove = False
+                severity = "low"
 
             leaks.append({
                 "category": "dev_only",
@@ -985,6 +766,7 @@ def _get_comment_prefix(ext: str) -> str:
         ".ts": "//", ".tsx": "//", ".jsx": "//",
         ".py": "#", ".rs": "//", ".go": "//",
         ".rb": "#", ".vue": "//", ".svelte": "//",
+        ".nim": "#", ".nims": "#",
     }
     return prefixes.get(ext, "")
 
@@ -1041,6 +823,16 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         r'\w+\.\w+\(',
         r'\w+\s*,\s*\w+\s*:=',
     ]
+    code_indicators_nim = [
+        r'(?:proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|return|if|elif|else|for|while|case|of|when|try|except|finally|block|defer|discard|raise|yield)\s',
+        r'[{}();:]',
+        r'->',
+        r'\w+\.\w+\(',
+        r'\w+\s*=\s*',
+        r'echo\s*\(',
+        r'new\s+\w+',
+        r'discard\s',
+    ]
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
         indicators = code_indicators_js
@@ -1050,6 +842,8 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         indicators = code_indicators_rs
     elif ext == ".go":
         indicators = code_indicators_go
+    elif ext in {".nim", ".nims"}:
+        indicators = code_indicators_nim
     else:
         indicators = code_indicators_js  # Default to JS-like
 

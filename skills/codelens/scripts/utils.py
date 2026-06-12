@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.9.3"
+CODELENS_VERSION = "5.9.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -427,54 +427,6 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
         return True
-    if lower.endswith('.global.js') or lower.endswith('.global.min.js'):
-        return True
-    if lower.endswith('.umd.js') or lower.endswith('.cjs.js'):
-        return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
-    # Bundled output directories — skip files in dist/, build/, out/ paths
-    # (checked via path, not just filename — callers should pass rel_path)
-    return False
-
-
-# Bundled/compiled output directory patterns
-BUNDLED_DIR_PATTERNS = frozenset({
-    'dist', 'build', 'out', 'bundle', 'bundled', 'compiled', 'output',
-})
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file is in a bundled/compiled output directory or has a bundled filename.
-
-    This is more aggressive than is_generated_file() — it also checks directory paths
-    for common build output folders. Use this for engines where analyzing compiled
-    output makes no sense (e.g., god object detection, complexity analysis).
-
-    Args:
-        rel_path: Relative path from workspace root, e.g. 'dist/app.js'
-
-    Returns:
-        True if the file appears to be bundled/compiled output.
-    """
-    # First check filename-level patterns
-    if is_generated_file(os.path.basename(rel_path)):
-        return True
-
-    lower = rel_path.lower().replace('\\', '/')
-
-    # Check for bundled filename patterns in path
-    bundled_suffixes = (
-        '.global.js', '.global.min.js', '.umd.js',
-        '.bundle.js', '.chunk.js', '.min.js', '.min.css',
-    )
-    if any(lower.endswith(s) for s in bundled_suffixes):
-        return True
-
-    # Check for build output directories in path
-    parts = lower.split('/')
-    for part in parts:
-        if part in BUNDLED_DIR_PATTERNS:
-            return True
-
     return False

@@ -3,315 +3,75 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
-
-## [5.10.0] — 2026-06-12
-
-### Polyglot Expansion — 6 New Language Parsers
-
-**Tested against a polyglot monorepo with 7 languages (Ruby, Elixir, Kotlin, Swift, Dart, Scala, Shell)**
-
-Real-world test on a multi-language project with 56 source files across 7 languages.
-Results: 609 backend nodes, 1,090 edges, 129 active nodes, 94 API routes.
-Before: Only 8 Kotlin files parsed (103 nodes, 0 edges, 0 routes).
-
-#### New Language Parsers (regex-based fallback)
-
-- **Ruby** (`fallback_ruby.py`): Classes, modules, methods (instance & class), attr_accessor/reader/writer,
-  Rails patterns (before_action, has_many, belongs_to, validates, scope), require/require_relative,
-  include/extend, method call edges
-- **Elixir** (`fallback_elixir.py`): defmodule, def/defp, defmacro/defmacrop, use/import/alias/require,
-  Phoenix routes (get/post/put/patch/delete), scope, pipe_through, Ecto schemas (field, has_many, belongs_to),
-  GenServer patterns, pipe operator call chains (|>)
-- **Dart** (`fallback_dart_extra.py`): Classes, abstract classes, mixins, extensions, enums, typedef,
-  factory constructors, Flutter widget detection (StatefulWidget/StatelessWidget),
-  import/export/part, method call edges
-- **Swift** (`fallback_swift.py`): Classes, structs, protocols, extensions, enums, actors,
-  SwiftUI View detection, ObservableObject, async/await patterns, import dependencies,
-  inheritance tracking
-- **Scala** (`fallback_scala.py`): Classes, case classes, objects, traits, sealed traits/classes,
-  implicit functions, Spark patterns, SBT build detection, package/import dependencies,
-  extension method calls
-- **Shell/Bash** (`fallback_shell.py`): Function definitions, export variables,
-  source/. dependencies, Dockerfile patterns (FROM, RUN, ENTRYPOINT, CMD),
-  function call edges
-
-#### New Framework Detection
-
-- **Rails**: Gemfile, config/routes.rb, app/controllers/, app/models/ directory indicators
-- **Phoenix**: mix.exs, config/config.exs, lib/*_web/endpoint.ex indicators
-- **Flutter**: pubspec.yaml, lib/main.dart directory indicators
-- **SwiftUI**: Package.swift, import SwiftUI indicators
-- **Vapor**: Package.swift, import Vapor indicators
-- **Spark**: build.sbt, import org.apache.spark indicators
-- **Akka**: build.sbt, import akka indicators
-- **Play Framework**: build.sbt, conf/application.conf indicators
-
-#### New API Route Extraction
-
-- **Rails** (`routes.rb`): get/post/put/patch/delete, resources, namespace, root
-- **Phoenix** (`router.ex`): get/post/put/patch/delete, resources, scope, pipe_through
-
-#### New Outline Support
-
-- Ruby: modules, classes, methods (instance & class), require
-- Elixir: defmodule, def/defp/defmacro, use/import/alias/require
-- Dart: classes, mixins, enums, extensions, functions, imports
-- Swift: classes, structs, protocols, extensions, enums, functions, imports
-- Scala: case classes, classes, traits, objects, enums, functions, imports
-- Shell: functions, exports, Dockerfile FROM patterns
-
-#### Other Changes
-
-- Updated `unsupported_langs` to remove Ruby, Elixir, Dart, Swift, Scala, Shell (now parsed)
-- Added Kotlin to detected-but-not-unsupported (Java fallback parses .kt files)
-- Extended `_detect_language()` mapping with 14 new extensions
-- Extended `_FILE_PATH_EXTENSIONS` with new language extensions
-- Updated `lang_note` supported set and language name mapping
-- Added framework-specific path configurations for Rails, Phoenix, Flutter, SwiftUI, Vapor, Spark, Akka, Play
-- File discovery: .rb, .ex, .exs, .dart, .swift, .scala, .sh, .bash, .zsh, .rake, Dockerfile, Rakefile, Gemfile, mix.exs
-
-## [6.1.0] — 2026-06-12
-
-### Tested against minetest/minetest (2,430 files: 598 C++ headers + 445 C++ + 206 Lua + 40 GLSL, CMake/C++ game engine with Lua scripting)
-
-Real-world test on a polyglot C++/Lua/GLSL voxel game engine (Luanti/Minetest). This is the first
-test on a non-web, non-API-server project — a native C++ game engine with embedded Lua scripting,
-GLSL shaders, and Android Java support. Identified and fixed major gaps in project identity detection,
-language classification, entry point detection, and tooling recommendations for native/C++ projects.
-
-### Added
-
-- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for `project(Name VERSION X.Y.Z)`, extracting project name and version. Classifies CMake projects as `cpp-game-engine` (C++ + Lua scripting), `qt-desktop-app`, `cpp-graphics`, `cpp-mobile-app`, or `cpp-project` based on CMakeLists.txt content and directory structure.
-- **Lua entry point detection**: New `lua_entry` entrypoint type with 4 patterns: `dofile()`, `require()`, `core.register_*()` (Luanti/Minetest API), and `minetest.register_*()` (legacy Minetest API). These detect game mod registration, script loading, and module initialization patterns.
-- **C++ entry point detection**: Added 4 new C++ entry point patterns: `WinMain` (Windows GUI), `wmain` (Unicode console), `SDL_main` (SDL game), `DllMain` (DLL entry). These cover the most common Windows/native application entry points beyond `int main()`.
-- **Game engine directory hints**: `_build_directory_map()` now recognizes 18 new directory names common in game engines and native C++ projects: `builtin`, `mods`, `games`, `textures`, `fonts`, `shaders`, `client`, `clientmods`, `irr`, `android`, `po`, `worlds`, `include`, `cmake`, `fastlane`, `misc`, etc.
-- **GLSL shader language detection**: `_detect_languages()` now recognizes `.glsl`, `.fsh`, `.vsh`, `.frag`, `.vert` extensions as `glsl` language.
-- **CMake language detection**: `.cmake` extension recognized as `cmake` language.
-- **Game/native framework signatures**: Added 4 new framework signatures in `FRAMEWORK_SIGNATURES`: `sdl` (SDL_Init/SDL_main), `irrlicht` (IrrlichtDevice), `opengl` (glGenBuffers/glBindVertexArray), `vulkan` (VkInstance/vkCreateInstance).
-- **Lua debug leak patterns**: Added 3 new debug leak patterns for Lua: `debug.debug()`, `debug.traceback()`, `debug.dump()`.
-- **C++/Lua/GLSL tooling recommendations**: `_generate_recommendations()` now suggests `clang-tidy` + `cppcheck` for C++ projects, `luacheck` + `lua-language-server` for Lua projects, and `glslangValidator` for GLSL shaders.
-- **CMake/Lua path configuration**: `get_recommended_config()` adds `src/`, `lib/`, `include/` for CMake projects, and `builtin/`, `scripts/`, `mods/` for Lua-scriptable projects.
-- **CMake `has_cmake` flag**: Framework detection now sets `has_cmake` when CMakeLists.txt is found.
-
-### Fixed
-
-- **`.h` headers classified as C instead of C++**: `_detect_languages()` mapped `.h` → `"c"`, but most `.h` files in C++ projects are C++ headers. Now maps `.h` → `"cpp"`, `.hpp` → `"cpp"`, `.hxx` → `"cpp"`.
-- **C/C++ listed as unsupported languages**: `UNSUPPORTED_MARKERS` in `framework_detect.py` listed C and C++ as unsupported even though fallback parsers exist for both. Removed C, C++, Java, and Kotlin from `UNSUPPORTED_MARKERS` — all have working fallback parsers.
-- **Architecture `total_files` only counting tree-sitter-supported files**: `analyze` command showed `total_files: 7` for a 2430-file C++ project because `get_workspace_outline()` only processes tree-sitter-supported languages. Now counts ALL source files across all supported extensions (including .cpp, .h, .lua, .glsl, etc.) and uses `max(outlined, actual)`.
-- **Project type `unknown` for CMake/C++ projects**: `_extract_project_identity()` returned `type: "unknown"` and `version: "0.0.0"` for CMake projects because it only checked `package.json`, `pyproject.toml`, `Cargo.toml`, and `go.mod`. Now also checks `CMakeLists.txt`.
-- **Polyglot type detection missing C++**: The combined type detection (`active_types`) only checked `[js_type, python_type, rust_type, go_type]`. Now also includes `cmake_type`, producing types like `cpp-lua-polyglot` for C++ game engines with Lua scripting.
-
-## [6.5.0] — 2026-06-12
-
-### Tested against SerenityOS/serenity (18,601 source files: 7,447 C/C++, 1,814 HTML, 1,098 JS, 26 Python, C++ OS monorepo)
-
-Real-world test on a complete from-scratch desktop operating system (33.4k stars) with custom kernel,
-userspace libc, GUI toolkit, JS engine (LibJS), and web browser (Ladybird). The largest and most
-architecturally diverse repo tested to date.
-
-### Added
-
-- **C++ project identity detection**: `handbook` now recognizes C++ projects via `CMakeLists.txt`.
-  Extracts project name from `project(Name)` and version from `project(Name VERSION x.y.z)`.
-  Detects three C++ project types: `cpp-os` (Kernel/ directory exists), `cpp-monorepo` (≥3 of
-  AK/Base/Meta/Ports/Tests directories), and `cpp-project` (default CMakeLists.txt-based).
-- **CMake monorepo detection**: Projects with ≥2 subdirectory `CMakeLists.txt` files are detected
-  as monorepos with `monorepo_tools: ["cmake-workspace"]`. Also triggered when Kernel/ directory
-  exists alongside root CMakeLists.txt.
-
-### Fixed
-
-- **C/C++ removed from `unsupported_langs`**: When fallback C/C++ parsers successfully parse files
-  (7,447 in SerenityOS), `c` and `cpp` are removed from the unsupported languages list. The
-  `lang_note` now reads "parsed via fallback parsers (7447 files)" instead of the misleading
-  "not yet supported by tree-sitter parsers".
-- **God object test file false positives**: JS/TS test files in `/Tests/`, `/tests/`, `/test/`,
-  `/__tests__/`, `/spec/`, `/specs/` directories are now skipped with **case-insensitive** matching.
-  Previously, capitalized paths like `LibJS/Tests/` were not caught. 52 false positives eliminated
-  on SerenityOS (critical smells: 1,037 → 985).
-
-## [5.9.3] — 2026-06-12
-
-### Tested against 4 real-world repos: sveltejs/svelte (7,888 files), vitejs/vite (1,445 files), withastro/astro (3,909 files), vercel/swr (252 files)
-
-Multi-repo real-world testing revealed that test file exclusion patterns were incomplete across multiple engines.
-The v5.9.2 fix only covered filename patterns (`.test.`, `.spec.`) but missed directory-based test paths
-(`/tests/`, `/test/`, `/e2e/`, `/samples/`) which caused massive false positive inflation on repos like Svelte
-and Astro that organize tests in directory hierarchies rather than filename conventions.
-
-### Fixed
-
-- **A11y engine still scans test directories** (94% reduction on Svelte: 500 → 29 issues): v5.9.2 skip keywords only included `.test.`, `.spec.`, `__tests__` but not `/tests/`, `/test/`, `/e2e/`, `/samples/` directory paths. Svelte's `packages/svelte/tests/validator/samples/` test fixtures generated 477 false a11y violations. Added directory patterns: `/tests/`, `/test/`, `/__tests__/`, `/e2e/`, `/spec/`, `/fixtures/`, `/fixture/`, `/mocks/`, `/samples/`.
-- **Secrets engine reports test fixture URLs** (95% reduction on Astro: 21 → 1 secret): Test files containing example URLs like `redis://localhost:6379`, `mongodb://localhost:27017`, `ssh://user@host.com` were reported as hardcoded secrets. The engine previously reduced severity for test files but didn't skip them — these are never actionable. Changed to skip test files entirely in secrets scanning.
-- **Smell `magic_values` scans test fixture directories** (8% reduction on Svelte: 2219 → 2047): `_detect_magic_values` used filename patterns but not directory patterns. Test fixture directories like `/tests/validator/samples/` contain intentional magic numbers for validation testing. Added `/tests/`, `/test/`, `/e2e/` etc. to `config_file_keywords` skip list. Also expanded skip keywords for `_detect_deep_nesting` and `_detect_long_functions`.
-- **Monorepo handbook shows "root"/"0.0.0"** (fixed for Astro and Vite): Monorepos like Astro and Vite have root `package.json` with `name: "root"`, `version: "0.0.0"` — the actual package identity lives in `packages/astro/package.json` or `packages/vite/package.json`. Added fallback that scans sub-packages (`packages/`, `apps/`, `services/`) for real name and version when root has placeholder values. Astro now shows `astro/6.4.6`, Vite shows `@vitejs/vite-monorepo/9.0.7`.
-- **Dataflow `eval` matches Playwright `$$eval`** (Vite: 2 false positives removed): `eval\s*\(` regex matched `page.$$eval()` which is a Playwright test utility, not `eval()`. Added word boundary `(?:^|[^\w.$])eval\s*\(` to prevent matching method calls containing "eval".
-- **`pyproject.toml` license/requires-python concatenation**: Recurring formatting issue where `license = {text = "MIT"}` and `requires-python = ">=3.8"` were merged on one line. Fixed line break again.
-
-### Test Coverage
-
-| Repo | Files | Type | Key Findings |
-|------|-------|------|-------------|
-| sveltejs/svelte | 7,888 | Compiler+Runtime (Svelte+TS) | 5,060 source files, 506 nodes, a11y 500→29, smells 2219→2047 |
-| vitejs/vite | 1,445 | Build tool (TS+Vue) | 1,462 nodes, secrets 5→5 (correct), dataflow 135→133 |
-| withastro/astro | 3,909 | Hybrid SSG (TS+Vue+Svelte) | 3,017 nodes, secrets 21→1, identity root→astro/6.4.6 |
-| vercel/swr | 252 | React hooks (TSX) | 807 nodes, dataflow 19→4, a11y 122→18 |
-
-## [5.10.0] — 2026-06-12
-
-### Tested against 5 large, diverse repositories
-
-Real-world testing on a broad set of unique codebases to validate cross-language
-and cross-framework accuracy:
-
-- **fastapi/fastapi** (1127 source files, Python backend, FastAPI+Pydantic+Starlette)
-- **tailwindlabs/tailwindcss** (391 source files, Rust+TS monorepo, Tailwind CSS engine)
-- **git/git** (999 source files, pure C, with small Rust and Python components)
-- **vuejs/core** (529 source files, TypeScript monorepo, Vue.js reactive system)
-- **laravel/framework** (2932 source files, PHP, Laravel framework with Blade templates)
-
-### Fixed
-
-- **God Object false positives in JS/TS** (99% reduction): The regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched any word followed by `(` (including `if(`, `for(`, `console.log(`), and searched the entire file instead of just inside class bodies. This caused absurd reports like "Class 'if' has 359 methods" or "Class 'and' has 296 methods". Replaced with proper brace-depth-tracking implementation that only counts actual method definitions inside class bodies, similar to the existing Rust impl detection. (smell_engine.py)
-- **PHP interface method false positives as long functions** (90%+ reduction): `_find_function_end()` used brace counting for PHP, but interface/abstract methods have no body (ending with `;`). This caused interface methods like `table()`, `raw()`, `selectOne()` to be reported as 150-205 lines long. Added PHP-specific handling that detects `;`-terminated method signatures as 1-line declarations. (smell_engine.py)
-- **PHP mock_data debug leak false positives** (99% reduction, 12076 → ~0 for Laravel): PHPUnit/Mockery/Laravel framework calls like `$this->createMock()`, `Mockery::mock()`, `Event::fake()` were incorrectly flagged as mock data leaks. Added PHP_MOCK_ALLOWLIST with 14 patterns for framework-specific test doubles. Also added `Test.` and `/Tests/` to TEST_FILE_PATTERNS for PHP PHPUnit convention. (debugleak_engine.py)
-- **PHP debugger false positives** (80%+ reduction): `dd()`, `dump()` flagged in test files; `exit;` incorrectly flagged as debugger statement in CLI scripts; `trap()` matched legitimate PHP methods. Fixed: `dd()`/`dump()` skipped in test files, `exit;` removed from patterns, `trap()` excluded for PHP, bare `die()` downgraded to medium severity. (debugleak_engine.py)
-- **Lines always 0 in architecture/summary output**: `get_workspace_outline()` in outline_engine.py never computed `total_lines`, so `compute_summary()` always returned 0. Added line counting during file iteration. (outline_engine.py)
-- **C/C++/Java/Kotlin/C# incorrectly listed as "unsupported"**: These languages all have fallback regex parsers but were still in `UNSUPPORTED_MARKERS` in framework_detect.py, causing them to be listed as unsupported in scan results. Removed them from the unsupported list. (framework_detect.py)
-- **Binary artifact findings show empty path**: Markdown formatter only checked `item.get("file")` but binary findings use `path` key. Added fallback to `item.get("path")`. (formatters/markdown.py)
-- **Secrets findings show empty description**: Markdown formatter tried `message`/`description`/`name` keys but secrets use `match`/`category`. Added fallback construction from category, match, type, extension, and detection_method fields. (formatters/markdown.py)
-- **Risk score always 0/near-0 for large projects**: The `_compute_risk_score()` formula applied linear deductions (`total * 5` for critical) without accounting for codebase size, so any project with 1000+ files always scored 0. Replaced with density-aware scoring that normalizes by `sqrt(issues/files)` with capped per-category deductions. (commands/analyze.py)
-- **Laravel detected as "unknown" project type**: No `composer.json` detection existed in `_extract_project_identity()`. Added PHP project type detection with Laravel/Symfony/Drupal/WordPress classification. (commands/handbook.py)
-- **git/git detected as "rust-project"**: Only Cargo.toml was checked, not Makefile/CMakeLists.txt. Added C/C++ project detection via Makefile/CMakeLists.txt with file extension counting to determine C vs C++ dominance. (commands/handbook.py)
-- **Laravel version 0.0.0**: `composer.json` version field was not read. Now reads name and version from composer.json. (commands/handbook.py)
-
-## [5.9.3] — 2026-06-12
-
-### Tested against spacedriveapp/spacedrive (1,594 source files: 1,161 Rust + 380 TSX + 28 JS + 7 CSS + 11 Python + 3 Kotlin, Tauri file explorer monorepo)
-
-Real-world test on a Rust+React Tauri desktop application with a virtual distributed filesystem.
-Confirmed: 13,068 backend nodes, 61,867 edges, 943 frontend classes, 42 IDs, 7 frameworks detected
-(react, tailwind, tauri, zustand, vite, rust, tokio), is_monorepo with npm-workspace + cargo-workspace.
-
-### Fixed
-
-- **Secrets URL-embedded password false positives** (100% reduction: 4 → 0 violations): The regex pattern `[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}` matched URLs containing `@` in file paths (e.g., `http://localhost/path/grid@1x.webp`, `sidecar://uuid/thumbs/grid@2x.webp`). The `@` is part of image density descriptors, not credential separators. Fixed by adding `/` to the exclusion set in the password capture group: `([^\s/@"\']{4,})`. Real credential URLs like `mongodb://admin:secretpass123@host.com` still match correctly because the password comes before the first `/` after `://`.
-- **Impact engine duplicate entries** (significant deduplication): When multiple target nodes (same-named functions in different files) share callers, the same caller was added to `affected["direct"]` once per target node. Fixed by deduplicating `affected["direct"]` and `affected["indirect"]` lists by `(name, file, line)` tuple before risk assessment.
-- **Stack-trace engine duplicate cyclic entries** (significant deduplication): When a function calls another function multiple times (different call sites), multiple edges with the same `from_id` exist in `callers_map`. Each duplicate edge produced a separate `cyclic: True` entry in the chain. Fixed by deduplicating callers by `caller_id` before iterating, so each unique caller is processed only once per depth level.
-- **Missing-refs Tailwind utility class false positives** (30% reduction: 92 → 25 issues): `aspect-square`, `backdrop-blur-*`, `line-clamp-*`, `group`, `peer` and other Tailwind utility classes were flagged as "used in HTML/JSX but has no CSS definition" because their prefixes were missing from the `_is_likely_tailwind()` prefix list. Added missing prefixes: `aspect-`, `backdrop-blur-`, `backdrop-brightness-`, `backdrop-contrast-`, `backdrop-grayscale-`, `backdrop-hue-rotate-`, `backdrop-invert-`, `backdrop-opacity-`, `backdrop-saturate-`, `backdrop-sepia-`, `backdrop-filter`, `container`, `columns-`, `line-clamp-`, `group`, `peer`, and others. Also added `_is_utility_base()` as a final fallback check to catch standalone utilities not in the prefix list.
-- **Debug-leak Rust doc comment false positives** (74% reduction: 1,036 → 268 commented_code): Rust doc comments (`///` and `//!`) were treated as regular `//` comments and scored for code likelihood. Since doc comments often contain code-like patterns (e.g., `/// Returns the value of x`, `/// let y = foo()`), they easily scored above the threshold. Fixed by skipping lines starting with `///` or `//!` when detecting commented code blocks in `.rs` files, and only grouping plain `//` comments (not doc comments) into consecutive blocks.
-
-## [5.9.3] — 2026-06-12
-
-### Tested against tauri-apps/tauri (1,099 files: 323 Rust + 40 JS + 28 TS/TSX + 12 Svelte, polyglot desktop framework monorepo)
-
-Real-world test on a Rust+TypeScript polyglot desktop app framework with Cargo workspace + pnpm workspace monorepo.
-Found and fixed 8 significant issues, most critically false positive inflation in smell, debug-leak, and secrets engines.
-
-### Fixed
-
-- **God object false positives in bundled/minified JS files** (CRITICAL — 295 false positive "critical" smells eliminated): `smell_engine.py` god object detection used an overly broad regex `r'\w+\s*\('` that matched ANY word followed by `(`, including chained method calls like `.then()`, `.catch()`, `.map()`. In bundled files like `bundle.global.js`, this counted 982 "methods" for a class named `did` (actually a variable in minified output). Fixed with: (1) improved regex that only matches class method definitions, (2) require actual `class` declaration in file, (3) `is_bundled_file()` check to skip dist/, build/, .global.js, .bundle.js, .chunk.js, .umd.js files.
-
-- **Rust production log macros flagged as debug leaks** (HIGH — 1000+ false positive debug leaks eliminated): `debugleak_engine.py` flagged ALL Rust `log` crate macros (`info!()`, `warn!()`, `error!()`, `debug!()`, `trace!()`) as "debug logging statements". However, `info!()`, `warn!()`, and `error!()` are production-appropriate structured logging controlled by log level at runtime — they are NOT debug code. Fixed by splitting `RUST_LOG_MACROS` into `RUST_LOG_MACROS_DEBUG_ONLY` (debug!/trace! only) and `RUST_LOG_MACROS_PRODUCTION` (info!/warn!/error! — now excluded entirely from debug leak detection).
-
-- **Risk assessment score=0 bug** (HIGH): `analyze` command risk scoring used linear subtraction (`score -= min(total * 5, 30)`) with per-category caps. With 9 finding categories, deductions easily exceeded 100, always resulting in score=0 for medium+ projects. Fixed with logarithmic scaling: `deduction = min(15, 3 + int(log2(total)))` per category, giving diminishing returns for each additional issue. Now produces meaningful scores (e.g., 28 for tauri instead of 0).
-
-- **Secrets false positives for Rust env vars and crate names** (MEDIUM): Entropy-based detection flagged `OTHE` (env var name), `sha2` (Rust crate name), `OBJC` (Objective-C env var) as high-entropy secrets. Fixed by: (1) adding Rust `std::env::var()` and `env!()` macro patterns to `ENV_REFERENCE_LINE_PATTERNS`, (2) adding common Rust crate names and env var names to `SAFE_VALUE_PATTERNS` and `ENTROPY_EXCLUSION_PATTERNS`.
-
-- **Complexity analysis on bundled files** (MEDIUM): `complexity_engine.py` analyzed bundled/compiled JS files (e.g., `packages/cli/index.js` with cyclomatic=197) producing meaningless complexity metrics. Fixed by adding `is_bundled_file()` check.
-
-- **Analyze `total_lines=0`** (MEDIUM): `analyze` command architecture overview always showed `total_lines: 0` because `outline_engine.get_workspace_outline()` never computed a `total_lines` field. Fixed by computing line count from outlined files in `analyze.py`.
-
-- **Debug leak scanning of bundled files** (MEDIUM): `debugleak_engine.py` scanned bundled output files like `bundle.global.js`, producing hundreds of false positives. Fixed by adding `is_bundled_file()` check.
-
-- **Perf hint scanning of bundled files** (LOW): `perfhint_engine.py` scanned bundled output files. Fixed by adding `is_bundled_file()` check.
-
-### Added
-
-- **`is_bundled_file()` utility function** (`utils.py`): Detects bundled/compiled output files by checking both filename patterns (`.global.js`, `.bundle.js`, `.chunk.js`, `.umd.js`, `.min.js`) and directory paths (`dist/`, `build/`, `out/`, `bundle/`, `bundled/`, `compiled/`, `output/`). More aggressive than `is_generated_file()` which only checks filenames.
-
-- **`BUNDLED_DIR_PATTERNS`** constant in `utils.py`: Set of directory names that indicate build output.
-
-## [5.9.2] — 2026-06-12
-
-### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
-
-Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
-across all analysis engines after targeted fixes based on SWR analysis findings.
-
-### Fixed
-
-- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
-- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
-- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
-- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
-- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
-- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
-- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
-- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
-- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [5.9.0] — 2026-06-12
 
-### Tested against database & XHR/network repos
+### Deep Nim Integration — Tested on nim-lang/Nim (3,707 .nim files, 30,984 nodes, 79,548 edges)
 
-Real-world testing on 5 diverse open-source repositories:
-- **redis/redis** (30MB, 789 C/H files, 19,030 backend nodes) — C in-memory database
-- **axios/axios** (5.5MB, 201 JS/TS files, 436 backend nodes) — JavaScript HTTP client
-- **libuv/libuv** (7.4MB, 364 C/H files, 6,590 backend nodes) — C networking/event loop
-- **nodejs/undici** (11MB, 619 JS/TS files, 1,078 backend nodes) — Node.js HTTP/1.1 client
-- **google/leveldb** (1.9MB, 132 C++/H files, 1,557 backend nodes) — C++ key-value database
-
-### Fixed
-
-- **`binary-scan` command crash (ImportError)**: `scan_tauri_artifacts` was imported but never implemented in `utils.py`. The `binary-scan` command would always crash with `cannot import name 'scan_tauri_artifacts' from 'utils'`. Added full implementation: detects Tauri config files, IPC commands from Rust source, capabilities/permissions, sidecar binaries, updater config, WebView security settings, and deep-link schemes. Returns `None` for non-Tauri projects (graceful skip).
-- **Drupal false positive from `modules/` directory**: Redis was incorrectly detected as a Drupal project because `modules/` and `themes/` were Drupal indicators. These are too generic — many non-Drupal projects have `modules/` directories (e.g., Redis modules, Go modules). Changed Drupal indicators to `sites/default/` and `sites/all/` (Drupal-specific paths), and added `sites/default/settings.php` as a config file. Redis is no longer falsely detected as Drupal.
-- **`new ClassName()` not tracked as call edge**: JS/TS/TSX parsers only tracked `call_expression` nodes (e.g., `funcName()`) but not `new_expression` nodes (e.g., `new AxiosError()`). This caused classes that are only instantiated via `new` to appear as "dead" in dead-code analysis. AxiosError (core Axios class, used in 17+ files) had `ref_count: 0` and `status: dead`. Added `_parse_new_expression()` to all three parsers (js_backend_parser, ts_backend_parser, tsx_parser). After fix: AxiosError correctly shows `ref_count: 29` and `status: active` with 11 callers.
-- **pyproject.toml formatting error**: `description` and `readme` fields were merged on a single line, causing TOML parse failure.
+Continued testing on the self-hosting Nim compiler. This release deepens Nim support
+across all analysis engines, adds Nim-specific CVEs to the vulnerability database,
+and fixes a critical framework detection bug that affected all repos with "target" in
+their path name.
 
 ### Added
 
-- **HTTP/network library detection**: `detect_frameworks()` now recognizes 7 HTTP client libraries as frameworks: `axios`, `undici`, `got`, `ky`, `superagent`, `node-fetch`, `request`. Added `has_http_library` flag to detection output. Works both when the library is a dependency AND when the repo IS the library itself (checks `package.json` `name` field).
-- **`scan_tauri_artifacts()` in utils.py**: Full Tauri RE analysis — IPC command/handler mapping from Rust source, capabilities/permissions security audit, sidecar binary detection, updater configuration, WebView CSP/asset-protocol security, deep-link scheme analysis, and risk assessment summary.
-- **New framework signatures**: Added 7 HTTP library signatures with packages and `has_http_library` flag support.
-
-### Changed
-
-- **Version bump**: 5.8.1 → 5.9.0
-
-## [5.9.0] — 2026-06-12
-
-### Tested against readest/readest (1,244 source files: 1,177 TSX + 40 Rust + 12 Java, Tauri V2 + Next.js 16 ebook reader)
-
-Real-world test on a cross-platform Tauri V2 desktop app with complex frontend-backend relationship:
-Next.js 16 frontend communicating with Rust backend via 15+ Tauri IPC commands, 26 Tauri plugins,
-WebDAV sync, AI TTS, Discord RPC, and platform-specific code for macOS/Windows/Android/iOS.
-
-### Added
-
-- **Tauri deep analysis in `binary-scan`**: New `scan_tauri_artifacts()` function in `utils.py` that performs comprehensive Tauri project analysis:
-  - IPC command mapping: Scans Rust source for `#[tauri::command]` functions, extracts both Rust name and camelCase IPC name (e.g., `parse_epub_metadata` → `parseEpubMetadata`)
-  - `tauri.conf.json` parsing: Extracts app name, identifier, version, CSP settings, asset protocol config, window count
-  - Capabilities/permissions audit: Scans `src-tauri/capabilities/` JSON files, lists permissions and window access
-  - Plugin detection: Reads `src-tauri/Cargo.toml` for `tauri-plugin-*` dependencies
-  - Sidecar detection: Extracts `externalBin` configuration
-  - Deep-link scheme analysis: Extracts custom URL schemes from plugin config
-  - Security analysis: Checks for missing CSP, enabled asset protocol, dangerous CSP modification flags, unrestricted IPC commands
-  - Monorepo support: Searches for `src-tauri/` in subdirectories (e.g., `apps/app/src-tauri/`)
-  - Plugin subdirectory scanning: Scans `src-tauri/plugins/*/src/` for additional Tauri commands
+- **`debugEcho()` detection in debug-leak**: Nim's `debugEcho()` is a debug-only print that should never appear in production. Now flagged as a `print_statement` with medium severity. Unlike regular `echo()` (which is standard Nim output), `debugEcho()` is always flagged.
+- **`doAssert()` and `doAssertRaises()` in debug-leak debugger category**: Nim's debug assertions crash in production. Flagged as high-severity `debugger` findings in non-test files. Skipped in test files where assertions are expected.
+- **`assert()` detection for Nim and Python**: Debug assertions (`assert()`) flagged in non-test `.nim`/`.nims`/`.py` files. Skipped in test files.
+- **Nim dev_only guard patterns**: Added 4 new `DEV_ONLY_PATTERNS` for Nim:
+  - `when defined(debug):` — flagged with `should_remove=True`
+  - `when not defined(release):` — flagged with `should_remove=True`
+  - `when defined(testing):` — flagged as dev-only guard
+  - `when isMainModule:` — flagged as low severity, `should_remove=False` (legitimate, equivalent to `if __name__ == "__main__"`)
+- **Nim smell detection**: `_detect_long_functions()` now detects Nim `proc`/`func`/`method`/`iterator`/`template`/`macro` declarations and calculates their body length using indentation-based block tracking. `_detect_many_params()` detects Nim procs with excessive parameters. `_find_function_end()` supports Nim's indentation-based syntax.
+- **Nim HTTP handler entrypoints**: Added Jester (`get @"path"`, `match @"path"`), Prologue (`app.get("path"`), and HappyX (`get @{path}`) route patterns to `entrypoints_engine.py`.
+- **Nimble CVE database**: Added 7 Nim-specific vulnerabilities to `VULN_DB`:
+  - Nim compiler: CVE-2023-2630 (code injection), CVE-2022-28589 (path traversal)
+  - Jester: CSRF protection missing
+  - Norm: SQL injection via string interpolation
+  - nimcrypto: timing side-channel in HMAC
+  - Karax: XSS via unescaped HTML
+  - Prologue: session fixation vulnerability
 
 ### Fixed
 
-- **`binary-scan` crash with ImportError**: `commands/binary_scan.py` imported `scan_tauri_artifacts` from `utils` but the function didn't exist, causing every `binary-scan` invocation to fail with `ImportError`. Added the full `scan_tauri_artifacts()` implementation.
-- **`has_rust: false` when Cargo.toml is in `src-tauri/`**: Tauri apps store Rust code in `src-tauri/Cargo.toml`, not the workspace root. `framework_detect.py` only checked the root, so Tauri apps were never detected as having Rust. Now falls back to `src-tauri/Cargo.toml` when root has none.
-- **Missing Tauri plugin dependencies**: Cargo.toml scanning only checked `crates/`, `ext/`, `libs/`, `packages/` subdirectories but not `src-tauri/` or its plugins. Added `src-tauri` to the scan list with recursive plugin subdirectory scanning.
-- **Regex error in `_scan_rust_tauri_commands`**: A malformed regex pattern `[\s\n.*?\]` (character class with unescaped `]`) caused `re.error: unterminated character set`. Removed the unused `cmd_pattern` since the line-by-line approach (`attr_pattern` + `fn_pattern`) is more reliable for multi-line `#[tauri::command]` annotations.
+- **CRITICAL: `framework_detect.py` substring matching bug**: The `if ignore in root` check in framework detection used Python's `in` operator for substring matching, which caused false positives. For example, a workspace at `/home/user/test-target-nim/` would match the `target` ignore directory, preventing ALL framework detection, Nim file discovery, and Tailwind CSS analysis. Fixed by replacing substring matching with path-segment-aware matching (same algorithm used in `scan.py`'s `should_ignore()`). Affected 4 file walk loops: nimble detection (4b), Tauri detection (5), file pattern detection (5), and Tailwind CSS detection (6).
+- **`has_nim: False` for Nim repos with "target" in path**: Consequence of the substring matching bug. Now correctly reports `has_nim: True` and detects `nim`/`jester` frameworks.
 
 ### Changed
 
-- **Refactored Cargo.toml dependency extraction**: Extracted `_extract_cargo_deps()` helper in `framework_detect.py` to eliminate code duplication across root Cargo.toml parsing, workspace member scanning, and src-tauri scanning.
-- **Version bumped to 5.9.0**: Reflects the significant new Tauri analysis capabilities.
+- **Version bump**: 5.8.2 → 5.9.0
+
+## [5.8.2] — 2026-06-12
+
+### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)
+
+Real-world test on a self-hosting Nim compiler — the language writes itself!
+Only 40/3734 source files were parsed before this release (1.1% coverage).
+After adding Nim support: 3,710 files parsed, 99.6% coverage.
+
+### Added
+
+- **Nim fallback parser** (`fallback_nim.py`): Regex-based parser that extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Handles Nim's `*` export marker, backtick-quoted identifiers, and indentation-based block tracking.
+- **Nim framework detection**: `detect_frameworks()` now detects `nim` (via `.nim`/`.nims`/`.nimble` files), `nimble` (package manager), `jester` (web framework), `prologue` (web framework), `karax` (SPA framework), `happyx` (web framework), `norm` (ORM), `nimcrypto` (crypto library). Parses `.nimble` files for `requires "package"` dependencies.
+- **`has_nim` field in framework detection**: `detect_frameworks()` now includes `has_nim: true` when Nim source files are found.
+- **Handbook Nim identity**: `handbook` now parses `.nimble` files for project name, version, and description. Classifies Nim projects as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project` based on name and dependencies.
+- **Nim entrypoints**: `entrypoints` command now detects `when isMainModule:` (Nim's equivalent of `if __name__ == "__main__"`) and `proc main()`.
+- **Nimble manifest parsing in vuln-scan**: `vuln-scan` now parses `.nimble` files for dependency versions and checks against the vulnerability database. Supports `requires "pkg >= version"` patterns.
+- **Nim code indicators for debug-leak commented_code**: Added `code_indicators_nim` with Nim-specific patterns (`proc`, `func`, `method`, `iterator`, `template`, `macro`, `type`, `const`, `let`, `var`, `import`, `from`, `export`, `discard`, `echo`, `new`).
+- **Nim comment prefix**: Debug-leak engine now recognizes `#` as the comment prefix for `.nim`/`.nims` files.
+
+### Fixed
+
+- **`echo()` false positive in debug-leak**: Python's `def echo(debugger, command, result, internal_dict)` in LLDB extensions was flagged as a debug print statement. Now skips: (1) Python function definitions `def echo(...)`, (2) echo calls in LLDB/debugger context, (3) Nim `echo()` calls without debug patterns (echo is standard output in Nim, like `println!` in Rust).
+- **Handbook `type: unknown` and `version: 0.0.0` for Nim projects**: Nim projects without package.json/Cargo.toml/go.mod had no identity detection. Now parses `.nimble` files for name, version, description, and type classification.
+- **Scan reports Nim as unsupported language**: Nim was silently dropped during scan (0 files parsed from 3672). Now has full parser support and is listed in the `supported` set.
+
+### Changed
+
+- **SOURCE_EXTENSIONS expanded**: Added `.nim` and `.nims` to all 16 engines (smell, complexity, debug-leak, entrypoints, regex-audit, side-effect, dataflow, ownership, config-drift, type-infer, secrets, env-check, test-map, state-map, dead-code, perf-hint, api-map).
+- **Version bump**: 5.8.1 → 5.8.2
 
 ## [5.8.1] — 2026-06-12
 

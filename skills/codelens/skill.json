@@ -1,8 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.3",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.3: Bundled file detection (is_bundled_file), Rust production log macro exclusion (info!/warn!/error! no longer flagged as debug leaks), God object false positive reduction for JS (improved method counting regex, only counts class declarations), Risk score logarithmic scaling (fixes score=0 bug), Secrets engine Rust env var/crate name filtering, analyze total_lines fix. Tested on tauri-apps/tauri (1K files Rust+TS desktop framework), cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS).",  "author": "codelens",
-  "tags": [    "code-analysis",
+  "version": "5.9.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.0: Deep Nim integration (debugEcho/doAssert/doAssertRaises detection, when defined(debug)/when not defined(release) dev-only guards, Nim smell detection for long functions and too-many-params, Nim HTTP handler entrypoints for Jester/Prologue/HappyX, nimble CVE database with 7 Nim-specific vulnerabilities, framework_detect substring matching bugfix). Tested on nim-lang/Nim (3707 .nim files, 30984 nodes, 79548 edges, self-hosting compiler).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",

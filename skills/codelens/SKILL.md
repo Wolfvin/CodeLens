@@ -32,7 +32,7 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Nim, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
@@ -40,27 +40,25 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.9.3 — Tested on fastapi/fastapi (1,120 Python files)
+## What's New in v5.9.0 — Deep Nim Integration (3,707 .nim files, 30,984 nodes, 79,548 edges)
 
-- **API-map middleware file-scoping fix**: Middleware detected via `app.add_middleware()` was incorrectly applied to ALL routes in the workspace. Now scoped to routes from the same file only. In multi-app projects (e.g., FastAPI docs_src with 78 tutorial apps), this eliminates cross-contamination where `GZipMiddleware` from one tutorial appeared on every route.
-- **Backend node type propagation**: All backend nodes stored their `type` (`function`, `class`, etc.) in the registry, but 6 command outputs hardcoded `type: "function"`. Fixed in: `symbols`, `context`, `query` (single + multi-match), `impact`, `list`, `trace`. Classes like `FastAPI` now correctly show as `type: "class"` with `superclasses` info, not `type: "function"`.
-- **Handbook version word-boundary fix**: `pyproject.toml` version regex `version\s*=` matched `minversion = "9.0"` because `version` is a substring of `minversion`. Added `\b` word boundary: `\bversion\s*=`. FastAPI's version now correctly shows `0.136.3` instead of `9.0`.
-- **pyproject.toml description extraction**: Handbook only extracted `description` from `package.json`. Now also reads `description = "..."` from `[project]` section in `pyproject.toml`. Python projects get proper descriptions.
-- **Dynamic version fallback**: Many Python projects use `dynamic = ["version"]` in pyproject.toml with the actual version in `pkg/__init__.py` as `__version__ = "x.y.z"`. Handbook now detects this pattern and falls back to reading `__version__` from the package's `__init__.py`.
+- **debugEcho/doAssert/doAssertRaises detection**: Nim's debug-only `debugEcho()` always flagged. `doAssert()` and `doAssertRaises()` flagged as high-severity debugger statements in non-test files.
+- **Nim dev_only guards**: Detects `when defined(debug):`, `when not defined(release):`, `when defined(testing):`, and `when isMainModule:` (low severity, legitimate).
+- **Nim smell detection**: Long function detection and too-many-params for Nim procs using indentation-based block tracking.
+- **Nim HTTP handler entrypoints**: Jester (`get @"path"`), Prologue (`app.get("path")`), HappyX (`get @{path}`) route patterns.
+- **Nimble CVE database**: 7 Nim-specific vulnerabilities (Nim compiler code injection/path traversal, Jester CSRF, Norm SQL injection, nimcrypto timing side-channel, Karax XSS, Prologue session fixation).
+- **CRITICAL FIX: framework_detect substring matching bug**: `if ignore in root` used Python's `in` operator for substring matching, causing repos with "target" in their path (e.g., `test-target-nim`) to have ALL framework detection disabled. Now uses path-segment-aware matching.
 
-## What's New in v6.0 — The "Analyze Everything" Release
+## What's New in v5.8.2 — Tested on nim-lang/Nim (3,672 .nim files, self-hosting compiler)
 
-- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.
-- **PHP support in all engines**: `.php` added to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files now scanned for code smells, complexity, debug leaks, and performance hints.
-- **PHP debug leak detection**: `var_dump()`, `print_r()`, `phpinfo()`, `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()`.
-- **PHP complexity detection**: New `_extract_php_functions()` — detects `public/private/protected function` and standalone `function` declarations.
-- **PHP smell detection**: Long functions, deep nesting, many parameters for PHP methods.
-- **PHP performance hints**: 8 PHP-specific patterns — Doctrine N+1, Eloquent N+1, sleep(), blocking file_get_contents(), exec()/shell_exec(), memory leaks in long-running processes, Redis KEYS command, missing TTL.
-- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines.
-- **Risk assessment**: 0-100 risk score with emoji indicators (🔴🟠🟡🟢) based on finding severity.
-- **Prioritized action plan**: Auto-generates P0-P3 action items with concrete next steps.
-- **Contextual recommendations**: Language/framework-specific recommendations (PHP: phpstan, Go: go vet, Python: mypy+ruff).
-- **Total commands**: 44 → 45.
+- **Nim fallback parser**: New `fallback_nim.py` extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Before: 40/3734 files parsed (1.1%). After: 3,710/3,734 files parsed (99.6%).
+- **Nim framework detection**: `detect_frameworks()` detects `nim`, `nimble`, `jester`, `prologue`, `karax`, `happyx`, `norm`, `nimcrypto` from `.nimble` file dependencies. `has_nim: true` field added.
+- **Handbook Nim identity**: Parses `.nimble` files for name/version/description. Classifies as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project`.
+- **Nim entrypoints**: Detects `when isMainModule:` and `proc main()` in `.nim`/`.nims` files.
+- **`echo()` false positive fix**: Python `def echo(...)` in LLDB extensions no longer flagged. Nim `echo()` treated like Rust `println!` — only flagged with debug patterns.
+- **Debug-leak Nim patterns**: Nim comment prefix (`#`), Nim code indicators, Nim `echo()` handling.
+- **Vuln-scan nimble manifest**: Parses `.nimble` requires for dependency vulnerability checking.
+- **16 engines updated**: `.nim`/`.nims` added to SOURCE_EXTENSIONS across all engines.
 
 ## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 
@@ -177,38 +175,6 @@ python3 "$CODELENS_DIR/scripts/codelens.py" scan /path/to/workspace
 ---
 
 ## Available Tools
-
-### 0. `codelens_analyze` — Full Repository Analysis (NEW v6.0)
-
-**The one-shot command to understand an entire repository.** Automatically runs init + scan + all engines, then produces a comprehensive report with risk assessment and action plan.
-
-This is the recommended first command when you encounter a new repository. It replaces running 10+ individual commands.
-
-```bash
-# Full analysis (runs init + scan + all engines)
-python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace
-
-# Security-focused analysis only
-python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --focus security
-
-# Full detail (no severity filtering)
-python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --detail full
-
-# Skip re-scanning if registry already exists
-python3 "$CODELENS_DIR/scripts/codelens.py" analyze /path/to/workspace --skip-scan
-```
-
-**Output includes:**
-- Project identity (name, type, version, description)
-- Frameworks and languages detected
-- Architecture overview (files, lines, directory structure, key modules, entry points)
-- API route map
-- Prioritized findings from all engines (secrets, smells, complexity, debug leaks, dead code, circular deps, perf hints, config drift, binary artifacts, data flow, env issues, vulnerabilities)
-- Risk assessment (0-100 score with 🔴🟠🟡🟢 indicator)
-- Prioritized action plan (P0-P3)
-- Contextual recommendations (language/framework-specific)
-
-**When to use:** Always run `analyze` when you first encounter a repository. Use `summary` for quick checks, `analyze` for deep understanding.
 
 ### 1. `codelens_init` — Initialize Workspace
 
