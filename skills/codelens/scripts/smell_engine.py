@@ -150,7 +150,9 @@ def detect_smells(
                 continue
 
             # Skip generated files (generated/, vendor/, _pb2.py, etc.)
-            if is_generated_file(rel_path):
+            # Note: is_generated_file expects a filename, not a path — pass both
+            # the filename (for exact match) and the rel_path (for extension checks)
+            if is_generated_file(filename) or is_generated_file(rel_path):
                 continue
 
             # Skip files exceeding size cap
@@ -404,6 +406,21 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)', line.strip())
                 if m:
                     fn_starts.append((i, m.group(1)))
+            # class methods with access modifiers: public/private/protected [static] [async] name(...)
+            # Require access modifier to avoid false positives from function calls inside methods
+            elif re.match(
+                r'(?:(?:public|private|protected)\s+)(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(?:readonly\s+)?(?:\*\s*)?(\w+)\s*(?:<[^>]*>)?\s*\(',
+                line.strip()
+            ):
+                m = re.match(
+                    r'(?:(?:public|private|protected)\s+)(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(?:readonly\s+)?(?:\*\s*)?(\w+)',
+                    line.strip()
+                )
+                if m:
+                    fn_starts.append((i, m.group(1)))
+            # constructor
+            elif re.match(r'constructor\s*\(', line.strip()):
+                fn_starts.append((i, 'constructor'))
 
     elif ext == ".py":
         for i, line in enumerate(lines):
@@ -766,6 +783,39 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "param_count": param_count,
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider grouping related parameters into an object."
+                })
+
+        # Class methods with access modifiers: public/private/protected name(params)
+        # Only match methods with explicit access modifiers to avoid false positives
+        for m in re.finditer(
+            r'(?:public|private|protected)\s+(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(?:abstract\s+)?(?:\*\s*)?(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*[^{]+)?\{',
+            content
+        ):
+            params_str = m.group(2).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Method has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options object or builder pattern."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Method has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider grouping related parameters into an object."
                 })
 

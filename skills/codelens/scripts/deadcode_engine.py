@@ -615,13 +615,22 @@ def _collect_js_exports_imports(
     exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
 ):
     """Collect JS/TS export and import declarations."""
-    # Named exports: export const/function/class X
-    for m in re.finditer(r'export\s+(?:const|let|var|function|class|async\s+function)\s+(\w+)', content):
+    # Named exports: export const/function/class/abstract class/async function X
+    for m in re.finditer(r'export\s+(?:abstract\s+)?(?:const|let|var|function|class|async\s+function)\s+(\w+)', content):
         exports[rel_path].append({
             "name": m.group(1),
             "type": "named_export",
             "line": content[:m.start()].count('\n') + 1
         })
+
+    # TypeScript-specific exports: export interface/type/enum/declare
+    if ext in {'.ts', '.tsx'}:
+        for m in re.finditer(r'export\s+(?:interface|type|enum|declare\s+const|declare\s+function|declare\s+class)\s+(\w+)', content):
+            exports[rel_path].append({
+                "name": m.group(1),
+                "type": "ts_export",
+                "line": content[:m.start()].count('\n') + 1
+            })
 
     # Default exports
     for m in re.finditer(r'export\s+default\s+(?:function\s+)?(\w+)', content):
@@ -642,8 +651,8 @@ def _collect_js_exports_imports(
                     "line": content[:m.start()].count('\n') + 1
                 })
 
-    # Imports
-    for m in re.finditer(r'import\s+(?:\{([^}]+)\}|\*\s+as\s+(\w+)|(\w+))\s+from', content):
+    # Imports (including TypeScript type-only imports)
+    for m in re.finditer(r'import\s+(?:type\s+)?(?:\{([^}]+)\}|\*\s+as\s+(\w+)|(\w+))\s+from', content):
         if m.group(1):  # Named imports
             names = [n.strip().split(' as ')[0].strip() for n in m.group(1).split(',')]
             for name in names:
@@ -865,7 +874,7 @@ def _detect_unused_exports(
                     "suggestion": f"Remove unused export '{name}' or add import where needed."
                 })
 
-    return unused[:50]
+    return unused[:200]
 
 def _detect_dead_from_registry(workspace: str) -> List[Dict]:
     """v6: Read the backend registry from .codelens/backend.json and report

@@ -83,6 +83,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Failed to write output files", exc_info=True)
 
     # 4. Frameworks
+    fw_result = {}
     try:
         fw_result = detect_frameworks(workspace)
         frameworks = fw_result.get("frameworks", [])
@@ -167,7 +168,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
-    directory_map = _build_directory_map(workspace, config)
+    directory_map = _build_directory_map(workspace, config, fw_result)
 
     # 11. Quick reference from summary
     try:
@@ -348,8 +349,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                         subdir_fws.append("svelte")
                         if js_type is None:
                             js_type = "frontend-app"
-                    if "express" in sub_deps or "fastify" in sub_deps:
+                    if "express" in sub_deps:
                         subdir_fws.append("express")
+                        if js_type is None:
+                            js_type = "backend-api"
+                    if "fastify" in sub_deps or "@nestjs/platform-fastify" in sub_deps:
+                        subdir_fws.append("fastify")
                         if js_type is None:
                             js_type = "backend-api"
                     if subdir_fws:
@@ -652,9 +657,24 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     return identity
 
 
-def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:
+def _build_directory_map(workspace: str, config: Dict[str, Any], fw_result: Dict[str, Any] = None) -> Dict[str, str]:
     """Build a one-level-deep directory map with descriptions."""
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
+    fw_result = fw_result or {}
+
+    # Determine if this project uses React (affects hooks/ description)
+    has_react = bool(fw_result.get("has_react"))
+    has_nestjs = bool(fw_result.get("has_nestjs"))
+    has_husky = os.path.isdir(os.path.join(workspace, ".husky"))
+
+    # Context-aware hooks description
+    if has_react and not has_nestjs and not has_husky:
+        hooks_desc = 'Custom React hooks'
+    elif has_nestjs or has_husky:
+        hooks_desc = 'Git hooks (husky)'
+    else:
+        hooks_desc = 'Hooks directory'
+
     dir_hints = {
         'src': 'Application source code',
         'app': 'Application pages/routes',
@@ -672,7 +692,7 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'public': 'Static public assets',
         'assets': 'Static assets',
         'styles': 'CSS/styling files',
-        'hooks': 'Custom React hooks',
+        'hooks': hooks_desc,
         'utils': 'Utility functions',
         'helpers': 'Helper functions',
         'services': 'Service modules',

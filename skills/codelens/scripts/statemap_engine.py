@@ -461,6 +461,9 @@ def map_state(
                 global_results = _extract_js_global_state(content, rel_path)
                 if global_results["stores"]:
                     frameworks_detected.add("module_level_js")
+                    # Also detect NestJS DI if any providers were found
+                    if any(s.get("framework") == "nestjs_di" for s in global_results["stores"]):
+                        frameworks_detected.add("nestjs_di")
                     stores.extend(global_results["stores"])
                     state_flow.extend(global_results["flow"])
 
@@ -561,6 +564,19 @@ def map_state(
         'Optional', 'Union', 'Literal', 'TypedDict', 'NamedTuple',
         # Common Python dataclass/type aliases
         'TypeVar', 'Generic', 'Protocol', 'Callable', 'Final',
+        # NestJS / well-known framework decorator factories and constants
+        # These are decorator definitions, NOT state stores
+        'Get', 'Post', 'Put', 'Delete', 'Patch', 'Options', 'Head',
+        'All', 'Search', 'Propfind', 'Proppatch', 'Mkcol',
+        'Copy', 'Move', 'Lock', 'Unlock',
+        'RequestMapping', 'Controller', 'Module', 'Injectable', 'Inject',
+        'Optional', 'SetMetadata', 'UseGuards', 'UseInterceptors',
+        'UsePipes', 'UseFilters',
+        'Param', 'Body', 'Query', 'Headers', 'Ip', 'HostParam',
+        'Session', 'Req', 'Request', 'Res', 'Response', 'Next',
+        'RawBody', 'UploadedFile', 'UploadedFiles',
+        'Render', 'Redirect', 'HttpCode', 'Header',
+        'NestFactory', 'RouteConstraints',
     }
     stores = [s for s in stores if s.get("name", "") not in _POST_FILTER_SKIP_NAMES]
 
@@ -643,8 +659,12 @@ def map_state(
     # ─── Post-processing: Reclassify global stores without mutations ──
     # A "global" store with no actions/mutations is not really mutable state —
     # it's a module-level constant. Reclassify as module_constant.
+    # Exception: NestJS DI providers (nestjs_role=provider) are real state
+    # managed by the DI container, even without detected actions.
     for store in stores:
         if store.get("type") == "global":
+            if store.get("nestjs_role") == "provider":
+                continue  # NestJS DI providers are real singleton state
             actions = store.get("actions", [])
             has_mutations = len(actions) > 0
             if not has_mutations:
@@ -1986,6 +2006,12 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     if any(x in rel_path for x in ['.test.', '.spec.', '.config.', 'jest.', 'webpack.']):
         return {"stores": [], "flow": []}
 
+    # Skip decorator definition files — their exports are decorator factories, NOT state stores
+    # e.g., packages/common/decorators/http/request-mapping.decorator.ts
+    normalized_path = rel_path.replace('\\', '/')
+    if '/decorators/' in normalized_path:
+        return {"stores": [], "flow": []}
+
     # v6→v5.8: Expanded skip list for constants that are NOT mutable state.
     # ALL_CAPS patterns are immutable constants, not state stores.
     # PascalCase patterns that are React components or class instantiations
@@ -2269,6 +2295,45 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     # Every exported utility function gets classified as a "state store",
     # which is incorrect. Module exports are API surfaces, not state.
     # Only track stateful singletons (already handled above).
+
+    # ── NestJS Module provider detection ──────────────────────────
+    # Detect @Module({ providers: [...] }) patterns — these are NestJS DI
+    # service registrations, which represent real state (singleton services).
+    for m in re.finditer(
+        r'@Module\s*\(\s*\{[^}]*?providers\s*:\s*\[([^\]]+)\]',
+        content,
+        re.DOTALL,
+    ):
+        providers_block = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        # Extract individual provider names (class references)
+        provider_names = re.findall(r'\b([A-Z]\w*)\b', providers_block)
+        for prov_name in provider_names:
+            # Skip common non-service words that appear in provider arrays
+            _PROVIDER_SKIP = {
+                'Module', 'Type', 'Class', 'Dynamic', 'Async', 'Factory',
+                'Provider', 'Inject', 'Optional', 'Token', 'Value',
+            }
+            if prov_name in _PROVIDER_SKIP:
+                continue
+            stores.append({
+                "name": prov_name,
+                "type": "global",
+                "framework": "nestjs_di",
+                "defined_in": rel_path,
+                "line": line_num,
+                "slices": [],
+                "actions": [],
+                "consumers": [],
+                "nestjs_role": "provider",
+            })
+            flow.append({
+                "from": rel_path,
+                "action": f"register({prov_name})",
+                "to": prov_name,
+                "file": rel_path,
+                "type": "write",
+            })
 
     return {"stores": stores, "flow": flow}
 

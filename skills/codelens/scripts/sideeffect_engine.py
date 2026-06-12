@@ -20,11 +20,17 @@ A function is CONDITIONALLY_PURE if it's pure for some call patterns but not oth
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, logger
+from utils import DEFAULT_IGNORE_DIRS, logger, MAX_FILE_SIZE, safe_read_file
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
+
+# Performance limits for large codebases
+MAX_FILES_TO_SCAN = 5000
+MAX_FUNCTIONS_TO_ANALYZE = 2000
+MAX_MODULE_EFFECTS = 200
 
 # ─── Side-Effect Signatures ───────────────────────────────────
 
@@ -209,7 +215,10 @@ def analyze_side_effects(
     workspace: str,
     function_name: Optional[str] = None,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_FILES_TO_SCAN,
+    max_functions: int = MAX_FUNCTIONS_TO_ANALYZE,
+    timeout_sec: float = 60.0
 ) -> Dict[str, Any]:
     """
     Analyze functions for side effects across the workspace.
@@ -223,13 +232,20 @@ def analyze_side_effects(
         function_name: Optional specific function to analyze
         file_filter: Optional file path filter
         config: CodeLens config
+        max_files: Maximum number of files to scan (default 3000)
+        max_functions: Maximum number of functions to analyze (default 500)
+        timeout_sec: Maximum seconds for the scan (default 60)
 
     Returns:
         Dict with function classifications (pure/impure) and side-effect details
     """
     workspace = os.path.abspath(workspace)
+    start_time = time.time()
+    timed_out = False
 
     function_analyses = []
+    module_effects = []
+    files_scanned = 0
 
     # First, try backend registry for function definitions
     try:
@@ -242,7 +258,7 @@ def analyze_side_effects(
 
     # If specific function requested, find it
     if function_name:
-        target_nodes = [n for n in registry_nodes if n["fn"] == function_name]
+        target_nodes = [n for n in registry_nodes if n.get("fn") == function_name]
         if target_nodes:
             for node in target_nodes:
                 analysis = _analyze_single_function(workspace, node)
@@ -268,6 +284,20 @@ def analyze_side_effects(
             continue
 
         for filename in filenames:
+            # Check time budget
+            if time.time() - start_time > timeout_sec:
+                timed_out = True
+                break
+
+            # Check file count budget
+            if files_scanned >= max_files:
+                timed_out = True
+                break
+
+            # Check function count budget
+            if len(function_analyses) >= max_functions:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -278,16 +308,19 @@ def analyze_side_effects(
             if file_filter and file_filter not in rel_path:
                 continue
 
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+            content = safe_read_file(file_path, MAX_FILE_SIZE)
+            if content is None:
                 continue
+
+            files_scanned += 1
 
             # Find all functions in this file
             functions = _extract_functions(content, ext, rel_path)
 
             for fn_info in functions:
+                if len(function_analyses) >= max_functions:
+                    break
+
                 # Get the function body
                 fn_body = _get_function_body(content, fn_info, ext)
 
@@ -303,18 +336,30 @@ def analyze_side_effects(
                     "classification": classification,
                     "side_effects": effects,
                     "effect_count": len(effects),
-                    "is_async": fn_info.get("async", False)
+                    "is_async": fn_info.get("async", False),
+                    "kind": fn_info.get("kind", "function")
                 })
+
+            # Detect module-level side effects
+            if len(module_effects) < MAX_MODULE_EFFECTS:
+                mod_fx = _detect_module_effects(content, ext, rel_path)
+                module_effects.extend(mod_fx)
+
+        if timed_out or len(function_analyses) >= max_functions:
+            break
 
     # Summary statistics
     pure_count = sum(1 for a in function_analyses if a["classification"] == "pure")
     impure_count = sum(1 for a in function_analyses if a["classification"] == "impure")
     total = len(function_analyses)
 
-    # Group by side-effect type
+    # Group by side-effect type (includes both function and module effects)
     effect_summary = defaultdict(int)
     for a in function_analyses:
         for e in a.get("side_effects", []):
+            effect_summary[e["type"]] += 1
+    for m in module_effects:
+        for e in m.get("side_effects", []):
             effect_summary[e["type"]] += 1
 
     return {
@@ -325,9 +370,13 @@ def analyze_side_effects(
             "pure": pure_count,
             "impure": impure_count,
             "purity_ratio": round(pure_count / total, 2) if total > 0 else 1.0,
-            "effect_summary": dict(effect_summary)
+            "effect_summary": dict(effect_summary),
+            "module_level_effects": len(module_effects),
+            "files_scanned": files_scanned,
+            "timed_out": timed_out
         },
         "functions": function_analyses,
+        "module_effects": module_effects,
         "count": total
     }
 
@@ -460,32 +509,68 @@ def _scan_for_function(workspace: str, function_name: str, file_filter: Optional
 
 
 def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Extract function definitions from file."""
+    """Extract function definitions from file, including class methods."""
     functions = []
     lines = content.split('\n')
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
         for i, line in enumerate(lines):
             stripped = line.strip()
+
+            # 1. Standalone function declarations: function name(...) or export async function name(...)
             m = re.match(r'(?:export\s+)?(?:async\s+)?function\s+(\w+)', stripped)
             if m:
-                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped[:m.end()]})
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped[:m.end()], "kind": "function"})
                 continue
+
+            # 2. Arrow function / const assignments: const name = () => or const name = async () =>
+            m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>', stripped)
+            if m:
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped, "kind": "arrow"})
+                continue
+
+            # 3. Const function assignments: const name = (async )function(...) or const name = (async )(args) =>
             m = re.match(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(', stripped)
             if m:
-                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped})
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped, "kind": "const_fn"})
+                continue
+
+            # 4. Class methods (TypeScript/JavaScript): async name(...), private name(...), etc.
+            #    Matches: methodName(), async methodName(), private methodName(), etc.
+            #    Also matches decorated methods: @Get() async findAll()
+            m = re.match(
+                r'(?:(?:public|private|protected|static|readonly|abstract|override)\s+)*'
+                r'(?:async\s+)?'
+                r'(?:get|set)?\s*'
+                r'(\w+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{', stripped)
+            if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'catch', 'class', 'function',
+                                         'constructor', 'return', 'throw', 'new', 'delete', 'typeof',
+                                         'void', 'export', 'import', 'from', 'const', 'let', 'var',
+                                         'interface', 'type', 'enum', 'namespace'):
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped, "kind": "method"})
+                continue
+
+            # 5. Arrow class properties: name = () => or name = async () =>
+            m = re.match(
+                r'(?:(?:public|private|protected|static|readonly|abstract|override)\s+)?'
+                r'(?:async\s+)?'
+                r'(\w+)\s*=\s*(?:async\s+)?\(?[^)]*\)?\s*=>', stripped)
+            if m and m.group(1) not in ('const', 'let', 'var', 'export', 'import', 'class', 'type',
+                                         'interface', 'enum', 'return', 'throw'):
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in stripped, "kind": "arrow_method"})
+                continue
 
     elif ext == ".py":
         for i, line in enumerate(lines):
             m = re.match(r'(?:async\s+)?def\s+(\w+)', line.strip())
             if m:
-                functions.append({"name": m.group(1), "line": i + 1, "async": line.strip().startswith("async")})
+                functions.append({"name": m.group(1), "line": i + 1, "async": line.strip().startswith("async"), "kind": "function"})
 
     elif ext == ".rs":
         for i, line in enumerate(lines):
             m = re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', line)
             if m:
-                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in line})
+                functions.append({"name": m.group(1), "line": i + 1, "async": "async" in line, "kind": "function"})
 
     elif ext == ".go":
         for i, line in enumerate(lines):
@@ -495,7 +580,7 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 fn_name = m.group(1)
                 # Skip init() and main() — they're entry points, not regular functions
                 if fn_name not in ('init', 'main'):
-                    functions.append({"name": fn_name, "line": i + 1, "async": False})
+                    functions.append({"name": fn_name, "line": i + 1, "async": False, "kind": "function"})
 
     return functions
 
@@ -554,3 +639,155 @@ def _detect_effects(fn_body: str, ext: str) -> List[Dict]:
                 break  # One detection per effect type is enough
 
     return effects
+
+
+def _detect_module_effects(content: str, ext: str, rel_path: str) -> List[Dict]:
+    """Detect module-level side effects (code outside any function that has side effects).
+
+    This catches things like:
+    - Top-level console.log() calls
+    - Module-level global variable assignments
+    - IIFE (Immediately Invoked Function Expressions)
+    - Top-level network/file operations
+    - Module-level decorator calls (NestJS patterns)
+    - Side-effecting imports (import './side-effects')
+    """
+    effects = []
+    lines = content.split('\n')
+
+    if ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
+        return effects
+
+    # Track brace depth to know when we're at module level
+    brace_depth = 0
+    paren_depth = 0
+    in_comment = False
+    in_string = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip empty lines and comments
+        if not stripped or stripped.startswith('//') or stripped.startswith('#'):
+            continue
+
+        # Simple state tracking for comments and strings
+        # (This is a heuristic — not a full parser)
+        if in_comment:
+            if '*/' in stripped:
+                in_comment = False
+            continue
+        if stripped.startswith('/*'):
+            if '*/' not in stripped:
+                in_comment = True
+            continue
+
+        # Count braces/parens to determine nesting level
+        for ch in stripped:
+            if ch == '{':
+                brace_depth += 1
+            elif ch == '}':
+                brace_depth = max(0, brace_depth - 1)
+            elif ch == '(':
+                paren_depth += 1
+            elif ch == ')':
+                paren_depth = max(0, paren_depth - 1)
+
+        # Only detect effects at module level (depth 0)
+        if brace_depth > 0 or paren_depth > 0:
+            continue
+
+        # Skip import/export declarations (they're not side effects per se)
+        if re.match(r'^import\s', stripped) or re.match(r'^export\s+(?:default\s+)?(?:class|interface|type|enum|const|let|var|function|async\s+function)', stripped):
+            continue
+
+        # Side-effecting import: import './side-effects' (no names imported)
+        if re.match(r'^import\s+[\'"]\.', stripped):
+            effects.append({
+                "type": "module_import",
+                "label": "side_effect_import",
+                "severity": "low",
+                "line": i + 1,
+                "example": stripped[:80]
+            })
+            continue
+
+        # IIFE: (function() { ... })() or (() => { ... })()
+        if re.match(r'^\(\s*(?:function\s*\(|.*=>)', stripped):
+            effects.append({
+                "type": "iife",
+                "label": "iife_execution",
+                "severity": "medium",
+                "line": i + 1,
+                "example": stripped[:80]
+            })
+            continue
+
+        # Module-level console/log calls
+        if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            if re.search(r'console\.\w+\s*\(', stripped):
+                effects.append({
+                    "type": "io",
+                    "label": "io_operation",
+                    "severity": "low",
+                    "line": i + 1,
+                    "example": stripped[:80]
+                })
+                continue
+
+        # Module-level network calls (fetch, axios, etc.)
+        if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            if re.search(r'(?:fetch|axios)\s*[\(\.]', stripped):
+                effects.append({
+                    "type": "network",
+                    "label": "network_request",
+                    "severity": "high",
+                    "line": i + 1,
+                    "example": stripped[:80]
+                })
+                continue
+
+        # Module-level global assignments
+        if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            if re.match(r'(?:global|window|process|module\.exports)\s*[\[.]', stripped):
+                effects.append({
+                    "type": "state",
+                    "label": "state_mutation",
+                    "severity": "medium",
+                    "line": i + 1,
+                    "example": stripped[:80]
+                })
+                continue
+
+        # Python module-level print/open/network calls
+        if ext == ".py":
+            if re.search(r'(?:print|open|urlopen|requests\.\w+)\s*\(', stripped):
+                effects.append({
+                    "type": "io",
+                    "label": "io_operation",
+                    "severity": "low",
+                    "line": i + 1,
+                    "example": stripped[:80]
+                })
+                continue
+
+    # Wrap module effects into result format
+    results = []
+    for eff in effects:
+        results.append({
+            "file": rel_path,
+            "line": eff["line"],
+            "classification": "impure",
+            "side_effects": [{
+                "type": eff["type"],
+                "label": eff["label"],
+                "severity": eff["severity"],
+                "occurrences": 1,
+                "example": eff["example"]
+            }],
+            "effect_count": 1,
+            "is_async": False,
+            "kind": "module_level"
+        })
+
+    return results

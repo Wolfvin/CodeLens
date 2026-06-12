@@ -43,6 +43,27 @@ SOURCE_PATTERNS = {
         "severity": "high",
         "languages": {".js", ".ts", ".tsx", ".jsx", ".mjs"}
     },
+    # NestJS / TypeScript decorator-injected request data
+    "nestjs_input": {
+        "patterns": [
+            r"@Body\s*\(\s*\)",
+            r"@Param\s*\(\s*\)",
+            r"@Query\s*\(\s*\)",
+            r"@Headers\s*\(\s*\)",
+            r"@Cookies\s*\(\s*\)",
+            r"@UploadedFile\s*\(\s*\)",
+            r"@UploadedFiles\s*\(\s*\)",
+            r"@Request\s*\(\s*\)",
+            r"@Req\s*\(\s*\)",
+            r"@Res\s*\(\s*\)",
+            r"@Session\s*\(\s*\)",
+            r"@Ip\s*\(\s*\)",
+            r"@HostParam\s*\(\s*\)",
+        ],
+        "label": "user_input",
+        "severity": "high",
+        "languages": {".ts", ".tsx"}
+    },
     # DOM input
     "js_dom_input": {
         "patterns": [
