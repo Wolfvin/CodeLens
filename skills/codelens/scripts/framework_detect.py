@@ -82,7 +82,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["django"],
         "pip_packages": ["django"],
         "config_files": ["manage.py"],
-        "indicators": []
+        "indicators": ["django/__init__.py", "django/apps/", "django/conf/", "django/contrib/", "django/core/"]
     },
     "celery": {
         "packages": ["celery"],
@@ -108,108 +108,82 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
-    # Mobile/native frameworks
-    "nativescript": {
-        "packages": ["@nativescript/core"],
-        "config_files": ["nativescript.config.ts", "nativescript.config.js"],
-        "indicators": ["tns_modules"]
-    },
-    "capacitor": {
-        "packages": ["@capacitor/core"],
-        "config_files": ["capacitor.config.ts", "capacitor.config.json"],
-        "indicators": []
-    },
-    "cordova": {
-        "packages": ["cordova"],
-        "config_files": ["config.xml"],
-        "indicators": ["www"]
-    },
-    "expo": {
-        "packages": ["expo"],
-        "config_files": ["app.json", "app.config.js", "app.config.ts"],
-        "indicators": []
-    },
-    "react-native": {
-        "packages": ["react-native"],
-        "config_files": [],
-        "indicators": []
-    },
-    "ionic": {
-        "packages": ["@ionic/react", "@ionic/angular", "@ionic/vue"],
-        "config_files": ["ionic.config.json"],
-        "indicators": []
-    },
-    # Monorepo tools
-    "nx": {
-        "packages": ["nx"],
-        "config_files": ["nx.json"],
-        "indicators": []
-    },
-    "turborepo": {
-        "packages": ["turbo"],
-        "config_files": ["turbo.json"],
-        "indicators": []
-    },
-    # Desktop frameworks
+    # Desktop app frameworks
     "tauri": {
-        "packages": ["@tauri-apps/api"],
-        "config_files": ["src-tauri/tauri.conf.json", "tauri.conf.json"],
-        "indicators": []
+        "packages": ["@tauri-apps/api", "@tauri-apps/cli"],
+        "config_files": ["tauri.conf.json", "Tauri.toml"],
+        "indicators": ["src-tauri"]
     },
     "electron": {
         "packages": ["electron"],
         "config_files": ["electron-builder.yml", "electron-builder.json"],
+        "indicators": ["main.js", "BrowserWindow"]
+    },
+    # Go frameworks (detected by config files / source presence)
+    "golang": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": [".go"]
+    },
+    "gin": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": ["gin-gonic/gin"]
+    },
+    "echo": {
+        "packages": [],
+        "config_files": ["go.mod"],
+        "indicators": ["labstack/echo"]
+    },
+    # Java/Kotlin frameworks
+    "spring": {
+        "packages": [],
+        "config_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "indicators": ["spring-boot"]
+    },
+    # C/C++ frameworks
+    "cmake": {
+        "packages": [],
+        "config_files": ["CMakeLists.txt"],
         "indicators": []
     },
-    # State management
-    "zustand": {
-        "packages": ["zustand"],
+    # Rust ecosystem
+    "rust": {
+        "packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["src/main.rs", "src/lib.rs"]
+    },
+    "actix": {
+        "packages": ["actix-web"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["actix_web"]
+    },
+    "axum": {
+        "packages": ["axum"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["axum"]
+    },
+    "tokio": {
+        "packages": ["tokio"],
+        "pip_packages": [],
+        "config_files": ["Cargo.toml"],
+        "indicators": ["tokio"]
+    },
+    "wasm": {
+        "packages": [],
+        "pip_packages": [],
         "config_files": [],
-        "indicators": []
+        "indicators": ["wasm-bindgen", "wasm-pack"]
     },
-    "redux": {
-        "packages": ["@reduxjs/toolkit", "redux"],
-        "config_files": [],
-        "indicators": []
+    # Generic Python project (no specific framework)
+    "python": {
+        "packages": [],
+        "pip_packages": [],
+        "config_files": ["pyproject.toml", "setup.py", "setup.cfg"],
+        "indicators": ["__init__.py"]
     },
-    "pinia": {
-        "packages": ["pinia"],
-        "config_files": [],
-        "indicators": []
-    },
-    # Build tools
-    "vite": {
-        "packages": ["vite"],
-        "config_files": ["vite.config.js", "vite.config.ts", "vite.config.mjs"],
-        "indicators": []
-    },
-    "webpack": {
-        "packages": ["webpack"],
-        "config_files": ["webpack.config.js", "webpack.config.ts"],
-        "indicators": []
-    },
-    # API frameworks
-    "trpc": {
-        "packages": ["@trpc/server", "@trpc/client", "@trpc/react-query", "@trpc/next"],
-        "config_files": [],
-        "indicators": []
-    },
-    "orpc": {
-        "packages": ["@orpc/server", "@orpc/client"],
-        "config_files": [],
-        "indicators": []
-    },
-    # CSS-in-JS
-    "styled-components": {
-        "packages": ["styled-components"],
-        "config_files": [],
-        "indicators": []
-    },
-    "emotion": {
-        "packages": ["@emotion/react", "@emotion/styled"],
-        "config_files": [],
-        "indicators": []
-    }
 }
 
 
@@ -241,73 +215,6 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
     return pkg_files
 
 
-def _find_config_file_deep(workspace: str, config_file: str, max_depth: int = 5) -> Optional[str]:
-    """Find a config file anywhere in the workspace tree (for deeply nested configs).
-
-    Uses os.walk with depth limiting to find config files like tauri.conf.json
-    that may be nested several levels deep in a monorepo:
-        apps/desktop/src-tauri/tauri.conf.json
-
-    Args:
-        workspace: Absolute path to workspace root.
-        config_file: Config file basename (e.g., "tauri.conf.json").
-        max_depth: Maximum directory depth to search.
-
-    Returns:
-        Full path to the config file, or None if not found.
-    """
-    basename = os.path.basename(config_file)
-    workspace_len = len(workspace.rstrip(os.sep))
-
-    for root, dirs, files in os.walk(workspace):
-        # Depth check
-        depth = root[workspace_len:].count(os.sep)
-        if depth > max_depth:
-            dirs.clear()
-            continue
-
-        # Skip ignored directories
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        if basename in files:
-            return os.path.join(root, basename)
-
-    return None
-
-
-def _find_all_cargo_toml(workspace: str, max_depth: int = 4) -> List[str]:
-    """Find all Cargo.toml files in the workspace tree (for deeply nested monorepos).
-
-    Args:
-        workspace: Absolute path to workspace root.
-        max_depth: Maximum directory depth to search.
-
-    Returns:
-        List of full paths to Cargo.toml files found.
-    """
-    results = []
-    workspace_len = len(workspace.rstrip(os.sep))
-
-    for root, dirs, files in os.walk(workspace):
-        depth = root[workspace_len:].count(os.sep)
-        if depth > max_depth:
-            dirs.clear()
-            continue
-
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-
-        if "Cargo.toml" in files:
-            results.append(os.path.join(root, "Cargo.toml"))
-
-    return results
-
-
 def detect_frameworks(workspace: str) -> Dict[str, Any]:
     """
     Detect frameworks used in a workspace.
@@ -325,16 +232,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
-        "has_nativescript": False,
-        "has_capacitor": False,
-        "has_expo": False,
-        "has_react_native": False,
-        "has_nx": False,
         "has_tauri": False,
         "has_electron": False,
-        "has_rust_backend": False,
-        "is_monorepo": False,
-        "lockfile": None,
+        "has_golang": False,
+        "has_rust": False,
+        "has_python": False,
+        "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
     }
@@ -342,7 +245,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 1. Check package.json (root + monorepo sub-packages)
     all_deps = {}
     pkg_files = _find_package_jsons(workspace)
-    root_pkg_data = None
 
     for pkg_path in pkg_files:
         try:
@@ -354,59 +256,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
             # Detect module system from root package.json only
             if pkg_path == os.path.join(workspace, "package.json"):
-                root_pkg_data = pkg
                 if "type" in pkg and pkg["type"] == "module":
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
-
-    # 1b. Detect monorepo and lockfile
-    # Monorepo indicators:
-    #   - pnpm-workspace.yaml
-    #   - package.json with "workspaces" field
-    #   - bun.lock with workspace structure
-    #   - Multiple package.json in apps/packages dirs
-    if os.path.exists(os.path.join(workspace, "pnpm-workspace.yaml")):
-        detected["is_monorepo"] = True
-
-    if root_pkg_data and "workspaces" in root_pkg_data:
-        detected["is_monorepo"] = True
-
-    # Check for bun.lock / bun.lockb as monorepo indicator
-    if os.path.exists(os.path.join(workspace, "bun.lock")) or os.path.exists(os.path.join(workspace, "bun.lockb")):
-        detected["is_monorepo"] = True
-
-    # Structural monorepo detection: multiple package.json in apps/ or packages/
-    if not detected["is_monorepo"]:
-        for subdir in ('apps', 'packages', 'projects', 'services', 'libs', 'modules'):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path):
-                pkg_count = 0
-                try:
-                    for entry in os.listdir(subdir_path):
-                        entry_path = os.path.join(subdir_path, entry)
-                        if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, "package.json")):
-                            pkg_count += 1
-                except OSError:
-                    pass
-                if pkg_count >= 2:
-                    detected["is_monorepo"] = True
-                    break
-
-    # Lockfile detection
-    lockfile_order = [
-        ("pnpm-lock.yaml", "pnpm"),
-        ("bun.lock", "bun"),
-        ("bun.lockb", "bun"),
-        ("yarn.lock", "yarn"),
-        ("package-lock.json", "npm"),
-    ]
-    for lockfile_name, lockfile_type in lockfile_order:
-        if os.path.exists(os.path.join(workspace, lockfile_name)):
-            detected["lockfile"] = lockfile_type
-            break
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -425,20 +280,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
-                    elif fw_name == "nativescript":
-                        detected["has_nativescript"] = True
-                    elif fw_name == "capacitor":
-                        detected["has_capacitor"] = True
-                    elif fw_name == "expo":
-                        detected["has_expo"] = True
-                    elif fw_name == "react-native":
-                        detected["has_react_native"] = True
-                    elif fw_name == "nx":
-                        detected["has_nx"] = True
                     elif fw_name == "tauri":
                         detected["has_tauri"] = True
                     elif fw_name == "electron":
                         detected["has_electron"] = True
+                    elif fw_name == "golang":
+                        detected["has_golang"] = True
                     break
 
         # Detect CSS preprocessor
@@ -450,9 +297,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             detected["css_preprocessor"] = "stylus"
 
     # 2. Check config files (root + subdirectories for monorepos)
-    # For tauri.conf.json, do a deep recursive search since it can be nested:
-    #   apps/desktop/src-tauri/tauri.conf.json
-    # For other config files, check root + one level deep
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
         if fw_name in detected["frameworks"]:
             continue
@@ -470,26 +314,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
-                elif fw_name == "tauri":
-                    detected["has_tauri"] = True
-                elif fw_name == "electron":
-                    detected["has_electron"] = True
-                elif fw_name == "vite":
-                    pass  # No has_vite flag needed
+                elif fw_name == "golang":
+                    detected["has_golang"] = True
                 break
-
-            # For tauri.conf.json, do deep recursive search
-            if cfg_file == "tauri.conf.json" or cfg_file == "src-tauri/tauri.conf.json":
-                found = _find_config_file_deep(workspace, cfg_file)
-                if found:
-                    detected["frameworks"].append(fw_name)
-                    detected["has_tauri"] = True
-                    break
-                continue
-
-            # Check one level deep for monorepo (apps/*, packages/*, src-tauri/*)
+            # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
-            for subdir in ('apps', 'packages', 'projects', 'services', 'src-tauri'):
+            for subdir in ('apps', 'packages', 'projects', 'services'):
                 subdir_path = os.path.join(workspace, subdir)
                 if not os.path.isdir(subdir_path):
                     continue
@@ -561,80 +391,85 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 3d. Check Cargo.toml for Rust dependencies (Tauri, Axum, Actix, etc.)
-    cargo_deps = set()
-    _cargo_search_paths = [
-        os.path.join(workspace, "Cargo.toml"),
-        os.path.join(workspace, "src-tauri", "Cargo.toml"),
-    ]
-    # Also search in monorepo sub-directories (apps/*/src-tauri/, apps/*/Cargo.toml)
-    for subdir in ('apps', 'packages', 'projects', 'services'):
-        subdir_path = os.path.join(workspace, subdir)
-        if not os.path.isdir(subdir_path):
-            continue
-        try:
-            for entry in os.listdir(subdir_path):
-                entry_path = os.path.join(subdir_path, entry)
-                if os.path.isdir(entry_path):
-                    _cargo_search_paths.append(os.path.join(entry_path, "Cargo.toml"))
-                    _cargo_search_paths.append(os.path.join(entry_path, "src-tauri", "Cargo.toml"))
-        except OSError:
-            pass
-    # Also do a deep search for Cargo.toml files (limited depth)
-    for found in _find_all_cargo_toml(workspace):
-        if found not in _cargo_search_paths:
-            _cargo_search_paths.append(found)
-
-    for cargo_path in _cargo_search_paths:
-        if not os.path.exists(cargo_path):
-            continue
-        try:
-            with open(cargo_path, 'r', encoding='utf-8') as f:
-                cargo_content = f.read()
-            # Parse [dependencies] section — extract crate names
-            in_deps = False
-            for line in cargo_content.split('\n'):
-                stripped = line.strip()
-                if stripped == '[dependencies]':
-                    in_deps = True
-                    continue
-                if stripped.startswith('[') and in_deps:
-                    break  # End of [dependencies] section
-                if in_deps and '=' in stripped:
-                    crate_name = stripped.split('=')[0].strip().lower()
-                    if crate_name:
-                        cargo_deps.add(crate_name)
-        except IOError:
-            logger.debug("Failed to parse Cargo.toml", exc_info=True)
-
-    if cargo_deps:
-        detected["has_rust_backend"] = True
-        # Detect Tauri from Cargo dependency
-        if "tauri" in cargo_deps:
-            if "tauri" not in detected["frameworks"]:
-                detected["frameworks"].append("tauri")
-            detected["has_tauri"] = True
-        # Detect other Rust frameworks
-        rust_framework_map = {
-            "axum": "axum",
-            "actix-web": "actix",
-            "rocket": "rocket",
-            "warp": "warp",
-        }
-        for crate, fw_name in rust_framework_map.items():
-            if crate in cargo_deps and fw_name not in detected["frameworks"]:
-                detected["frameworks"].append(fw_name)
-
-    # Tauri implies Rust backend (even if Cargo.toml wasn't parsed or had no deps)
-    if detected["has_tauri"] and not detected["has_rust_backend"]:
-        detected["has_rust_backend"] = True
-
-    # 4. Check file patterns (for Vue, Svelte) + Tailwind CSS in one walk
-    need_file_scan = (not detected["has_vue"]) or (not detected["has_svelte"]) or (not detected["has_tailwind"])
-    if need_file_scan:
+    # 4. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
+    if not detected["has_tauri"]:
+        tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            # Skip ignored dirs
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            for f in files:
+                if f in tauri_markers:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+            if detected["has_tauri"]:
+                break
+
+        # Also check for src-tauri directory
+        if not detected["has_tauri"]:
+            for root, dirs, files in os.walk(workspace):
+                skip = False
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
+                        skip = True
+                        break
+                if skip or '.codelens' in root:
+                    continue
+                if 'src-tauri' in dirs:
+                    if "tauri" not in detected["frameworks"]:
+                        detected["frameworks"].append("tauri")
+                    detected["has_tauri"] = True
+                    break
+
+    # 5. Check file patterns (for Vue, Svelte)
+    for root, dirs, files in os.walk(workspace):
+        # Skip ignored dirs
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip:
+            continue
+
+        for f in files:
+            if f.endswith('.vue') and not detected["has_vue"]:
+                if "vue" not in detected["frameworks"]:
+                    detected["frameworks"].append("vue")
+                detected["has_vue"] = True
+            elif f.endswith('.svelte') and not detected["has_svelte"]:
+                if "svelte" not in detected["frameworks"]:
+                    detected["frameworks"].append("svelte")
+                detected["has_svelte"] = True
+
+    # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
+    # Some frameworks have distinctive directory structures even when they're the
+    # framework source itself (not a project using the framework).
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for indicator in sig.get("indicators", []):
+            indicator_path = os.path.join(workspace, indicator)
+            if os.path.exists(indicator_path):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "django":
+                    detected["has_django"] = True
+                elif fw_name == "fastapi":
+                    detected["has_fastapi"] = True
+                elif fw_name == "flask":
+                    detected["has_flask"] = True
+                break
+
+    # 6. Detect Tailwind from CSS content
+    if not detected["has_tailwind"]:
+        tailwind_indicators = ['@tailwind', '@apply']
+        for root, dirs, files in os.walk(workspace):
             skip = False
             for ignore in DEFAULT_IGNORE_DIRS:
                 if ignore in root:
@@ -642,39 +477,104 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
             if skip:
                 continue
-
-            # Check Vue/Svelte file patterns
             for f in files:
-                if f.endswith('.vue') and not detected["has_vue"]:
-                    if "vue" not in detected["frameworks"]:
-                        detected["frameworks"].append("vue")
-                    detected["has_vue"] = True
-                elif f.endswith('.svelte') and not detected["has_svelte"]:
-                    if "svelte" not in detected["frameworks"]:
-                        detected["frameworks"].append("svelte")
-                    detected["has_svelte"] = True
-
-            # Check Tailwind from CSS content
-            if not detected["has_tailwind"]:
-                for f in files:
-                    if f.endswith(('.css', '.scss', '.pcss')):
-                        try:
-                            fpath = os.path.join(root, f)
-                            with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
-                                content = fh.read(4096)  # Read first 4KB
-                                if '@tailwind' in content or '@apply' in content:
+                if f.endswith(('.css', '.scss', '.pcss')):
+                    try:
+                        fpath = os.path.join(root, f)
+                        with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                            content = fh.read(4096)  # Read first 4KB
+                            for indicator in tailwind_indicators:
+                                if indicator in content:
                                     if "tailwind" not in detected["frameworks"]:
                                         detected["frameworks"].append("tailwind")
                                     detected["has_tailwind"] = True
                                     break
-                        except IOError:
-                            pass
-                if detected["has_tailwind"]:
-                    pass  # Continue walking for Vue/Svelte if not found yet
-
-            # Early exit if all targets found
-            if detected["has_vue"] and detected["has_svelte"] and detected["has_tailwind"]:
+                            if detected["has_tailwind"]:
+                                break
+                    except IOError:
+                        pass
+            if detected["has_tailwind"]:
                 break
+
+    # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
+    # These languages are detected but not parsed by tree-sitter.
+    UNSUPPORTED_MARKERS = {
+        "go": ["go.mod", "go.sum"],
+        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "kotlin": ["build.gradle.kts"],
+        "c": ["CMakeLists.txt", "Makefile"],
+        "cpp": ["CMakeLists.txt", "Makefile"],
+        "csharp": [".csproj", ".sln"],
+        "swift": ["Package.swift", "Package.resolved"],
+        "ruby": ["Gemfile", "Rakefile"],
+    }
+    for lang, markers in UNSUPPORTED_MARKERS.items():
+        for marker in markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if lang not in detected["unsupported_langs"]:
+                    detected["unsupported_langs"].append(lang)
+                if lang == "go" and "golang" not in detected["frameworks"]:
+                    detected["frameworks"].append("golang")
+                    detected["has_golang"] = True
+                break
+
+    # 8. Detect Rust (Cargo.toml) — Cargo workspace and single-crate
+    if not detected["has_rust"]:
+        cargo_toml = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(cargo_toml):
+            if "rust" not in detected["frameworks"]:
+                detected["frameworks"].append("rust")
+            detected["has_rust"] = True
+            # Check for workspace members (monorepo)
+            try:
+                with open(cargo_toml, 'r', encoding='utf-8') as f:
+                    cargo_content = f.read()
+                # Detect workspace members
+                if 'workspace' in cargo_content and 'members' in cargo_content:
+                    detected["is_cargo_workspace"] = True
+                # Detect specific Rust frameworks from dependencies
+                rust_fw_patterns = {
+                    "actix": ["actix-web", "actix_web"],
+                    "axum": ["axum"],
+                    "tokio": ["tokio"],
+                    "serde": ["serde"],
+                    "clap": ["clap"],
+                    "wasm": ["wasm-bindgen", "wasm_pack"],
+                }
+                for fw_name, patterns in rust_fw_patterns.items():
+                    if fw_name not in detected["frameworks"]:
+                        for pattern in patterns:
+                            if pattern in cargo_content:
+                                detected["frameworks"].append(fw_name)
+                                break
+            except (IOError, OSError):
+                pass
+
+    # 9. Detect generic Python project (pyproject.toml, setup.py, etc.)
+    if not detected["has_python"]:
+        python_markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
+        for marker in python_markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if "python" not in detected["frameworks"]:
+                    detected["frameworks"].append("python")
+                detected["has_python"] = True
+                break
+
+        # Also check for .py files if no markers found
+        if not detected["has_python"]:
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                if '.codelens' in root:
+                    dirs.clear()
+                    continue
+                for f in files:
+                    if f.endswith('.py') and f != '__init__.py':
+                        if "python" not in detected["frameworks"]:
+                            detected["frameworks"].append("python")
+                        detected["has_python"] = True
+                        break
+                if detected["has_python"]:
+                    break
 
     return detected
 
@@ -692,40 +592,12 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "watch": True,
         "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
         "frameworks": fw["frameworks"],
-        "is_monorepo": fw.get("is_monorepo", False),
-        "lockfile": fw.get("lockfile"),
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
         "vue_mode": False,
         "svelte_mode": False,
         "tailwind_mode": False
     }
-
-    # Monorepo path adjustments: detect sub-project directories
-    if fw.get("is_monorepo"):
-        for subdir in ('apps', 'packages', 'projects', 'services'):
-            subdir_path = os.path.join(workspace, subdir)
-            if not os.path.isdir(subdir_path):
-                continue
-            try:
-                for entry in sorted(os.listdir(subdir_path)):
-                    entry_path = os.path.join(subdir_path, entry)
-                    if not os.path.isdir(entry_path):
-                        continue
-                    # Use forward slashes for consistency
-                    entry_rel = f"{subdir}/{entry}"
-                    # Add sub-project source paths (even if dirs don't exist yet)
-                    config["frontend_paths"].append(f"{entry_rel}/src/")
-                    config["frontend_paths"].append(f"{entry_rel}/public/")
-                    # Check for Tauri sub-project
-                    sub_tauri_src = os.path.join(entry_path, "src-tauri", "src")
-                    if os.path.isdir(sub_tauri_src):
-                        config["backend_paths"].append(f"{entry_rel}/src-tauri/src/")
-                    elif os.path.exists(os.path.join(entry_path, "src-tauri")):
-                        # src-tauri exists but no src/ inside — add the pattern anyway
-                        config["backend_paths"].append(f"{entry_rel}/src-tauri/src/")
-            except OSError:
-                pass
 
     # Adjust paths based on framework
     if fw["has_nextjs"]:
@@ -750,20 +622,54 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
 
+    # Tauri: add Rust backend paths and src-tauri
     if fw.get("has_tauri"):
-        config["frontend_paths"].extend(["src/", "src-tauri/"])
-        config["backend_paths"].extend(["src-tauri/src/"])
-        # Remove generic src/ from backend_paths since it's frontend in Tauri
-        if "src/" in config["backend_paths"]:
-            config["backend_paths"].remove("src/")
+        config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
+        config["frontend_paths"].append("src/")
+        # Find and add app-specific src-tauri paths
+        for app_dir in ('apps', 'packages'):
+            app_path = os.path.join(workspace, app_dir)
+            if os.path.isdir(app_path):
+                try:
+                    for entry in os.listdir(app_path):
+                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        if os.path.isdir(tauri_src):
+                            rel = os.path.relpath(tauri_src, workspace)
+                            config["backend_paths"].append(rel + "/")
+                except OSError:
+                    pass
 
-    if fw.get("has_nativescript"):
-        config["frontend_paths"].extend(["app/", "src/app/"])
-        config["backend_paths"].extend(["src/"])
+    # Rust: add common Rust source paths
+    if fw.get("has_rust"):
+        config["backend_paths"].extend(["src/", "crates/"])
+        # Detect Cargo workspace sub-crates
+        cargo_toml = os.path.join(workspace, "Cargo.toml")
+        if os.path.exists(cargo_toml):
+            try:
+                with open(cargo_toml, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                if 'workspace' in content:
+                    # Add crates/* paths for monorepo
+                    crates_dir = os.path.join(workspace, "crates")
+                    if os.path.isdir(crates_dir):
+                        try:
+                            for entry in os.listdir(crates_dir):
+                                crate_src = os.path.join(crates_dir, entry, "src")
+                                if os.path.isdir(crate_src):
+                                    rel = os.path.relpath(crate_src, workspace)
+                                    config["backend_paths"].append(rel + "/")
+                        except OSError:
+                            pass
+            except (IOError, OSError):
+                pass
 
-    if fw.get("has_capacitor"):
-        config["frontend_paths"].extend(["src/", "www/"])
-        config["backend_paths"].extend(["android/", "ios/"])
+    # Python: add common Python source paths
+    if fw.get("has_python"):
+        config["backend_paths"].extend(["src/", "lib/", "python/"])
+        # Detect src-layout vs flat-layout
+        src_init = os.path.join(workspace, "src", "__init__.py")
+        if os.path.exists(src_init):
+            config["backend_paths"].append("src/")
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

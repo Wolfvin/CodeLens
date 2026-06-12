@@ -300,6 +300,33 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             if tool_name not in identity["monorepo_tools"]:
                 identity["monorepo_tools"].append(tool_name)
 
+    # v6.1: Check Cargo workspace as monorepo indicator
+    cargo_toml_path = os.path.join(workspace, "Cargo.toml")
+    if os.path.isfile(cargo_toml_path):
+        try:
+            with open(cargo_toml_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if 'workspace' in cargo_content and 'members' in cargo_content:
+                identity["is_monorepo"] = True
+                if "cargo-workspace" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("cargo-workspace")
+            # Also check if crates/ directory has multiple sub-directories with Cargo.toml
+            crates_dir = os.path.join(workspace, "crates")
+            if os.path.isdir(crates_dir):
+                crate_count = 0
+                try:
+                    for entry in os.listdir(crates_dir):
+                        if os.path.isfile(os.path.join(crates_dir, entry, "Cargo.toml")):
+                            crate_count += 1
+                except OSError:
+                    pass
+                if crate_count >= 2:
+                    identity["is_monorepo"] = True
+                    if "cargo-workspace" not in identity["monorepo_tools"]:
+                        identity["monorepo_tools"].append("cargo-workspace")
+        except (IOError, OSError):
+            pass
+
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
