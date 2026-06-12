@@ -324,6 +324,12 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     match_start_depth = 0
     last_arm_depth = 0
 
+    # v6.3.1: Go select/switch case tracking — same logic as Rust match
+    # Each case in a select/switch is an independent branch, so return/break
+    # inside one case does NOT make the next case unreachable.
+    in_go_select = False
+    go_select_start_depth = 0
+
     for i, line in enumerate(lines):
         stripped = line.strip()
 
@@ -349,6 +355,17 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             # End match when we return to the depth where match started
             if in_match and brace_depth <= match_start_depth and '{' not in stripped:
                 in_match = False
+
+        # v6.3.1: Track Go select/switch statements
+        if ext == ".go":
+            if re.match(r'\s*select\s*\{', stripped) or re.match(r'\s*switch\s+', stripped):
+                in_go_select = True
+                go_select_start_depth = brace_depth
+            # End select/switch when we drop BELOW the depth where it started
+            # (a closing } at the select level). Don't end on same-depth lines
+            # like return/break inside case branches.
+            if in_go_select and brace_depth < go_select_start_depth:
+                in_go_select = False
 
         # Detect function start
         if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -396,10 +413,21 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 if ext == ".rs" and in_match:
                     found_terminal = False  # Reset, don't flag match arm terminals
                     continue
+                # v6.3.1: In Go select/switch, terminal statements in one case
+                # do NOT make the next case unreachable — each case is independent.
+                if ext == ".go" and in_go_select:
+                    found_terminal = False
+                    continue
+                # v6.3.1: In Go/JS/TS, "return func(...) {" or "return () => {"
+                # means the body of the anonymous function is the return value,
+                # NOT unreachable code after a return. Skip flagging as terminal.
+                if ext in {".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                    if re.match(r'(?:return|throw)\s+(?:func\s*\(|\([\s\S]*?\)\s*=>\s*\{)', stripped):
+                        continue
                 # v8: Multi-line return statements in Rust/C-like languages.
                 # If the return line doesn't end with ';' or '}' or ')' or ']', the
                 # return expression continues on the next line — don't flag as terminal yet.
-                if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go"}:
                     if not stripped.endswith(';') and not stripped.endswith('}') and not stripped.endswith(')') and not stripped.endswith(']'):
                         continue  # Not a complete return statement yet
                 found_terminal = True
@@ -418,6 +446,12 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     found_terminal = False
                     continue
 
+            # v6.3.1: Go select/switch case separator — new case resets the terminal flag
+            if ext == ".go" and in_go_select:
+                if re.match(r'\s*case\s+', stripped) or re.match(r'\s*default\s*:', stripped):
+                    found_terminal = False
+                    continue
+
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
             #     This avoids resetting on every '}' (e.g. if-blocks inside functions).
@@ -425,6 +459,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = False
                 found_terminal = False
                 in_match = False
+                in_go_select = False
                 continue
 
             # Lua: detect function end via 'end' keyword
