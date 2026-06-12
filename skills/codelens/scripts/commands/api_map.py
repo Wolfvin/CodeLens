@@ -11,10 +11,14 @@ def add_args(parser):
                         default=None, help="Filter by HTTP method")
     parser.add_argument("--path", dest="path_filter", default=None,
                         help="Filter by route path substring")
+    parser.add_argument("--production-only", dest="production_only", action="store_true",
+                        default=False,
+                        help="Filter out routes from test files (*.test.*, *.spec.*, __tests__/, test/, tests/)")
 
 
 def execute(args, workspace):
-    return map_api_routes(workspace, method=args.method, path_filter=args.path_filter)
+    return map_api_routes(workspace, method=args.method, path_filter=args.path_filter,
+                          production_only=args.production_only)
 
 
 register_command("api-map", "Map REST/GraphQL/gRPC routes to handlers", add_args, execute)

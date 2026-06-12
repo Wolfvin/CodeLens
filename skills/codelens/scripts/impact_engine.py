@@ -8,6 +8,13 @@ import os
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 
+# Re-use the std lib methods list from edge_resolver to filter out
+# built-in JS/TS/Rust/Python methods from impact analysis.
+try:
+    from edge_resolver import _STD_LIB_METHODS
+except ImportError:
+    _STD_LIB_METHODS = frozenset()
+
 
 def analyze_impact(
     name: str,
@@ -118,6 +125,11 @@ def analyze_impact(
                         "domain": "backend"
                     })
                 elif to_fn:
+                    # Skip built-in std lib methods (setTimeout, then, get, etc.)
+                    # These are not project-defined functions and should not
+                    # appear in impact analysis.
+                    if to_fn in _STD_LIB_METHODS:
+                        continue
                     affected["direct"].append({
                         "type": "function",  # Unresolved node, fallback to function
                         "name": to_fn,

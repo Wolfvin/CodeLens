@@ -729,16 +729,19 @@ ENTRYPOINT_PATTERNS = {
     "test_entry": {
         "patterns": [
             # Jest / Vitest describe()
+            # v6.2: Added \b word boundaries to prevent false matches on words
+            # ending in "it" (e.g., visit, submit, commit, split, emit, wait)
             {
-                "regex": r'(?:describe|context|suite)\s*\(\s*["\']([^"\']+)["\']',
+                "regex": r'\b(?:describe|context|suite)\b\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".js", ".mjs", ".cjs", ".ts", ".tsx"},
                 "extract": "test_name",
                 "name_group": 1,
                 "label": "jest_describe",
             },
             # Jest / Vitest it() / test()
+            # v6.2: Added \b word boundaries to prevent false matches
             {
-                "regex": r'(?:it|test|specify)\s*\(\s*["\']([^"\']+)["\']',
+                "regex": r'\b(?:it|test|specify)\b\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".js", ".mjs", ".cjs", ".ts", ".tsx"},
                 "extract": "test_name",
                 "name_group": 1,
@@ -1033,7 +1036,12 @@ def _extract_entrypoints(
                 test_name = match.group(name_group) if name_group and match.lastindex is not None and match.lastindex >= name_group else "unknown"
                 # Filter out empty/whitespace-only test names (e.g., it(\n...) matches)
                 if test_name.strip() and test_name.strip() not in ('\\n', '\\r', '\\t'):
-                    entrypoint["test_name"] = test_name.strip()
+                    # v6.2: Filter out test names that are empty or just punctuation
+                    # (e.g., ":", ",", "=", etc. — these come from false regex matches)
+                    stripped_name = test_name.strip()
+                    if re.match(r'^[\s\-_=+.,;:!?@#$%^&*()/\\<>\[\]{}|~`]+$', stripped_name):
+                        continue  # Skip — test name is only punctuation
+                    entrypoint["test_name"] = stripped_name
                 else:
                     continue  # Skip this match — empty test name
 

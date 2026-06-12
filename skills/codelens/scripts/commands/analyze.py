@@ -19,9 +19,14 @@ Usage:
 
 import os
 import time
+import signal
 from typing import Dict, Any, List, Optional
 from commands import register_command
 from utils import logger, DEFAULT_IGNORE_DIRS
+
+# Per-engine timeout for large repos (seconds).
+# Each engine gets this many seconds before being killed.
+_ENGINE_TIMEOUT = 30
 
 
 def add_args(parser):
@@ -35,6 +40,8 @@ def add_args(parser):
                         help="Detail level: minimal (critical only), standard (critical+high), full (all)")
     parser.add_argument("--skip-scan", action="store_true", default=False,
                         help="Skip init+scan if registry already exists")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum files to scan (default: 5000)")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
 
@@ -46,6 +53,7 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
+        max_files=args.max_files,
     )
 
 
@@ -116,6 +124,7 @@ def analyze_repository(
                 incremental=False,
                 full=False,
                 format="json",
+                max_files=max_files,
             )
             scan_result = scan_execute(scan_args, workspace)
             result["scan"] = {
@@ -405,11 +414,36 @@ def analyze_repository(
 # ─── Engine Runners ────────────────────────────────────────
 
 def _run_engine(findings: List[Dict], category: str, label: str, engine_fn) -> None:
-    """Safely run an analysis engine and append findings."""
+    """Safely run an analysis engine and append findings.
+    
+    Includes a per-engine timeout to prevent a single slow engine from
+    blocking the entire analyze command on very large repos.
+    """
     try:
-        result = engine_fn()
+        # Use alarm-based timeout (POSIX only, but Linux/Mac are POSIX)
+        old_handler = signal.getsignal(signal.SIGALRM)
+        def _timeout_handler(signum, frame):
+            raise TimeoutError(f"Engine {category} exceeded {_ENGINE_TIMEOUT}s timeout")
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(_ENGINE_TIMEOUT)
+        try:
+            result = engine_fn()
+        finally:
+            signal.alarm(0)  # Cancel alarm
+            signal.signal(signal.SIGALRM, old_handler)
         if result:
             findings.append(result)
+    except TimeoutError as e:
+        logger.warning(str(e))
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": -1,
+            "severity": "info",
+            "top_items": [],
+            "action": f"Engine timed out after {_ENGINE_TIMEOUT}s — use the individual command for full results",
+            "impact": "Analysis incomplete due to repository size",
+        })
     except Exception as e:
         logger.debug(f"Engine {category} failed: {e}")
 

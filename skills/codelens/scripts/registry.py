@@ -14,10 +14,43 @@ v5.8: Added FrontendRegistryInput dataclass to replace 9-param function.
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from utils import logger
+
+
+# Valid CSS class/id name pattern: starts with letter, underscore, or hyphen,
+# followed by word chars or hyphens.
+_VALID_CSS_NAME_RE = re.compile(r'^[a-zA-Z_-][\w-]*$')
+
+
+def _is_valid_css_class_name(name: str) -> bool:
+    """Check if a name is a valid CSS class name.
+
+    Rejects Vue template expressions and other non-CSS names that slip through
+    parsing, such as '!!hint,', '!==', '!action.completed,', function calls,
+    ternary operators, property access, etc.
+    """
+    if not name:
+        return False
+    # Quick pattern check
+    if not _VALID_CSS_NAME_RE.match(name):
+        return False
+    # Broader rejection filters for patterns that pass the regex but are
+    # clearly not CSS class names
+    if len(name) > 80:
+        return False
+    if name.startswith('!'):
+        return False
+    if ' ' in name:
+        return False
+    # These characters indicate expressions, not class names
+    for ch in ('(', ')', '?', '.', '>', '<', '=', '+', '*', '/'):
+        if ch in name:
+            return False
+    return True
 
 
 def get_codelens_dir(workspace: str) -> str:
@@ -250,6 +283,13 @@ def _build_frontend_registry_impl(
     def add_refs(entries: List[Dict], entry_type: str, ref_category: str):
         for entry in entries:
             name = entry["name"]
+
+            # Validate CSS class names — skip Vue template expressions and
+            # other non-CSS names that slip through parsing.
+            if entry_type == "class" and not _is_valid_css_class_name(name):
+                logger.debug(f"Skipping invalid CSS class name in frontend registry: {name!r}")
+                continue
+
             target_map = class_map if entry_type == "class" else id_map
             if name not in target_map:
                 target_map[name] = {"html": [], "css": [], "js": []}

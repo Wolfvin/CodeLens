@@ -29,7 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
-    ".nim", ".nims",
+    ".php", ".dart", ".lua", ".java", ".cs",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -37,6 +37,20 @@ TEST_FILE_PATTERNS = {
     ".test.", ".spec.", "_test.", "_spec.",
     "__tests__", "/tests/", "/test/",
     "test_", "spec_", "_test.py", "_test.rs",
+}
+
+# v6.2: Config file patterns — findings in these files are downgraded to "info"
+# severity and should_remove is set to False. Config files like jest.config.js
+# contain test-related patterns (testEnvironment, testRegex, etc.) that are
+# perfectly legitimate in their context.
+CONFIG_FILE_PATTERNS = {
+    ".config.js", ".config.ts", ".config.mjs", ".config.cjs",
+    "jest.config.", "vite.config.", "webpack.config.",
+    "tsconfig.", ".eslintrc.", "babel.config.",
+    "rollup.config.", "karma.conf.", "protractor.conf.",
+    "nyc.config.", ".babelrc", ".prettierrc",
+    "postcss.config.", "tailwind.config.", "next.config.",
+    "nuxt.config.", "vue.config.",
 }
 
 # Performance limits for large codebases
@@ -58,19 +72,34 @@ PRINT_PATTERNS = [
     (r'\bpprint\.pprint\s*\(', "pprint.pprint()"),
     (r'\bpprint\s*\(', "pprint()"),
     (r'\becho\s*\(', "echo()"),
-    (r'\bdebugEcho\s*\(', "debugEcho()"),       # Nim debug-only echo
     (r'\bfmt\.Println\s*\(', "fmt.Println()"),
     (r'\bfmt\.Printf\s*\(', "fmt.Printf()"),
     (r'\bprintln!\s*\(', "println!()"),
     (r'\beprintln!\s*\(', "eprintln!()"),
     (r'\blog\.Debug\s*\(', "log.Debug()"),
     (r'\blog\.Info\s*\(', "log.Info()"),
-    # Rust log crate macros — these are logging, not debugger statements
-    (r'\bdebug!\s*\(', "debug!()"),          # log::debug!() — Rust log crate
-    (r'\btrace!\s*\(', "trace!()"),          # log::trace!() — Rust log crate
-    (r'\binfo!\s*\(', "info!()"),            # log::info!() — Rust log crate
-    (r'\bwarn!\s*\(', "warn!()"),            # log::warn!() — Rust log crate
-    (r'\berror!\s*\(', "error!()"),          # log::error!() — Rust log crate
+    # PHP debug output
+    (r'\bvar_dump\s*\(', "var_dump()"),
+    (r'\bprint_r\s*\(', "print_r()"),
+    (r'\bphpinfo\s*\(', "phpinfo()"),
+]
+
+# v5.9: CLI/framework output functions that are NOT debug leaks.
+# These are legitimate output mechanisms for CLI applications.
+CLI_OUTPUT_ALLOWLIST = [
+    r'\bclick\.echo\s*\(',
+    r'\bclick\.secho\s*\(',
+    r'\bclick\.style\s*\(',
+    r'\bsys\.stdout\.write\s*\(',
+    r'\bsys\.stderr\.write\s*\(',
+    r'\blogging\.\w+\s*\(',
+    r'\blogger\.\w+\s*\(',
+    r'\bconsole\.print\s*\(',     # Rich library
+    r'\bconsole\.log\s*\(',       # Rich library
+    r'\btyper\.echo\s*\(',        # Typer CLI
+    r'\bprint_error\s*\(',        # Common pattern
+    r'\bprint_warning\s*\(',      # Common pattern
+    r'\bprint_success\s*\(',      # Common pattern
 ]
 
 DEBUGGER_PATTERNS = [
@@ -79,14 +108,40 @@ DEBUGGER_PATTERNS = [
     (r'\bpdb\.set_trace\s*\(\s*\)', "pdb.set_trace()"),
     (r'\bpdb\s*\(\s*\)', "pdb()"),
     (r'\bipdb\s*\(\s*\)', "ipdb()"),
-    # Note: debug!() moved to PRINT_PATTERNS — it's Rust's log::debug!(), not a debugger
     (r'\bdbg!\s*\(', "dbg!()"),
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
     (r'\bnode\s+--inspect\b', "node --inspect"),
-    (r'\bdoAssert\s*\(', "doAssert()"),      # Nim: debug assertion (not for production)
-    (r'\bdoAssertRaises\s*\(', "doAssertRaises()"),  # Nim: debug exception assertion
-    (r'\bassert\s*\(', "assert()"),          # Nim/Python: debug assertion
+    # PHP debug/die statements
+    (r'\bdd\s*\(', "dd()"),               # dump and die (Laravel)
+    (r'\bdump\s*\(', "dump()"),           # Symfony VarDumper
+    (r'\bray\s*\(', "ray()"),             # Spatie Ray
+    (r'\bdpm\s*\(', "dpm()"),             # Drupal debug
+    (r'\bkint\s*\(', "kint()"),           # Kint debugger
+    (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
+    (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
+    (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
+]
+
+# Rust logging macros from the `log` crate — these are NOT debugger statements.
+# They are proper structured logging and should not be flagged as debug leaks.
+# Only `dbg!()` is a true debugger statement (it prints and returns a value for debugging).
+RUST_LOG_MACROS = [
+    (r'\blog::debug!\s*\(', "log::debug!()"),
+    (r'\blog::info!\s*\(', "log::info!()"),
+    (r'\blog::warn!\s*\(', "log::warn!()"),
+    (r'\blog::error!\s*\(', "log::error!()"),
+    (r'\blog::trace!\s*\(', "log::trace!()"),
+    (r'\bdebug!\s*\(', "debug!()"),
+    (r'\binfo!\s*\(', "info!()"),
+    (r'\bwarn!\s*\(', "warn!()"),
+    (r'\berror!\s*\(', "error!()"),
+    (r'\btrace!\s*\(', "trace!()"),
+    (r'\btracing::debug!\s*\(', "tracing::debug!()"),
+    (r'\btracing::info!\s*\(', "tracing::info!()"),
+    (r'\btracing::warn!\s*\(', "tracing::warn!()"),
+    (r'\btracing::error!\s*\(', "tracing::error!()"),
+    (r'\btracing::trace!\s*\(', "tracing::trace!()"),
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -147,11 +202,9 @@ DEV_ONLY_PATTERNS = [
     (r'\bcfg\.Debug\b', "cfg.Debug"),
     (r'\bdebug_mode\b', "debug_mode"),
     (r'\bDEV_MODE\b', "DEV_MODE"),
-    # Nim: compile-time conditional debug blocks
-    (r'\bwhen\s+defined\s*\(\s*debug\s*\)\s*:', "when defined(debug)"),       # Nim debug guard
-    (r'\bwhen\s+not\s+defined\s*\(\s*release\s*\)\s*:', "when not defined(release)"),  # Nim non-release guard
-    (r'\bwhen\s+defined\s*\(\s*testing\s*\)\s*:', "when defined(testing)"),   # Nim testing guard
-    (r'\bwhen\s+isMainModule\s*:', "when isMainModule"),                      # Nim main module guard
+    # Rust debug-only guards
+    (r'#\[cfg\(debug_assertions\)\]', "#[cfg(debug_assertions)]"),
+    (r'#\[cfg\(debug_assertions\)\]', "cfg(debug_assertions)"),
 ]
 
 
@@ -224,39 +277,41 @@ def detect_debug_leaks(
 
             files_scanned += 1
             is_test_file = any(p in rel_path for p in TEST_FILE_PATTERNS)
+            # v6.2: Check if this is a config file
+            is_config_file = any(p in rel_path for p in CONFIG_FILE_PATTERNS)
             lines = content.split('\n')
 
             # ─── console_log ──────────────────────────────
             if "console_log" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
-                _detect_console_logs(lines, rel_path, is_test_file, leaks)
+                _detect_console_logs(lines, rel_path, is_test_file, is_config_file, leaks)
 
             # ─── print_statement ──────────────────────────
             if "print_statement" in categories:
-                _detect_print_statements(lines, rel_path, ext, is_test_file, leaks, content)
+                _detect_print_statements(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── debugger ─────────────────────────────────
             if "debugger" in categories:
-                _detect_debugger_statements(lines, rel_path, ext, is_test_file, leaks)
+                _detect_debugger_statements(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── todo_fixme ───────────────────────────────
             if "todo_fixme" in categories:
-                _detect_todo_fixme(lines, rel_path, is_test_file, leaks)
+                _detect_todo_fixme(lines, rel_path, is_test_file, is_config_file, leaks)
 
             # ─── commented_code ───────────────────────────
             if "commented_code" in categories:
-                _detect_commented_code(lines, rel_path, ext, is_test_file, leaks)
+                _detect_commented_code(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── test_skip ────────────────────────────────
             if "test_skip" in categories:
-                _detect_test_skips(lines, rel_path, ext, is_test_file, leaks)
+                _detect_test_skips(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── mock_data ────────────────────────────────
             if "mock_data" in categories:
-                _detect_mock_data(lines, rel_path, ext, is_test_file, leaks)
+                _detect_mock_data(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
             # ─── dev_only ─────────────────────────────────
             if "dev_only" in categories:
-                _detect_dev_only(lines, rel_path, ext, is_test_file, leaks)
+                _detect_dev_only(lines, rel_path, ext, is_test_file, is_config_file, leaks)
 
         if truncated:
             break
@@ -297,7 +352,7 @@ def detect_debug_leaks(
 # ─── Category Detectors ────────────────────────────────────────
 
 def _detect_console_logs(
-    lines: List[str], rel_path: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect console.log/warn/error/debug/info statements."""
     for i, line in enumerate(lines):
@@ -321,12 +376,43 @@ def _detect_console_logs(
                 # Also skip if it's in a dedicated error-handling utility
                 if re.search(r'(logError|handleError|reportError|onError)', context):
                     continue
+                # v6.1: Skip console.error in guard/argument-validation patterns
+                # These are intentional runtime validation errors, not debug leaks.
+                # Pattern: console.error('X has to be a number, got ' + typeof Y)
+                # Pattern: console.error('initialValue must be...', ...)
+                # Also check next 2 lines for multi-line console.error calls
+                next_lines_start = i + 1
+                next_lines_end = min(len(lines), i + 3)
+                multi_line_context = stripped + '\n' + '\n'.join(lines[next_lines_start:next_lines_end])
+                if re.search(r"(has to be|must be|is required|got |invalid|expected )", multi_line_context, re.IGNORECASE):
+                    continue
+                # v6.1: Skip console.error inside if-conditions that check validity
+                # Pattern: if (condition) console.error(...)
+                if re.search(r'if\s*\(.+\)\s*console\.error\s*\(', stripped):
+                    continue
+                # Also check: if the previous non-empty line is an if-condition, this
+                # console.error is inside a guard block — legitimate runtime validation
+                prev_line = lines[i - 1].strip() if i > 0 else ""
+                if prev_line.startswith('if ') or prev_line.startswith('if('):
+                    # Check if it's a type/validity check (typeof, instanceof, etc.)
+                    if re.search(r'(typeof|instanceof|===|!==|>|<|>=|<=)', prev_line):
+                        continue
+                # v6.1: Skip console.error in development-only guards
+                # Pattern: if (process.env.NODE_ENV === 'development') console.error(...)
+                context_start2 = max(0, i - 1)
+                context2 = '\n'.join(lines[context_start2:i + 1])
+                if re.search(r"process\.env\.NODE_ENV\s*===?\s*['\"]development['\"]", context2):
+                    continue
 
             # console.warn in catch blocks is also somewhat legitimate
             if label == "console.warn":
                 context_start = max(0, i - 2)
                 context = '\n'.join(lines[context_start:i + 1])
                 if re.search(r'\bcatch\s*\(', context):
+                    continue
+                # v6.1: Skip console.warn in deprecation/warning patterns
+                # These are intentional user-facing warnings, not debug leaks.
+                if re.search(r"(deprecated|unsupported|not recommended|falling back|fallback)", stripped, re.IGNORECASE):
                     continue
 
             severity = "medium"
@@ -337,12 +423,21 @@ def _detect_console_logs(
                 severity = "low"
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Debug console statement: {label}()"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "console_log",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Debug console statement: {label}()",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -351,39 +446,8 @@ def _detect_console_logs(
             break  # One match per line
 
 
-def _is_cli_module(file_path: str, content: str) -> bool:
-    """Check if a Python file is likely a CLI module where print() is legitimate output.
-
-    CLI modules use print() for user-facing output, not debugging.
-    """
-    # Check directory patterns
-    cli_dirs = ['/commands/', '/cli/', '/cmd/', '/scripts/', '/bin/']
-    for cli_dir in cli_dirs:
-        if cli_dir in file_path or file_path.startswith(cli_dir.lstrip('/')):
-            return True
-
-    # Check for CLI framework indicators in the file
-    cli_indicators = [
-        'if __name__ == "__main__"',
-        "if __name__ == '__main__'",
-        'import argparse',
-        'from argparse',
-        'import click',
-        'from click',
-        'import typer',
-        'from typer',
-        'import rich',
-        'from rich',
-        '@click.',
-        'app = typer.',
-        'argparse.ArgumentParser',
-    ]
-    return any(indicator in content for indicator in cli_indicators)
-
-
 def _detect_print_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict],
-    content: str = ""
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect print(), pprint(), echo, fmt.Println, println! statements."""
     for i, line in enumerate(lines):
@@ -400,14 +464,20 @@ def _detect_print_statements(
                 continue
             if label in ("print()", "pprint()", "pprint.pprint()") and ext not in {".py", ".rs"}:
                 continue
-            if label == "debugEcho()" and ext not in {".nim", ".nims"}:
-                continue
-            # Rust log crate macros — only match in .rs files
-            if label in ("debug!()", "trace!()", "info!()", "warn!()", "error!()") and ext not in {".rs"}:
-                continue
 
             m = re.search(pattern, stripped)
             if not m:
+                continue
+
+            # v5.9: Skip CLI/framework output functions that are NOT debug leaks.
+            # e.g., click.echo() is the standard way to output in CLI apps,
+            # logging.info() is for structured logging, etc.
+            is_cli_output = False
+            for allow_pattern in CLI_OUTPUT_ALLOWLIST:
+                if re.search(allow_pattern, stripped):
+                    is_cli_output = True
+                    break
+            if is_cli_output:
                 continue
 
             # In Python, skip if it's inside __main__ block or a CLI entry point
@@ -434,119 +504,28 @@ def _detect_print_statements(
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
 
-            # Rust log crate: debug!/trace!/info!/warn!/error! are standard logging macros,
-            # NOT debugger statements. In production code they're perfectly fine.
-            # Only flag in test files (redundant) or with debug patterns in message.
-            if ext == ".rs" and label in ("debug!()", "trace!()", "info!()", "warn!()", "error!()"):
-                context_start = max(0, i - 15)
-                context = '\n'.join(lines[context_start:i + 1])
-                is_in_test = bool(re.search(r'#\[test\]|#\[tokio::test\]|fn test_|fn it_', context))
-                has_debug_pattern = bool(re.search(
-                    r'\bdbg!\(|TODO|FIXME|HACK|TEMP\b',
-                    stripped, re.IGNORECASE
-                ))
-                if not is_in_test and not has_debug_pattern:
-                    continue  # Standard Rust logging, not a debug leak
-
-            # Nim: echo() is the standard print mechanism, similar to println! in Rust.
-            # Only flag if in test context or contains debug-specific patterns.
-            if label == "echo()" and ext in {".nim", ".nims"}:
-                has_debug_pattern = bool(re.search(
-                    r'debug|todo|fixme|FIXME|TODO|hack|HACK|TEMP|temp\b|dbg|trace',
-                    stripped, re.IGNORECASE
-                ))
-                if not has_debug_pattern:
-                    continue  # Standard Nim output, not a debug leak
-
-            # Python: Skip echo() if it's a function definition (not a call)
-            # e.g. "def echo(debugger, command, result, internal_dict):" in LLDB extensions
-            if label == "echo()" and ext == ".py":
-                # Check if this is a def echo(...), not a call echo(...)
-                if re.match(r'\s*def\s+echo\s*\(', line):
-                    continue
-                # Also skip if inside an LLDB command handler context
-                context_start = max(0, i - 10)
-                context = '\n'.join(lines[context_start:i + 1])
-                if 'lldb' in context.lower() or 'debugger' in context.split():
-                    continue
-
             severity = "medium"
             should_remove = True
-            note = None
 
             if is_test_file:
                 severity = "low"
                 should_remove = False
 
-            # Context-aware filtering: Python CLI modules use print() for
-            # legitimate user output, not debugging — downgrade severity.
-            if ext == ".py" and label in ("print()", "pprint()", "pprint.pprint()") and _is_cli_module(rel_path, content):
-                severity = "info"  # Legitimate CLI output
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
                 should_remove = False
-                note = "CLI module — print() may be intentional user output"
 
-            finding = {
+            message = f"Debug print statement: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
+            leaks.append({
                 "category": "print_statement",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Debug print statement: {label}",
-                "content": stripped[:120],
-                "match": label,
-                "severity": severity,
-                "should_remove": should_remove,
-            }
-            if note is not None:
-                finding["note"] = note
-            leaks.append(finding)
-            break
-
-
-def _detect_debugger_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
-) -> None:
-    """Detect debugger; breakpoint(); pdb.set_trace(); debug! macro."""
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
-            continue
-
-        for pattern, label in DEBUGGER_PATTERNS:
-            # Language filter
-            if label in ("dbg!()",) and ext not in {".rs"}:
-                continue
-            if label in ("pdb.set_trace()", "pdb()", "ipdb()", "breakpoint()") and ext not in {".py"}:
-                continue
-            if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
-                continue
-            if label in ("doAssert()", "doAssertRaises()") and ext not in {".nim", ".nims"}:
-                continue
-
-            m = re.search(pattern, stripped)
-            if not m:
-                continue
-
-            # Nim: doAssert is a debug assertion that crashes in production.
-            # In test files, it's acceptable — only flag in non-test files.
-            if label in ("doAssert()", "doAssertRaises()") and is_test_file:
-                continue
-
-            # Nim/Python: assert() in test files is acceptable
-            if label == "assert()":
-                if ext not in {".nim", ".nims", ".py"}:
-                    continue
-                if is_test_file:
-                    continue
-
-            severity = "high"
-            should_remove = True
-
-            leaks.append({
-                "category": "debugger",
-                "file": rel_path,
-                "line": i + 1,
-                "pattern": label,
-                "message": f"Debugger/breakpoint statement: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -555,8 +534,95 @@ def _detect_debugger_statements(
             break
 
 
+def _detect_debugger_statements(
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
+) -> None:
+    """Detect debugger; breakpoint(); pdb.set_trace(); dbg! macro.
+
+    Rust `log::debug!()`, `debug!()`, `info!()`, `warn!()`, `error!()`, `trace!()`
+    are structured logging macros from the `log` crate — NOT debugger statements.
+    They are flagged as low-severity `debug_log` instead of high-severity `debugger`.
+    Only `dbg!()` is a true debugger statement (prints value + source location for debugging).
+    """
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
+            continue
+
+        # First check for true debugger statements
+        for pattern, label in DEBUGGER_PATTERNS:
+            # Language filter
+            if label == "dbg!()" and ext not in {".rs"}:
+                continue
+            if label in ("pdb.set_trace()", "pdb()", "ipdb()", "breakpoint()") and ext not in {".py"}:
+                continue
+            if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
+                continue
+
+            m = re.search(pattern, stripped)
+            if not m:
+                continue
+
+            severity = "high"
+            should_remove = True
+
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Debugger/breakpoint statement: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
+            leaks.append({
+                "category": "debugger",
+                "file": rel_path,
+                "line": i + 1,
+                "pattern": label,
+                "message": message,
+                "content": stripped[:120],
+                "match": label,
+                "severity": severity,
+                "should_remove": should_remove,
+            })
+            break
+
+        # Then check for Rust logging macros (not debugger statements, but debug logging)
+        # These are from the `log` crate or `tracing` crate and are proper structured logging.
+        # We flag them as low-severity debug_log entries, not high-severity debugger statements.
+        if ext == ".rs":
+            for pattern, label in RUST_LOG_MACROS:
+                m = re.search(pattern, stripped)
+                if not m:
+                    continue
+
+                # Downgrade severity in test files — logging in tests is expected
+                if is_test_file:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging in test: {label}"
+                else:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging statement: {label} (structured logging, not a debugger)"
+
+                leaks.append({
+                    "category": "debug_log",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": label,
+                    "message": message,
+                    "content": stripped[:120],
+                    "match": label,
+                    "severity": severity,
+                    "should_remove": should_remove,
+                })
+                break
+
+
 def _detect_todo_fixme(
-    lines: List[str], rel_path: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect TODO, FIXME, HACK, XXX, TEMP, BODGE comments."""
     for i, line in enumerate(lines):
@@ -583,6 +649,17 @@ def _detect_todo_fixme(
                 if not (stripped.startswith('"""') or stripped.startswith("'''")):
                     continue
 
+            # Skip XXX/BODGE/TEMP when they appear inside string literals
+            # (e.g., test paths like "a/xxx/yyy" or variable names like testData)
+            if label in ("XXX", "TEMP") and not is_comment:
+                match_pos = stripped.upper().find(label)
+                # Check if the match is inside a quoted string
+                before = stripped[:match_pos]
+                single_quotes = before.count("'") - before.count("\\'")
+                double_quotes = before.count('"') - before.count('\\"')
+                if single_quotes % 2 == 1 or double_quotes % 2 == 1:
+                    continue  # Inside a string literal, skip
+
             # Severity varies by marker
             severity_map = {
                 "FIXME": "medium",
@@ -601,12 +678,21 @@ def _detect_todo_fixme(
             if is_test_file:
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Code marker: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "todo_fixme",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Code marker: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -616,17 +702,12 @@ def _detect_todo_fixme(
 
 
 def _detect_commented_code(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect 3+ consecutive commented lines that look like code."""
     comment_prefix = _get_comment_prefix(ext)
     if not comment_prefix:
         return
-
-    # Rust-specific: doc comments (/// and //!) are documentation, NOT
-    # commented-out code. Attribute annotations (#[...]) are also not
-    # commented code. Skip entire blocks that start with doc comments.
-    is_rust = ext == ".rs"
 
     i = 0
     while i < len(lines):
@@ -637,19 +718,6 @@ def _detect_commented_code(
             i += 1
             continue
 
-        # Rust: Skip doc comment blocks (/// or //!)
-        # These are idiomatic Rust documentation, not commented-out code.
-        if is_rust and (stripped.startswith('///') or stripped.startswith('//!')):
-            # Skip the entire doc comment block
-            while i < len(lines) and (lines[i].strip().startswith('///') or lines[i].strip().startswith('//!')):
-                i += 1
-            continue
-
-        # Rust: Skip attribute blocks (#[...])
-        if is_rust and stripped.startswith('#['):
-            i += 1
-            continue
-
         # Count consecutive commented lines
         block_start = i
         while i < len(lines) and lines[i].strip().startswith(comment_prefix):
@@ -657,8 +725,7 @@ def _detect_commented_code(
         block_end = i
 
         # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
-        # Rust also has many false positives from doc comments, so use 5
-        min_initial = 5 if ext in (".go", ".rs") else 3
+        min_initial = 5 if ext == ".go" else 3
         if block_end - block_start < min_initial:
             continue
 
@@ -672,9 +739,7 @@ def _detect_commented_code(
 
         # v5.8.1: Go projects use multi-line comments heavily for godoc,
         # so require a higher threshold (3 instead of 2) to avoid false positives.
-        # v6.1: Rust projects similarly have many doc-comment blocks that look
-        # like code (e.g., code examples in /// doc comments). Use higher threshold.
-        threshold = 3 if ext in (".go", ".rs") else 2
+        threshold = 3 if ext == ".go" else 2
 
         if code_score >= threshold:
             severity = "low"
@@ -683,12 +748,21 @@ def _detect_commented_code(
             if is_test_file:
                 should_remove = False
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"{block_end - block_start} commented lines (code score: {code_score})"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "commented_code",
                 "file": rel_path,
                 "line": block_start + 1,
                 "pattern": "commented_block",
-                "message": f"{block_end - block_start} commented lines (code score: {code_score})",
+                "message": message,
                 "content": f"Block of {block_end - block_start} commented lines",
                 "match": f"{block_end - block_start} commented lines (code score: {code_score})",
                 "severity": severity,
@@ -697,7 +771,7 @@ def _detect_commented_code(
 
 
 def _detect_test_skips(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect test skip markers (.skip, xit, @pytest.mark.skip, #[ignore])."""
     for i, line in enumerate(lines):
@@ -725,12 +799,21 @@ def _detect_test_skips(
             severity = "high" if not is_test_file else "medium"
             should_remove = not is_test_file
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Skipped test marker: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "test_skip",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Skipped test marker: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -740,7 +823,7 @@ def _detect_test_skips(
 
 
 def _detect_mock_data(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect hardcoded test data in non-test files."""
     if is_test_file:
@@ -777,12 +860,21 @@ def _detect_mock_data(
             severity = "medium" if is_assignment else "low"
             should_remove = is_assignment
 
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
+                should_remove = False
+
+            message = f"Mock/test data in production code: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
+
             leaks.append({
                 "category": "mock_data",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Mock/test data in production code: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -792,23 +884,17 @@ def _detect_mock_data(
 
 
 def _detect_dev_only(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect dev-only guards and debug conditionals."""
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             # But #ifdef is a comment-style preprocessor directive
-            # And Nim "when defined(debug):" starts with "when", not "#"
             if '#ifdef' not in stripped and '#if' not in stripped:
                 continue
 
         for pattern, label in DEV_ONLY_PATTERNS:
-            # Language filter for Nim-specific patterns
-            if label in ("when defined(debug)", "when not defined(release)",
-                         "when defined(testing)", "when isMainModule") and ext not in {".nim", ".nims"}:
-                continue
-
             m = re.search(pattern, stripped)
             if not m:
                 continue
@@ -818,23 +904,25 @@ def _detect_dev_only(
 
             # Some dev-only checks are legitimate (feature flags)
             # But hardcoded DEBUG checks in production code are suspect
-            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode",
-                         "when defined(debug)", "when not defined(release)"):
+            if label in ("if (DEBUG)", "#ifdef DEBUG", "DEBUG === true", "debug_mode"):
                 should_remove = True
                 severity = "medium"
 
-            # Nim: when isMainModule is legitimate (equivalent to if __name__ == "__main__")
-            # Don't suggest removal, just note it as a dev-only guard
-            if label == "when isMainModule":
+            # v6.2: In config files, downgrade severity and skip should_remove
+            if is_config_file:
+                severity = "info"
                 should_remove = False
-                severity = "low"
+
+            message = f"Dev-only guard: {label}"
+            if is_config_file:
+                message += " (in config file — not production code)"
 
             leaks.append({
                 "category": "dev_only",
                 "file": rel_path,
                 "line": i + 1,
                 "pattern": label,
-                "message": f"Dev-only guard: {label}",
+                "message": message,
                 "content": stripped[:120],
                 "match": label,
                 "severity": severity,
@@ -852,7 +940,6 @@ def _get_comment_prefix(ext: str) -> str:
         ".ts": "//", ".tsx": "//", ".jsx": "//",
         ".py": "#", ".rs": "//", ".go": "//",
         ".rb": "#", ".vue": "//", ".svelte": "//",
-        ".nim": "#", ".nims": "#",
     }
     return prefixes.get(ext, "")
 
@@ -909,16 +996,6 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         r'\w+\.\w+\(',
         r'\w+\s*,\s*\w+\s*:=',
     ]
-    code_indicators_nim = [
-        r'(?:proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|return|if|elif|else|for|while|case|of|when|try|except|finally|block|defer|discard|raise|yield)\s',
-        r'[{}();:]',
-        r'->',
-        r'\w+\.\w+\(',
-        r'\w+\s*=\s*',
-        r'echo\s*\(',
-        r'new\s+\w+',
-        r'discard\s',
-    ]
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
         indicators = code_indicators_js
@@ -928,8 +1005,6 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         indicators = code_indicators_rs
     elif ext == ".go":
         indicators = code_indicators_go
-    elif ext in {".nim", ".nims"}:
-        indicators = code_indicators_nim
     else:
         indicators = code_indicators_js  # Default to JS-like
 
