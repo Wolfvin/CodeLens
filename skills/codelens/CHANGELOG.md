@@ -5,6 +5,22 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.1] — 2026-06-12
+
+### Fixed
+
+- **CRITICAL: 4 broken commands restored** — `ask`, `complexity`, `context`, `perf-hint` commands failed to import due to missing `is_bundled_file` symbol in `utils.py`. The new v6.3.0 engines (`complexity_engine.py`, `perfhint_engine.py`) and their consumers reference `is_bundled_file()` but the function was never added to `utils.py`.
+- **HIGH: apimap_engine crash on None path** — `_build_route_groups()` and `_is_route_deprecated()` crashed with `AttributeError: 'NoneType' object has no attribute 'split'` when route dict had `path: None`. Fixed by using `route.get("path") or "/"` instead of `route.get("path", "/")` which doesn't handle explicit `None` values.
+
+### Added
+
+- **`is_bundled_file()` function** (`utils.py`): Detects bundled/compiled artifacts (minified JS/CSS, vendor bundles, webpack chunks with content hashes, dist/build output directories). Used by `complexity_engine` and `perfhint_engine` to skip non-source files.
+- **`BUNDLED_FILE_PATTERNS`** and **`BUNDLED_DIR_SEGMENTS`** constants in `utils.py` for consistent bundled file detection across engines.
+
+### Test Target Documentation
+
+- **meilisearch/meilisearch** (GitHub): Used as test target for v6.3.1 — a search engine written in Rust with 21 workspace crates, 692 .rs files, 12214 backend nodes, 490543 edges. Detected frameworks: rust, tokio, actix-web. Monorepo with cargo-workspace. Health score: 50/100 (677 critical smells, god object Index with 99 methods). 2 potential secrets in open_api_utils.rs. 1299 debug leaks (851 commented code, 310 debug_log). 402 dead code items. 200 circular dependencies.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

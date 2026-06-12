@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.3.1"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -429,4 +429,65 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
+    return False
+
+
+# ─── Bundled File Detection ──────────────────────────────────
+
+BUNDLED_FILE_PATTERNS = (
+    '.min.js', '.min.css',       # Minified JS/CSS
+    '.bundle.js', '.chunk.js',   # Webpack/Vite bundles
+    '.vendor.js',                # Vendor bundles
+    '.global.js', '.global.css', # Global bundles (e.g. Ant Design)
+    '.pack.js',                  # Packaged bundles
+    '.esm.js',                   # ESM bundles (often built)
+)
+
+BUNDLED_DIR_SEGMENTS = frozenset({
+    'dist', 'build', 'out', 'bundle', 'bundles',
+    '.output', '.nuxt', '.next', '.cache',
+})
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file is a bundled/compiled artifact that should be skipped.
+
+    Bundled files are build output (minified JS/CSS, vendor bundles, etc.)
+    that are not original source code and should not be analyzed for
+    quality, complexity, or code smells.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be a bundled/compiled artifact.
+    """
+    lower = rel_path.lower()
+
+    # Check file extension patterns
+    for pattern in BUNDLED_FILE_PATTERNS:
+        if lower.endswith(pattern):
+            return True
+
+    # Check if file is in a bundled output directory
+    parts = lower.replace('\\', '/').split('/')
+    for segment in parts:
+        if segment in BUNDLED_DIR_SEGMENTS:
+            return True
+
+    # Check for source maps
+    if lower.endswith('.map') and (lower.endswith('.js.map') or lower.endswith('.css.map')):
+        return True
+
+    # Check for common bundle filename patterns
+    filename = parts[-1] if parts else ''
+    if filename.startswith('vendor') and filename.endswith('.js'):
+        return True
+    if filename.startswith('polyfill') and filename.endswith('.js'):
+        return True
+    # Webpack chunk pattern: [name].[hash].js or [name].[hash].css
+    import re
+    if re.match(r'.+\.[a-f0-9]{8,}\.(js|css)$', filename):
+        return True
+
     return False

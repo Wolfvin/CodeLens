@@ -2078,7 +2078,7 @@ def _is_deprecated_route(route: Dict[str, Any]) -> bool:
     if "deprecated" in handler.lower():
         return True
     # Check if the route path suggests deprecation
-    path = route.get("path", "")
+    path = route.get("path") or ""
     if "/deprecated/" in path or "/v1/" in path:
         return True
     # This is a heuristic — in practice we'd check the file content for
@@ -2091,7 +2091,7 @@ def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     groups: Dict[str, List[Dict]] = defaultdict(list)
 
     for route in routes:
-        path = route.get("path", "/")
+        path = route.get("path") or "/"
         parts = path.split('/')
         # Use first 2-3 path segments as the group key
         if len(parts) >= 3:
