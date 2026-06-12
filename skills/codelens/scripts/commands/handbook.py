@@ -29,8 +29,8 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
-    parser.add_argument("--timeout", type=int, default=300,
-                        help="Total time budget in seconds for handbook generation (default: 300). "
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Total time budget in seconds for handbook generation (default: 120). "
                              "Remaining engines are skipped when budget is nearly exhausted.")
 
 
@@ -40,7 +40,7 @@ def execute(args, workspace):
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -62,8 +62,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) 
 
     def _should_skip(engine_name: str) -> bool:
         """Check if we should skip an engine due to time budget."""
-        min_remaining = max(15, time_budget * 0.1)  # 10% of budget or 15s, whichever is larger
-        if _remaining() < min_remaining:
+        if _remaining() < 15:
             engines_skipped.append(engine_name)
             logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
                            f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
@@ -155,7 +154,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) 
         pass
     else:
         try:
-            api_result = map_api_routes(workspace, production_only=True)
+            api_result = map_api_routes(workspace)
             api_routes = [
                 {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
                 for r in api_result.get("routes", [])[:50]
@@ -218,21 +217,9 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) 
     summary = {}
     if not _should_skip('summary'):
         try:
-            summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=max_files), scan_result)
+            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
         except Exception:
             logger.warning("Summary computation failed", exc_info=True)
-
-    # Fallback: if summary is empty, try loading from previously saved .codelens/summary.json
-    if not summary or not summary.get('files'):
-        try:
-            summary_path = os.path.join(workspace, '.codelens', 'summary.json')
-            if os.path.exists(summary_path):
-                with open(summary_path, 'r', encoding='utf-8') as sf:
-                    saved = json.load(sf)
-                    if saved and saved.get('files'):
-                        summary = saved
-        except Exception:
-            pass
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -497,17 +484,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 content = f.read()
             name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
             ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
-            # Handle version.workspace = true by looking for [workspace.package] version
-            if not ver_match:
-                ws_ver_match = re.search(r'version\.workspace\s*=\s*true', content)
-                if ws_ver_match:
-                    ws_pkg_ver = re.search(r'\[workspace\.package\][^\[]*?version\s*=\s*["\']([^"\']+)["\']', content, re.DOTALL)
-                    if ws_pkg_ver:
-                        ver_match = ws_pkg_ver
             if name_match:
                 identity["name"] = name_match.group(1)
-            # Only overwrite version if we found a non-empty, non-placeholder version
-            if ver_match and ver_match.group(1) not in ('', '0.0.0'):
+            if ver_match:
                 identity["version"] = ver_match.group(1)
             rust_type = "rust-project"
         except Exception:
@@ -602,21 +581,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = proj_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            else:
-                # Try version variables: set(PROJECT_VERSION_MAJOR x) or set(NVIM_VERSION_MAJOR x)
-                ver_major = re.search(r'set\s*\(\s*\w*VERSION_MAJOR\s+(\d+)\)', cmake_content)
-                ver_minor = re.search(r'set\s*\(\s*\w*VERSION_MINOR\s+(\d+)\)', cmake_content)
-                ver_patch = re.search(r'set\s*\(\s*\w*VERSION_PATCH\s+(\d+)\)', cmake_content)
-                ver_prerelease = re.search(r'set\s*\(\s*\w*VERSION_PRERELEASE\s+"([^"]*)"', cmake_content)
-                if ver_major:
-                    version_str = ver_major.group(1)
-                    if ver_minor:
-                        version_str += f".{ver_minor.group(1)}"
-                    if ver_patch:
-                        version_str += f".{ver_patch.group(1)}"
-                    if ver_prerelease:
-                        version_str += ver_prerelease.group(1)
-                    identity["version"] = version_str
             c_cpp_type = "cmake-project"
         except Exception:
             pass
@@ -677,232 +641,53 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
-    # v6.4: Detect Elixir projects from mix.exs
-    elixir_type = None
-    mix_exs_path = os.path.join(workspace, 'mix.exs')
-    # Also check subdirectories for Elixir monorepo pattern (e.g., elixir-lang/elixir has lib/*/mix.exs)
-    if not os.path.isfile(mix_exs_path):
-        for subdir in ('lib', 'apps', 'packages'):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path):
-                try:
-                    for entry in os.listdir(subdir_path):
-                        sub_mix = os.path.join(subdir_path, entry, 'mix.exs')
-                        if os.path.isfile(sub_mix):
-                            mix_exs_path = sub_mix
-                            break
-                except OSError:
-                    pass
-            if os.path.isfile(mix_exs_path):
-                break
-    if os.path.isfile(mix_exs_path):
-        try:
-            with open(mix_exs_path, 'r', encoding='utf-8') as f:
-                mix_content = f.read()
-            # Extract project name from def project do
-            name_match = re.search(r'app:\s*:(\w+)', mix_content)
-            ver_match = re.search(r'version:\s*["\']([^"\']+)["\']', mix_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            # Detect Phoenix/Ecto
-            if 'phoenix' in mix_content.lower():
-                elixir_type = "phoenix-app"
-            elif 'ecto' in mix_content.lower():
-                elixir_type = "elixir-ecto-app"
-            else:
-                elixir_type = "elixir-project"
-        except Exception:
-            elixir_type = "elixir-project"
-    elif any(f.endswith('.ex') or f.endswith('.exs') for f in os.listdir(workspace)) if os.path.isdir(workspace) else False:
-        # Fallback: detect Elixir by .ex/.exs files in root even without mix.exs
-        elixir_type = "elixir-project"
-
-    # v6.4: Detect Haskell projects from .cabal or stack.yaml
-    haskell_type = None
-    cabal_project_path = os.path.join(workspace, 'cabal.project')
-    stack_yaml_path = os.path.join(workspace, 'stack.yaml')
-    cabal_files = [f for f in os.listdir(workspace) if f.endswith('.cabal')] if os.path.isdir(workspace) else []
-    if cabal_files:
-        haskell_type = "haskell-cabal-project"
-        try:
-            with open(os.path.join(workspace, cabal_files[0]), 'r', encoding='utf-8') as f:
-                cabal_content = f.read()
-            name_match = re.search(r'^\s*name:\s*(.+)$', cabal_content, re.MULTILINE)
-            ver_match = re.search(r'^\s*version:\s*(.+)$', cabal_content, re.MULTILINE)
-            if name_match:
-                identity["name"] = name_match.group(1).strip()
-            if ver_match:
-                identity["version"] = ver_match.group(1).strip()
-        except Exception:
-            pass
-    elif os.path.isfile(stack_yaml_path):
-        haskell_type = "haskell-stack-project"
-    elif os.path.isfile(cabal_project_path):
-        haskell_type = "haskell-cabal-project"
-
-    # v6.4: Detect Nim projects from .nimble files
-    nim_type = None
-    nimble_files = [f for f in os.listdir(workspace) if f.endswith('.nimble')] if os.path.isdir(workspace) else []
-    if nimble_files:
-        nim_type = "nim-project"
-        try:
-            with open(os.path.join(workspace, nimble_files[0]), 'r', encoding='utf-8') as f:
-                nimble_content = f.read()
-            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', nimble_content)
-            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', nimble_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            # Detect Nimble-specific type
-            if 'backend' in nimble_content.lower():
-                if 'js' in nimble_content.lower():
-                    nim_type = "nim-js-project"
-                elif 'c' in nimble_content.lower():
-                    nim_type = "nim-c-project"
-        except Exception:
-            pass
-    elif os.path.isfile(os.path.join(workspace, 'nim.cfg')):
-        nim_type = "nim-project"
-
-    # v6.4: Detect Godot projects from project.godot
-    godot_type = None
-    godot_project_path = os.path.join(workspace, 'project.godot')
-    if os.path.isfile(godot_project_path):
-        try:
-            with open(godot_project_path, 'r', encoding='utf-8') as f:
-                godot_content = f.read()
-            name_match = re.search(r'config/name\s*=\s*["\']([^"\']+)["\']', godot_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            godot_type = "godot-project"
-        except Exception:
-            godot_type = "godot-project"
-
-    # v6.4: Detect Dart/Flutter projects from pubspec.yaml
+    # v6.4: Detect Flutter/Dart projects
     dart_type = None
-    pubspec_path = os.path.join(workspace, 'pubspec.yaml')
-    if os.path.isfile(pubspec_path):
+    pubspec_yaml_path = os.path.join(workspace, 'pubspec.yaml')
+    if os.path.isfile(pubspec_yaml_path):
         try:
-            with open(pubspec_path, 'r', encoding='utf-8') as f:
+            with open(pubspec_yaml_path, 'r', encoding='utf-8') as f:
                 pubspec_content = f.read()
-            name_match = re.search(r'^name:\s*(.+)$', pubspec_content, re.MULTILINE)
-            ver_match = re.search(r'^version:\s*(.+)$', pubspec_content, re.MULTILINE)
-            if name_match:
-                identity["name"] = name_match.group(1).strip()
-            if ver_match:
-                identity["version"] = ver_match.group(1).strip()
             if 'flutter' in pubspec_content.lower():
                 dart_type = "flutter-app"
+                # Try to get project name from pubspec
+                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
+                if name_match:
+                    identity["name"] = name_match.group(1).strip()
+                ver_match = re.search(r'^version:\s*(.+)', pubspec_content, re.MULTILINE)
+                if ver_match:
+                    identity["version"] = ver_match.group(1).strip()
             else:
                 dart_type = "dart-project"
+                name_match = re.search(r'^name:\s*(.+)', pubspec_content, re.MULTILINE)
+                if name_match:
+                    identity["name"] = name_match.group(1).strip()
         except Exception:
-            dart_type = "dart-project"
-
-    # v6.4: Detect Ruby projects from Gemfile
-    ruby_type = None
-    gemfile_path = os.path.join(workspace, 'Gemfile')
-    if os.path.isfile(gemfile_path):
-        try:
-            with open(gemfile_path, 'r', encoding='utf-8') as f:
-                gemfile_content = f.read()
-            if 'rails' in gemfile_content.lower():
-                ruby_type = "rails-app"
-            else:
-                ruby_type = "ruby-project"
-        except Exception:
-            ruby_type = "ruby-project"
-
-    # v6.4: Detect Scala projects from build.sbt
-    scala_type = None
-    sbt_path = os.path.join(workspace, 'build.sbt')
-    if os.path.isfile(sbt_path):
-        try:
-            with open(sbt_path, 'r', encoding='utf-8') as f:
-                sbt_content = f.read()
-            name_match = re.search(r'name\s*:=\s*["\']([^"\']+)["\']', sbt_content)
-            ver_match = re.search(r'version\s*:=\s*["\']([^"\']+)["\']', sbt_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            if 'play' in sbt_content.lower():
-                scala_type = "play-app"
-            else:
-                scala_type = "scala-project"
-        except Exception:
-            scala_type = "scala-project"
-
-    # v6.4: Detect Swift projects from Package.swift
-    swift_type = None
-    swift_pkg_path = os.path.join(workspace, 'Package.swift')
-    if os.path.isfile(swift_pkg_path):
-        try:
-            with open(swift_pkg_path, 'r', encoding='utf-8') as f:
-                swift_content = f.read()
-            name_match = re.search(r'name:\s*"([^"]+)"', swift_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            if 'vapor' in swift_content.lower():
-                swift_type = "vapor-app"
-            else:
-                swift_type = "swift-project"
-        except Exception:
-            swift_type = "swift-project"
-
-    # v6.4: Detect R projects from DESCRIPTION file
-    r_type = None
-    desc_path = os.path.join(workspace, 'DESCRIPTION')
-    if os.path.isfile(desc_path):
-        try:
-            with open(desc_path, 'r', encoding='utf-8') as f:
-                desc_content = f.read()
-            name_match = re.search(r'^Package:\s*(.+)$', desc_content, re.MULTILINE)
-            ver_match = re.search(r'^Version:\s*(.+)$', desc_content, re.MULTILINE)
-            if name_match:
-                identity["name"] = name_match.group(1).strip()
-            if ver_match:
-                identity["version"] = ver_match.group(1).strip()
-            r_type = "r-package"
-        except Exception:
-            r_type = "r-project"
-
-    # v6.4: Detect Kotlin projects from build.gradle.kts
-    kotlin_type = None
-    kts_path = os.path.join(workspace, 'build.gradle.kts')
-    if os.path.isfile(kts_path) and not os.path.isfile(sbt_path):
-        try:
-            with open(kts_path, 'r', encoding='utf-8') as f:
-                kts_content = f.read()
-            if 'android' in kts_content.lower():
-                kotlin_type = "android-kotlin-project"
-            elif 'ktor' in kts_content.lower():
-                kotlin_type = "ktor-app"
-            else:
-                kotlin_type = "kotlin-project"
-        except Exception:
-            kotlin_type = "kotlin-project"
+            pass
+    elif os.path.isdir(workspace):
+        # Check for pubspec.yaml in subdirectories (monorepo)
+        for subdir in ('packages', 'apps', 'examples'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                for entry in os.listdir(subdir_path):
+                    entry_path = os.path.join(subdir_path, entry)
+                    sub_pubspec = os.path.join(entry_path, 'pubspec.yaml')
+                    if os.path.isfile(sub_pubspec):
+                        try:
+                            with open(sub_pubspec, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            if 'flutter' in content.lower():
+                                dart_type = "flutter-monorepo"
+                                break
+                        except Exception:
+                            pass
+                if dart_type:
+                    break
 
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type,
-                                 elixir_type, haskell_type, nim_type, godot_type, dart_type,
-                                 ruby_type, scala_type, swift_type, r_type, kotlin_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, dart_type] if t is not None]
 
-    # v6.5: Detect neovim (C core + Lua runtime + VimScript)
-    runtime_lua_dir = os.path.join(workspace, 'runtime', 'lua')
-    if os.path.isdir(runtime_lua_dir) and c_cpp_type and lua_type:
-        identity["type"] = "neovim"
-    # v6.5: Detect VimScript-heavy project
-    elif c_cpp_type and lua_type:
-        type_parts = []
-        if c_cpp_type:
-            type_parts.append("c-cpp")
-        if lua_type:
-            type_parts.append("lua")
-        identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
-    elif len(active_types) >= 2:
+    if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
@@ -919,26 +704,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
-        if elixir_type:
-            type_parts.append("elixir")
-        if haskell_type:
-            type_parts.append("haskell")
-        if nim_type:
-            type_parts.append("nim")
-        if godot_type:
-            type_parts.append("godot")
         if dart_type:
-            type_parts.append("dart")
-        if ruby_type:
-            type_parts.append("ruby")
-        if scala_type:
-            type_parts.append("scala")
-        if swift_type:
-            type_parts.append("swift")
-        if r_type:
-            type_parts.append("r")
-        if kotlin_type:
-            type_parts.append("kotlin")
+            type_parts.append("flutter" if "flutter" in (dart_type or "") else "dart")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
