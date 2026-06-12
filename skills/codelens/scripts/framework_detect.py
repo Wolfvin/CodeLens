@@ -141,6 +141,17 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "indicators": ["spring-boot"]
     },
+    # Android frameworks
+    "android": {
+        "packages": [],
+        "config_files": ["AndroidManifest.xml", "build.gradle", "build.gradle.kts"],
+        "indicators": ["app/src/main/", "androidx", "com.android.application"]
+    },
+    "android_ndk": {
+        "packages": [],
+        "config_files": ["CMakeLists.txt", "Android.mk", "Application.mk"],
+        "indicators": ["native/", "jni/", ".so"]
+    },
     # C/C++ frameworks
     "cmake": {
         "packages": [],
@@ -434,6 +445,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_android": False,
+        "has_android_ndk": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -873,12 +886,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # 7. Detect Android projects
+    _detect_android(workspace, detected)
+
+    # 8. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
+    # Note: Kotlin was previously listed here but now has fallback_kotlin.py parser.
+    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
+        # "java" removed — has fallback_java.py parser
+        # "kotlin" removed — has fallback_kotlin.py parser
         "c": ["CMakeLists.txt", "Makefile"],
         "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
@@ -893,6 +911,175 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     return detected
+
+
+def _detect_android(workspace: str, detected: Dict[str, Any]) -> None:
+    """Detect Android project and its specific frameworks/components.
+
+    Checks for:
+    - AndroidManifest.xml (in app/src/main/ or similar)
+    - build.gradle / build.gradle.kts with Android plugin
+    - Android SDK dependencies (androidx, com.android)
+    - Jetpack Compose
+    - Android Architecture Components (Room, ViewModel, LiveData)
+    - Hilt / Dagger dependency injection
+    - Android NDK / native code
+    - Zygisk / Xposed frameworks
+    """
+    # Check for AndroidManifest.xml in standard locations
+    manifest_paths = [
+        os.path.join(workspace, "app", "src", "main", "AndroidManifest.xml"),
+        os.path.join(workspace, "src", "main", "AndroidManifest.xml"),
+    ]
+    # Also search for AndroidManifest.xml anywhere in the workspace (max depth 4)
+    for root, dirs, files in os.walk(workspace):
+        # Skip ignored and deep directories
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        depth = root.replace(workspace, '').count(os.sep)
+        if depth > 4:
+            dirs.clear()
+            continue
+        if 'AndroidManifest.xml' in files:
+            manifest_paths.append(os.path.join(root, 'AndroidManifest.xml'))
+
+    has_manifest = any(os.path.exists(p) for p in manifest_paths)
+
+    # Check for build.gradle / build.gradle.kts with Android indicators
+    has_android_gradle = False
+    has_compose = False
+    has_hilt = False
+    has_room = False
+    has_viewmodel = False
+    has_zygisk = False
+    has_xposed = False
+
+    gradle_files = []
+    for gradle_name in ('build.gradle', 'build.gradle.kts'):
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            if gradle_name in files:
+                gradle_files.append(os.path.join(root, gradle_name))
+
+    for gf in gradle_files:
+        try:
+            with open(gf, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            # Check for Android plugin
+            if re.search(r"com\.android\.application|com\.android\.library|android\s*\{", content):
+                has_android_gradle = True
+
+            # Check for Jetpack Compose
+            if re.search(r"compose\s*\{|androidx\.compose|composeOptions", content):
+                has_compose = True
+
+            # Check for Hilt
+            if re.search(r"com\.google\.dagger\.hilt|dagger\.hilt", content):
+                has_hilt = True
+
+            # Check for Room
+            if re.search(r"androidx\.room", content):
+                has_room = True
+
+            # Check for ViewModel / Lifecycle
+            if re.search(r"androidx\.lifecycle|androidx\.viewmodel", content):
+                has_viewmodel = True
+
+        except IOError:
+            pass
+
+    # Check for Zygisk / Xposed in source files
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for fname in files:
+            if not fname.endswith(('.kt', '.java', '.cpp', '.c', '.rs')):
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(8192)  # Read first 8KB
+                if 'Zygisk' in content or 'zygisk' in content:
+                    has_zygisk = True
+                if 'Xposed' in content or 'xposed' in content or 'IXposedHookLoadPackage' in content:
+                    has_xposed = True
+            except IOError:
+                pass
+
+    # Check for NDK native code
+    has_ndk = False
+    ndk_markers = ['CMakeLists.txt', 'Android.mk', 'Application.mk']
+    for marker in ndk_markers:
+        if os.path.exists(os.path.join(workspace, marker)):
+            has_ndk = True
+            break
+    if not has_ndk:
+        # Check for native/ or jni/ directories
+        for dirname in ('native', 'jni', 'cpp', 'rust'):
+            if os.path.isdir(os.path.join(workspace, dirname)):
+                # Check that it actually contains native code
+                for root, dirs, files in os.walk(os.path.join(workspace, dirname)):
+                    if any(f.endswith(('.cpp', '.c', '.h', '.rs')) for f in files):
+                        has_ndk = True
+                        break
+                if has_ndk:
+                    break
+
+    # Set detection flags
+    is_android = has_manifest or has_android_gradle
+    if is_android:
+        if "android" not in detected["frameworks"]:
+            detected["frameworks"].append("android")
+        detected["has_android"] = True
+
+        # Add sub-frameworks
+        if has_compose and "jetpack_compose" not in detected["frameworks"]:
+            detected["frameworks"].append("jetpack_compose")
+        if has_hilt and "hilt" not in detected["frameworks"]:
+            detected["frameworks"].append("hilt")
+        if has_room and "room" not in detected["frameworks"]:
+            detected["frameworks"].append("room")
+        if has_viewmodel and "viewmodel" not in detected["frameworks"]:
+            detected["frameworks"].append("viewmodel")
+        if has_zygisk and "zygisk" not in detected["frameworks"]:
+            detected["frameworks"].append("zygisk")
+        if has_xposed and "xposed" not in detected["frameworks"]:
+            detected["frameworks"].append("xposed")
+
+    if has_ndk:
+        if "android_ndk" not in detected["frameworks"]:
+            detected["frameworks"].append("android_ndk")
+        detected["has_android_ndk"] = True
+
+    # Also detect Spring Boot (from build.gradle)
+    if not is_android:
+        for gf in gradle_files:
+            try:
+                with open(gf, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                if 'spring-boot' in content or 'org.springframework' in content:
+                    if "spring" not in detected["frameworks"]:
+                        detected["frameworks"].append("spring")
+                    break
+            except IOError:
+                pass
 
 
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
@@ -983,6 +1170,37 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
+
+    # Android: add Android-specific paths
+    if fw.get("has_android"):
+        config["backend_paths"].extend([
+            "app/src/main/java/", "app/src/main/kotlin/",
+            "app/src/main/", "app/src/",
+        ])
+        config["frontend_paths"].extend([
+            "app/src/main/res/", "app/src/main/res/layout/",
+        ])
+        # Add Gradle-specific ignores
+        config["ignore"].extend([
+            ".gradle/", ".idea/", "local.properties",
+            "app/build/", "build/",
+        ])
+
+    # Android NDK: add native code paths
+    if fw.get("has_android_ndk"):
+        config["backend_paths"].extend([
+            "native/src/", "jni/", "cpp/",
+        ])
+        # Also check for native directory structure
+        for native_dir in ('native', 'jni', 'cpp', 'rust'):
+            native_path = os.path.join(workspace, native_dir)
+            if os.path.isdir(native_path):
+                # Find src subdirectories
+                for root, dirs, files in os.walk(native_path):
+                    if 'src' in dirs:
+                        rel = os.path.relpath(os.path.join(root, 'src'), workspace)
+                        config["backend_paths"].append(rel + "/")
+                        break
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
