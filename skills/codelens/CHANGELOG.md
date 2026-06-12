@@ -186,6 +186,22 @@ and cross-framework accuracy:
 - **git/git detected as "rust-project"**: Only Cargo.toml was checked, not Makefile/CMakeLists.txt. Added C/C++ project detection via Makefile/CMakeLists.txt with file extension counting to determine C vs C++ dominance. (commands/handbook.py)
 - **Laravel version 0.0.0**: `composer.json` version field was not read. Now reads name and version from composer.json. (commands/handbook.py)
 
+## [5.9.3] — 2026-06-12
+
+### Tested against spacedriveapp/spacedrive (1,594 source files: 1,161 Rust + 380 TSX + 28 JS + 7 CSS + 11 Python + 3 Kotlin, Tauri file explorer monorepo)
+
+Real-world test on a Rust+React Tauri desktop application with a virtual distributed filesystem.
+Confirmed: 13,068 backend nodes, 61,867 edges, 943 frontend classes, 42 IDs, 7 frameworks detected
+(react, tailwind, tauri, zustand, vite, rust, tokio), is_monorepo with npm-workspace + cargo-workspace.
+
+### Fixed
+
+- **Secrets URL-embedded password false positives** (100% reduction: 4 → 0 violations): The regex pattern `[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}` matched URLs containing `@` in file paths (e.g., `http://localhost/path/grid@1x.webp`, `sidecar://uuid/thumbs/grid@2x.webp`). The `@` is part of image density descriptors, not credential separators. Fixed by adding `/` to the exclusion set in the password capture group: `([^\s/@"\']{4,})`. Real credential URLs like `mongodb://admin:secretpass123@host.com` still match correctly because the password comes before the first `/` after `://`.
+- **Impact engine duplicate entries** (significant deduplication): When multiple target nodes (same-named functions in different files) share callers, the same caller was added to `affected["direct"]` once per target node. Fixed by deduplicating `affected["direct"]` and `affected["indirect"]` lists by `(name, file, line)` tuple before risk assessment.
+- **Stack-trace engine duplicate cyclic entries** (significant deduplication): When a function calls another function multiple times (different call sites), multiple edges with the same `from_id` exist in `callers_map`. Each duplicate edge produced a separate `cyclic: True` entry in the chain. Fixed by deduplicating callers by `caller_id` before iterating, so each unique caller is processed only once per depth level.
+- **Missing-refs Tailwind utility class false positives** (30% reduction: 92 → 25 issues): `aspect-square`, `backdrop-blur-*`, `line-clamp-*`, `group`, `peer` and other Tailwind utility classes were flagged as "used in HTML/JSX but has no CSS definition" because their prefixes were missing from the `_is_likely_tailwind()` prefix list. Added missing prefixes: `aspect-`, `backdrop-blur-`, `backdrop-brightness-`, `backdrop-contrast-`, `backdrop-grayscale-`, `backdrop-hue-rotate-`, `backdrop-invert-`, `backdrop-opacity-`, `backdrop-saturate-`, `backdrop-sepia-`, `backdrop-filter`, `container`, `columns-`, `line-clamp-`, `group`, `peer`, and others. Also added `_is_utility_base()` as a final fallback check to catch standalone utilities not in the prefix list.
+- **Debug-leak Rust doc comment false positives** (74% reduction: 1,036 → 268 commented_code): Rust doc comments (`///` and `//!`) were treated as regular `//` comments and scored for code likelihood. Since doc comments often contain code-like patterns (e.g., `/// Returns the value of x`, `/// let y = foo()`), they easily scored above the threshold. Fixed by skipping lines starting with `///` or `//!` when detecting commented code blocks in `.rs` files, and only grouping plain `//` comments (not doc comments) into consecutive blocks.
+
 ## [5.9.2] — 2026-06-12
 
 ### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)

@@ -731,10 +731,30 @@ def _detect_commented_code(
             i += 1
             continue
 
-        # Count consecutive commented lines
-        block_start = i
-        while i < len(lines) and lines[i].strip().startswith(comment_prefix):
+        # v5.9.3: Skip Rust doc comments (/// and //!). These are legitimate
+        # documentation, NOT commented-out code. Only plain // comments can be
+        # commented-out code. This prevents massive false positives in Rust repos
+        # where doc comment blocks easily score as "code".
+        if ext == ".rs" and (stripped.startswith("///") or stripped.startswith("//!")):
             i += 1
+            continue
+
+        # Count consecutive commented lines
+        # For Rust: only count lines that are plain comments (// but not /// or //!)
+        block_start = i
+        if ext == ".rs":
+            # Rust: group only plain // comments, skip doc comments
+            while i < len(lines):
+                s = lines[i].strip()
+                if s.startswith("///") or s.startswith("//!"):
+                    break  # doc comment — end the block
+                if s.startswith(comment_prefix):
+                    i += 1
+                else:
+                    break
+        else:
+            while i < len(lines) and lines[i].strip().startswith(comment_prefix):
+                i += 1
         block_end = i
 
         # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
