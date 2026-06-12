@@ -313,6 +313,11 @@ ENV_REFERENCE_LINE_PATTERNS = [
     re.compile(r'os\.getenv\('),                   # os.getenv('SECRET')
     re.compile(r'import\.meta\.env\.[A-Za-z_]'),  # import.meta.env.KEY
     re.compile(r'deno\.env\.get\('),              # Deno: Deno.env.get('KEY')
+    re.compile(r'deno\.env\.[A-Za-z_]'),          # Deno: Deno.env.KEY (shorthand)
+    re.compile(r'std::env::var\('),               # Rust: std::env::var("KEY")
+    re.compile(r'std::env::var_os\('),            # Rust: std::env::var_os("KEY")
+    re.compile(r'env!\('),                         # Rust: env!("KEY") macro
+    re.compile(r'option_env!\('),                  # Rust: option_env!("KEY") macro
     re.compile(r'process\.env\.PASSWORD'),
     re.compile(r'process\.env\.SECRET'),
     re.compile(r'process\.env\.TOKEN'),
@@ -563,6 +568,10 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if _is_example_or_placeholder_line(line_text):
                         continue
 
+                    # Rust-specific false positive reduction
+                    if ext == ".rs" and _is_rust_non_secret(raw_value, line_text):
+                        continue
+
                     # Mask the value for safe reporting
                     masked = _mask_value(raw_value)
 
@@ -655,6 +664,10 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
 
             # Skip example/placeholder/documentation lines
             if _is_example_or_placeholder_line(line_text):
+                continue
+
+            # Rust-specific false positive reduction
+            if ext == ".rs" and _is_rust_non_secret(candidate, line_text):
                 continue
 
             # Determine likely category based on context
@@ -864,6 +877,73 @@ def _is_safe_value(value: str) -> bool:
 
     return False
 
+
+def _is_rust_non_secret(value: str, line_text: str) -> bool:
+    """Rust-specific false positive reduction for secrets engine.
+
+    Rust code has many patterns that look like secrets but aren't:
+    - Hash constants and test vectors (hex strings in test files)
+    - Derive macros (#[derive(...)])
+    - Type ascriptions and trait bounds
+    - Enum variant strings (e.g., "password" as a variant name)
+    - Assertion/comparison strings in tests
+    - Static string constants that are labels, not secrets
+    - Base64-encoded test data in test fixtures
+
+    Returns True if the value is likely a Rust-specific non-secret.
+    """
+    stripped = line_text.strip()
+
+    # Rust attribute lines: #[derive(...)], #[cfg(...)], #[test], etc.
+    if stripped.startswith('#['):
+        return True
+
+    # Rust assertion patterns: assert_eq!, assert!, assert_ne!
+    if re.match(r'^\s*assert(?:_eq|_ne)?!', stripped):
+        return True
+
+    # Rust match arm patterns (enum variant strings are labels, not secrets)
+    # e.g., `"password" => ...` or `TokenKind::Password => ...`
+    if re.match(r'^\s*"', stripped) and '=>' in stripped:
+        return True
+
+    # Rust doc comments: /// or //!
+    if stripped.startswith('///') or stripped.startswith('//!'):
+        return True
+
+    # Rust string literal used as a label/name in struct/enum definition
+    # e.g., const NAME: &str = "password"; (just the word, not an actual secret)
+    if re.match(r'^\s*(?:const|static)\s+\w+\s*:\s*&?str\s*=\s*"', stripped):
+        # Check if the value is just a keyword like "password", "token", "secret"
+        if value.lower() in ('password', 'passwd', 'token', 'secret', 'key',
+                              'api_key', 'apikey', 'private_key', 'auth',
+                              'credential', 'session', 'cookie'):
+            return True
+
+    # Rust test fixture patterns — hex strings and base64 in test data
+    # e.g., hex::decode("abcdef0123456789") or base64::decode("...")
+    if re.search(r'(?:hex|base64|decode|encode|from_str|from_hex)\s*\(', stripped):
+        return True
+
+    # Rust format macro strings — values embedded in format!(), println!(), etc.
+    if re.match(r'^\s*(?:format!|println!|print!|eprintln!|eprint!|write!|writeln!)\s*\(', stripped):
+        return True
+
+    # Rust string comparison in tests: == "value", != "value"
+    if re.search(r'(?:==|!=)\s*"', stripped) and 'assert' in stripped.lower():
+        return True
+
+    # Rust include_str!() — embeds file content, not a secret
+    if 'include_str!' in stripped:
+        return True
+
+    # Short hex strings (< 40 chars) — likely hash prefixes, not secrets
+    # Git hashes, SHA prefixes used in test data
+    if re.match(r'^[a-f0-9]{12,39}$', value, re.IGNORECASE):
+        return True
+
+    return False
+
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory or has a test file extension.
 
@@ -913,7 +993,15 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'locales/', 'locale/', 'i18n/', 'lang/', 'translations/',
         'intl/', 'localization/',
     ]
+    # Additional test fixture / expected-result directories that contain
+    # fake credentials (e.g., WPT expectations, snapshot tests, golden files)
+    test_fixture_indicators = [
+        '/expectations/', '/expected/', '/golden/', '/snapshots/',
+        '/wpt/', '/web-platform-tests/', '/testdata/', '/test_data/',
+        '/__snapshots__/', '/__fixtures__/',
+    ]
     return (any(indicator in normalized for indicator in docs_indicators) or
+            any(indicator in normalized for indicator in test_fixture_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
 
 def _find_line_number(content: str, value: str) -> int:

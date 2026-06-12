@@ -490,8 +490,9 @@ def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, 
 
     # Commands that can be slow on large repos — apply timeout
     _SLOW_COMMANDS = {"dead-code", "smell", "complexity", "scan", "handbook",
-                      "outline", "test-map", "perf-hint", "css-deep", "a11y"}
-    _ASK_TIMEOUT = 30  # seconds
+                      "outline", "test-map", "perf-hint", "css-deep", "a11y",
+                      "summary"}
+    _ASK_TIMEOUT = 45  # seconds — increased from 30 for large repos
 
     def _timeout_handler(signum, frame):
         raise TimeoutError(f"ask command '{command}' timed out after {_ASK_TIMEOUT}s")
