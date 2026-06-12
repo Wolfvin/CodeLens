@@ -78,7 +78,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
 
     # 3. Generate output files (outline.json, summary.json)
     try:
-        write_output_files(workspace, scan_result)
+        write_output_files(workspace, scan_result, max_files=max_files)
     except Exception:
         logger.warning("Failed to write output files", exc_info=True)
 
@@ -146,7 +146,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Circular dependency detection failed", exc_info=True)
     try:
         dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead_code", dead_result.get("stats", {}).get("total_dead", 0))
+        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
         if dead_count > 0:
             risks.append({"type": "dead_code", "count": dead_count})
     except Exception:
@@ -244,11 +244,11 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     has_package_json = False
     has_cargo_toml = False
     has_pyproject = False
-    has_go_mod = False
+    has_composer_json = False
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
-    go_type = None  # v6.1: track Go-derived type
+    php_type = None  # v6: track PHP-derived type separately
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -256,7 +256,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         "pnpm-workspace.yaml": "pnpm-workspace",
         "lerna.json": "lerna",
         "nx.json": "nx",
-        ".yarnrc.yml": "yarn-workspace",
     }
     for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
         if os.path.isfile(os.path.join(workspace, indicator_file)):
@@ -295,22 +294,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 if "cargo-workspace" not in identity["monorepo_tools"]:
                     identity["monorepo_tools"].append("cargo-workspace")
 
-    # v5.9: Check for packages/ directory with multiple package.json (Yarn/pnpm monorepo pattern)
-    packages_dir = os.path.join(workspace, 'packages')
-    if os.path.isdir(packages_dir):
-        sub_pkgs = 0
-        try:
-            for entry in os.listdir(packages_dir):
-                entry_path = os.path.join(packages_dir, entry)
-                if os.path.isdir(entry_path) and os.path.isfile(os.path.join(entry_path, 'package.json')):
-                    sub_pkgs += 1
-        except OSError:
-            pass
-        if sub_pkgs >= 2:
-            identity["is_monorepo"] = True
-            if "yarn-workspace" not in identity["monorepo_tools"] and "pnpm-workspace" not in identity["monorepo_tools"]:
-                identity["monorepo_tools"].append("yarn-workspace")
-
     # Try package.json
     pkg_path = os.path.join(workspace, 'package.json')
     if os.path.isfile(pkg_path):
@@ -319,9 +302,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
             identity["name"] = pkg.get("name", identity["name"])
-            pkg_version = pkg.get("version", "0.0.0")
-            if pkg_version and pkg_version != "0.0.0":
-                identity["version"] = pkg_version
+            identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
             if "next" in deps:
@@ -334,33 +315,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 js_type = "node-project"
         except Exception:
             logger.warning("package.json parsing failed", exc_info=True)
-
-    # v5.9: Try tauri.conf.json for version (Tauri apps often have version there)
-    if identity["version"] == "0.0.0":
-        for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore_dir in DEFAULT_IGNORE_DIRS:
-                if ignore_dir in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
-                continue
-            if 'tauri.conf.json' in files:
-                try:
-                    tauri_conf_path = os.path.join(root, 'tauri.conf.json')
-                    with open(tauri_conf_path, 'r', encoding='utf-8') as f:
-                        tauri_conf = json.load(f)
-                    pkg_info = tauri_conf.get("package", {})
-                    tauri_version = pkg_info.get("version", "0.0.0")
-                    if tauri_version and tauri_version != "0.0.0":
-                        identity["version"] = tauri_version
-                    # Also get product name if identity name is still default
-                    product_name = pkg_info.get("productName", "")
-                    if product_name and identity["name"] in ("", "unknown"):
-                        identity["name"] = product_name
-                    break
-                except Exception:
-                    pass
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
@@ -446,36 +400,37 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
-    # v6.1: Try go.mod — detect Go project identity
-    go_mod_path = os.path.join(workspace, 'go.mod')
-    if os.path.isfile(go_mod_path):
-        has_go_mod = True
+    # v6: Combined type detection — handle polyglot projects
+    # Try composer.json (PHP/Laravel/Symfony)
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        has_composer_json = True
         try:
-            with open(go_mod_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            # Parse module path and version from go.mod
-            module_match = re.search(r'^module\s+(\S+)', content, re.MULTILINE)
-            go_ver_match = re.search(r'^go\s+(\S+)', content, re.MULTILINE)
-            if module_match:
-                # Extract module name (last part of path)
-                mod_path = module_match.group(1)
-                identity["name"] = mod_path.split('/')[-1]
-            if go_ver_match:
-                identity["version"] = go_ver_match.group(1)
-            # Determine Go project type from dependencies
-            if 'gin-gonic/gin' in content or 'echo' in content or 'chi' in content or 'fiber' in content:
-                go_type = "go-web-api"
-            elif 'kubernetes' in content:
-                go_type = "go-kubernetes"
-            elif 'grpc' in content:
-                go_type = "go-grpc-service"
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            identity["name"] = composer_data.get("name", identity["name"]).split("/")[-1]
+            ver_match = composer_data.get("version")
+            if ver_match:
+                identity["version"] = ver_match
+            identity["description"] = composer_data.get("description", identity.get("description", ""))
+            deps = {**composer_data.get("require", {}), **composer_data.get("require-dev", {})}
+            if "laravel/framework" in deps:
+                php_type = "laravel-project"
+            elif "symfony/framework-bundle" in deps:
+                php_type = "symfony-project"
+            elif os.path.isfile(os.path.join(workspace, "artisan")):
+                php_type = "laravel-project"
             else:
-                go_type = "go-project"
+                php_type = "php-project"
         except Exception:
-            logger.warning("go.mod parsing failed", exc_info=True)
+            logger.warning("composer.json parsing failed", exc_info=True)
+    elif os.path.isfile(os.path.join(workspace, "artisan")):
+        has_composer_json = True
+        php_type = "laravel-project"
+    elif any(f.endswith('.php') for f in os.listdir(workspace) if os.path.isfile(os.path.join(workspace, f))):
+        php_type = "php-project"
 
-    # v6.1: Combined type detection — handle polyglot projects (now includes Go)
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, php_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -486,8 +441,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
-        if go_type:
-            type_parts.append("go")
+        if php_type:
+            type_parts.append("php")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

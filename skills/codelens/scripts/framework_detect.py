@@ -189,20 +189,23 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
-    "trpc": {
-        "packages": ["@trpc/server", "@trpc/client"],
-        "config_files": [],
-        "indicators": []
+    # PHP frameworks
+    "php": {
+        "packages": [],
+        "config_files": ["composer.json"],
+        "indicators": [".php"]
     },
-    "zustand": {
-        "packages": ["zustand"],
-        "config_files": [],
-        "indicators": []
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan"],
+        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php", "routes/web.php"]
     },
-    "vite": {
-        "packages": ["vite"],
-        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
-        "indicators": []
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle"],
+        "config_files": ["symfony.lock"],
+        "indicators": ["config/bundles.php"]
     },
 }
 
@@ -256,9 +259,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
-        "has_rust_backend": False,
-        "is_monorepo": False,
-        "lockfile": None,
+        "has_php": False,
+        "has_laravel": False,
+        "has_symfony": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -282,31 +285,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
-                # Detect npm/yarn workspaces (monorepo indicator)
-                if "workspaces" in pkg:
-                    detected["is_monorepo"] = True
         except (json.JSONDecodeError, IOError):
             pass
-
-    # Detect pnpm-workspace.yaml (another monorepo indicator)
-    pnpm_workspace_path = os.path.join(workspace, "pnpm-workspace.yaml")
-    if os.path.exists(pnpm_workspace_path):
-        detected["is_monorepo"] = True
-
-    # Detect lerna.json (yet another monorepo indicator)
-    lerna_path = os.path.join(workspace, "lerna.json")
-    if os.path.exists(lerna_path):
-        detected["is_monorepo"] = True
-
-    # Detect lockfile type
-    if os.path.exists(os.path.join(workspace, "pnpm-lock.yaml")):
-        detected["lockfile"] = "pnpm"
-    elif os.path.exists(os.path.join(workspace, "yarn.lock")):
-        detected["lockfile"] = "yarn"
-    elif os.path.exists(os.path.join(workspace, "bun.lock")):
-        detected["lockfile"] = "bun"
-    elif os.path.exists(os.path.join(workspace, "package-lock.json")):
-        detected["lockfile"] = "npm"
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -403,7 +383,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         if pkg_name:
                             pip_deps.add(pkg_name)
         except IOError:
-            _logger.debug("Failed to parse requirements.txt", exc_info=True)
+            logger.debug("Failed to parse requirements.txt", exc_info=True)
 
     # 3b. pyproject.toml
     pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -418,7 +398,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for m in re.finditer(r'["\']([a-zA-Z0-9_-]+)[><=!~]', content):
                 pip_deps.add(m.group(1).lower())
         except IOError:
-            _logger.debug("Failed to parse pyproject.toml", exc_info=True)
+            logger.debug("Failed to parse pyproject.toml", exc_info=True)
 
     # 3c. Check pip deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -436,7 +416,66 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 break
 
-    # 4. Check Rust/Cargo.toml for framework detection
+    # 4b. Check composer.json (PHP dependency scanning)
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            composer_deps.update(composer_data.get("require", {}).keys())
+            composer_deps.update(composer_data.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    if composer_deps:
+        if "php" not in detected["frameworks"]:
+            detected["frameworks"].append("php")
+        detected["has_php"] = True
+
+        # Match composer deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name in composer_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    elif fw_name == "symfony":
+                        detected["has_symfony"] = True
+                    break
+
+    # 4c. Check PHP config files (artisan for Laravel)
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for cfg_file in sig.get("config_files", []):
+            if os.path.exists(os.path.join(workspace, cfg_file)):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
+                elif fw_name == "php":
+                    detected["has_php"] = True
+                break
+
+    # 4d. Check PHP file indicators
+    for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+        if fw_name in detected["frameworks"]:
+            continue
+        for indicator in sig.get("indicators", []):
+            if os.path.exists(os.path.join(workspace, indicator)):
+                detected["frameworks"].append(fw_name)
+                if fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "php":
+                    detected["has_php"] = True
+                break
+
+    # 5. Check Rust/Cargo.toml for framework detection
     cargo_deps = set()
     cargo_path = os.path.join(workspace, "Cargo.toml")
     if os.path.exists(cargo_path):
@@ -503,54 +542,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for crate_name in cargo_crates:
                 if crate_name.lower() in cargo_deps:
                     detected["frameworks"].append(fw_name)
-                    if fw_name in ("axum", "actix", "rocket"):
-                        detected["has_rust_backend"] = True
                     break
-
-    # 4b. If no root Cargo.toml, search nested dirs for Cargo.toml (monorepo support)
-    if not detected["has_rust"]:
-        for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
-                continue
-            if 'Cargo.toml' in files:
-                if "rust" not in detected["frameworks"]:
-                    detected["frameworks"].append("rust")
-                detected["has_rust"] = True
-                # Also parse this Cargo.toml for dependencies
-                try:
-                    sub_cargo = os.path.join(root, 'Cargo.toml')
-                    with open(sub_cargo, 'r', encoding='utf-8') as f:
-                        sub_content = f.read()
-                    in_deps = False
-                    for line in sub_content.split('\n'):
-                        stripped = line.strip()
-                        if stripped.startswith('['):
-                            section = stripped.strip('[]').strip()
-                            in_deps = section in ('dependencies', 'dev-dependencies')
-                            continue
-                        if in_deps and '=' in stripped:
-                            dep_name = stripped.split('=')[0].strip().lower()
-                            if dep_name and not dep_name.startswith('#'):
-                                cargo_deps.add(dep_name)
-                except IOError:
-                    pass
-                break  # Found one, no need to search further
-
-        # Match any newly found cargo deps against framework signatures
-        if detected["has_rust"]:
-            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-                if fw_name in detected["frameworks"]:
-                    continue
-                cargo_crates = sig.get("cargo_crates", [])
-                for crate_name in cargo_crates:
-                    if crate_name.lower() in cargo_deps:
-                        detected["frameworks"].append(fw_name)
-                        break
 
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
     if not detected["has_tauri"]:
@@ -568,7 +560,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
-                    detected["has_rust_backend"] = True
                     break
             if detected["has_tauri"]:
                 break
@@ -587,7 +578,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
-                    detected["has_rust_backend"] = True
                     break
 
     # 5. Check file patterns (for Vue, Svelte)
@@ -660,13 +650,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
-    # These languages are detected but not parsed by tree-sitter.
+    # These languages have fallback parsers but no tree-sitter support.
+    # Note: Go has fallback_go.py, C/C++ has fallback_c.py/fallback_cpp.py,
+    # Java has fallback_java.py — they ARE parsed, but noted for tree-sitter limitation.
     UNSUPPORTED_MARKERS = {
-        "go": ["go.mod", "go.sum"],
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
@@ -676,9 +665,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if os.path.exists(os.path.join(workspace, marker)):
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
-                if lang == "go" and "golang" not in detected["frameworks"]:
-                    detected["frameworks"].append("golang")
-                    detected["has_golang"] = True
                 break
 
     return detected
@@ -697,7 +683,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "watch": True,
         "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
         "frameworks": fw["frameworks"],
-        "is_monorepo": fw.get("is_monorepo", False),
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
         "vue_mode": False,
@@ -748,30 +733,34 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_tauri"):
         config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
         config["frontend_paths"].append("src/")
-        # For Tauri, src/ is the frontend — remove it from backend_paths if present
-        config["backend_paths"] = [p for p in config["backend_paths"] if p != "src/"]
         # Find and add app-specific src-tauri paths
         for app_dir in ('apps', 'packages'):
             app_path = os.path.join(workspace, app_dir)
             if os.path.isdir(app_path):
                 try:
                     for entry in os.listdir(app_path):
-                        entry_path = os.path.join(app_path, entry)
-                        if not os.path.isdir(entry_path):
-                            continue
-                        rel_app = os.path.relpath(entry_path, workspace)
-                        # Add apps/<name>/src/ as frontend path
-                        config["frontend_paths"].append(rel_app + "/src/")
-                        # Check for src-tauri directory
-                        sub_tauri = os.path.join(entry_path, "src-tauri")
-                        if os.path.isdir(sub_tauri):
-                            # Add apps/<name>/src-tauri/ and apps/<name>/src-tauri/src/ as backend paths
-                            config["backend_paths"].append(rel_app + "/src-tauri/")
-                            config["backend_paths"].append(rel_app + "/src-tauri/src/")
+                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        if os.path.isdir(tauri_src):
+                            rel = os.path.relpath(tauri_src, workspace)
+                            config["backend_paths"].append(rel + "/")
                 except OSError:
                     pass
 
     # Deduplicate paths
+    config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
+    config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
+
+    # PHP/Laravel: add PHP-specific paths
+    if fw.get("has_php") or fw.get("has_laravel"):
+        config["backend_paths"].extend(["app/", "src/", "routes/", "database/", "resources/"])
+        config["frameworks"] = fw["frameworks"]
+
+    # Go: add Go-specific paths
+    if fw.get("has_golang"):
+        config["backend_paths"].extend(["pkg/", "internal/", "cmd/"])
+        config["frameworks"] = fw["frameworks"]
+
+    # Deduplicate paths again after framework additions
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
     config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
 

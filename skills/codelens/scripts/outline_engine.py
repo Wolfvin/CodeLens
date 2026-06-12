@@ -5,7 +5,6 @@ using tree-sitter for accurate AST-based extraction.
 """
 
 import os
-import re
 from typing import Dict, List, Any, Optional
 from utils import DEFAULT_IGNORE_DIRS, logger, safe_read_file
 
@@ -78,6 +77,8 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
+    elif ext == '.php':
+        outline = _outline_php(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -98,7 +99,7 @@ def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = 0
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
@@ -106,10 +107,10 @@ def get_workspace_outline(
     Returns a summary-level outline (not per-function detail).
 
     Args:
-        workspace: Path to workspace root.
-        file_filter: Optional glob filter for file names.
-        config: Optional configuration dict.
-        max_files: Maximum number of files to outline (0 = unlimited).
+        workspace: Absolute path to workspace
+        file_filter: Optional filter string for file paths
+        config: Optional configuration dict
+        max_files: Maximum number of files to outline (default: 5000)
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -119,12 +120,12 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+        '.php', '.java', '.c', '.cpp', '.h', '.hpp', '.cc', '.cs', '.lua'
     }
 
     outlines = []
     errors = []
-    files_processed = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -133,10 +134,6 @@ def get_workspace_outline(
             continue
 
         for filename in filenames:
-            # Respect max_files limit (0 = unlimited)
-            if max_files > 0 and files_processed >= max_files:
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             if ext not in source_extensions:
                 continue
@@ -145,6 +142,10 @@ def get_workspace_outline(
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
+            # Enforce max_files cap
+            if len(outlines) >= max_files:
+                break
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
@@ -152,13 +153,13 @@ def get_workspace_outline(
                 continue
 
             result = get_file_outline(file_path, workspace, detail_level="minimal")
-            files_processed += 1
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
 
-        if max_files > 0 and files_processed >= max_files:
+        # Enforce max_files cap at directory level too
+        if len(outlines) >= max_files:
             break
 
     return {
@@ -285,6 +286,7 @@ def _outline_python(content: str, detail: str) -> Dict:
 
 def _outline_html(content: str, detail: str) -> Dict:
     """Outline for HTML files."""
+    import re
     outline = {"ids": [], "classes": [], "scripts": [], "links": []}
 
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -310,6 +312,7 @@ def _outline_html(content: str, detail: str) -> Dict:
 
 def _outline_css(content: str, detail: str) -> Dict:
     """Outline for CSS/SCSS/Less files."""
+    import re
     outline = {"selectors": [], "variables": [], "mixins": [], "keyframes": []}
 
     # Remove comments
@@ -345,6 +348,7 @@ def _outline_css(content: str, detail: str) -> Dict:
 
 def _outline_vue(content: str, detail: str) -> Dict:
     """Outline for Vue SFC files."""
+    import re
     outline = {"template": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     # Split sections
@@ -376,6 +380,7 @@ def _outline_vue(content: str, detail: str) -> Dict:
 
 def _outline_svelte(content: str, detail: str) -> Dict:
     """Outline for Svelte component files."""
+    import re
     outline = {"markup": {"ids": [], "classes": []}, "script": {"imports": [], "functions": [], "classes": [], "exports": []}, "style": {"selectors": []}}
 
     script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
@@ -408,6 +413,7 @@ def _outline_svelte(content: str, detail: str) -> Dict:
 
 def _outline_go(content: str, detail: str) -> Dict:
     """Outline for Go source files."""
+    import re
     outline = {
         "functions": [],
         "classes": [],
@@ -513,8 +519,101 @@ def _outline_go(content: str, detail: str) -> Dict:
     return outline
 
 
+def _outline_php(content: str, detail: str) -> Dict:
+    """Outline for PHP source files."""
+    import re
+    outline = {
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "traits": [],
+        "imports": [],
+        "exports": [],
+        "variables": [],
+    }
+
+    # Namespace detection
+    ns_match = re.search(r'namespace\s+([\w\\]+)\s*;', content)
+    if ns_match:
+        outline["namespace"] = ns_match.group(1).strip('\\')
+
+    # Use statements (imports)
+    for m in re.finditer(r'use\s+(?:function\s+|const\s+)?([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
+        import_path = m.group(1)
+        alias = m.group(2) or import_path.rsplit('\\', 1)[-1]
+        line = content[:m.start()].count('\n') + 1
+        outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+
+    # Group use statements (PHP 7+)
+    for m in re.finditer(r'use\s+([\w\\]+)\\{([^}]+)}\s*;', content):
+        base_ns = m.group(1)
+        for item in re.finditer(r'([\w\\]+)(?:\s+as\s+(\w+))?', m.group(2)):
+            import_path = base_ns + '\\' + item.group(1)
+            alias = item.group(2) or item.group(1).rsplit('\\', 1)[-1]
+            line = content[:m.start()].count('\n') + 1
+            outline["imports"].append({"text": import_path, "alias": alias, "line": line})
+
+    lines = content.split('\n')
+    in_class = False
+    class_depth = 0
+
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Interface declarations
+        m = re.match(r'(?:^|\s)interface\s+(\w+)', stripped)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": line_num})
+            continue
+
+        # Trait declarations
+        m = re.match(r'(?:^|\s)trait\s+(\w+)', stripped)
+        if m:
+            outline["traits"].append({"name": m.group(1), "line": line_num})
+            continue
+
+        # Class declarations
+        m = re.match(r'(?:^|\s)(?:abstract\s+|final\s+)?class\s+(\w+)', stripped)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": line_num, "methods": []})
+            in_class = True
+            continue
+
+        # Function declarations
+        m = re.match(r'(?:public\s+|private\s+|protected\s+)?(?:static\s+)?function\s+(\w+)', stripped)
+        if m:
+            fn_name = m.group(1)
+            is_method = in_class or stripped.startswith(('public ', 'private ', 'protected '))
+            entry = {"name": fn_name, "line": line_num, "method": is_method}
+            outline["functions"].append(entry)
+            # Add method to last class
+            if in_class and outline["classes"]:
+                outline["classes"][-1].setdefault("methods", []).append({"name": fn_name, "line": line_num})
+            continue
+
+        # Track class depth for method detection
+        if in_class:
+            class_depth += stripped.count('{') - stripped.count('}')
+            if class_depth < 0:
+                in_class = False
+                class_depth = 0
+
+        # Constants
+        m = re.match(r'(?:public\s+|private\s+|protected\s+)?const\s+(\w+)', stripped)
+        if m:
+            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
+
+        # Define constants
+        m = re.match(r"define\s*\(\s*['\"](\w+)['\"]", stripped)
+        if m:
+            outline["variables"].append({"name": m.group(1), "line": line_num, "const": True})
+
+    return outline
+
+
 def _outline_generic(content: str, detail: str) -> Dict:
     """Generic outline for unsupported file types."""
+    import re
     outline = {"functions": [], "variables": []}
     # Basic function-like pattern detection
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -528,6 +627,7 @@ def _outline_generic(content: str, detail: str) -> Dict:
 
 def _extract_js_outline(parser, tree, source, outline, detail):
     """Extract JS outline using tree-sitter AST."""
+    import re
 
     def visitor(node, src, depth):
         nt = node.type
@@ -727,6 +827,7 @@ def _extract_python_outline(parser, tree, source, outline, detail):
 
 def _extract_js_outline_regex(content, outline, detail):
     """Regex-based JS outline fallback."""
+    import re
     content_clean = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
     content_clean = re.sub(r'(?<!:)//.*$', '', content_clean, flags=re.MULTILINE)
 
@@ -764,6 +865,7 @@ def _extract_js_outline_regex(content, outline, detail):
 
 def _extract_ts_outline_regex(content, outline, detail):
     """Regex-based TypeScript outline fallback."""
+    import re
     _extract_js_outline_regex(content, outline, detail)
 
     for line_num, line in enumerate(content.split('\n'), 1):
@@ -779,6 +881,7 @@ def _extract_ts_outline_regex(content, outline, detail):
 
 def _extract_tsx_outline_regex(content, outline, detail):
     """Regex-based TSX outline fallback."""
+    import re
     _extract_ts_outline_regex(content, outline, detail)
 
     # Component detection (PascalCase functions)
@@ -790,6 +893,7 @@ def _extract_tsx_outline_regex(content, outline, detail):
 
 def _extract_rust_outline_regex(content, outline, detail):
     """Regex-based Rust outline fallback."""
+    import re
 
     for line_num, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()
@@ -841,6 +945,7 @@ def _extract_rust_outline_regex(content, outline, detail):
 
 def _extract_python_outline_regex(content, outline, detail):
     """Regex-based Python outline fallback."""
+    import re
 
     for line_num, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()

@@ -127,7 +127,8 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte',
+                          '.php', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.lua'}
 
 
 # ─── Performance Safeguards ────────────────────────────────

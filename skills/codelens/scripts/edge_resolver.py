@@ -246,11 +246,44 @@ def resolve_edges(
     return all_nodes, resolved_edges
 
 
-def get_callers(node_id: str, edges: List[Dict]) -> List[Dict]:
-    """Get all callers (incoming edges) for a node. Uses cached index for O(1) lookup."""
-    _build_index(edges)
+def get_callers(node_id: str, edges: List[Dict], nodes: Optional[List[Dict]] = None) -> List[Dict]:
+    """Get all callers (incoming edges) for a node. Uses cached index for O(1) lookup.
+    
+    Returns rich caller info with file, line, and fn keys for markdown formatting.
+    """
+    _build_index(edges, nodes)
     incoming = _edge_cache["to_index"].get(node_id, [])
-    return [{"from": edge["from"]} for edge in incoming]
+    node_map = _edge_cache.get("node_map", {})
+    
+    results = []
+    for edge in incoming:
+        from_id = edge.get("from", "")
+        # Try to resolve caller info from node_map
+        caller_node = node_map.get(from_id, {})
+        caller = {
+            "from": from_id,
+            "file": caller_node.get("file", ""),
+            "line": caller_node.get("line", ""),
+            "fn": caller_node.get("fn", ""),
+            "source": caller_node.get("fn", ""),
+        }
+        # Fallback: parse from_id string to extract file/line/fn
+        if not caller["file"] and ":" in from_id:
+            parts = from_id.rsplit(":", 2)
+            if len(parts) >= 3:
+                caller["file"] = parts[0]
+                try:
+                    caller["line"] = int(parts[1])
+                except (ValueError, TypeError):
+                    caller["line"] = parts[1]
+                caller["fn"] = parts[2]
+                caller["source"] = parts[2]
+            elif len(parts) == 2:
+                caller["file"] = parts[0]
+                caller["fn"] = parts[1]
+                caller["source"] = parts[1]
+        results.append(caller)
+    return results
 
 
 def get_callees(node_id: str, edges: List[Dict], nodes: List[Dict]) -> List[Dict]:

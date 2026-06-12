@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
-from utils import logger, is_generated_file, DEFAULT_IGNORE_FILES
+from utils import logger
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -29,7 +29,7 @@ from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
-from parsers.fallback_dart import parse_dart_fallback
+from parsers.fallback_php import parse_php_fallback
 
 from commands import register_command
 
@@ -40,23 +40,28 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000). "
+                             "Use 0 for unlimited.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    max_files = getattr(args, 'max_files', 5000)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, max_files=max_files)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 5000) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    max_files caps the number of files scanned per category.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -572,26 +577,26 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read C# file: {path}")
 
-    # Parse Dart files
-    dart_data = []
-    if files["dart"]:
-        for path in files["dart"]:
+    # Parse PHP files
+    php_data = []
+    if files["php"]:
+        for path in files["php"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_dart_fallback(content, os.path.relpath(path, workspace))
-                dart_data.append({
+                refs = parse_php_fallback(content, os.path.relpath(path, workspace))
+                php_data.append({
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                logger.debug(f"Failed to read Dart file: {path}")
+                logger.debug(f"Failed to read PHP file: {path}")
 
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + dart_data
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -681,8 +686,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "go": len(files["go"]),
             "lua": len(files["lua"]),
             "csharp": len(files["csharp"]),
-            "dart": len(files["dart"]),
-            "sql": len(files["sql"]),
+            "php": len(files["php"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -690,7 +694,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
-        "dart_parsed": len(dart_data),
+        "php_parsed": len(php_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -712,7 +716,11 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte"}
+    # Languages that have fallback parsers (parsed, but no tree-sitter)
+    has_fallback = {"go", "c", "cpp", "java", "php", "csharp", "lua"}
+    truly_unsupported = [l for l in unsupported if l not in has_fallback]
+    fallback_only = [l for l in unsupported if l in has_fallback]
+
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -722,9 +730,21 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "csharp": "C#",
         "swift": "Swift",
         "ruby": "Ruby",
+        "php": "PHP",
+        "lua": "Lua",
     }
-    parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
+
+    parts = []
+    if fallback_only:
+        parts.append(", ".join(lang_names.get(l, l) for l in fallback_only) +
+                     " (parsed via regex fallback, limited accuracy)")
+    if truly_unsupported:
+        parts.append(", ".join(lang_names.get(l, l) for l in truly_unsupported) +
+                     " (not yet supported)")
+
+    if not parts:
+        return None
+    return "Detected " + " and ".join(parts) + "."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
@@ -747,8 +767,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "go": [],
         "lua": [],
         "csharp": [],
-        "dart": [],
-        "sql": [],
+        "php": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -773,10 +792,6 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
             # Skip TypeScript declaration files (auto-generated, no runtime code)
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
-                continue
-
-            # Skip generated/lock files (Yarn PNP, lock files, etc.)
-            if is_generated_file(filename) or filename in DEFAULT_IGNORE_FILES:
                 continue
 
             if ext in ('.html', '.htm'):
@@ -816,10 +831,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["lua"].append(file_path)
             elif ext in ('.cs',):
                 files["csharp"].append(file_path)
-            elif ext == '.dart':
-                files["dart"].append(file_path)
-            elif ext in ('.sql',):
-                files["sql"].append(file_path)
+            elif ext == '.php':
+                files["php"].append(file_path)
+            elif filename.endswith('.blade.php'):
+                files["php"].append(file_path)
 
     return files
 
