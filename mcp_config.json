@@ -1,0 +1,80 @@
+{
+  "_comment": "CodeLens MCP Server Configuration Templates — Copy the relevant section to your AI tool's config file",
+  "_usage": "codelens serve --config  (to print this configuration)",
+
+  "claude_desktop": {
+    "_target_file": "~/Library/Application Support/Claude/claude_desktop_config.json",
+    "_instructions": "Add the mcpServers section to your claude_desktop_config.json file",
+    "mcpServers": {
+      "codelens": {
+        "command": "python3",
+        "args": ["./scripts/codelens.py", "serve"],
+        "env": {
+          "CODELENS_AI_MODE": "1"
+        }
+      }
+    }
+  },
+
+  "cursor": {
+    "_target_file": ".cursor/mcp.json",
+    "_instructions": "Add the mcpServers section to your .cursor/mcp.json file",
+    "mcpServers": {
+      "codelens": {
+        "command": "python3",
+        "args": ["./scripts/codelens.py", "serve"],
+        "env": {
+          "CODELENS_AI_MODE": "1"
+        }
+      }
+    }
+  },
+
+  "vscode": {
+    "_target_file": ".vscode/settings.json",
+    "_instructions": "Add the mcp section to your VS Code settings.json. Requires the MCP extension or GitHub Copilot with MCP support.",
+    "mcp": {
+      "servers": {
+        "codelens": {
+          "url": "http://localhost:8080/sse",
+          "transport": "sse"
+        }
+      }
+    }
+  },
+
+  "continue_dev": {
+    "_target_file": "~/.continue/config.json",
+    "_instructions": "Add the mcpServers section to your Continue.dev config.json file",
+    "mcpServers": [
+      {
+        "name": "codelens",
+        "command": "python3",
+        "args": ["./scripts/codelens.py", "serve"],
+        "env": {
+          "CODELENS_AI_MODE": "1"
+        }
+      }
+    ]
+  },
+
+  "cline": {
+    "_target_file": ".clinerules/mcp.json",
+    "_instructions": "Add the mcpServers section for Cline (VS Code extension)",
+    "mcpServers": {
+      "codelens": {
+        "command": "python3",
+        "args": ["./scripts/codelens.py", "serve"],
+        "env": {
+          "CODELENS_AI_MODE": "1"
+        }
+      }
+    }
+  },
+
+  "aider": {
+    "_target_file": ".aider.conf.yml",
+    "_instructions": "Configure MCP tools for Aider. Run: codelens serve --port 8080 first, then configure Aider to use the HTTP endpoint.",
+    "note": "Aider doesn't natively support MCP yet. Use the HTTP/SSE endpoint with custom scripting."
+  }
+}

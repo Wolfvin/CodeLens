@@ -39,6 +39,7 @@ Usage:
     python3 codelens.py regex-audit <workspace>        # Audit regex for ReDoS and issues
     python3 codelens.py a11y <workspace>               # Detect accessibility issues
     python3 codelens.py vuln-scan <workspace>          # Scan dependencies for known CVEs
+    python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
     python3 codelens.py perf-hint <workspace>          # Detect performance anti-patterns
     python3 codelens.py css-deep <workspace]           # Deep CSS analysis (vars, keyframes, specificity)
     python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
@@ -46,6 +47,8 @@ Usage:
     python3 codelens.py migrate <workspace>            # Migrate JSON registry to SQLite
     python3 codelens.py lsp-status                     # Check LSP server availability
     python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
+    python3 codelens.py dashboard <workspace>           # Generate HTML visualization dashboard
+    python3 codelens.py history <workspace>             # Show historical trend data
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)
@@ -108,7 +111,7 @@ def _suggest_fix(command: str, error: Exception) -> str:
     if command in ("circular", "dead-code", "smell", "complexity", "api-map", "entrypoints"):
         return "Make sure you've run 'scan' first to build the registry, or check the workspace path."
 
-    if command in ("secrets", "vuln-scan"):
+    if command in ("secrets", "vuln-scan", "taint"):
         return "Check that the workspace path is correct and contains source files to scan."
 
     if command == "diff":
@@ -665,6 +668,26 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
             lite["recommendations"] = result["recommendations"][:3]
         return lite
 
+    if command == "taint":
+        # Taint lite: risk + stats + top 5 findings + key actionable items
+        lite = {
+            "status": result.get("status", "ok"),
+            "risk": result.get("risk"),
+        }
+        if "stats" in result:
+            lite["stats"] = result["stats"]
+        findings = result.get("findings", [])
+        if findings:
+            sorted_f = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "info").lower(), 99))
+            lite["top_findings"] = sorted_f[:5]
+            if len(findings) > 5:
+                lite["findings_total"] = len(findings)
+        if result.get("recommendations"):
+            lite["recommendations"] = result["recommendations"][:3]
+        if result.get("by_rule"):
+            lite["by_rule"] = result["by_rule"]
+        return lite
+
     # ─── Generic lite fallback ──────────────────────────
     lite = {
         "status": result.get("status", "ok"),
@@ -785,6 +808,18 @@ def main():
             sub.add_argument("--deep", action="store_true", default=False,
                              help="Enable LSP-enhanced deep analysis (requires language server)")
 
+        # Add --deep flag to commands that support hybrid LSP analysis
+        if "deep" not in existing_dests and cmd_name in (
+            "dead-code", "query", "impact", "smell", "complexity"
+        ):
+            sub.add_argument("--deep", action="store_true", default=False,
+                             help="Use LSP-enhanced deep analysis for higher accuracy")
+
+        # Add --db-path flag for persistent registry (if command doesn't define it)
+        if "db_path" not in existing_dests:
+            sub.add_argument("--db-path", default=None, metavar="PATH",
+                             help="Custom path for SQLite database file")
+
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
@@ -795,11 +830,22 @@ def main():
 
     # ─── Parse and dispatch ─────────────────────────────
 
+    # Handle --lsp-status as a special top-level flag (not a subcommand)
+    if "--lsp-status" in sys.argv:
+        try:
+            from hybrid_engine import get_lsp_status
+            status = get_lsp_status()
+            print(format_output(status, _default_format, "lsp-status"))
+        except Exception as e:
+            print(json.dumps({"status": "error", "error": str(e)}, indent=2))
+        sys.exit(0)
+
     # Pre-parse to capture global flags before subparser overwrites them
     global_format = None
     global_top = None
     global_max_tokens = None
     global_lite = False
+    global_deep = False
 
     i = 1
     while i < len(sys.argv):
@@ -834,6 +880,8 @@ def main():
                 pass
         elif arg == '--lite':
             global_lite = True
+        elif arg == '--deep':
+            global_deep = True
         i += 1
 
     args = parser.parse_args()
@@ -862,6 +910,12 @@ def main():
     if global_lite:
         args.lite = True
 
+    # Resolve --deep: either global or subparser
+    if global_deep:
+        args.deep = True
+    elif not hasattr(args, 'deep') or getattr(args, 'deep', None) is None:
+        args.deep = False
+
     if not args.command:
         parser.print_help()
         sys.exit(1)
@@ -881,6 +935,7 @@ def main():
         "api-map", "state-map", "handbook", "analyze", "test-map",
         "stack-trace", "config-drift", "type-infer", "ownership",
         "regex-audit", "a11y", "css-deep", "diff", "ask", "validate",
+        "taint", "dashboard", "history",
     }
 
     auto_setup_info = None
@@ -930,9 +985,18 @@ def main():
                 pass
             except Exception as e:
                 logger.warning(f"Failed to persist to SQLite: {e}", exc_info=True)
+            # Auto-save history snapshot for trend tracking
+            try:
+                from history_engine import save_snapshot as save_history_snapshot
+                hist_result = save_history_snapshot(workspace, result)
+                result["history_snapshot_saved"] = True
+                result["history_snapshot_file"] = hist_result.get("_snapshot_file", "")
+            except Exception:
+                logger.debug("Failed to save history snapshot", exc_info=True)
+                result["history_snapshot_saved"] = False
 
-        # ─── Watch is a long-running command — it already printed output ──
-        if args.command == "watch":
+        # ─── Watch/Serve are long-running commands — they already printed output ──
+        if args.command in ("watch", "serve"):
             return
 
         # ─── Post-processing: --top N (with smart default) ──
@@ -992,6 +1056,74 @@ def main():
         # ─── Add auto-setup info if applicable ──
         if auto_setup_info and isinstance(result, dict):
             result["_auto_setup"] = auto_setup_info
+
+        # ─── Post-processing: --deep (hybrid LSP analysis) ──
+        deep = getattr(args, 'deep', False)
+        if deep and isinstance(result, dict) and args.command in (
+            "dead-code", "query", "impact", "smell", "complexity"
+        ):
+            try:
+                from hybrid_engine import create_hybrid_engine, add_confidence_to_result
+                hybrid = create_hybrid_engine(workspace, deep=True)
+
+                if args.command == "dead-code":
+                    # Enhance dead-code findings with LSP verification
+                    all_findings = []
+                    for cat_items in result.get("results", {}).values():
+                        if isinstance(cat_items, list):
+                            all_findings.extend(cat_items)
+                    if all_findings:
+                        verified = hybrid.verify_dead_code(all_findings)
+                        result["lsp_verified"] = True
+                        result["lsp_active"] = hybrid.lsp_active
+
+                elif args.command == "query" and result.get("found"):
+                    result = hybrid.enhance_query(result, result.get("query", ""))
+                    result["lsp_active"] = hybrid.lsp_active
+
+                elif args.command == "impact":
+                    result = hybrid.enhance_impact(result, result.get("symbol", ""))
+                    result["lsp_active"] = hybrid.lsp_active
+
+                elif args.command == "smell":
+                    all_findings = []
+                    for cat_items in result.get("by_category", {}).values():
+                        if isinstance(cat_items, list):
+                            all_findings.extend(cat_items)
+                    if all_findings:
+                        hybrid.enhance_smell(all_findings)
+                    result["lsp_active"] = hybrid.lsp_active
+
+                elif args.command == "complexity":
+                    funcs = result.get("functions", [])
+                    if funcs:
+                        hybrid.enhance_complexity(funcs)
+                    result["lsp_active"] = hybrid.lsp_active
+
+                # Add confidence distribution to stats
+                result = add_confidence_to_result(result)
+                hybrid.cleanup()
+
+            except Exception as e:
+                logger.warning(f"Deep analysis failed, using fast-path results: {e}", exc_info=True)
+                if isinstance(result, dict):
+                    result["lsp_active"] = False
+                    result["deep_error"] = str(e)
+        elif not deep and isinstance(result, dict) and args.command in (
+            "dead-code", "query", "impact", "smell", "complexity"
+        ):
+            # Auto-detect: if LSP available and --deep not specified, show hint
+            try:
+                from hybrid_engine import get_lsp_status
+                status = get_lsp_status()
+                if status.get("lsp_available"):
+                    print(
+                        f"[CodeLens] Hint: LSP servers detected ({status['available_count']} available). "
+                        f"Use --deep for higher accuracy analysis.",
+                        file=sys.stderr,
+                    )
+            except Exception:
+                pass
 
         # ─── Determine command name for formatting ──
         format_command = args.command
