@@ -254,12 +254,12 @@ def detect_smells(
 
     # Duplicate pattern detection (cross-file, only if requested)
     if "duplicate_pattern" in categories:
-        dupes = _detect_duplicate_patterns(workspace)
+        dupes = _detect_duplicate_patterns(workspace, max_files=max_files)
         all_smells["duplicate_pattern"] = dupes
 
     # Inconsistent patterns (cross-file)
     if "inconsistent" in categories:
-        inconsistent = _detect_inconsistent_patterns(workspace)
+        inconsistent = _detect_inconsistent_patterns(workspace, max_files=max_files)
         all_smells["inconsistent"] = inconsistent
 
     # Downgrade smells from docs/examples/test files to "info" severity
@@ -397,7 +397,7 @@ def detect_smells(
         },
         "files_truncated": files_truncated,
         "by_category": {
-            cat: smells for cat, smells in all_smells.items() if smells
+            cat: smells[:100] for cat, smells in all_smells.items() if smells  # Cap per-category to prevent JSON explosion
         },
         "top_priority": top_smells[:20],
         "categories_checked": list(categories)
@@ -1617,12 +1617,13 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     return smells
 
 
-def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
+def _detect_duplicate_patterns(workspace: str, max_files: int = 3000) -> List[Dict]:
     """Detect potential duplicate code patterns across files (lightweight)."""
     smells = []
 
     # Collect function signatures across files
     fn_signatures: Dict[str, List[Dict]] = defaultdict(list)
+    files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -1649,6 +1650,10 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             except OSError:
                 continue
 
+            files_scanned += 1
+            if files_scanned >= max_files:
+                break
+
             content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
             if content is None:
                 continue
@@ -1668,6 +1673,9 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
                     "signature": sig
                 })
 
+        if files_scanned >= max_files:
+            break
+
     # Find signatures that appear in multiple files
     for sig, locations in fn_signatures.items():
         unique_files = set(loc["file"] for loc in locations)
@@ -1684,7 +1692,7 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     return smells[:30]  # Cap results
 
 
-def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
+def _detect_inconsistent_patterns(workspace: str, max_files: int = 3000) -> List[Dict]:
     """Detect inconsistent coding patterns across the workspace."""
     smells = []
 
@@ -1739,6 +1747,8 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
                 continue
 
             file_count += 1
+            if file_count >= max_files:
+                break
 
             # Error handling patterns
             if 'try' in content and 'catch' in content:
@@ -1763,6 +1773,9 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
                 export_patterns["es_module"] += 1
             if 'module.exports' in content or 'require(' in content:
                 export_patterns["commonjs"] += 1
+
+        if file_count >= max_files:
+            break
 
     if file_count == 0:
         return smells

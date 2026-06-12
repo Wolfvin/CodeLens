@@ -121,7 +121,7 @@ def execute(args, workspace):
     )
 
 
-def _time_left(start: float, budget: float = 90) -> float:
+def _time_left(start: float, budget: float = 120) -> float:
     """Return remaining seconds within the time budget."""
     return max(0.0, budget - (time.time() - start))
 
@@ -265,6 +265,9 @@ def generate_summary(
 
     # ─── 4. Prioritized Findings ─────────────────────────
     findings = []
+    # For summary, cap max_files to prevent timeout on huge repos
+    # On repos with 20K+ files, even 1500 files causes 60+ seconds
+    summary_max_files = min(max_files, 500)
 
     if focus in ("security", "all"):
         # Security findings
@@ -273,7 +276,7 @@ def generate_summary(
         else:
             try:
                 from secrets_engine import detect_secrets
-                sec = detect_secrets(workspace)
+                sec = detect_secrets(workspace, max_files=min(summary_max_files, 500))
                 sec_stats = sec.get("stats", {})
                 if sec_stats.get("total_secrets", 0) > 0:
                     # Get only the highest severity items
@@ -313,7 +316,7 @@ def generate_summary(
         else:
             try:
                 from dataflow_engine import trace_dataflow
-                df = trace_dataflow(workspace)
+                df = trace_dataflow(workspace, max_files=summary_max_files, timeout_sec=30.0)
                 violations = df.get("stats", {}).get("violations", 0)
                 if violations > 0:
                     df_items = df.get("violations", [])
@@ -337,7 +340,7 @@ def generate_summary(
         else:
             try:
                 from smell_engine import detect_smells
-                smell = detect_smells(workspace, max_files=max_files)
+                smell = detect_smells(workspace, max_files=summary_max_files)
                 smell_stats = smell.get("stats", {})
                 if smell_stats.get("total_smells", 0) > 0:
                     top_items = smell.get("top_priority", [])[:max_items]
@@ -362,7 +365,7 @@ def generate_summary(
         else:
             try:
                 from debugleak_engine import detect_debug_leaks
-                dl = detect_debug_leaks(workspace)
+                dl = detect_debug_leaks(workspace, max_files=summary_max_files)
                 dl_stats = dl.get("stats", {})
                 if dl_stats.get("total_leaks", 0) > 0:
                     high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
@@ -413,7 +416,7 @@ def generate_summary(
         else:
             try:
                 from deadcode_engine import detect_dead_code
-                dc = detect_dead_code(workspace, max_files=max_files)
+                dc = detect_dead_code(workspace, max_files=summary_max_files)
                 dc_stats = dc.get("stats", {})
                 dead_count = dc_stats.get("total_dead_code", 0)
                 if dead_count > 0:

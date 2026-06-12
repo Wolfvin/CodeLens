@@ -19,6 +19,7 @@ file, line, and optionally a call chain to downstream functions.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -927,11 +928,16 @@ ENTRYPOINT_PATTERNS = {
 }
 
 
+MAX_ENTRYPOINTS_FILES = 5000   # Max files to scan (prevents timeout on huge repos)
+GLOBAL_ENTRYPOINTS_TIMEOUT = 120  # Max seconds for entire scan
+
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
     config: Optional[Dict] = None,
-    exclude_tests: bool = False
+    exclude_tests: bool = False,
+    max_files: int = MAX_ENTRYPOINTS_FILES,
+    timeout_sec: float = GLOBAL_ENTRYPOINTS_TIMEOUT
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -945,6 +951,8 @@ def map_entrypoints(
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
         exclude_tests: If True, exclude "test_entry" from scanning (v6.3)
+        max_files: Maximum number of files to scan (default 5000)
+        timeout_sec: Global timeout in seconds (default 120)
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -967,9 +975,17 @@ def map_entrypoints(
 
     entrypoints: List[Dict[str, Any]] = []
     files_scanned = 0
+    truncated = False
+    start_time = time.time()
 
     # ─── Phase 1: Scan files for entrypoints ──────────────────
     for root, dirs, filenames in os.walk(workspace):
+        # Global timeout check
+        if time.time() - start_time > timeout_sec:
+            truncated = True
+            logger.warning(f"entrypoints: global timeout ({timeout_sec}s) reached, truncating scan")
+            break
+
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
@@ -1015,6 +1031,17 @@ def map_entrypoints(
                 continue
 
             files_scanned += 1
+
+            # Max files limit check
+            if max_files > 0 and files_scanned >= max_files:
+                truncated = True
+                break
+
+            # Global timeout check (inside inner loop too)
+            if time.time() - start_time > timeout_sec:
+                truncated = True
+                logger.warning(f"entrypoints: global timeout ({timeout_sec}s) reached during scan")
+                break
 
             # Check each requested entrypoint type
             for ep_type in types_to_scan:
@@ -1071,12 +1098,17 @@ def map_entrypoints(
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)
 
+    elapsed_sec = round(time.time() - start_time, 1)
+
     return {
         "status": "ok",
         "workspace": workspace,
         "entry_type_filter": entry_type,
         "exclude_tests": exclude_tests,
         "stats": stats,
+        "files_scanned": files_scanned,
+        "truncated": truncated,
+        "elapsed_sec": elapsed_sec,
         "entrypoints": entrypoints[:300],  # Cap to avoid explosion
         "execution_graph": execution_graph,
         "recommendations": recommendations,
