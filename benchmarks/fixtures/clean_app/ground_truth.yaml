@@ -1,0 +1,25 @@
+secrets:
+  expected: 0
+  locations: []
+dead_code:
+  expected: 0
+  locations: []
+complexity:
+  expected: 0
+  locations: []
+  threshold: 15
+debug_leaks:
+  expected: 0
+  locations: []
+perf_antipatterns:
+  expected: 0
+  locations: []
+circular_dependencies:
+  expected: 0
+  locations: []
+sql_injection:
+  expected: 0
+  locations: []
+command_injection:
+  expected: 0
+  locations: []

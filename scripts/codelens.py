@@ -49,6 +49,7 @@ Usage:
     python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
     python3 codelens.py dashboard <workspace>           # Generate HTML visualization dashboard
     python3 codelens.py history <workspace>             # Show historical trend data
+    python3 codelens.py benchmark <workspace>          # Run accuracy and performance benchmarks
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)
