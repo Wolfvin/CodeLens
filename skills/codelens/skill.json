@@ -1,7 +1,7 @@
 {
   "name": "codelens",
   "version": "6.4.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on godotengine/godot (14K files, C++/GDScript game engine) and denoland/deno (20K files, Rust+TS monorepo). Fixes: is_bundled_file() added to utils.py (4 commands were broken: ask, complexity, context, perf_hint); api-map now accepts production_only parameter; Godot/Unreal/Unity/dotnet framework detection added; Drupal false positive fixed (removed generic modules/ indicator); C/C++ parser now generates call edges (was only includes/macros); outline_engine supports 10+ new languages (Java, Kotlin, C/C++, C#, GDScript, Lua, R, Haskell, Nim); handbook identity.type now detects Godot games and C++ build systems (SCons, CMake, Meson, Make); source_extensions expanded in workspace outline; _FILE_PATH_EXTENSIONS expanded for all languages.",  "author": "codelens",  "tags": [    "code-analysis",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on redis/redis (1844 files, C+Lua+Python+TCL Makefile project). C/C++ project support: removed from unsupported_langs, added c_project framework detection, c-project/c-database identity types, Makefile version/name extraction. Fixed is_bundled_file missing from utils.py (broke ask/complexity/context/perf_hint commands). Fixed Drupal false positive (modules/ indicator too generic, replaced with sites/default/ and sites/all/). Fixed C function name false positives (void, const, unsigned etc. no longer detected as function names in smell_engine and fallback_c parser).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",
@@ -170,4 +170,9 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection"  ]}
+    "timeout-protection",
+    "c-project",
+    "makefile",
+    "c-database",
+    "bundled-file-detection"
+  ]}

@@ -527,64 +527,70 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6.4: Detect C/C++ and game engine projects
-    cpp_type = None
-    godot_type = None
-
-    # Godot project detection (project.godot file)
-    project_godot_path = os.path.join(workspace, 'project.godot')
-    if os.path.isfile(project_godot_path):
-        try:
-            with open(project_godot_path, 'r', encoding='utf-8', errors='ignore') as f:
-                godot_content = f.read()
-            name_match = re.search(r'config/name\s*=\s*"([^"]+)"', godot_content)
-            ver_match = re.search(r'config/features\s*=\s*[^)]*PackedScene', godot_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            godot_type = "godot-game"
-        except Exception:
-            logger.warning("project.godot parsing failed", exc_info=True)
-
-    # C/C++ project detection (SCons, CMake, Makefile — but NOT if Godot project)
-    if not godot_type:
-        scons_path = os.path.join(workspace, 'SConstruct')
-        cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-        makefile_path = os.path.join(workspace, 'Makefile')
-        meson_path = os.path.join(workspace, 'meson.build')
-        if os.path.isfile(scons_path):
-            cpp_type = "cpp-project-scons"
-        elif os.path.isfile(cmake_path):
-            try:
-                with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    cmake_content = f.read(8192)
-                name_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
-                if name_match:
-                    identity["name"] = name_match.group(1)
-                ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
-                if ver_match:
-                    identity["version"] = ver_match.group(1)
-                cpp_type = "cpp-project-cmake"
-            except Exception:
-                cpp_type = "cpp-project-cmake"
-        elif os.path.isfile(meson_path):
-            cpp_type = "cpp-project-meson"
-        elif os.path.isfile(makefile_path):
-            cpp_type = "cpp-project-make"
-
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, cpp_type, godot_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+
+    # v6.4: Detect C/C++ projects via Makefile (for identity type)
+    c_type = None
+    _C_MAKEFILE_MARKERS = {"Makefile", "makefile", "GNUmakefile", "CMakeLists.txt", "Makefile.am"}
+    _has_makefile = any(
+        os.path.isfile(os.path.join(workspace, marker))
+        for marker in _C_MAKEFILE_MARKERS
+    )
+    if _has_makefile:
+        # Check if there are actual C/C++ source files
+        _has_c_sources = False
+        for root_d, _, fnames in os.walk(workspace):
+            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
+                continue
+            if '.codelens' in root_d:
+                continue
+            for fn in fnames:
+                if fn.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
+                    _has_c_sources = True
+                    break
+            if _has_c_sources:
+                break
+        if _has_c_sources:
+            # Try to extract name from Makefile (first target or PROJECT name)
+            for mf_name in ('Makefile', 'makefile', 'GNUmakefile'):
+                mf_path = os.path.join(workspace, mf_name)
+                if os.path.isfile(mf_path):
+                    try:
+                        with open(mf_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            mf_content = f.read(4096)
+                        # Look for VERSION = or VERSION:=
+                        ver_match = re.search(r'VERSION\s*[:?]?=\s*"?([^"\s\n]+)"?', mf_content)
+                        if ver_match:
+                            identity["version"] = ver_match.group(1)
+                        # Look for PROGRAM/APP/TARGET name
+                        prog_match = re.search(r'(?:PROGRAM|APP|TARGET|PROG)\s*[:?]?=\s*"?([^"\s\n]+)"?', mf_content)
+                        if prog_match:
+                            identity["name"] = prog_match.group(1)
+                    except Exception:
+                        pass
+                    break
+            # Classify based on project structure
+            has_redis_patterns = os.path.isfile(os.path.join(workspace, 'redis.conf'))
+            has_nginx_patterns = os.path.isdir(os.path.join(workspace, 'conf')) and os.path.isdir(os.path.join(workspace, 'src'))
+            if has_redis_patterns:
+                c_type = "c-database"
+            elif has_nginx_patterns:
+                c_type = "c-infrastructure"
+            else:
+                c_type = "c-project"
+
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, c_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if godot_type:
-            type_parts.append("godot")
+        if c_type:
+            type_parts.append("c")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
-        if cpp_type:
-            type_parts.append("cpp")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

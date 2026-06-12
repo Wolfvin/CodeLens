@@ -58,7 +58,9 @@ def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
                             'sizeof', 'typedef', 'struct', 'enum', 'class',
                             'case', 'break', 'continue', 'namespace',
                             'ifdef', 'ifndef', 'endif', 'define', 'include',
-                            'pragma', 'if', 'elif', 'else'):
+                            'pragma', 'if', 'elif', 'else',
+                            'void', 'const', 'unsigned', 'signed', 'volatile',
+                            'extern', 'register', 'auto', 'static', 'inline'):
                 continue
             node_id = f"{rel_path}:{i}:{fn_name}"
             nodes.append({

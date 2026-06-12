@@ -1,5 +1,22 @@
 # CodeLens Changelog
 
+## v6.4.0 — 2026-06-12
+
+### Tested against redis/redis (1,844 files: 471 C + 311 H + 20 Lua + 46 Python + 228 TCL + 69 Shell, in-memory database)
+
+### Fixed (5)
+
+- **`is_bundled_file()` missing from `utils.py`** — Broke 4 commands: `ask`, `complexity`, `context`, `perf-hint`. Added function with detection for `deps/`, `vendor/`, `third_party/`, etc.
+- **Drupal false positive from `modules/` indicator** — Replaced with `sites/default/` and `sites/all/` which are truly unique to Drupal
+- **C/C++ function name false positives** — `void`, `const`, `unsigned`, etc. detected as function names in `smell_engine.py` and `fallback_c.py`
+- **C/C++ incorrectly listed as `unsupported_langs`** — Removed since fallback parsers work
+
+### Added (3)
+
+- **C/C++ project framework detection** — `c_project` detected via Makefile/CMakeLists.txt + C source files
+- **C/C++ project identity in handbook** — `c-database`, `c-infrastructure`, `c-project` types with Makefile version/name extraction
+- **`c_type` in polyglot detection** — C projects included in combined type strings like `c-python-polyglot`
+
 ## v5.9.0 — 2026-06-12
 
 ### Tested against readest/readest (1,244 files: 1,177 TSX + 40 Rust, Tauri V2 + Next.js 16 ebook reader)

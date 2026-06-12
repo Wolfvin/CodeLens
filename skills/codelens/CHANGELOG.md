@@ -7,36 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
-### Tested against godotengine/godot (13,978 files: 7,846 C/C++ + 690 GDScript + 155 Java + 301 C# + 53 Kotlin, game engine) and denoland/deno (20,336 files: 970 Rust + 4,009 TS + 69 TSX, runtime monorepo)
+### Tested against redis/redis (1,844 files: 471 C + 311 H + 20 Lua + 46 Python + 228 TCL + 69 Shell, in-memory database)
 
-Real-world test on two very different repos: a C++ game engine (Godot) and a Rust+TS runtime (Deno).
-This exposed critical issues with framework detection, missing outline support, broken commands,
-and zero call-edge extraction for C/C++.
+Real-world test on a pure C project with Makefile build system, embedded Lua scripting,
+and polyglot codebase (C+Lua+Python+TCL+Shell). Exposed critical gaps in C/C++ project
+support that were invisible on JS/TS/Rust/Go projects.
 
 ### Fixed
 
-- **`is_bundled_file()` missing from utils.py** — 4 commands were completely broken (`ask`, `complexity`, `context`, `perf-hint`) because `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from utils but it was never defined. Added the function with proper detection of bundled/compiled output files (dist/, build/, .min.js, .bundle.js, etc.).
-- **`api-map` TypeError: `production_only` argument** — `commands/api_map.py` passed `production_only` kwarg to `map_api_routes()`, but the function signature didn't accept it. Added the parameter and implemented filtering of test routes.
-- **Drupal false positive on Godot engine** — `framework_detect.py` had `"modules/"` as a Drupal indicator, which matched Godot's `modules/` directory. Removed the overly generic indicator. Godot now correctly detects as `"godot"` framework.
-- **C/C++ parser had zero call edges** — `fallback_c.py` only extracted includes, macros, and function definitions but no function call relationships. Added brace-tracking body extraction and call pattern matching. Result: Godot went from 49,621 edges to 174,672 edges.
-- **Performance: C++ call edge extraction** — Added 5,000-line limit per file for call edge extraction to prevent slowdowns on massive C++ files (e.g., game engine sources).
+- **`is_bundled_file()` missing from `utils.py`**: `perfhint_engine.py` and `complexity_engine.py` imported `is_bundled_file` from `utils`, but the function was never defined there. This broke 4 commands silently: `ask`, `complexity`, `context`, `perf-hint`. Added `is_bundled_file()` to `utils.py` with detection for `deps/`, `vendor/`, `third_party/`, `external/`, `submodules/`, and minified/bundled file patterns.
+
+- **Drupal false positive from `modules/` indicator**: Redis (and many non-Drupal projects) have a `modules/` directory, which was listed as a Drupal indicator. Replaced `modules/` and `themes/` with `sites/default/` and `sites/all/` — directories that are truly unique to Drupal installations. This eliminates the false positive on Redis and similar C projects with module systems.
+
+- **C/C++ function name false positives in `smell_engine.py`**: The regex `r'(?:static\s+|inline\s+)*(?:\w+[\s*]+)+(\w+)\s*\('` matched C type keywords like `void`, `const`, `unsigned`, `signed`, `volatile`, `extern`, `register`, `auto`, `static`, `inline` as function names, producing absurd findings like "Function 'void' is 248 lines". Added all C type keywords and storage-class specifiers to the skip list.
+
+- **C/C++ function name false positives in `fallback_c.py`**: Same issue as smell_engine — the parser's skip list was missing `void`, `const`, `unsigned`, `signed`, `volatile`, `extern`, `register`, `auto`, `static`, `inline`. Extended the skip list to match.
+
+- **C/C++ listed as `unsupported_langs`**: Despite having working fallback parsers (790 C/C++ files successfully parsed on redis/redis), C and C++ were listed in `UNSUPPORTED_MARKERS` in `framework_detect.py`, causing the scan output to say "these languages are not yet supported". Removed C/C++ from `UNSUPPORTED_MARKERS` since they have fallback parser support.
 
 ### Added
 
-- **Godot/Unreal/Unity/dotnet framework detection** — Added framework signatures for game engines (Godot, Unreal, Unity) and .NET/C# projects. Added `has_godot` and `has_dotnet` flags to detect results.
-- **GDScript `.gd` file detection** — Files with `.gd` extension now trigger "godot" framework detection.
-- **`.csproj`/`.sln` file detection** — C# project files now trigger "dotnet" framework detection.
-- **10 new outline functions** — `_outline_java()`, `_outline_kotlin()`, `_outline_c_cpp()`, `_outline_csharp()`, `_outline_gdscript()`, `_outline_lua()`, `_outline_r()`, `_outline_haskell()`, `_outline_nim()` added to `outline_engine.py`. These provide language-specific outlines instead of falling through to generic regex.
-- **Outline routing for new languages** — `get_file_outline()` now routes Java, Kotlin, C/C++, C#, GDScript, Lua, R, Haskell, and Nim files to their specific outline functions.
-- **Workspace outline `source_extensions` expanded** — Added Java, C/C++, C#, Ruby, Elixir, Dart, Swift, Scala, Shell, Lua, R, Haskell, Nim extensions so `get_workspace_outline()` includes these files.
-- **C/C++ project type detection in handbook** — Handbook `identity.type` now detects Godot games (`godot-game`) and C++ build systems (SCons: `cpp-project-scons`, CMake: `cpp-project-cmake`, Meson: `cpp-project-meson`, Make: `cpp-project-make`). Previously, Godot was misidentified as `python-project`.
-- **`_FILE_PATH_EXTENSIONS` expanded** — Added `.java`, `.kt`, `.go`, `.c`, `.cpp`, `.h`, `.hpp`, `.cs`, `.rb`, `.ex`, `.exs`, `.dart`, `.swift`, `.scala`, `.sh`, `.bash`, `.zsh`, `.gd`, `.lua`, `.php` to the set of recognized file path extensions.
-- **`_detect_language` mapping expanded** — Added `.gd` → `gdscript` mapping.
+- **C/C++ project framework detection**: Added `c_project` framework detection in `framework_detect.py` when a Makefile/CMakeLists.txt is found alongside C/C++ source files. This gives C projects proper framework recognition instead of empty framework lists.
 
-### Changed
+- **C/C++ project identity detection in handbook**: Added C/C++ project type detection in `_extract_project_identity()` with Makefile version/name extraction. Supports classification as `c-database` (projects with `.conf` files like redis.conf), `c-infrastructure` (nginx-like structure), or `c-project` (generic). Polyglot C+Python/Lua projects get combined type like `c-python-polyglot`.
 
-- **Removed already-supported languages from `unsupported_langs`** — Java, Kotlin, C, C++, C#, Swift, Ruby all have fallback parsers now; removed from `UNSUPPORTED_MARKERS` in `framework_detect.py`.
-- **Polyglot type detection** — Handbook combined type detection now includes `godot_type` and `cpp_type` alongside existing JS/Python/Rust/Go types.
+- **`c_type` in polyglot detection**: Extended the polyglot type builder to include C projects alongside Rust, Go, JS, and Python types.
 
 ## [5.10.0] — 2026-06-12
 

@@ -502,7 +502,10 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
             # C/C++: type name(...)
             elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
                 m = re.match(r'(?:static\s+|inline\s+)*(?:\w+[\s*]+)+(\w+)\s*\(', stripped)
-                if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'return', 'sizeof', 'include'):
+                if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'return', 'sizeof',
+                                             'include', 'void', 'const', 'unsigned', 'signed',
+                                             'struct', 'enum', 'class', 'typedef', 'volatile',
+                                             'extern', 'register', 'auto', 'static', 'inline'):
                     fn_starts.append((i, m.group(1)))
 
     elif ext == ".lua":
