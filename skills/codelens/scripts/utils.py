@@ -497,3 +497,46 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative path points to a bundled/compiled/generated file.
+
+    Detects:
+    - Files in build output directories (dist/, build/, out/, .next/, .nuxt/, .output/)
+    - Minified files (.min.js, .min.css)
+    - Bundled/chunked files (.bundle.js, .chunk.js, .global.js)
+    - Source maps (.map)
+    - TypeScript declaration files (.d.ts, .d.ts.map)
+    - Common CJS/ESM build output patterns
+
+    Args:
+        rel_path: Relative path from workspace root, e.g. 'dist/main.bundle.js'
+
+    Returns:
+        True if the file appears to be bundled/compiled output.
+    """
+    normalized = rel_path.replace('\\', '/')
+    lower = normalized.lower()
+
+    # Directory-based: files in build output directories
+    BUNDLED_DIRS = frozenset({
+        'dist', 'build', 'out', '.next', '.nuxt', '.output',
+        'storybook-static', '.cache',
+    })
+    parts = normalized.split('/')
+    if any(p in BUNDLED_DIRS for p in parts):
+        return True
+
+    # Extension/pattern-based checks
+    if lower.endswith(('.min.js', '.min.css', '.min.mjs', '.min.cjs')):
+        return True
+    if lower.endswith(('.bundle.js', '.chunk.js', '.global.js',
+                       '.bundle.mjs', '.chunk.mjs')):
+        return True
+    if lower.endswith('.map'):
+        return True
+    if lower.endswith(('.d.ts', '.d.ts.map', '.d.cts', '.d.mts')):
+        return True
+
+    return False

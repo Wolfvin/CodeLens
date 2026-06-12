@@ -1,13 +1,19 @@
 {
   "name": "codelens",
   "version": "6.4.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on redis/redis (1844 files, C+Lua+Python+TCL Makefile project). C/C++ project support: removed from unsupported_langs, added c_project framework detection, c-project/c-database identity types, Makefile version/name extraction. Fixed is_bundled_file missing from utils.py (broke ask/complexity/context/perf_hint commands). Fixed Drupal false positive (modules/ indicator too generic, replaced with sites/default/ and sites/all/). Fixed C function name false positives (void, const, unsigned etc. no longer detected as function names in smell_engine and fallback_c parser).",  "author": "codelens",  "tags": [    "code-analysis",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4: Tested on styled-components/styled-components (521 files, TS/TSX pnpm monorepo, CSS-in-JS). CRITICAL fix: is_bundled_file() missing from utils.py — broke ask, complexity, context, perf-hint commands (4 commands + 3 analyze engines). Dataflow false positive fixes: .pipe() pattern narrowed (Node.js stream.pipe() != file write); innerHTML='' safe DOM reset skipped; textContent= skipped (no HTML parsing); production violations prioritized over test file violations in analyze. Monorepo identity: auto-detects main sub-package name/version from packages/* (was placeholder styled-components-project/0.0.0, now styled-components/6.4.1).",
+  "author": "codelens",
+  "tags": [
+    "code-analysis",
     "reference-tracking",
     "dead-code",
-    "duplicate-detection",    "frontend",    "backend",
+    "duplicate-detection",
+    "frontend",
+    "backend",
     "rust",
     "html",
-    "css",    "javascript",
+    "css",
+    "javascript",
     "typescript",
     "tsx",
     "jsx",
@@ -170,9 +176,6 @@
     "kotlin",
     "unreal",
     "unity",
-    "timeout-protection",
-    "c-project",
-    "makefile",
-    "c-database",
-    "bundled-file-detection"
-  ]}
+    "timeout-protection"
+  ]
+}
