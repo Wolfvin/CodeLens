@@ -5,51 +5,44 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
-## [6.4.1] — 2026-06-12
+## [6.3.2] — 2026-06-12
 
-### Tested against denoland/deno (Rust+TypeScript polyglot, 13,468 files, 970 .rs, 3,233 .ts, 1.89M edges)
+### Tested against spacedriveapp/spacedrive (2,905 files, 1,166 Rust files, 404 TS/TSX, 62K edges)
 
-Real-world test on a massive polyglot repo (Rust core + TypeScript runtime API) — exposed
-critical performance issues and false positives that only manifest at this scale.
-
-### Fixed
-
-- **`analyze` command hangs on large repos** (CRITICAL): No per-engine timeout — a single slow engine could block the entire analysis indefinitely. Added per-engine timeout (default 60s) using daemon threads. Timed-out engines are skipped with a clear message to run them individually.
-- **`stack-trace` command hangs on high-fanout nodes** (CRITICAL): BFS traversal on 1.89M-edge graphs with no result limit caused exponential explosion. Added `max_chain_entries=500` limit, breadth cap of 50 per level, and `lazy_error_check=True` (defers file-reading to post-processing, only top 100 entries checked).
-- **`summary` identity type wrong for polyglot repos**: Deno (97% Rust+TS) was classified as `rust-c-cpp-monorepo` because 11 C files (0.3%) triggered `c_cpp_type`. Added language significance filter (minor languages <5% excluded). Also auto-upgrades `js_type="node-project"` to `"typescript-project"` when TS files > 2x JS files.
-- **`api-map` detects "express" from test fixtures**: Added test-only framework filtering — frameworks that only appear in test/example files are removed from `frameworks_detected`.
-- **`secrets` false positives on integrity hashes and example URLs**: Added `sha[235]XX-` prefix and 64+ hex char patterns to `ENTROPY_EXCLUSION_PATTERNS`, and `example.com/org/net` URL pattern to `LINE_EXCLUSION_PATTERNS`.
-
-### Added
-
-- **Rust HTTP library detection**: `hyper` added to `FRAMEWORK_SIGNATURES`. When `hyper`, `actix-web`, `axum`, `warp`, `rocket`, or `reqwest` are detected in Cargo.toml, `has_http_library` is now set to `True`.
-- **Shallow clone warning in `ownership`**: Detects shallow clones via `git rev-parse --is-shallow-repository` and adds `shallow_clone_warning` field.
-
-## [6.4.0] — 2026-06-12
-
-### Tested against polyglot & compiler repos: Svelte, Vercel AI SDK, Elysia
-
-Round 3 real-world testing targeting compiler frameworks (Svelte), AI SDK monorepos
-(Vercel AI), and Bun HTTP frameworks (Elysia). Exposed parser gaps for TypeScript
-generic functions, export default patterns, and framework detection blind spots.
+Real-world test on a Tauri VDFS (Virtual Distributed Filesystem) file explorer monorepo —
+a unique architecture combining a Rust core with P2P networking, React/TSX frontend,
+Tauri desktop app, React Native mobile app, and WASM extensions. This repo exposed
+false positives in the secrets engine and dead code in the query command.
 
 ### Fixed
 
-- **HIGH:  files produce false positive unused exports** (`deadcode_engine.py`): TypeScript declaration files (100 false positives in Svelte) were flagged because exports in `.d.ts` are public type API consumed by type checkers, not by internal imports. Now skips `.d.ts`, `.d.mts`, and `.d.cts` files in the unused_exports analysis.
-- **HIGH: `export default class` not detected** (`ts_backend_parser.py`, `js_backend_parser.py`, `fallback_js_backend.py`): The `export default class Name` pattern was not handled by any parser. Elysia's main class `export default class Elysia<...>` was completely invisible. Now all three parsers detect `default_export_clause` and generic class declarations.
-- **HIGH: TypeScript generic functions not parsed by fallback** (`fallback_js_backend.py`): Functions like `export async function generateText<TOOLS>(` were missed because the regex required `\(` immediately after the function name, but TypeScript generics insert `<...>` in between. Added multiline generic function detection via `re.DOTALL` pattern matching.
-- **HIGH: TypeScript generic class declarations not matched** (`fallback_js_backend.py`): Regex `class\s+([a-zA-Z_]\w*)\s` failed on `class Name<Generic>` because `<` follows the name instead of whitespace. Updated to `class\s+([a-zA-Z_]\w*)\s*[{<(]` and added heritage extraction with optional generic clause.
-- **MEDIUM: Elysia/Bun HTTP frameworks not detected** (`framework_detect.py`): Elysia, Hono, and Fastify were missing from FRAMEWORK_SIGNATURES and HTTP_LIBRARY_NAMES. Added 3 new signatures and updated `has_http_library` detection. Elysia now correctly detected as `has_http_library: true`.
-- **MEDIUM: TS parser missing `_parse_class_decl`** (`ts_backend_parser.py`): The TS parser had no class declaration parser — classes in TS files were only detected by the fallback parser. Added full `_parse_class_decl` with heritage extraction, component detection, and export support.
+- **`secrets` engine URI scheme false positive** (HIGH): The URL-embedded password pattern
+  `[\w+\-\.]+:([^\s@"\']{4,})@` matched URI paths like `sidecar://content_id/thumbs/grid@2x.webp`
+  as passwords because the capture group `[^\s@"\']` allowed `/` characters. URI schemes with
+  `://` and `@` in the path (common in custom protocol handlers) were incorrectly flagged as
+  `password` with severity `critical`. Fixed by adding `/` to the excluded character class:
+  `[^\s/@"\']{4,}`. This still correctly captures real URL-embedded passwords like
+  `user:password@host.com` and `ftp://user:pass@host.com` (which match from the `user:pass`
+  portion), while rejecting paths with `/` that are clearly URI paths, not credentials.
 
-### Test Repos Used
+- **`ask` command symbol extraction missed common question prefixes** (MEDIUM): The
+  `_extract_symbol_name()` function only stripped prefixes like "what is", "where is",
+  "how does" but missed "what does", "what do", "why does", "why do", "when does",
+  "when do", "how can", "how should". This caused questions like "What does the Library
+  struct do?" to extract "what" as the symbol instead of "library", making the ask
+  command completely useless for these common question patterns. Added all 8 missing
+  prefixes. Also added pronoun fillers ("i ", "we ", "you ", "they ", "my ", "our ")
+  to prevent them from being extracted as symbol names (e.g., "How can I find..."
+  now extracts "find" instead of "i").
 
-| Repo | Language | Size | Theme | Key Finding |
-|------|----------|------|-------|-------------|
-| sveltejs/svelte | JS/TS | ~30MB | Compiler | 100 .d.ts false positives |
-| vercel/ai | JS/TS | ~100MB | AI SDK monorepo | generateText not parsed (TS generics) |
-| elysiajs/elysia | TS | ~5MB | Bun HTTP framework | export default class not detected |
-
+- **`query --fuzzy` was dead code when zero exact matches** (HIGH): The fuzzy matching
+  block was placed AFTER the `total_matches == 0` early return, meaning `--fuzzy` was
+  completely non-functional when there were no exact matches — precisely the scenario
+  where fuzzy matching is most needed. For example, `query spawn --fuzzy` returned
+  "Name does not exist. Safe to create." even though `symbols spawn` found 12 matches.
+  Moved the fuzzy matching block BEFORE the early return so it executes when either
+  `--fuzzy` is enabled OR no exact matches are found. Removed the duplicate fuzzy
+  block that was unreachable at the bottom of the function.
 
 ## [6.4.0] — 2026-06-12
 

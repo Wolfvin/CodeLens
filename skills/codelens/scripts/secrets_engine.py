@@ -109,7 +109,10 @@ SECRET_PATTERNS = {
             # Environment variable style
             r'(?i)(?:DB_PASSWORD|DATABASE_PASSWORD|MYSQL_PASSWORD|POSTGRES_PASSWORD|PG_PASSWORD|MONGO_PASSWORD|REDIS_PASSWORD)\s*(?:=|:)\s*["\']?([^\s"\'`]{6,})["\']?',
             # URL-embedded passwords: user:pass@
-            r'(?i)[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
+            # Exclude '/' from capture group to prevent false positives from URI schemes
+            # like "sidecar://content_id/thumbs/grid@2x.webp" being matched as passwords.
+            # The '/' separator only appears in URI paths, never in real passwords.
+            r'(?i)[\w+\-\.]+:([^\s/@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
             # Config-style password
             r'(?i)["\']password["\']\s*:\s*["\']([^"\']{6,})["\']',
             # Python-style
