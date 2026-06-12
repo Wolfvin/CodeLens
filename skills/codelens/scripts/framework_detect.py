@@ -582,15 +582,32 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_symfony"] = True
                     break
 
-    # 4. Check Rust/Cargo.toml for framework detection
+    # 4. Check Rust/Cargo.toml for framework detection (root + subdirectories)
     cargo_deps = set()
-    cargo_path = os.path.join(workspace, "Cargo.toml")
-    if os.path.exists(cargo_path):
+    cargo_paths = []
+
+    # Check root first
+    root_cargo = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(root_cargo):
+        cargo_paths.append(root_cargo)
+
+    # Also find Cargo.toml in immediate subdirectories (e.g., src-rust/, server-rs/)
+    try:
+        for entry in os.listdir(workspace):
+            entry_path = os.path.join(workspace, entry)
+            if os.path.isdir(entry_path):
+                sub_cargo = os.path.join(entry_path, "Cargo.toml")
+                if os.path.isfile(sub_cargo) and sub_cargo not in cargo_paths:
+                    cargo_paths.append(sub_cargo)
+    except OSError:
+        pass
+
+    for cargo_path in cargo_paths:
         if "rust" not in detected["frameworks"]:
             detected["frameworks"].append("rust")
         detected["has_rust"] = True
 
-        # Parse root Cargo.toml for dependencies
+        # Parse Cargo.toml for dependencies
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 cargo_content = f.read()
@@ -755,11 +772,31 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if detected["has_tailwind"]:
                 break
 
-    # 6b. Detect Go web frameworks from go.mod content
+    # 6b. Detect Go web frameworks from go.mod content (root + subdirectories)
     # Only flag gin/echo/etc if the dependency actually appears in go.mod,
     # NOT just because go.mod exists (every Go project has go.mod).
-    go_mod_path = os.path.join(workspace, "go.mod")
-    if os.path.isfile(go_mod_path):
+    go_mod_paths = []
+    root_go_mod = os.path.join(workspace, "go.mod")
+    if os.path.isfile(root_go_mod):
+        go_mod_paths.append(root_go_mod)
+
+    # Also find go.mod in immediate subdirectories (e.g., api-go/, backend-go/)
+    try:
+        for entry in os.listdir(workspace):
+            entry_path = os.path.join(workspace, entry)
+            if os.path.isdir(entry_path):
+                sub_mod = os.path.join(entry_path, "go.mod")
+                if os.path.isfile(sub_mod) and sub_mod not in go_mod_paths:
+                    go_mod_paths.append(sub_mod)
+    except OSError:
+        pass
+
+    for go_mod_path in go_mod_paths:
+        # Flag golang presence from any go.mod found
+        if "golang" not in detected["frameworks"]:
+            detected["frameworks"].append("golang")
+        detected["has_golang"] = True
+
         try:
             with open(go_mod_path, 'r', encoding='utf-8') as f:
                 go_mod_content = f.read()

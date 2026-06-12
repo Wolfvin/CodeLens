@@ -423,24 +423,26 @@ def _build_tree(
         tree["line"] = start.get("line", 0)
         tree["status"] = start.get("status", "active")
 
-    # Build caller tree
+    # Build caller tree (skip depth 0 — that's the start node itself, not a caller)
     for entry in chains.get("up", []):
-        if entry.get("depth", 0) <= 3:
+        depth = entry.get("depth", 0)
+        if 0 < depth <= 3:
             tree["callers"].append({
                 "fn": entry.get("fn", ""),
                 "file": entry.get("file", ""),
                 "line": entry.get("line", 0),
-                "depth": entry.get("depth", 0)
+                "depth": depth
             })
 
-    # Build callee tree
+    # Build callee tree (skip depth 0 — that's the start node itself, not a callee)
     for entry in chains.get("down", []):
-        if entry.get("depth", 0) <= 3:
+        depth = entry.get("depth", 0)
+        if 0 < depth <= 3:
             tree["callees"].append({
                 "fn": entry.get("fn", ""),
                 "file": entry.get("file", ""),
                 "line": entry.get("line", 0),
-                "depth": entry.get("depth", 0),
+                "depth": depth,
                 "resolved": entry.get("resolved", True)
             })
 
