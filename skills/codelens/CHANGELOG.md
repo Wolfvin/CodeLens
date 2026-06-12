@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
+### Tested against compiler-explorer/compiler-explorer (2,694 files: 813 TS + 40 CPP + 40 Python + 7 Java, multi-language web app)
+
+Real-world test on a large multi-language project with massive test/fixture files (9.8MB JSON)
+exposed catastrophic regex backtracking in secrets_engine and timeout issues in aggregate commands.
+
+### Fixed (Large Repo Reliability)
+
+- **`secrets_engine` catastrophic regex backtracking** (CRITICAL): Files larger than 1MB (e.g., 9.8MB JSON test fixtures, 6.6MB asm-docs) caused regex matching to hang indefinitely. Added `MAX_FILE_SIZE_BYTES = 1_000_000` file size limit and `PER_FILE_REGEX_TIMEOUT = 5s` per-file SIGALRM timeout to prevent hangs. Files that are too large are skipped; files where regex times out are logged and skipped.
+- **Lock file false positives in secrets detection** (HIGH): `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and other lock files contain registry URLs like `"resolved": "https://registry.npmjs.org/..."` which trigger the URL-embedded-password pattern (`user:pass@host`). These are now explicitly skipped via `_is_example_config_file()`.
+- **`summary` command timeout on large repos** (CRITICAL): The summary command had a hardcoded 90s budget but `_time_left()` used the old default instead of the configurable `total_budget`. Now uses the `--timeout` flag (default 120s). Also added `--max-files` default reduction from 5000→2000, and all engine calls now pass `max_files` consistently.
+- **`analyze` command timeout on large repos** (CRITICAL): Added per-engine SIGALRM timeout (30s default per engine, capped to remaining budget) in `_run_engine()`. Added `--max-files` flag (default 2000). All engine helper functions now accept and forward `max_files` to their respective engines.
+- **`handbook` command timeout on large repos** (HIGH): Engine calls (`detect_smells`, `detect_dead_code`, `detect_secrets`) now pass `max_files` parameter. Default `--max-files` reduced from 5000→2000.
+- **Missing `logger` import in secrets_engine** (MEDIUM): After adding timeout logging, `logger` was not imported. Added to `from utils import` statement.
+
+### Added
+
+- **Per-engine SIGALRM timeout in `_run_engine()`**: The analyze command's engine runner now sets a per-engine alarm signal. If an engine exceeds its timeout (capped to remaining budget minus 2s buffer), it's caught gracefully and marked as skipped with a reason. Falls back to no-timeout on platforms without SIGALRM (Windows).
+- **`elapsed_seconds` and `time_budget_seconds` in summary output**: Summary now reports how long it took and what the budget was.
+- **`files_skipped_oversized` and `files_skipped_regex_timeout` in secrets output**: New diagnostic fields showing how many files were skipped and why.
+
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 
 Real-world test on a pure Python project with no web frameworks — exposed multiple blind spots

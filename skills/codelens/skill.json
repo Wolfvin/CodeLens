@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint) due to missing is_bundled_file. apimap_engine NoneType crash on path=None fixed. Tested on meilisearch/meilisearch (Rust search engine, 21 crates, 490K edges). v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes, false positive fixes, analyze/handbook timeout flags.",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.4.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.4.0: Large repo reliability — secrets_engine max_file_size limit (1MB) + per-file regex timeout (5s SIGALRM) prevents catastrophic backtracking on huge files. Lock file false positives eliminated (package-lock.json, yarn.lock, etc). summary/analyze/handbook commands: --max-files default reduced to 2000, --timeout flag added to summary, per-engine SIGALRM timeout in analyze. All engine calls in summary/analyze/handbook now pass max_files consistently. Tested on compiler-explorer/compiler-explorer (2694 files, 813 TS, multi-language). v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",

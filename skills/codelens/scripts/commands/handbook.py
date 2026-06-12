@@ -26,8 +26,8 @@ from utils import write_output_files, compute_summary, CODELENS_VERSION, DEFAULT
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--max-files", type=int, default=5000,
-                        help="Maximum number of files to scan (default: 5000). "
+    parser.add_argument("--max-files", type=int, default=2000,
+                        help="Maximum number of files to scan (default: 2000). "
                              "Prevents timeout on very large repos.")
     parser.add_argument("--timeout", type=int, default=120,
                         help="Total time budget in seconds for handbook generation (default: 120). "
@@ -35,12 +35,12 @@ def add_args(parser):
 
 
 def execute(args, workspace):
-    max_files = getattr(args, 'max_files', 5000)
+    max_files = getattr(args, 'max_files', 2000)
     timeout = getattr(args, 'timeout', 120)
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 2000, time_budget: int = 120) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -124,7 +124,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         pass
     else:
         try:
-            smell_result = detect_smells(workspace)
+            smell_result = detect_smells(workspace, max_files=max_files)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -187,7 +187,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
             logger.warning("Circular dependency detection failed", exc_info=True)
     if not _should_skip('deadcode'):
         try:
-            dead_result = detect_dead_code(workspace)
+            dead_result = detect_dead_code(workspace, max_files=max_files)
             dead_count = dead_result.get("stats", {}).get("total_dead", 0)
             if dead_count > 0:
                 risks.append({"type": "dead_code", "count": dead_count})
@@ -195,7 +195,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
             logger.warning("Dead code detection failed", exc_info=True)
     if not _should_skip('secrets'):
         try:
-            secrets_result = detect_secrets(workspace)
+            secrets_result = detect_secrets(workspace, max_files=max_files)
             secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
             if secrets_count > 0:
                 risks.append({"type": "secrets", "count": secrets_count})

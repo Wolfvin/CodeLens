@@ -24,9 +24,30 @@ the engine itself from becoming a secret-leaking vector.
 import os
 import re
 import math
+import signal
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
+
+# ─── Safety Limits ──────────────────────────────────────────────
+
+# Maximum file size to scan (1MB). Files larger than this are skipped
+# to prevent catastrophic regex backtracking on minified/generated files.
+MAX_FILE_SIZE_BYTES = 1_000_000
+
+# Per-file regex timeout in seconds. If regex matching takes longer,
+# the file is skipped.
+PER_FILE_REGEX_TIMEOUT = 5
+
+
+class _RegexTimeout(Exception):
+    """Raised when regex matching exceeds the time limit."""
+    pass
+
+
+def _regex_timeout_handler(signum, frame):
+    """Signal handler for regex timeout."""
+    raise _RegexTimeout("Regex matching timed out")
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -439,6 +460,9 @@ def detect_secrets(
     files_scanned = 0
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
+    skipped_oversized = 0
+    skipped_regex_timeout = 0
+
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
@@ -455,6 +479,15 @@ def detect_secrets(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Skip files that are too large to prevent regex catastrophic backtracking
+            try:
+                file_size = os.path.getsize(file_path)
+                if file_size > MAX_FILE_SIZE_BYTES:
+                    skipped_oversized += 1
+                    continue
+            except OSError:
+                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -479,14 +512,33 @@ def detect_secrets(
             if _is_credential_template_file(rel_path, content):
                 continue
 
-            # Scan for patterns
-            file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
-            findings.extend(file_findings)
+            # Scan for patterns with per-file timeout protection
+            try:
+                # Set a per-file timeout to prevent catastrophic regex backtracking
+                old_handler = signal.signal(signal.SIGALRM, _regex_timeout_handler)
+                signal.alarm(PER_FILE_REGEX_TIMEOUT)
+                try:
+                    file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
+                    findings.extend(file_findings)
 
-            # Entropy-based scanning for code files
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
-                findings.extend(entropy_findings)
+                    # Entropy-based scanning for code files
+                    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+                        entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
+                        findings.extend(entropy_findings)
+                finally:
+                    signal.alarm(0)  # Cancel the alarm
+                    signal.signal(signal.SIGALRM, old_handler)
+            except _RegexTimeout:
+                skipped_regex_timeout += 1
+                logger.debug(f"Skipped {rel_path}: regex matching timed out ({PER_FILE_REGEX_TIMEOUT}s)")
+            except (OSError, ValueError):
+                # Signal may not be available on all platforms (e.g., Windows)
+                # Fall back to scanning without timeout
+                file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
+                findings.extend(file_findings)
+                if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+                    entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
+                    findings.extend(entropy_findings)
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -521,6 +573,9 @@ def detect_secrets(
         "findings": findings[:200],  # Cap to avoid explosion
         "env_exposed": env_exposed,
         "recommendations": recommendations,
+        "files_scanned": files_scanned,
+        "files_skipped_oversized": skipped_oversized,
+        "files_skipped_regex_timeout": skipped_regex_timeout,
     }
 
 # ─── Pattern-based Scanner ─────────────────────────────────────
@@ -975,12 +1030,22 @@ def _is_example_config_file(rel_path: str) -> bool:
 
     Files like config.example.json, settings.sample.yaml, etc. contain
     placeholder credentials and are not security risks.
+    Also skips lock files (package-lock.json, yarn.lock, pnpm-lock.yaml)
+    which contain registry URLs that trigger false-positive URL-embedded-password patterns.
     """
     basename = os.path.basename(rel_path).lower()
     example_indicators = [
         '.example.', '.sample.', '.template.', '.demo.',
         '.example', '.sample',  # file ends with these
     ]
+    # Lock files contain registry URLs like "resolved": "https://registry.npmjs.org/..."
+    # These trigger the URL-embedded-password pattern (user:pass@host) as false positives
+    lock_file_names = {
+        'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+        'bun.lockb', 'composer.lock', 'poetry.lock', 'gemfile.lock',
+    }
+    if basename in lock_file_names:
+        return True
     return any(indicator in basename for indicator in example_indicators)
 
 def _find_line_number(content: str, value: str) -> int:
