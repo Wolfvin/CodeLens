@@ -12,6 +12,28 @@ description: >
 > **AI Loading Guide**: Read THIS FILE FIRST. Do NOT read scripts/*.py unless debugging errors.
 > All commands support `--format json|markdown` and auto-detect workspace if omitted.
 
+## First-Time Setup
+
+```bash
+CODELENS_DIR="{project_path}"
+CLI="python3 $CODELENS_DIR/scripts/codelens.py"
+
+# 1. Install dependencies (one-time)
+bash "$CODELENS_DIR/setup.sh"
+
+# 2. Initialize workspace
+$CLI init                  # Creates .codelens/ config, auto-detects workspace
+
+# 3. Build registry (REQUIRED before any analysis)
+$CLI scan                  # Scans all source files. <500 files: ~5-15s, 1K-5K: ~30-120s
+                           # For large repos: $CLI scan --max-files 3000
+
+# 4. Done! Use any command
+$CLI query "myFunction"    # Check before writing
+```
+
+**After code changes**: always `$CLI scan --incremental` (~1-5s) before re-querying.
+
 ## State Prerequisites
 
 1. No `.codelens/` → auto-run `init` → `scan` first
@@ -135,104 +157,102 @@ description: >
 
 ---
 
-## All 45 Commands — Grouped by Category
+## All 45 Commands — Grouped by Category (Output Schemas Validated)
 
 ### Setup & Registry
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 1 | `init` | `$CLI init [ws]` | JSON `{initialized, config_path}` | `workspace-not-found` |
-| 2 | `scan` | `$CLI scan [ws] [--incremental]` | JSON `{scanned_files, registry_size}` | `workspace-not-found`, `parse-error` |
-| 3 | `validate` | `$CLI validate [ws]` | JSON `{valid, issues[]}` | `no-registry` |
+| 1 | `init` | `$CLI init [ws]` | `{status, workspace, codelens_dir, config}` | `workspace-not-found` |
+| 2 | `scan` | `$CLI scan [ws] [--incremental]` | `{status, scanned_files, frontend{classes,ids}, backend{nodes,edges}, incremental}` | `workspace-not-found` |
+| 3 | `validate` | `$CLI validate [ws]` | `{status, total_issues, issues{missing_files[], unregistered_files[]}}` | returns empty if no registry |
 
 ### Pre-Write Checks (MOST IMPORTANT)
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 4 | `query` | `$CLI query "name" [ws] [--domain {frontend,backend}] [--fuzzy]` | JSON `{found, status, callers, callees}` | `no-registry` |
-| 5 | `impact` | `$CLI impact "name" [ws] [--action {modify,delete}]` | JSON `{affected[], risk_level}` | `symbol-not-found`, `no-registry` |
-| 6 | `refactor-safe` | `$CLI refactor-safe "name" [ws] [--action {rename,move}] [--new-name X]` | JSON `{safe, conflicts[], suggestions[]}` | `symbol-not-found`, `no-registry` |
+| 4 | `query` | `$CLI query "name" [ws] [--domain {frontend,backend}] [--fuzzy]` | `{found, type, status, domain, action, action_reason, node{id,fn,status,file,line}, callers[], callees[]}` | returns `found:false` if not in registry |
+| 5 | `impact` | `$CLI impact "name" [ws] [--action {modify,delete}]` | `{risk, affected{direct[],indirect[],files[],tests[]}, risk_level, recommended_action, recommendations[], fuzzy_match}` | returns `risk:low` if symbol not found |
+| 6 | `refactor-safe` | `$CLI refactor-safe "name" [ws] [--action {rename,move}] [--new-name X]` | `{safety, risks{doc_refs[],string_refs[],dynamic_refs[]}}` | returns result for any name |
 
 ### Navigation & Understanding
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 7 | `summary` | `$CLI summary [ws] [--focus {security,quality,architecture,all}] [--detail {minimal,standard,full,auto}]` | JSON/MD `{overview, findings[]}` | `no-registry`, `timeout` |
-| 8 | `context` | `$CLI context "name" [ws] [--domain {frontend,backend,auto}]` | JSON `{symbol, code, callers[], callees[]}` | `symbol-not-found`, `no-registry` |
-| 9 | `trace` | `$CLI trace "name" [ws] [--direction {up,down,both}] [--depth N]` | JSON `{chain[], depth}` | `symbol-not-found`, `no-registry` |
-| 10 | `search` | `$CLI search "pattern" [ws]` | JSON `{matches[], count}` | `no-registry` |
-| 11 | `symbols` | `$CLI symbols "name" [ws] [--domain {frontend,backend,all}] [--fuzzy]` | JSON `{symbols[], count}` | `no-registry` |
-| 12 | `outline` | `$CLI outline [ws] [--file path] [--detail {minimal,normal,full}]` | JSON `{file, functions[], classes[]}` | `file-not-found`, `no-registry` |
-| 13 | `dependents` | `$CLI dependents "file" [ws] [--direction {dependents,dependencies,graph}]` | JSON `{dependents[], dependencies[]}` | `file-not-found`, `no-registry` |
-| 14 | `list` | `$CLI list [ws] [--filter {all,dead,duplicate_define,duplicate_ref,collision,active}] [--domain {frontend,backend,all}]` | JSON `{entries[], total}` | `no-registry` |
-| 15 | `ask` | `$CLI ask "question" [ws]` | JSON `{answer, suggested_commands[]}` | `no-registry` |
+| 7 | `summary` | `$CLI summary [ws] [--focus {security,quality,architecture,all}] [--detail {minimal,standard,full,auto}]` | `{identity, registry_stats, findings[{category,total,by_severity,top_items}]}` | empty findings if no registry |
+| 8 | `context` | `$CLI context "name" [ws] [--domain {frontend,backend,auto}]` | `{found, context{definition{type,name,status,ref_count,file,line}, nearby_symbols[], quality}}` | `found:false, context:null` if not found |
+| 9 | `trace` | `$CLI trace "name" [ws] [--direction {up,down,both}] [--depth N]` | `{chains{up[],down[]}, tree{name,children[]}}` | empty chains if not found |
+| 10 | `search` | `$CLI search "pattern" [ws]` | `{matches[{file,line,match,start_col,end_col}]}` | empty matches if no registry |
+| 11 | `symbols` | `$CLI symbols "name" [ws] [--domain {frontend,backend,all}] [--fuzzy]` | `{results[{name,type,status,ref_count,file,line,domain}], stats{total_matches,truncated}}` | empty results if no registry |
+| 12 | `outline` | `$CLI outline [ws] [--file path] [--detail {minimal,normal,full}]` | `{file, language, line_count, outline{imports[],functions[],classes[]}}` | `status:"error", message:"File not found"` |
+| 13 | `dependents` | `$CLI dependents "file" [ws] [--direction {dependents,dependencies,graph}]` | `{direct_dependents[], transitive_dependents[], stats}` | empty lists if file not found |
+| 14 | `list` | `$CLI list [ws] [--filter ...] [--domain {frontend,backend,all}]` | `{entries[], total, count, has_more, summary{by_type,by_status}}` | empty if no registry |
+| 15 | `ask` | `$CLI ask "question" [ws]` | Routes to appropriate engine - output varies by routed command | returns stats + results from routed engine |
 
 ### Entry Points & Architecture
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 16 | `entrypoints` | `$CLI entrypoints [ws] [--type {main,http_handler,event_handler,cli_command,cron_job,worker,module_export,test_entry}] [--exclude-tests]` | JSON `{entrypoints[]}` | `no-registry`, `timeout` |
-| 17 | `api-map` | `$CLI api-map [ws] [--method {GET,POST,PUT,DELETE,PATCH}] [--path filter] [--production-only]` | JSON `{routes[{method, path, handler, file}]}` | `no-registry` |
-| 18 | `state-map` | `$CLI state-map [ws] [--store name]` | JSON `{stores[{name, actions, files}]}` | `no-registry` |
-| 19 | `detect` | `$CLI detect [ws]` | JSON `{frameworks[], languages[]}` | `workspace-not-found` |
-| 20 | `handbook` | `$CLI handbook [ws]` | JSON/MD `{project_overview, conventions, key_files}` | `workspace-not-found`, `timeout` |
-| 21 | `diff` | `$CLI diff [ws] [--snapshot1 ID] [--snapshot2 ID] [--list-snapshots]` | JSON `{added[], removed[], modified[]}` | `no-snapshots`, `no-registry` |
+| 16 | `entrypoints` | `$CLI entrypoints [ws] [--type ...] [--exclude-tests]` | `{stats{total_entrypoints,by_type}, entrypoints[{type,file,line,name}]}` | empty if no registry |
+| 17 | `api-map` | `$CLI api-map [ws] [--method ...] [--path filter] [--production-only]` | `{frameworks_detected[], stats{total_routes,production_routes,by_method}, routes[{method,path,handler,file,line}]}` | empty if no registry |
+| 18 | `state-map` | `$CLI state-map [ws] [--store name]` | `{stats{total_stores,total_slices,by_type}, stores[{name,type,actions[],files[]}]}` | empty if no registry |
+| 19 | `detect` | `$CLI detect [ws]` | `{frameworks[], has_react, has_vue, has_nextjs, ...}` | all `false` if no frameworks |
+| 20 | `handbook` | `$CLI handbook [ws]` | `{identity, structure, health, conventions, risks, quick_reference}` | writes `.codelens/AGENT.md` |
+| 21 | `diff` | `$CLI diff [ws] [--snapshot1 ID] [--snapshot2 ID] [--list-snapshots]` | `{snapshots[{id,created_at}]} or {added[],removed[],modified[]}` | `snapshots:[]` if no scans yet |
 
 ### Security
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 22 | `secrets` | `$CLI secrets [ws] [--severity {critical,high,medium,low}]` | JSON `{findings[{type, severity, file, line, snippet}]}` | `no-registry` |
-| 23 | `dataflow` | `$CLI dataflow [ws] [--source {user_input,env_var,file_input,api_response}] [--sink {db_query,html_output,command_exec,file_write,http_header}]` | JSON `{flows[{source, path, sink, risk}]}` | `no-registry`, `timeout` |
-| 24 | `vuln-scan` | `$CLI vuln-scan [ws] [--severity {critical,high,medium,low}]` | JSON `{vulnerabilities[{cve, package, severity, fix_version}]}` | `no-lockfile`, `no-registry` |
-| 25 | `env-check` | `$CLI env-check [ws] [--var NAME]` | JSON `{variables[{name, used_in[], defined_in, missing}]}` | `no-registry` |
+| 22 | `secrets` | `$CLI secrets [ws] [--severity ...]` | `{stats{total_secrets,by_category,by_severity}, risk, findings[{type,file,line,match,severity}]}` | empty findings if no registry |
+| 23 | `dataflow` | `$CLI dataflow [ws] [--source ...] [--sink ...]` | `{stats{sources_found,sinks_found,violations,production_violations}, risk, violations[]}` | `timed_out:true` if budget exceeded |
+| 24 | `vuln-scan` | `$CLI vuln-scan [ws] [--severity ...]` | `{stats{total_vulnerabilities,by_severity,by_ecosystem}, risk, findings[{cve,package,severity,fix_version}]}` | empty if no lockfile |
+| 25 | `env-check` | `$CLI env-check [ws] [--var NAME]` | `{stats{total_vars,required,optional,undocumented}, variables[{name,required,used_in[],defined_in}]}` | empty if no registry |
 
 ### Code Quality
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 26 | `smell` | `$CLI smell [ws] [--categories ...] [--severity {info,warning,critical}]` | JSON `{smells[{category, severity, file, description}]}` | `no-registry` |
-| 27 | `complexity` | `$CLI complexity [ws] [--name FN] [--file PATH] [--threshold N] [--sort {complexity,cognitive,loc}]` | JSON `{functions[{name, complexity, cognitive, loc}]}` | `no-registry` |
-| 28 | `dead-code` | `$CLI dead-code [ws] [--categories {unreachable,unused_exports,zombie_css,unused_vars,dead_listeners}]` | JSON `{findings[{category, item, file}]}` | `no-registry` |
-| 29 | `debug-leak` | `$CLI debug-leak [ws] [--category {console_log,print_statement,debugger,todo_fixme,commented_code,test_skip,mock_data,dev_only}]` | JSON `{leaks[{category, file, line, snippet}]}` | `no-registry` |
-| 30 | `circular` | `$CLI circular [ws] [--domain {backend,imports,css,all}]` | JSON `{cycles[{participants, type}]}` | `no-registry` |
-| 31 | `missing-refs` | `$CLI missing-refs [ws]` | JSON `{missing[{ref, file, type}]}` | `no-registry` |
-| 32 | `side-effect` | `$CLI side-effect [ws] [--name FN] [--file PATH]` | JSON `{functions[{name, pure, effects[]}]}` | `no-registry` |
-| 33 | `perf-hint` | `$CLI perf-hint [ws] [--severity {critical,high,medium,low}] [--category {n_plus_one,sync_blocking,memory_leak,expensive_renders,large_bundle,inefficient_iteration,cache_miss}]` | JSON `{hints[{category, severity, file, description}]}` | `no-registry` |
+| 26 | `smell` | `$CLI smell [ws] [--categories ...] [--severity ...]` | `{health_score, total_findings, stats{by_category,by_severity}, findings[]}` | empty if no registry |
+| 27 | `complexity` | `$CLI complexity [ws] [--name FN] [--file PATH] [--threshold N] [--sort ...]` | `{stats{total_functions,avg_cyclomatic,avg_cognitive,high_complexity}, functions[{name,complexity,cognitive,loc}]}` | empty if no registry |
+| 28 | `dead-code` | `$CLI dead-code [ws] [--categories ...]` | `{stats{total_dead_code,by_category,by_source}, findings[{category,file,line,item}]}` | `truncated:true` if max-results hit |
+| 29 | `debug-leak` | `$CLI debug-leak [ws] [--category ...]` | `{stats{total_leaks,by_category}, findings[{category,file,line,snippet}]}` | empty if no registry |
+| 30 | `circular` | `$CLI circular [ws] [--domain {backend,imports,css,all}]` | `{total_cycles, cycles{function_calls[],import_cycles[],css_cycles[]}}` | empty if no registry |
+| 31 | `missing-refs` | `$CLI missing-refs [ws]` | `{total_issues, issues{css_no_html[],html_no_css[],possible_typos[]}, truncated_counts}` | empty if no registry |
+| 32 | `side-effect` | `$CLI side-effect [ws] [--name FN] [--file PATH]` | `{analyses[{name,file,line,classification,side_effects[],effect_count}], count}` | empty if no registry |
+| 33 | `perf-hint` | `$CLI perf-hint [ws] [--severity ...] [--category ...]` | `{stats{total_hints,by_category,by_severity}, hints[{category,severity,file,description}]}` | empty if no registry |
 
 ### Refactoring & Safety
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 34 | `test-map` | `$CLI test-map [ws] [--function FN] [--file PATH]` | JSON `{coverage[{function, tested, test_files[]}]}` | `no-registry` |
-| 35 | `stack-trace` | `$CLI stack-trace "name" [ws] [--error-type TYPE] [--depth N]` | JSON `{propagation[{function, error_type, file}]}` | `symbol-not-found`, `no-registry` |
-| 36 | `config-drift` | `$CLI config-drift [ws]` | JSON `{drift[{package, declared_version, actual_usage}]}` | `no-lockfile`, `no-registry` |
+| 34 | `test-map` | `$CLI test-map [ws] [--function FN] [--file PATH]` | `{stats{total_functions,tested_functions,coverage_percent}, coverage_map{file:{tested[],untested[]}}}` | empty if no registry |
+| 35 | `stack-trace` | `$CLI stack-trace "name" [ws] [--error-type TYPE] [--depth N]` | `{chains[{origin{fn,file,line}, chain[]}]}` | empty chains if not found |
+| 36 | `config-drift` | `$CLI config-drift [ws]` | `{project_type, declared_dependencies, actual_imports_summary, drift{unused_deps[],missing_deps[]}}` | empty if no lockfile |
 
 ### Frontend-Specific
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 37 | `css-deep` | `$CLI css-deep [ws] [--severity {high,medium,low}] [--category {unused_vars,orphan_keyframes,specificity_wars,duplicate_props,unused_media,z_index_abuse}]` | JSON `{issues[{category, severity, file, detail}]}` | `no-registry` |
-| 38 | `a11y` | `$CLI a11y [ws]` | JSON `{issues[{rule, severity, element, file}]}` | `no-registry` |
+| 37 | `css-deep` | `$CLI css-deep [ws] [--severity ...] [--category ...]` | `{stats{total_issues,by_category,by_severity}, issues[{category,severity,file,detail}]}` | empty if no CSS |
+| 38 | `a11y` | `$CLI a11y [ws]` | `{stats{total_issues,by_category,by_severity}, issues[], wcag_mapping{}, recommendations[]}` | `0 issues, 0 files_scanned` if no HTML |
 
 ### Advanced & Specialized
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 39 | `analyze` | `$CLI analyze [ws] [--focus {security,quality,architecture,all}] [--detail {minimal,standard,full}] [--skip-scan]` | JSON `{summary, security, quality, architecture}` | `workspace-not-found`, `timeout` |
-| 40 | `type-infer` | `$CLI type-infer [ws] [--file PATH] [--function FN]` | JSON `{types[{name, inferred_type, confidence}]}` | `no-registry` |
-| 41 | `ownership` | `$CLI ownership [ws] [--file PATH] [--function FN]` | JSON `{owners[{author, lines, percentage}]}` | `no-git`, `no-registry` |
-| 42 | `regex-audit` | `$CLI regex-audit [ws] [--severity {high,medium,low}]` | JSON `{issues[{pattern, severity, risk, file}]}` | `no-registry` |
-| 43 | `binary-scan` | `$CLI binary-scan [ws]` | JSON `{binaries[{path, type, size}]}` | `workspace-not-found` |
-| 44 | `artifact-scan` | `$CLI artifact-scan [ws] [--deep]` | JSON `{artifacts[{path, type, details}]}` | `workspace-not-found` |
+| 39 | `analyze` | `$CLI analyze [ws] [--focus ...] [--detail ...] [--skip-scan]` | `{identity, frameworks, languages, architecture, security, quality, risk_score, action_plan[]}` | `timeout` on very large repos |
+| 40 | `type-infer` | `$CLI type-infer [ws] [--file PATH] [--function FN]` | `{stats{variables_typed,functions_typed,high_confidence}, type_map{file:{var:{type,confidence}}}}` | empty if no registry |
+| 41 | `ownership` | `$CLI ownership [ws] [--file PATH] [--function FN]` | `{ownership[{author,lines,percentage,first_commit,last_commit}]}` | `status:"no_git"` fallback to mtime |
+| 42 | `regex-audit` | `$CLI regex-audit [ws] [--severity ...]` | `{stats{total_patterns,vulnerable,by_category}, findings[]}` | `truncated:true` on large repos |
+| 43 | `binary-scan` | `$CLI binary-scan [ws]` | `{stats{files_scanned,total_artifacts,total_size_bytes,by_category}, findings[]}` | `0 artifacts` for pure source repos |
+| 44 | `artifact-scan` | `$CLI artifact-scan [ws] [--deep]` | `{stats{total_artifacts,binaries,minified_files,source_maps,wasm_modules,built_output_dirs}}` | `0 artifacts` for pure source repos |
 
 ### Utility
 
-| # | Command | Syntax | Output | Errors |
+| # | Command | Syntax | Output (validated) | Errors |
 |---|---------|--------|--------|--------|
-| 45 | `watch` | `$CLI watch [ws] [--debounce SECS]` | Streaming: file change events | `workspace-not-found` |
-
-> **Note**: `watch` runs continuously until interrupted. Not for one-shot use.
+| 45 | `watch` | `$CLI watch [ws] [--debounce SECS]` | Streaming: file change events | runs continuously until interrupted |
 
 ---
 
@@ -242,7 +262,7 @@ description: >
 CODELENS_DIR="{project_path}"
 CLI="python3 $CODELENS_DIR/scripts/codelens.py"
 
-# Workspace is AUTO-DETECTED if omitted (since v5.1)
+# Workspace is AUTO-DETECTED if omitted
 # Fallback: cwd → parent dirs → last workspace → cwd
 
 # Setup
@@ -266,7 +286,7 @@ $CLI vuln-scan
 $CLI perf-hint
 $CLI css-deep
 
-# Agent-first commands (since v5.2)
+# Agent-first commands
 $CLI handbook              # One-shot project orientation
 $CLI ask "dead code?"      # Natural language query
 $CLI context "fn" -f markdown  # Markdown output
