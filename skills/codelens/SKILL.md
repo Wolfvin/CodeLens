@@ -40,6 +40,15 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.5 — Tested on SerenityOS/serenity (18K+ files, C++ OS from scratch)
+
+- **`is_bundled_file` ImportError fix**: `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` which was renamed to `is_generated_file`, causing 4 commands (ask, complexity, context, perf-hint) and 3 analyze engines to fail silently. Added backward-compat alias.
+- **`analyze` env_issues engine fix**: `_detect_env()` called non-existent `audit_environment()` — now uses correct `check_env_vars()`.
+- **Shell script deep nesting false positives eliminated**: Brace-depth tracking for shell scripts and all brace-based languages instead of indentation counting. Shell `pushd`/`popd` indentation is visual, not logical nesting.
+- **C/C++ no longer listed as unsupported**: Despite having a working fallback C parser, C/C++ were incorrectly marked as unsupported_langs. Now removed from the unsupported markers (like Go before it).
+- **CMake project identity detection**: Parses `CMakeLists.txt` for project name/version. Detects `cpp-operating-system`, `cpp-browser-engine`, `cpp-library`, `cpp-gui-application`, `cpp-embedded`, `cpp-project` types. CMake monorepo detection via `add_subdirectory`.
+- **Version consistency**: All version references now report `6.5.0` (was scattered across 6.0/6.3/6.5).
+
 ## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 
 - **Large repo timeout fixes**: `missing_refs` O(n²) typo detection now time-budgeted (15s cap, 2-char prefix filtering, 500K comparison cap, pre-built lookup dict). `analyze` command gets `--timeout` (default 300s) with per-engine time budget and graceful degradation (skips engines when <20% budget remains). `handbook` command gets `--timeout` (default 120s) with per-engine skip and `partial: true` output flag.

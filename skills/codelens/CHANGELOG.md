@@ -5,6 +5,28 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.5.0] — 2026-06-12
+
+### Tested against SerenityOS/serenity (18,601 files: 3,725 C++ + 3,722 C headers + 1,099 JS + 1,814 HTML + 455 Shell + 26 Python, C++ OS from scratch with kernel, browser, and userspace)
+
+Real-world test on a massive C++ monorepo (CMake-based OS project with Ladybird browser).
+This exposed critical import errors and deep nesting false positives that were invisible
+on web-tech projects.
+
+### Fixed
+
+- **`is_bundled_file` ImportError** (4 command modules + 3 engines broken): `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function was renamed to `is_generated_file` without updating callers. This caused `ask`, `complexity`, `context`, and `perf-hint` commands to fail on import, and `analyze` skipped 3 engine categories (env_issues, complexity, perf_hints). Fixed by adding `is_bundled_file = is_generated_file` backward compatibility alias in `utils.py`.
+- **`analyze` command calls non-existent `audit_environment()`**: `_detect_env()` in `analyze.py` called `envcheck_engine.audit_environment()` which doesn't exist — the actual function is `check_env_vars()`. This caused the env_issues engine to always be skipped with `ImportError`. Fixed to use `check_env_vars()` and correctly parse its output format (`variables` key instead of `issues`).
+- **Shell script deep nesting false positives** (nesting levels 22-30 reported): Indentation-based nesting detection counted visual indentation in shell scripts (e.g., `pushd`/`popd` blocks) as logical nesting, producing absurd results like "30 levels deep" for build scripts. Fixed by switching to brace-depth tracking for shell scripts and all brace-based languages (JS/TS/C/C++/Java/Go/Rust/Swift/PHP/Dart/Lua). Only indentation-based languages (Python/Ruby/Elixir/Nim) still use indentation tracking.
+- **Version mismatch across codebase**: `utils.py` reported version `6.3.0`, `analyze.py` hardcoded `6.0`, actual version was `6.5.0`. Fixed `utils.py` to `6.5.0` and `analyze.py` now imports `CODELENS_VERSION` from `utils.py`.
+- **C/C++ incorrectly listed as "unsupported_langs"**: `framework_detect.py` marked C and C++ as unsupported when `CMakeLists.txt` exists, even though the scan command successfully parses 7,000+ C/C++ files using `fallback_c.py`. Removed C/C++ from the `UNSUPPORTED_MARKERS` dict (same treatment Go already received).
+
+### Added
+
+- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for project name (`project(NAME)`) and version (`project(... VERSION x.y.z)`). Detects project types: `cpp-operating-system` (Kernel+Userland dirs), `cpp-browser-engine`, `cpp-library`, `cpp-gui-application`, `cpp-embedded`, `cpp-project`. Also detects CMake monorepo pattern (3+ `add_subdirectory` entries → `cmake-workspace`).
+- **Expanded directory hints for C/C++ projects**: Added hints for `kernel`, `userland`, `ports`, `toolchain`, `ak` directories common in C++ projects.
+- **Expanded source file counting**: Directory map now counts `.c`, `.cpp`, `.h`, `.go`, `.java`, `.kt`, `.cs`, `.sh`, `.rb`, `.swift`, `.scala`, `.lua`, `.php`, `.dart` files as source (was only `.py`, `.js`, `.ts`, `.rs`, `.html`, `.css`).
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

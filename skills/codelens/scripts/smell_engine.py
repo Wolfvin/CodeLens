@@ -648,6 +648,12 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     Reports only the entry point of each deeply-nested block (where the
     nesting first exceeds the threshold), not every line inside the block.
     This avoids inflating the smell count with hundreds of duplicate findings.
+    
+    For brace-based languages (JS/TS/C/C++/Java/Go/etc.), uses actual
+    brace-depth tracking so indentation style doesn't cause false positives.
+    For indentation-based languages (Python/Ruby/etc.), uses indentation.
+    For shell scripts (.sh/.bash), uses brace-depth tracking since shell
+    indentation is purely visual (e.g. pushd/popd blocks) and not logical nesting.
     """
     smells = []
     
@@ -656,6 +662,162 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     if any(kw in rel_path for kw in skip_keywords):
         return smells
     
+    # ─── Choose detection strategy based on language ────
+    # Brace-based languages: track actual { } depth (not indentation)
+    BRACE_BASED_EXTS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+                        ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                        ".rs", ".go", ".java", ".cs", ".swift", ".scala", ".sc",
+                        ".zig", ".php", ".dart", ".lua", ".kt", ".kts",
+                        ".sh", ".bash", ".zsh"}  # Shell: indentation is visual, only {} is real nesting
+    
+    if ext in BRACE_BASED_EXTS:
+        return _detect_deep_nesting_brace(content, ext, rel_path)
+    
+    # Indentation-based languages
+    return _detect_deep_nesting_indent(content, ext, rel_path)
+
+
+def _detect_deep_nesting_brace(content: str, ext: str, rel_path: str) -> List[Dict]:
+    """Detect deep nesting using brace-depth tracking.
+    
+    Tracks actual { and } to determine logical nesting depth.
+    This avoids false positives from indentation style differences
+    and from shell scripts where indentation is purely visual.
+    
+    For shell scripts, only {} and subshell () blocks count as nesting,
+    not pushd/popd visual indentation.
+    """
+    smells = []
+    lines = content.split('\n')
+    
+    is_shell = ext in {".sh", ".bash", ".zsh"}
+    
+    max_brace_depth = 0
+    max_depth_line = 0
+    brace_depth = 0
+    in_deep_block = False
+    deep_block_start = 0
+    deep_block_max_depth = 0
+    
+    in_string = False
+    string_char = None
+    in_comment = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        
+        # Reset line-level comment state
+        in_comment = False
+        
+        j = 0
+        line_len = len(line)
+        while j < line_len:
+            ch = line[j]
+            
+            # Handle string literals (avoid counting braces inside strings)
+            if ch in ('"', "'") and not in_comment:
+                if not in_string:
+                    in_string = True
+                    string_char = ch
+                elif ch == string_char:
+                    # Check for escaped quote
+                    if j > 0 and line[j-1] == '\\':
+                        # Check for double-escaped
+                        num_backslashes = 0
+                        k = j - 1
+                        while k >= 0 and line[k] == '\\':
+                            num_backslashes += 1
+                            k -= 1
+                        if num_backslashes % 2 == 0:  # Even number = not escaped
+                            in_string = False
+                            string_char = None
+                    else:
+                        in_string = False
+                        string_char = None
+                j += 1
+                continue
+            
+            if in_string:
+                j += 1
+                continue
+            
+            # Handle comments
+            if ch == '#' and (not is_shell or j == 0 or line[:j].strip() == ''):
+                # Shell: # is a comment only at start or after whitespace
+                # For non-shell, # inside code isn't a comment (could be preprocessor)
+                if not is_shell:
+                    j += 1
+                    continue
+                break  # Rest of line is comment
+            
+            if ch == '/' and j + 1 < line_len:
+                if line[j+1] == '/':
+                    break  # C++ style comment, rest of line
+                elif line[j+1] == '*':
+                    in_comment = True
+                    j += 2
+                    continue
+            
+            if in_comment:
+                if ch == '*' and j + 1 < line_len and line[j+1] == '/':
+                    in_comment = False
+                    j += 2
+                    continue
+                j += 1
+                continue
+            
+            # Track brace depth
+            if ch == '{':
+                brace_depth += 1
+                if brace_depth >= DEEP_NESTING_LEVEL and not in_deep_block:
+                    in_deep_block = True
+                    deep_block_start = i + 1
+                    deep_block_max_depth = brace_depth
+                if in_deep_block and brace_depth > deep_block_max_depth:
+                    deep_block_max_depth = brace_depth
+            elif ch == '}':
+                if brace_depth > 0:
+                    brace_depth -= 1
+                if in_deep_block and brace_depth < DEEP_NESTING_LEVEL:
+                    in_deep_block = False
+                    severity = "critical" if deep_block_max_depth >= DEEP_NESTING_CRITICAL else "warning"
+                    threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+                    smells.append({
+                        "file": rel_path,
+                        "line": deep_block_start,
+                        "nesting_level": deep_block_max_depth,
+                        "severity": severity,
+                        "message": f"Code is nested {deep_block_max_depth} levels deep (threshold: {threshold})",
+                        "suggestion": "Extract inner logic into separate functions. Use early returns."
+                    })
+            
+            j += 1
+    
+    # Handle case where file ends while still in a deep block
+    if in_deep_block:
+        severity = "critical" if deep_block_max_depth >= DEEP_NESTING_CRITICAL else "warning"
+        threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+        smells.append({
+            "file": rel_path,
+            "line": deep_block_start,
+            "nesting_level": deep_block_max_depth,
+            "severity": severity,
+            "message": f"Code is nested {deep_block_max_depth} levels deep (threshold: {threshold})",
+            "suggestion": "Extract inner logic into separate functions. Use early returns."
+        })
+    
+    return smells
+
+
+def _detect_deep_nesting_indent(content: str, ext: str, rel_path: str) -> List[Dict]:
+    """Detect deep nesting using indentation tracking.
+    
+    Used for indentation-based languages (Python, Ruby, Elixir, Nim, etc.)
+    where indentation IS the nesting indicator.
+    """
+    smells = []
     lines = content.split('\n')
     
     prev_level = 0
@@ -674,15 +836,11 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
-        elif ext in {".rs", ".go", ".java", ".cs", ".swift", ".scala", ".sc",
-                     ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".zig"}:
-            # Rust/Go/Java/C#/Swift/Scala/C/C++/Zig: 4 spaces per level
-            level = indent // 4
         elif ext in {".ex", ".exs", ".rb", ".nim", ".nims"}:
             # Elixir/Ruby/Nim: 2 spaces per level
             level = indent // 2
         else:
-            # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
+            # Fallback: 2 spaces per level
             level = indent // 2
 
         # Detect when we first enter a deep nesting block

@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.5.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -430,3 +430,10 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+# ─── Backward Compatibility Aliases ────────────────────────────
+# is_bundled_file was renamed to is_generated_file in v6.5, but some
+# engines still import the old name. This alias prevents ImportError.
+
+is_bundled_file = is_generated_file
