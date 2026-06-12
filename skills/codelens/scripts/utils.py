@@ -149,21 +149,29 @@ def should_ignore_dir(rel_root: str) -> bool:
 
 
 def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
-    """Read a file safely with size limit and encoding handling.
+    """Read a file safely with size limit, encoding handling, and binary detection.
 
     Args:
         file_path: Absolute path to the file.
         max_size: Maximum file size in bytes. Files larger than this are skipped.
 
     Returns:
-        File content as string, or None if the file cannot be read or is too large.
+        File content as string, or None if the file cannot be read, is too large,
+        or appears to be a binary file (contains null bytes in the first 8KB).
     """
     try:
         file_size = os.path.getsize(file_path)
         if file_size > max_size:
             return None
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
+            content = f.read()
+        # Binary file detection: if the content contains null bytes,
+        # it's almost certainly a binary file (e.g., .pyc, .wasm, .exe)
+        # that was read as text. Check the first 8KB for efficiency.
+        check_region = content[:8192]
+        if '\x00' in check_region:
+            return None
+        return content
     except (IOError, OSError):
         return None
 

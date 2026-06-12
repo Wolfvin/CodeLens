@@ -322,8 +322,14 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
+                rel_path = os.path.relpath(path, workspace)
                 if parse_vue_sfc:
-                    refs = parse_vue_sfc(content, os.path.relpath(path, workspace))
+                    refs = parse_vue_sfc(content, rel_path)
+                    vue_data.append(refs)
+                else:
+                    # Fallback: extract classes/ids from <template> using HTML fallback,
+                    # and functions/imports from <script> using JS backend fallback
+                    refs = _parse_vue_fallback(content, rel_path)
                     vue_data.append(refs)
             except IOError:
                 logger.debug(f"Failed to read Vue file: {path}")
@@ -342,8 +348,14 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
+                rel_path = os.path.relpath(path, workspace)
                 if parse_svelte_component:
-                    refs = parse_svelte_component(content, os.path.relpath(path, workspace))
+                    refs = parse_svelte_component(content, rel_path)
+                    svelte_data.append(refs)
+                else:
+                    # Fallback: extract classes/ids from markup using HTML fallback,
+                    # and functions/imports from <script> using JS backend fallback
+                    refs = _parse_svelte_fallback(content, rel_path)
                     svelte_data.append(refs)
             except IOError:
                 logger.debug(f"Failed to read Svelte file: {path}")
@@ -747,6 +759,9 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
     Discover all relevant source files in the workspace.
     Returns categorized file lists.
     """
+    # Max files per category — prevents OOM on huge repos (e.g., emscripten 8K+ C files)
+    MAX_FILES_PER_CATEGORY = 5000
+
     files = {
         "html": [],
         "css": [],
@@ -798,9 +813,12 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["tsx"].append(file_path)
             elif ext == '.tsx':
                 files["tsx"].append(file_path)
-            elif ext in ('.js', '.ts'):
+            elif ext in ('.js', '.ts', '.mjs', '.cjs'):
                 if ext == '.ts' and is_frontend_file(rel_path, config):
                     files["tsx"].append(file_path)
+                elif ext in ('.mjs', '.cjs'):
+                    # ESM/CommonJS module files — treat as backend by default
+                    files["js_backend"].append(file_path)
                 elif is_frontend_file(rel_path, config):
                     files["js_frontend"].append(file_path)
                 elif is_backend_file(rel_path, config):
@@ -833,6 +851,11 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                     files["blade"].append(file_path)
                 else:
                     files["php"].append(file_path)
+
+    # Cap each category to prevent OOM on huge repos
+    for cat in files:
+        if len(files[cat]) > MAX_FILES_PER_CATEGORY:
+            files[cat] = files[cat][:MAX_FILES_PER_CATEGORY]
 
     return files
 
@@ -903,6 +926,88 @@ def should_ignore(file_path: str, config: Dict) -> bool:
             return True
     
     return False
+
+
+def _parse_vue_fallback(content: str, rel_path: str) -> Dict[str, Any]:
+    """Fallback parser for Vue SFC when tree-sitter Vue parser is unavailable.
+    
+    Extracts:
+    - Template: classes and IDs via HTML fallback
+    - Script: functions, imports via JS backend fallback
+    - Style: CSS classes via CSS fallback
+    """
+    import re
+    result = {"path": rel_path, "frontend": {}, "backend": {}}
+    
+    # Extract <template> content
+    template_match = re.search(r'<template>(.*?)</template>', content, re.DOTALL)
+    if template_match:
+        template_content = template_match.group(1)
+        template_refs = parse_html_fallback(template_content, rel_path)
+        result["frontend"].update({
+            "classes": template_refs.get("classes", []),
+            "ids": template_refs.get("ids", []),
+        })
+    
+    # Extract <script> or <script setup> content
+    script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+    if script_match:
+        script_content = script_match.group(1)
+        script_refs = parse_js_backend_fallback(script_content, rel_path)
+        result["backend"].update({
+            "nodes": script_refs.get("nodes", []),
+            "edges": script_refs.get("edges", []),
+        })
+        # Also extract frontend references (class references in JS)
+        fe_refs = parse_js_frontend_fallback(script_content, rel_path)
+        if fe_refs.get("classes"):
+            result["frontend"].setdefault("classes", []).extend(fe_refs["classes"])
+    
+    return result
+
+
+def _parse_svelte_fallback(content: str, rel_path: str) -> Dict[str, Any]:
+    """Fallback parser for Svelte components when tree-sitter parser is unavailable.
+    
+    Extracts:
+    - Markup: classes and IDs via HTML fallback
+    - <script> block: functions, imports via JS backend fallback
+    - <style> block: CSS classes via CSS fallback
+    """
+    import re
+    result = {"path": rel_path, "frontend": {}, "backend": {}}
+    
+    # Extract <script> content
+    script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+    if script_match:
+        script_content = script_match.group(1)
+        script_refs = parse_js_backend_fallback(script_content, rel_path)
+        result["backend"].update({
+            "nodes": script_refs.get("nodes", []),
+            "edges": script_refs.get("edges", []),
+        })
+        fe_refs = parse_js_frontend_fallback(script_content, rel_path)
+        if fe_refs.get("classes"):
+            result["frontend"].setdefault("classes", []).extend(fe_refs["classes"])
+    
+    # For markup, strip <script> and <style> blocks, then parse remaining HTML-like content
+    markup = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
+    markup = re.sub(r'<style[^>]*>.*?</style>', '', markup, flags=re.DOTALL)
+    markup_refs = parse_html_fallback(markup, rel_path)
+    result["frontend"].update({
+        "classes": markup_refs.get("classes", []),
+        "ids": markup_refs.get("ids", []),
+    })
+    
+    # Extract <style> content for CSS class definitions
+    style_match = re.search(r'<style[^>]*>(.*?)</style>', content, re.DOTALL)
+    if style_match:
+        style_content = style_match.group(1)
+        style_refs = parse_css_fallback(style_content, rel_path)
+        if style_refs.get("classes"):
+            result["frontend"].setdefault("classes", []).extend(style_refs["classes"])
+    
+    return result
 
 
 register_command("scan", "Scan workspace and build registry", add_args, execute)

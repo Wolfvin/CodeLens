@@ -7,39 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.2.0] — 2026-06-12
 
-### Tested against 5 diverse repositories:
-- **redis/redis** (789 C/H files) — Classic C codebase with Makefile build system
-- **type-challenges/type-challenges** (402 TS files) — Pure TypeScript type declarations
-- **pydantic/pydantic** (404 Python + 125 Rust files) — Python+Rust polyglot with nested Cargo.toml
-- **LazyVim/LazyVim** (155 Lua files) — Neovim plugin framework
-- **typst/typst** (405 Rust files) — Modern Rust typesetting system
+### Reverse Engineering & Binary Analysis Overhaul
+
+Real-world tested on large, diverse, and unusual repositories:
+- **gtk-rs/gtk4-rs** (Rust → WASM binary polyglot, 3,800+ files)
+- **wasmerio/wasmer** (WASM runtime with .wasm binaries, 1,500+ files)
+- **vercel/next.js** (massive Next.js monorepo, 4,000+ files)
+- **sveltejs/svelte** (Svelte compiler + framework, 1,200+ files)
+- **emscripten-core/emscripten** (C/C++ → WASM compiler, 7,000+ files)
 
 ### Added
 
-- **C/Make/CMake framework detection**: `detect_frameworks()` now detects C projects from Makefile, CMakeLists.txt, configure.ac, and also from source file counts (>10 .c/.h files) when no build system markers exist. Adds `has_c` field.
-- **Lua/Neovim framework detection**: Detects Neovim plugins from `init.lua`/`init.vim` + `lua/` + `plugin/` directory structure. Detects Lua projects from `.lua` file counts. Adds `has_lua` field.
-- **TypeScript language detection**: Detects TypeScript as a framework from `.ts`/`.tsx` source files even when no tsconfig.json exists. Adds `has_typescript` field.
-- **Neovim plugin entrypoint detection**: New `neovim_plugin` entrypoint type with patterns for `vim.api.nvim_create_user_command`, `vim.keymap.set`, `vim.api.nvim_create_autocmd`, Lua module returns, and lazy.nvim setup. LazyVim now detects 84 entrypoints (was 0).
-- **Enhanced Lua fallback parser** (`fallback_lua.py` v2): Complete rewrite with proper edge format for edge_resolver, function-level call edges, method call detection (`obj:method()`, `obj.method()`), `require()` module resolution, method assignments (`M.foo = function()`), Neovim API call tracking (`vim.api`, `vim.keymap`, etc.), and owner-node resolution for edges.
-- **Nested Cargo.toml detection**: Framework detection now scans subdirectories for Cargo.toml (e.g., `pydantic-core/Cargo.toml`) in addition to root.
-- **Source file counting utility** (`_count_source_files`): New helper function in framework_detect.py that counts source files by extension, enabling language detection from file counts rather than only build markers.
-- **New framework signatures**: Added `make`, `cmake`, `autotools`, `neovim`, `lua`, `typescript`, `laravel` to FRAMEWORK_SIGNATURES.
-- **Lua in entrypoints SOURCE_EXTENSIONS**: Added `.lua` extension support.
-- **Lua test patterns**: Added busted framework `describe`/`it` patterns for test entry detection.
+- **WASM deep analysis**: `artifact-scan --deep` now parses WASM binary headers to extract section names, export names (function/table/memory/global), and import entries (module.field). Uses LEB128 encoding, section header scanning, and bounded iteration — handles 100MB+ .wasm files in constant time.
+- **Reverse engineering mode**: New `artifact-scan` command discovers compiled binaries, minified files, source maps, and built output directories. Generates actionable recommendations for reverse engineering.
+- **Binary-safe file reading**: `safe_read_file()` now detects binary files via null-byte sentinel in the first 8KB. Prevents text-based parsers from crashing on .pyc, .wasm, .exe, and other binary files.
+- **Vue/Svelte fallback parsers**: When tree-sitter Vue/Svelte parsers are unavailable, scan now falls back to regex-based extraction of template classes/IDs and script functions/imports.
+- **`.mjs`/`.cjs` ESM support**: `discover_files()` now recognizes `.mjs` and `.cjs` extensions as JavaScript backend files.
+- **WASM framework detection**: `detect_frameworks()` now detects `wasm-bindgen`, `wasm-pack`, `emscripten`, and generic `.wasm` file presence.
+- **Source map parsing**: `artifact-scan --deep` parses `.map` files to extract original source references, names (pre-minification identifiers), and source roots.
 
 ### Fixed
 
-- **CRITICAL: `fallback_rust.py` regex crash** (Bug #1): Named capture groups used JavaScript syntax `(?<trait>...)` instead of Python `(?P<trait>...)`, causing `re.error: unknown extension ?<t at position 13`. This crashed scan on ANY repository containing Rust files (pydantic, typst). Fixed to use Python syntax.
-- **CRITICAL: `get_workspace_outline()` TypeError** (Bug #2): `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`, causing `TypeError: got an unexpected keyword argument 'max_files'`. This broke outline/summary generation on ALL scans. Fixed by removing the invalid parameter.
-- **CRITICAL: `fallback_lua.py` missing import** (Bug cascade): `Optional` type was imported at file bottom instead of top, causing `name 'Optional' is not defined` ImportError. This prevented scan/handbook/ask/watch command modules from loading (4/42 commands missing). Fixed by moving import to top.
-- **Version consistency**: `skill.json` said 5.8.0, `CODELENS_VERSION` in utils.py said 5.8.0, but `SKILL-QUICK.md` said v6.2. Updated all to 6.2.0.
-
-### Changed
-
-- **LazyVim detection improvement**: From 0 entrypoints and 100% dead nodes → 84 entrypoints (71 neovim_plugin + 13 test_entry) and 244 active nodes.
-- **Pydantic detection improvement**: From scan crash → successful scan with 11,673 nodes and 184,819 edges. Rust now detected from nested `pydantic-core/Cargo.toml`.
-- **Typst detection improvement**: From scan crash → successful scan with 12,154 nodes and 497,280 edges.
-- **Redis detection improvement**: From `frameworks: []` and `unsupported_langs: ["c", "cpp"]` → `frameworks: ["make", "lua"]` with `has_c: true`.
+- **WASM infinite loop bug**: `_analyze_wasm()` could loop infinitely on malformed/truncated WASM files. Fixed with three safety mechanisms: (1) bounds-checking `section_size` against remaining file bytes, (2) progress check that breaks if file pointer doesn't advance, (3) 50-section iteration cap.
+- **CSS `duplicate_props` same-line false positive**: Properties declared on the same line (e.g., `color: red; color: blue;`) are no longer flagged as false duplicates.
+- **`safe_read_file` binary crash**: Text-based engines (smell, a11y, etc.) no longer crash when encountering binary files — `safe_read_file()` returns `None` for files containing null bytes.
 
 ## [5.8.0] — 2026-06-12
 
