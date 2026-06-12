@@ -189,6 +189,25 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # WebAssembly frameworks
+    "wasm-bindgen": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["wasm-bindgen"],
+        "indicators": []
+    },
+    "wasm-pack": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["wasm-pack"],
+        "indicators": []
+    },
+    "emscripten": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["emscripten"],
+        "indicators": [".emscripten", "emcc"]
+    },
 }
 
 
@@ -590,6 +609,32 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
                 break
+
+    # 8. Detect WebAssembly files in workspace (.wasm binaries)
+    # WASM files indicate WebAssembly usage (wasm-bindgen, wasm-pack, emscripten, etc.)
+    detected["has_wasm"] = False
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            if f.endswith('.wasm'):
+                detected["has_wasm"] = True
+                if "wasm-bindgen" not in detected["frameworks"]:
+                    # Check if wasm-bindgen is in Cargo deps
+                    if "wasm-bindgen" in cargo_deps:
+                        detected["frameworks"].append("wasm-bindgen")
+                    elif "wasm-pack" in cargo_deps:
+                        detected["frameworks"].append("wasm-pack")
+                    else:
+                        detected["frameworks"].append("wasm")
+                break
+        if detected["has_wasm"]:
+            break
 
     return detected
 

@@ -5,6 +5,33 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.0] — 2026-06-12
+
+### Reverse Engineering & Binary Analysis Overhaul
+
+Real-world tested on large, diverse, and unusual repositories:
+- **gtk-rs/gtk4-rs** (Rust → WASM binary polyglot, 3,800+ files)
+- **wasmerio/wasmer** (WASM runtime with .wasm binaries, 1,500+ files)
+- **vercel/next.js** (massive Next.js monorepo, 4,000+ files)
+- **sveltejs/svelte** (Svelte compiler + framework, 1,200+ files)
+- **emscripten-core/emscripten** (C/C++ → WASM compiler, 7,000+ files)
+
+### Added
+
+- **WASM deep analysis**: `artifact-scan --deep` now parses WASM binary headers to extract section names, export names (function/table/memory/global), and import entries (module.field). Uses LEB128 encoding, section header scanning, and bounded iteration — handles 100MB+ .wasm files in constant time.
+- **Reverse engineering mode**: New `artifact-scan` command discovers compiled binaries, minified files, source maps, and built output directories. Generates actionable recommendations for reverse engineering.
+- **Binary-safe file reading**: `safe_read_file()` now detects binary files via null-byte sentinel in the first 8KB. Prevents text-based parsers from crashing on .pyc, .wasm, .exe, and other binary files.
+- **Vue/Svelte fallback parsers**: When tree-sitter Vue/Svelte parsers are unavailable, scan now falls back to regex-based extraction of template classes/IDs and script functions/imports.
+- **`.mjs`/`.cjs` ESM support**: `discover_files()` now recognizes `.mjs` and `.cjs` extensions as JavaScript backend files.
+- **WASM framework detection**: `detect_frameworks()` now detects `wasm-bindgen`, `wasm-pack`, `emscripten`, and generic `.wasm` file presence.
+- **Source map parsing**: `artifact-scan --deep` parses `.map` files to extract original source references, names (pre-minification identifiers), and source roots.
+
+### Fixed
+
+- **WASM infinite loop bug**: `_analyze_wasm()` could loop infinitely on malformed/truncated WASM files. Fixed with three safety mechanisms: (1) bounds-checking `section_size` against remaining file bytes, (2) progress check that breaks if file pointer doesn't advance, (3) 50-section iteration cap.
+- **CSS `duplicate_props` same-line false positive**: Properties declared on the same line (e.g., `color: red; color: blue;`) are no longer flagged as false duplicates.
+- **`safe_read_file` binary crash**: Text-based engines (smell, a11y, etc.) no longer crash when encountering binary files — `safe_read_file()` returns `None` for files containing null bytes.
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

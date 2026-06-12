@@ -19,9 +19,10 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, time_budget_expired
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -43,6 +44,8 @@ LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 MAX_FILE_SIZE = 500 * 1024  # 500KB
+MAX_FILES = 5000              # Max files to scan before stopping
+SMELL_TIMEOUT_SEC = 120       # Global timeout for smell detection
 
 
 def detect_smells(
@@ -82,6 +85,7 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
+    start_time = time.time()
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -89,7 +93,15 @@ def detect_smells(
             dirs.clear()
             continue
 
+        # Global timeout check — stop scanning if budget exceeded
+        if time_budget_expired(start_time, SMELL_TIMEOUT_SEC):
+            break
+
         for filename in filenames:
+            # File count cap — prevent scanning enormous repos indefinitely
+            if files_scanned >= MAX_FILES:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue

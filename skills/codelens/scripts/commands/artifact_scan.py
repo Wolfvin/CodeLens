@@ -274,7 +274,15 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
     binary content into memory. Uses seek() to skip over section payloads,
     so even a 100MB .wasm file is handled in constant time.
     
-    In deep mode, also extracts export names from the export section (7).
+    In deep mode, also extracts export names from the export section (7)
+    and import entries from the import section (2).
+    
+    Safety guarantees:
+    - Capped at 50 section iterations to prevent infinite loops
+    - Every seek is bounds-checked against file_size to avoid hang on
+      malformed/truncated WASM files
+    - Progress check: if the file pointer does not advance between
+      iterations, we break immediately
     """
     info = {
         "is_valid_wasm": False,
@@ -313,6 +321,10 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                     if not section_id_byte:
                         break
 
+                    # EOF check: if we've reached/passed file_size, stop
+                    if f.tell() > file_size:
+                        break
+
                     section_id = section_id_byte[0]
                     section_size = _read_leb128(f)
                     section_name = WASM_SECTION_NAMES.get(section_id, f"unknown_{section_id}")
@@ -320,11 +332,21 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                     # Position at start of section payload
                     payload_start = f.tell()
 
+                    # Bounds check: if section_size claims more bytes than
+                    # remain in the file, the WASM is malformed/truncated.
+                    # Clamp to remaining bytes to avoid seeking past EOF.
+                    bytes_remaining = file_size - payload_start
+                    if section_size > bytes_remaining:
+                        # Truncated or malformed — still record the section
+                        sections[section_name] = sections.get(section_name, 0) + 1
+                        info["truncated"] = True
+                        break
+
                     if section_id == 0 and section_size > 0 and section_size < 100000:
                         # Custom section — read the name using LEB128 for proper decoding
                         try:
                             name_len = _read_leb128(f)
-                            if name_len > 0 and name_len < 10000:
+                            if 0 < name_len < 10000 and name_len <= section_size:
                                 name_bytes = f.read(name_len)
                                 if name_bytes:
                                     name = name_bytes.decode('utf-8', errors='replace')
@@ -355,6 +377,13 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                     # Skip section payload using seek (constant time, no memory use)
                     section_end = payload_start + section_size
                     f.seek(section_end)
+
+                    # Progress check: if file pointer didn't advance past
+                    # pos_before, we're stuck — break immediately.
+                    # This prevents infinite loops on malformed WASM where
+                    # section_size is 0 and we keep re-reading the same byte.
+                    if f.tell() <= pos_before:
+                        break
 
                 if sections:
                     info["sections"] = sections
