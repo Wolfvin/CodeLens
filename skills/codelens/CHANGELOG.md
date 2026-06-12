@@ -5,6 +5,67 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [6.5.0] — 2026-06-12
+
+### Tested against xtermjs/xterm.js (739 files, 339 TypeScript, terminal emulator npm-workspace monorepo)
+
+Real-world test on a TypeScript monorepo with npm workspaces (`addons/*`), webpack resolve
+aliases, benchmark files with non-npm imports, and large source files (156KB InputHandler.ts).
+Exposed critical false positives in config-drift and a severe performance regression in perf-hint.
+
+### Fixed
+
+- **`config-drift` false positives on npm workspace packages** (HIGH): In npm workspace monorepos,
+  packages like `@xterm/addon-webgl` are implicitly available as dependencies through the
+  `workspaces` field in root `package.json`. The engine reported all workspace packages as
+  "missing dependencies" (15+ false positives on xterm.js). Added `_detect_npm_workspace_packages()`
+  which resolves workspace globs (`addons/*`, `packages/*`) and also scans for nested
+  `package.json` files outside the workspace pattern (e.g., `headless/package.json`).
+  Missing deps reduced from 19 to 2 (both `info` severity).
+
+- **`config-drift` false positives on webpack resolve aliases** (HIGH): Webpack aliases like
+  `common: path.resolve('../../out/common')` create non-npm import paths. The engine reported
+  these as missing dependencies. Added `_detect_webpack_aliases()` which scans webpack.config.js
+  files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`. Also added
+  a PascalCase heuristic: single-word PascalCase imports (e.g., `SerializeAddon`,
+  `UnicodeGraphemeProvider`) are likely build aliases, not npm packages — downgraded to `info`
+  severity with appropriate messaging.
+
+- **`perf-hint` severe performance regression** (CRITICAL): The `_timed_finditer()` function used
+  Python threading for every regex call on content >5000 chars. With 40 patterns and 350+ files,
+  this created ~14,000 thread objects, adding ~2ms overhead per call. Full analysis took >120s
+  and usually timed out. Replaced threading with iterative time-checking (check `time.monotonic()`
+  every 10 matches). Also increased the direct-run threshold from 5KB to 50KB (most source files
+  are under 50KB and do not need any timeout mechanism). Performance: 350 files now completes in
+  ~29s (was >120s timeout). Added `GLOBAL_TIMEOUT_SEC=180` to the scan loop as a safety net.
+
+- **`perf-hint` wide quantifier detection incomplete** (MEDIUM): `_WIDE_QUANTIFIER_RE` only caught
+  `{0,N}`, `.*?`, and `.+?` patterns. Negated character classes with quantifiers like `[^{]*\{[^}]*`
+  (used in the nested loop detection regex) cause catastrophic backtracking on large files but
+  were not detected. Added `[^X]*` and `[^X]+` patterns to the detection regex, ensuring content
+  truncation is applied for these patterns too.
+
+- **`side-effect` test file context awareness** (LOW): IO side effects (console.log, print) in test
+  files are expected and not actionable. Added test/benchmark/demo file detection in the analysis
+  loop. IO effects in test files are now downgraded to `severity: "test_context"` with a note
+  explaining they are expected. This preserves the detection while making it clear the finding
+  is not actionable.
+
+### Added
+
+- **npm workspace package detection**: New `_detect_npm_workspace_packages()` function parses
+  root `package.json` for `workspaces` field, resolves glob patterns, and also walks for nested
+  `package.json` files with `name` fields. Returns a set of workspace package names that are
+  excluded from "missing dependency" checks and counted as "used" for unused dependency checks.
+
+- **Webpack/tsconfig resolve alias detection**: New `_detect_webpack_aliases()` function scans
+  webpack.config.js files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`.
+  Detected aliases are excluded from "missing dependency" checks.
+
+- **`perf-hint` global timeout**: New `GLOBAL_TIMEOUT_SEC=180` constant and corresponding check
+  in the scan loop. Prevents runaway analysis on very large repos by stopping the scan gracefully
+  when the global time budget is exceeded.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

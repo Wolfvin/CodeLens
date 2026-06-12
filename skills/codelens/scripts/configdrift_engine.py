@@ -11,11 +11,17 @@ Checks:
 3. Dev/prod mismatch: production dependency only imported in test files
 4. Version conflicts: multiple versions of same package
 5. Phantom imports: imports that resolve to nothing (broken paths)
+
+v6.5 improvements:
+- npm workspace package detection (workspaces field in package.json)
+- Webpack resolve alias detection (skip non-npm imports)
+- Better non-package import heuristics (PascalCase, benchmark files)
 """
 
 import os
 import re
 import json
+import glob as glob_module
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -662,6 +668,167 @@ def _detect_local_packages(workspace: str) -> Set[str]:
 
     return local
 
+
+def _detect_npm_workspace_packages(workspace: str) -> Set[str]:
+    """Detect npm workspace package names from the root package.json workspaces field.
+
+    When a package.json has "workspaces": ["addons/*"], the packages under
+    those directories are workspace members. They're implicitly available as
+    dependencies without being listed in "dependencies" or "devDependencies".
+    Not recognizing them causes false "missing dependency" reports.
+
+    Returns:
+        Set of workspace package names (e.g., {'@xterm/addon-webgl', '@xterm/xterm'})
+    """
+    workspace_pkgs = set()
+    root_pkg_path = os.path.join(workspace, "package.json")
+    if not os.path.isfile(root_pkg_path):
+        return workspace_pkgs
+
+    try:
+        with open(root_pkg_path, 'r', encoding='utf-8') as f:
+            root_pkg = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return workspace_pkgs
+
+    # Also add the root package itself
+    root_name = root_pkg.get("name")
+    if root_name:
+        workspace_pkgs.add(root_name)
+
+    workspaces = root_pkg.get("workspaces", [])
+    if not workspaces:
+        return workspace_pkgs
+
+    # Normalize: workspaces can be an array of strings or an object with "packages" key
+    if isinstance(workspaces, dict):
+        workspaces = workspaces.get("packages", [])
+
+    # Resolve workspace globs
+    for ws_pattern in workspaces:
+        if not isinstance(ws_pattern, str):
+            continue
+        # Use glob to resolve patterns like "addons/*" or "packages/*"
+        full_pattern = os.path.join(workspace, ws_pattern)
+        for pkg_dir in glob_module.glob(full_pattern):
+            pkg_json_path = os.path.join(pkg_dir, "package.json")
+            if os.path.isfile(pkg_json_path):
+                try:
+                    with open(pkg_json_path, 'r', encoding='utf-8') as f:
+                        pkg = json.load(f)
+                    pkg_name = pkg.get("name")
+                    if pkg_name:
+                        workspace_pkgs.add(pkg_name)
+                except (json.JSONDecodeError, IOError):
+                    pass
+
+    # v6.5: Also scan for nested package.json files that are workspace-adjacent.
+    # Some monorepos have packages outside the workspaces glob pattern
+    # (e.g., headless/package.json next to addons/*).
+    # Any package.json with a "name" field that's not the root is a potential
+    # workspace member. This catches packages like @xterm/headless.
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        dirnames[:] = [d for d in dirnames if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if 'node_modules' in dirpath or '.codelens' in dirpath:
+            dirnames.clear()
+            continue
+        if 'package.json' not in filenames:
+            continue
+        pkg_path = os.path.join(dirpath, 'package.json')
+        # Skip root (already handled above)
+        if os.path.abspath(pkg_path) == os.path.abspath(root_pkg_path):
+            continue
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            pkg_name = pkg.get("name")
+            if pkg_name and pkg_name not in workspace_pkgs:
+                workspace_pkgs.add(pkg_name)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return workspace_pkgs
+
+
+def _detect_webpack_aliases(workspace: str) -> Set[str]:
+    """Detect webpack resolve.alias entries from webpack.config.js files.
+
+    Webpack aliases like `common: path.resolve('../../out/common')` or
+    `browser: path.resolve('../../out/browser')` create non-npm import
+    paths. These are NOT missing npm dependencies — they're build-system
+    path aliases. Not recognizing them causes false "missing dependency" reports.
+
+    Also detects tsconfig paths aliases (compilerOptions.paths).
+
+    Returns:
+        Set of alias names (e.g., {'common', 'browser', 'SerializeAddon'})
+    """
+    aliases = set()
+
+    # Scan for webpack.config.js files (root and one level deep)
+    webpack_configs = []
+    root_wc = os.path.join(workspace, "webpack.config.js")
+    if os.path.isfile(root_wc):
+        webpack_configs.append(root_wc)
+    # Also check one level deep (addons/addon-*/webpack.config.js)
+    for entry in os.listdir(workspace):
+        entry_path = os.path.join(workspace, entry)
+        if os.path.isdir(entry_path) and not entry.startswith('.') and entry not in DEFAULT_IGNORE_DIRS:
+            wc = os.path.join(entry_path, "webpack.config.js")
+            if os.path.isfile(wc):
+                webpack_configs.append(wc)
+            # One more level (common in monorepos)
+            for sub_entry in os.listdir(entry_path):
+                sub_path = os.path.join(entry_path, sub_entry)
+                if os.path.isdir(sub_path) and not sub_entry.startswith('.'):
+                    wc = os.path.join(sub_path, "webpack.config.js")
+                    if os.path.isfile(wc):
+                        webpack_configs.append(wc)
+
+    for wc_path in webpack_configs:
+        try:
+            with open(wc_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Detect alias: { key: path.resolve(...) } or alias: { key: 'value' }
+            # Match the alias object: alias: { ... }
+            alias_match = re.search(r'alias\s*:\s*\{([^}]+)\}', content, re.DOTALL)
+            if alias_match:
+                alias_block = alias_match.group(1)
+                # Each line: key: value
+                for line in alias_block.split('\n'):
+                    m = re.match(r'\s*["\']?(\w+)["\']?\s*:', line)
+                    if m:
+                        aliases.add(m.group(1))
+        except IOError:
+            pass
+
+    # Also detect tsconfig.json path aliases
+    tsconfig_path = os.path.join(workspace, "tsconfig.json")
+    if os.path.isfile(tsconfig_path):
+        try:
+            with open(tsconfig_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Remove comments (simple // style)
+            content = re.sub(r'//[^\n]*', '', content)
+            # Find paths section
+            paths_match = re.search(r'"paths"\s*:\s*\{([^}]+)\}', content, re.DOTALL)
+            if paths_match:
+                paths_block = paths_match.group(1)
+                for line in paths_block.split('\n'):
+                    # Match: "@alias/*": [...] or "alias": [...]
+                    m = re.match(r'\s*"(@?[\w-]+/?(?:\*)?)"\s*:', line)
+                    if m:
+                        alias_name = m.group(1).rstrip('/*')
+                        # For scoped packages, keep the scope
+                        if alias_name.startswith('@'):
+                            alias_name = alias_name.rstrip('/')
+                        aliases.add(alias_name)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return aliases
+
+
 def _resolve_js_import(import_path: str, from_dir: str, workspace: str) -> bool:
     """Check if a relative JS import resolves to an actual file."""
     if import_path.startswith('@/'):
@@ -708,6 +875,15 @@ def _compute_drift(
 
     # Get local packages (not real external deps — they're part of the project)
     local_packages = actual.get("local_packages", set())
+
+    # v6.5: Detect npm workspace packages — these are implicitly available
+    # as dependencies when the root package.json has "workspaces" field.
+    # Not recognizing them causes false "missing dependency" reports.
+    npm_workspace_pkgs = _detect_npm_workspace_packages(workspace)
+
+    # v6.5: Detect webpack resolve aliases and tsconfig path aliases.
+    # These create non-npm import paths that are NOT missing dependencies.
+    webpack_aliases = _detect_webpack_aliases(workspace)
 
     # Known built-in modules (not real dependencies)
     builtins = {
@@ -781,20 +957,43 @@ def _compute_drift(
     for pkg in actual_external:
         if pkg in builtins or pkg in local_packages:
             continue
+        # v6.5: Skip npm workspace packages — they're implicitly available
+        if pkg in npm_workspace_pkgs:
+            continue
+        # v6.5: Skip webpack/tsconfig resolve aliases — they're not npm packages
+        if pkg in webpack_aliases:
+            continue
         normalized = _normalize_pkg_name(pkg, project_type)
         if normalized not in all_declared and pkg not in builtins:
             # Skip common framework packages that are often transitive
             transitive = {'prop-types', 'scheduler', 'react', 'react-dom', 'vue', '@vue/runtime-dom'}
             if pkg not in transitive:
+                # v6.5: Better heuristic for non-npm-package imports.
+                # Single-word PascalCase names (e.g., SerializeAddon,
+                # UnicodeGraphemeProvider) are typically webpack aliases
+                # or local class names, not npm packages. Lower severity.
+                is_likely_alias = (
+                    re.match(r'^[A-Z][a-zA-Z]+$', pkg) and  # PascalCase, single word
+                    not pkg.startswith('@') and  # Not scoped
+                    '/' not in pkg  # Not a path
+                )
+                severity = "info" if is_likely_alias else "warning"
+                message = f"'{pkg}' is imported in code but not declared in dependencies"
+                suggestion = f"Add '{pkg}' to your dependencies."
+                if is_likely_alias:
+                    message = f"'{pkg}' is imported but not found in dependencies — likely a build alias or local module"
+                    suggestion = f"Check if '{pkg}' is a webpack/tsconfig alias or internal module."
                 drift["missing"].append({
                     "package": pkg,
-                    "severity": "warning",
-                    "message": f"'{pkg}' is imported in code but not declared in dependencies",
-                    "suggestion": f"Add '{pkg}' to your dependencies."
+                    "severity": severity,
+                    "message": message,
+                    "suggestion": suggestion,
                 })
 
     # ─── Unused dependencies ────────────────────────────
     all_actual_normalized = {_normalize_pkg_name(p, project_type) for p in actual_external}
+    # v6.5: Also consider workspace packages as "used" — they're linked into the project
+    all_actual_normalized.update({_normalize_pkg_name(p, project_type) for p in npm_workspace_pkgs})
 
     for name, version in declared_deps.items():
         normalized = _normalize_pkg_name(name, project_type)

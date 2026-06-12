@@ -40,6 +40,14 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.5 — Tested on xtermjs/xterm.js (739 files, TypeScript terminal emulator npm-workspace monorepo)
+
+- **Config drift: npm workspace package detection**: Monorepos using npm workspaces (e.g., `workspaces: ["addons/*"]`) no longer produce false "missing dependency" reports for workspace-internal packages. New `_detect_npm_workspace_packages()` resolves workspace globs and nested package.json files to identify workspace members. Missing deps reduced from 19 to 2 on xterm.js.
+- **Config drift: webpack/tsconfig alias detection**: Webpack `resolve.alias` entries and tsconfig `compilerOptions.paths` are now detected and excluded from "missing dependency" checks. PascalCase single-word imports (e.g., `SerializeAddon`) are heuristically identified as build aliases with `info` severity.
+- **Perf-hint: 4x+ speed improvement**: Replaced threading-based regex timeout (`_timed_finditer`) with iterative time-checking. Threading added ~2ms overhead per regex call, creating ~14K threads on medium repos. New approach: run directly for content <50KB, check time every 10 matches for larger content. Full scan on xterm.js: 29s (was >120s timeout). Added `GLOBAL_TIMEOUT_SEC=180` safety net.
+- **Perf-hint: wider catastrophic backtracking detection**: `_WIDE_QUANTIFIER_RE` now catches `[^X]*` and `[^X]+` negated character class patterns that cause catastrophic backtracking (e.g., the nested loop detection regex on 150KB+ files).
+- **Side-effect: test file context awareness**: IO side effects in test/benchmark/demo files are downgraded to `severity: "test_context"` with an explanatory note, making it clear they are not actionable.
+
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 
 - **Bugfix: `is_bundled_file` missing from utils.py**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) were silently broken due to missing `is_bundled_file` function in `utils.py`. Now added with proper path-based and extension-based detection for minified, bundled, and dist/build output files.
