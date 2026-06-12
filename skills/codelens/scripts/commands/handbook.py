@@ -146,7 +146,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Circular dependency detection failed", exc_info=True)
     try:
         dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+        dead_count = dead_result.get("stats", {}).get("total_dead_code", dead_result.get("stats", {}).get("total_dead", 0))
         if dead_count > 0:
             risks.append({"type": "dead_code", "count": dead_count})
     except Exception:
@@ -244,9 +244,11 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     has_package_json = False
     has_cargo_toml = False
     has_pyproject = False
+    has_go_mod = False
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
+    go_type = None  # v6.1: track Go-derived type
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -398,8 +400,36 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    # v6.1: Try go.mod — detect Go project identity
+    go_mod_path = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod_path):
+        has_go_mod = True
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Parse module path and version from go.mod
+            module_match = re.search(r'^module\s+(\S+)', content, re.MULTILINE)
+            go_ver_match = re.search(r'^go\s+(\S+)', content, re.MULTILINE)
+            if module_match:
+                # Extract module name (last part of path)
+                mod_path = module_match.group(1)
+                identity["name"] = mod_path.split('/')[-1]
+            if go_ver_match:
+                identity["version"] = go_ver_match.group(1)
+            # Determine Go project type from dependencies
+            if 'gin-gonic/gin' in content or 'echo' in content or 'chi' in content or 'fiber' in content:
+                go_type = "go-web-api"
+            elif 'kubernetes' in content:
+                go_type = "go-kubernetes"
+            elif 'grpc' in content:
+                go_type = "go-grpc-service"
+            else:
+                go_type = "go-project"
+        except Exception:
+            logger.warning("go.mod parsing failed", exc_info=True)
+
+    # v6.1: Combined type detection — handle polyglot projects (now includes Go)
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -410,6 +440,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        if go_type:
+            type_parts.append("go")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

@@ -96,12 +96,19 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
 
     Returns a summary-level outline (not per-function detail).
+
+    Args:
+        workspace: Absolute path to workspace.
+        file_filter: Optional substring to filter files by relative path.
+        config: Optional project config dict (for ignore paths).
+        max_files: Maximum number of files to outline (0 = unlimited).
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -111,11 +118,13 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+        '.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.lua', '.rb',
     }
 
     outlines = []
     errors = []
+    file_count = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -138,18 +147,23 @@ def get_workspace_outline(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            if max_files > 0 and file_count >= max_files:
+                break
+
             result = get_file_outline(file_path, workspace, detail_level="minimal")
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+            file_count += 1
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
         "outlines": outlines,
-        "errors": errors if errors else None
+        "errors": errors if errors else None,
+        "truncated": max_files > 0 and file_count >= max_files
     }
 
 

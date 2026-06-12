@@ -76,6 +76,8 @@ def _detect_project_type(workspace: str) -> str:
         return "node"
     elif os.path.exists(os.path.join(workspace, "Cargo.toml")):
         return "rust"
+    elif os.path.exists(os.path.join(workspace, "go.mod")):
+        return "go"
     elif os.path.exists(os.path.join(workspace, "requirements.txt")) or \
          os.path.exists(os.path.join(workspace, "pyproject.toml")):
         return "python"
@@ -258,6 +260,34 @@ def _load_declared_dependencies(workspace: str, project_type: str) -> Dict:
             except IOError:
                 logger.debug("Config drift: failed to parse file", exc_info=True)
 
+    elif project_type == "go":
+        go_mod_path = os.path.join(workspace, "go.mod")
+        if os.path.exists(go_mod_path):
+            try:
+                with open(go_mod_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                in_require = False
+                for line in content.split('\n'):
+                    stripped = line.strip()
+                    if stripped == 'require (':
+                        in_require = True
+                        continue
+                    elif stripped == ')':
+                        in_require = False
+                        continue
+                    elif stripped.startswith('require '):
+                        # Single-line require: require "pkg" v1.2.3
+                        m = re.match(r'require\s+(\S+)\s+(\S+)', stripped)
+                        if m:
+                            declared["dependencies"][m.group(1)] = m.group(2)
+                        continue
+                    if in_require and stripped and not stripped.startswith('//'):
+                        parts = stripped.split()
+                        if len(parts) >= 2:
+                            declared["dependencies"][parts[0]] = parts[1]
+            except IOError:
+                logger.debug("Config drift: failed to parse go.mod", exc_info=True)
+
     return declared
 
 def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
@@ -380,6 +410,27 @@ def _scan_actual_imports(workspace: str, project_type: str) -> Dict:
                         # Validate: only accept alphanumeric + underscore crate names
                         if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', pkg_name):
                             external.add(pkg_name)
+
+            elif ext == ".go":
+                # Parse Go import statements
+                # Handle: import "pkg" and import ("pkg1"\n"pkg2")
+                for m in re.finditer(r'import\s+"([^"]+)"', content):
+                    imp = m.group(1)
+                    if not imp.startswith(('internal/', 'vendor/')):
+                        external.add(imp)
+                # Multi-line import block
+                for m in re.finditer(r'import\s*\((.*?)\)', content, re.DOTALL):
+                    block = m.group(1)
+                    for line in block.split('\n'):
+                        stripped = line.strip()
+                        if stripped.startswith('//') or not stripped:
+                            continue
+                        # Extract quoted path
+                        imp_match = re.search(r'"([^"]+)"', stripped)
+                        if imp_match:
+                            imp = imp_match.group(1)
+                            if not imp.startswith(('internal/', 'vendor/')):
+                                external.add(imp)
 
     return {
         "external": external,

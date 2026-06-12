@@ -33,7 +33,8 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs",
+    ".py", ".rs", ".go",
+    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
 }
 
 # Cyclomatic complexity thresholds
@@ -273,6 +274,10 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_py_functions(lines, content)
     elif ext == ".rs":
         functions = _extract_rs_functions(lines, content)
+    elif ext == ".go":
+        functions = _extract_go_functions(lines, content)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        functions = _extract_c_cpp_functions(lines, content, ext)
 
     return functions
 
@@ -368,6 +373,63 @@ def _extract_rs_functions(lines: List[str], content: str) -> List[Dict]:
                 "name": m.group(1),
                 "line": i + 1,
                 "type": "fn",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_go_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract Go function definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        # Match: func Name(params) or func (receiver) Name(params)
+        m = re.match(
+            r'\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)',
+            line
+        )
+        if m:
+            fn_name = m.group(1)
+            # Skip init() and main() as they are entry points
+            functions.append({
+                "name": fn_name,
+                "line": i + 1,
+                "type": "func",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[Dict]:
+    """Extract C/C++ function definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        # C/C++ function definition pattern:
+        # type name(params) {  or  type Class::name(params) {
+        # Skip common non-function patterns
+        m = re.match(
+            r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+            r'(?:[\w:*&<>,\s]+?)\s+'
+            r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?\{',
+            line
+        )
+        if m:
+            fn_name = m.group(1)
+            # Skip control flow keywords and common non-function names
+            skip_names = {'if', 'for', 'while', 'switch', 'catch', 'return',
+                         'class', 'struct', 'enum', 'union', 'namespace', 'typedef',
+                         'using', 'template', 'include', 'define', 'ifdef', 'endif'}
+            if fn_name in skip_names:
+                continue
+            functions.append({
+                "name": fn_name,
+                "line": i + 1,
+                "type": "function",
                 "params_str": m.group(2),
                 "start_col": len(line) - len(line.lstrip()),
             })
@@ -481,6 +543,10 @@ def _compute_cyclomatic(fn_body: str, ext: str) -> int:
         decisions += _count_py_decisions(clean)
     elif ext == ".rs":
         decisions += _count_rs_decisions(clean)
+    elif ext == ".go":
+        decisions += _count_go_decisions(clean)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        decisions += _count_c_cpp_decisions(clean)
 
     return decisions + 1
 
@@ -574,6 +640,61 @@ def _count_rs_decisions(clean: str) -> int:
     return count
 
 
+def _count_go_decisions(clean: str) -> int:
+    """Count decision points in Go code."""
+    count = 0
+
+    # if statements
+    count += len(re.findall(r'\bif\s+', clean))
+    # else if
+    count += len(re.findall(r'\belse\s+if\s+', clean))
+    # else
+    count += len(re.findall(r'\belse\s*\{', clean))
+    # for loops
+    count += len(re.findall(r'\bfor\s+', clean))
+    # switch cases — each case is a decision
+    count += len(re.findall(r'\bcase\s+', clean))
+    # select cases — each case in a select statement
+    count += len(re.findall(r'\bcase\s+<-', clean))
+    # && and ||
+    count += clean.count('&&')
+    count += clean.count('||')
+
+    return count
+
+
+def _count_c_cpp_decisions(clean: str) -> int:
+    """Count decision points in C/C++ code."""
+    count = 0
+
+    # if statements
+    count += len(re.findall(r'\bif\s*\(', clean))
+    # else if
+    count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    # else
+    count += len(re.findall(r'\belse\s*\{', clean))
+    # for loops
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    # while loops
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    # do-while
+    count += len(re.findall(r'\bdo\s*\{', clean))
+    # switch cases — each case is a decision
+    count += len(re.findall(r'\bcase\s+', clean))
+    # catch blocks
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    # && and ||
+    count += clean.count('&&')
+    count += clean.count('||')
+    # Ternary operator
+    count += len(re.findall(r'\?\s*[^:]+\s*:', clean))
+    # Preprocessor #if (each is a decision branch)
+    count += len(re.findall(r'^\s*#\s*if\b', clean, re.MULTILINE))
+    count += len(re.findall(r'^\s*#\s*elif\b', clean, re.MULTILINE))
+
+    return count
+
+
 # ─── Cognitive Complexity ──────────────────────────────────────
 
 def _compute_cognitive(fn_body: str, ext: str) -> int:
@@ -602,6 +723,10 @@ def _compute_cognitive(fn_body: str, ext: str) -> int:
         total = _cognitive_py(lines)
     elif ext == ".rs":
         total = _cognitive_rs(lines)
+    elif ext == ".go":
+        total = _cognitive_brace_based(lines)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        total = _cognitive_brace_based(lines)
 
     return total
 
@@ -756,6 +881,61 @@ def _cognitive_rs(lines: List[str]) -> int:
         # Logical operators
         total += stripped.count('&&')
         total += stripped.count('||')
+
+        # Track nesting
+        for ch in stripped:
+            if ch == '{':
+                brace_stack.append(nesting)
+                nesting += 1
+            elif ch == '}':
+                if brace_stack:
+                    nesting = brace_stack.pop()
+                elif nesting > 0:
+                    nesting -= 1
+
+    return total
+
+
+def _cognitive_brace_based(lines: List[str]) -> int:
+    """Compute cognitive complexity for brace-based languages (Go, C/C++)."""
+    total = 0
+    nesting = 0
+    brace_stack = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Control flow increments
+        if re.search(r'\bif\s*', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belse\s+if\b', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belse\s*\{', stripped) or re.search(r'\belse\s*$', stripped):
+            total += nesting
+        elif re.search(r'\bfor\s*', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhile\s*\(', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bdo\s*\{', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bswitch\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcase\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcatch\s*\(', stripped):
+            total += 1 + nesting
+        # Go-specific: select statement
+        elif re.search(r'\bselect\s*\{', stripped):
+            total += 1 + nesting
+
+        # Logical operators
+        total += stripped.count('&&')
+        total += stripped.count('||')
+        # C/C++ ternary
+        if '?' in stripped and ':' in stripped:
+            total += 1
 
         # Track nesting
         for ch in stripped:
