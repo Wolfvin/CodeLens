@@ -392,6 +392,45 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 CODELENS_VERSION = "6.3.0"
 
 
+# ─── Bundled File Detection ─────────────────────────────────
+
+BUNDLED_DIR_SEGMENTS = frozenset({
+    'dist', 'build', 'out', 'bundle', 'bundled', 'compiled',
+    '.output', '.nuxt', '.next',
+})
+
+BUNDLED_FILE_SUFFIXES = (
+    '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+    '.bundle.css', '.chunk.css', '.global.js', '.global.css',
+)
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative file path appears to be a bundled/compiled artifact.
+
+    Matches files in dist/, build/, out/, etc. directories and files with
+    common bundled suffixes (.min.js, .bundle.js, .chunk.js, etc.).
+
+    Args:
+        rel_path: Relative path from workspace root.
+
+    Returns:
+        True if the file appears to be bundled/compiled.
+    """
+    lower = rel_path.replace('\\', '/').lower()
+    # Check directory segments
+    parts = lower.split('/')
+    for seg in parts[:-1]:  # exclude filename itself
+        if seg in BUNDLED_DIR_SEGMENTS:
+            return True
+    # Check filename suffixes
+    filename = parts[-1]
+    for suffix in BUNDLED_FILE_SUFFIXES:
+        if filename.endswith(suffix):
+            return True
+    return False
+
+
 # ─── Generated File Detection ───────────────────────────────
 
 GENERATED_FILE_PATTERNS = frozenset({

@@ -717,6 +717,26 @@ def _compute_cyclomatic(fn_body: str, ext: str) -> int:
         decisions += _count_go_decisions(clean)
     elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
         decisions += _count_c_cpp_decisions(clean)
+    elif ext == ".php":
+        decisions += _count_php_decisions(clean)
+    elif ext in {".ex", ".exs"}:
+        decisions += _count_elixir_decisions(clean)
+    elif ext == ".rb":
+        decisions += _count_ruby_decisions(clean)
+    elif ext == ".lua":
+        decisions += _count_lua_decisions(clean)
+    elif ext in {".nim", ".nims"}:
+        decisions += _count_nim_decisions(clean)
+    elif ext == ".java":
+        decisions += _count_java_decisions(clean)
+    elif ext == ".cs":
+        decisions += _count_csharp_decisions(clean)
+    elif ext in {".swift", ".scala", ".sc"}:
+        decisions += _count_swift_scala_decisions(clean)
+    elif ext == ".dart":
+        decisions += _count_dart_decisions(clean)
+    elif ext in {".sh", ".bash", ".zsh"}:
+        decisions += _count_shell_decisions(clean)
 
     return decisions + 1
 
@@ -865,6 +885,181 @@ def _count_c_cpp_decisions(clean: str) -> int:
     return count
 
 
+def _count_php_decisions(clean: str) -> int:
+    """Count decision points in PHP code."""
+    count = 0
+    count += len(re.findall(r'\bif\s*\(', clean))
+    count += len(re.findall(r'\belseif\s*\(', clean))
+    count += len(re.findall(r'\belse\s*\{', clean))
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    count += len(re.findall(r'\bforeach\s*\(', clean))
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    count += len(re.findall(r'\bdo\s*\{', clean))
+    count += len(re.findall(r'\bswitch\s*\(', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    count += clean.count('&&')
+    count += clean.count('||')
+    count += len(re.findall(r'\?\s*[^:?]', clean))  # ternary
+    count += len(re.findall(r'\bmatch\s*\(', clean))  # PHP 8 match
+    return count
+
+
+def _count_elixir_decisions(clean: str) -> int:
+    """Count decision points in Elixir code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belif\s+', clean))
+    count += len(re.findall(r'\bunless\s+', clean))
+    count += len(re.findall(r'\bcond\s+do', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bwith\s+', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\btry\s+do', clean))
+    count += len(re.findall(r'\brescue\s+', clean))
+    count += len(re.findall(r'\bcatch\s+', clean))
+    count += clean.count(' and ')
+    count += clean.count(' or ')
+    count += len(re.findall(r'\?\s*', clean))  # Elixir ternary-like
+    return count
+
+
+def _count_ruby_decisions(clean: str) -> int:
+    """Count decision points in Ruby code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belsif\s+', clean))
+    count += len(re.findall(r'\bunless\s+', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\bwhile\s+', clean))
+    count += len(re.findall(r'\buntil\s+', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bwhen\s+', clean))
+    count += len(re.findall(r'\brescue\s+', clean))
+    count += clean.count(' && ')
+    count += clean.count(' || ')
+    count += len(re.findall(r'\?\s*[^:?]', clean))  # ternary
+    return count
+
+
+def _count_lua_decisions(clean: str) -> int:
+    """Count decision points in Lua code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belseif\s+', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\bwhile\s+', clean))
+    count += len(re.findall(r'\brepeat\s+', clean))
+    count += clean.count(' and ')
+    count += clean.count(' or ')
+    return count
+
+
+def _count_nim_decisions(clean: str) -> int:
+    """Count decision points in Nim code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belif\s+', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\bwhile\s+', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bof\s+', clean))
+    count += len(re.findall(r'\btry\s+', clean))
+    count += len(re.findall(r'\bexcept\s+', clean))
+    count += clean.count(' and ')
+    count += clean.count(' or ')
+    return count
+
+
+def _count_java_decisions(clean: str) -> int:
+    """Count decision points in Java code."""
+    count = 0
+    count += len(re.findall(r'\bif\s*\(', clean))
+    count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    count += len(re.findall(r'\belse\s*\{', clean))
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    count += len(re.findall(r'\bdo\s*\{', clean))
+    count += len(re.findall(r'\bswitch\s*\(', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    count += clean.count('&&')
+    count += clean.count('||')
+    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary
+    return count
+
+
+def _count_csharp_decisions(clean: str) -> int:
+    """Count decision points in C# code."""
+    count = 0
+    count += len(re.findall(r'\bif\s*\(', clean))
+    count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    count += len(re.findall(r'\belse\s*\{', clean))
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    count += len(re.findall(r'\bforeach\s*\(', clean))
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    count += len(re.findall(r'\bdo\s*\{', clean))
+    count += len(re.findall(r'\bswitch\s*\(', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    count += clean.count('&&')
+    count += clean.count('||')
+    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary / null-coalescing
+    count += clean.count('??')  # null-coalescing
+    return count
+
+
+def _count_swift_scala_decisions(clean: str) -> int:
+    """Count decision points in Swift/Scala code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belse\s+if\s+', clean))
+    count += len(re.findall(r'\belse\s*\{', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\bwhile\s+', clean))
+    count += len(re.findall(r'\bswitch\s+', clean))  # Swift
+    count += len(re.findall(r'\bmatch\s+', clean))   # Scala
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bcatch\s*\{', clean))
+    count += clean.count('&&')
+    count += clean.count('||')
+    count += len(re.findall(r'\?\s*[^.?]', clean))
+    return count
+
+
+def _count_dart_decisions(clean: str) -> int:
+    """Count decision points in Dart code."""
+    count = 0
+    count += len(re.findall(r'\bif\s*\(', clean))
+    count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    count += len(re.findall(r'\belse\s*\{', clean))
+    count += len(re.findall(r'\bfor\s*\(', clean))
+    count += len(re.findall(r'\bwhile\s*\(', clean))
+    count += len(re.findall(r'\bswitch\s*\(', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bcatch\s*\(', clean))
+    count += clean.count('&&')
+    count += clean.count('||')
+    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary / null-aware
+    count += clean.count('??')  # null-coalescing
+    return count
+
+
+def _count_shell_decisions(clean: str) -> int:
+    """Count decision points in Shell/Bash code."""
+    count = 0
+    count += len(re.findall(r'\bif\s+', clean))
+    count += len(re.findall(r'\belif\s+', clean))
+    count += len(re.findall(r'\bfor\s+', clean))
+    count += len(re.findall(r'\bwhile\s+', clean))
+    count += len(re.findall(r'\buntil\s+', clean))
+    count += len(re.findall(r'\bcase\s+', clean))
+    count += len(re.findall(r'\bselect\s+', clean))
+    count += clean.count(' && ')
+    count += clean.count(' || ')
+    return count
+
+
 # ─── Cognitive Complexity ──────────────────────────────────────
 
 def _compute_cognitive(fn_body: str, ext: str) -> int:
@@ -897,6 +1092,26 @@ def _compute_cognitive(fn_body: str, ext: str) -> int:
         total = _cognitive_brace_based(lines)
     elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
         total = _cognitive_brace_based(lines)
+    elif ext == ".php":
+        total = _cognitive_brace_based(lines)
+    elif ext == ".java":
+        total = _cognitive_brace_based(lines)
+    elif ext == ".cs":
+        total = _cognitive_brace_based(lines)
+    elif ext in {".swift", ".scala", ".sc"}:
+        total = _cognitive_brace_based(lines)
+    elif ext == ".dart":
+        total = _cognitive_brace_based(lines)
+    elif ext in {".ex", ".exs"}:
+        total = _cognitive_elixir(lines)
+    elif ext == ".rb":
+        total = _cognitive_ruby(lines)
+    elif ext == ".lua":
+        total = _cognitive_lua(lines)
+    elif ext in {".nim", ".nims"}:
+        total = _cognitive_nim(lines)
+    elif ext in {".sh", ".bash", ".zsh"}:
+        total = _cognitive_shell(lines)
 
     return total
 
@@ -1118,6 +1333,284 @@ def _cognitive_brace_based(lines: List[str]) -> int:
                     nesting = brace_stack.pop()
                 elif nesting > 0:
                     nesting -= 1
+
+    return total
+
+
+def _cognitive_elixir(lines: List[str]) -> int:
+    """Compute cognitive complexity for Elixir code (do/end blocks)."""
+    total = 0
+    nesting = 0
+    depth_stack = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Control flow increments
+        if re.search(r'\bif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bunless\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcond\s+do', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcase\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwith\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bfor\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\btry\s+do', stripped):
+            total += 1 + nesting
+        elif re.search(r'\brescue\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcatch\s+', stripped):
+            total += 1 + nesting
+
+        # Logical operators
+        total += stripped.count(' and ')
+        total += stripped.count(' or ')
+
+        # Track nesting via do/end
+        # Only count block 'do' (not one-liner 'do:')
+        inline_do_colon = len(re.findall(r'\bdo:', stripped))
+        block_do = 0
+        if stripped.endswith(' do') or stripped.endswith(' do|'):
+            block_do = 1
+        elif re.search(r'\bdo\b(?!\s*:)', stripped):
+            block_do = 1
+        # Subtract one-liner do: from block count
+        effective_do = block_do - inline_do_colon
+        for _ in range(max(0, effective_do)):
+            depth_stack.append(nesting)
+            nesting += 1
+        end_count = stripped.count('end')
+        for _ in range(end_count):
+            if depth_stack:
+                nesting = depth_stack.pop()
+            elif nesting > 0:
+                nesting -= 1
+
+    return total
+
+
+def _cognitive_ruby(lines: List[str]) -> int:
+    """Compute cognitive complexity for Ruby code (do/end blocks)."""
+    total = 0
+    nesting = 0
+    depth_stack = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Control flow increments
+        if re.search(r'\bif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belsif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bunless\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhile\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\buntil\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bfor\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcase\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhen\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\brescue\s+', stripped):
+            total += 1 + nesting
+
+        # Logical operators
+        total += stripped.count(' && ')
+        total += stripped.count(' || ')
+
+        # Track nesting via do/end/if/unless/while/until/for/case + end
+        openers = 0
+        if re.search(r'\bdo\b', stripped):
+            openers += 1
+        if re.search(r'\bif\s+', stripped) and not re.search(r'\belsif\s+', stripped):
+            openers += 1
+        if re.search(r'\bunless\s+', stripped):
+            openers += 1
+        if re.search(r'\bwhile\s+', stripped):
+            openers += 1
+        if re.search(r'\buntil\s+', stripped):
+            openers += 1
+        if re.search(r'\bcase\s+', stripped):
+            openers += 1
+        for _ in range(openers):
+            depth_stack.append(nesting)
+            nesting += 1
+        end_count = stripped.count('end')
+        for _ in range(end_count):
+            if depth_stack:
+                nesting = depth_stack.pop()
+            elif nesting > 0:
+                nesting -= 1
+
+    return total
+
+
+def _cognitive_lua(lines: List[str]) -> int:
+    """Compute cognitive complexity for Lua code (then/end blocks)."""
+    total = 0
+    nesting = 0
+    depth_stack = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Control flow increments
+        if re.search(r'\bif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belseif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bfor\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhile\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\brepeat\s+', stripped):
+            total += 1 + nesting
+
+        # Logical operators
+        total += stripped.count(' and ')
+        total += stripped.count(' or ')
+
+        # Track nesting
+        openers = 0
+        if re.search(r'\bif\s+', stripped) and not re.search(r'\belseif\s+', stripped):
+            openers += 1
+        if re.search(r'\bfor\s+', stripped):
+            openers += 1
+        if re.search(r'\bwhile\s+', stripped):
+            openers += 1
+        if re.search(r'\brepeat\s+', stripped):
+            openers += 1
+        if re.search(r'\bfunction\s+', stripped):
+            openers += 1
+        for _ in range(openers):
+            depth_stack.append(nesting)
+            nesting += 1
+        end_count = stripped.count('end')
+        until_count = len(re.findall(r'\buntil\s+', stripped))
+        for _ in range(end_count + until_count):
+            if depth_stack:
+                nesting = depth_stack.pop()
+            elif nesting > 0:
+                nesting -= 1
+
+    return total
+
+
+def _cognitive_nim(lines: List[str]) -> int:
+    """Compute cognitive complexity for Nim code (indentation-based)."""
+    total = 0
+    prev_indents = [0]
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        current_indent = len(line) - len(line.lstrip())
+        while prev_indents and prev_indents[-1] > current_indent:
+            prev_indents.pop()
+        if current_indent > (prev_indents[-1] if prev_indents else 0):
+            prev_indents.append(current_indent)
+        nesting = len(prev_indents) - 1
+
+        # Control flow increments
+        if re.search(r'\bif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bfor\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhile\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcase\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bof\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\btry\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bexcept\s+', stripped):
+            total += 1 + nesting
+
+        total += stripped.count(' and ')
+        total += stripped.count(' or ')
+
+    return total
+
+
+def _cognitive_shell(lines: List[str]) -> int:
+    """Compute cognitive complexity for Shell/Bash code."""
+    total = 0
+    nesting = 0
+    depth_stack = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Control flow increments
+        if re.search(r'\bif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\belif\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bfor\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bwhile\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\buntil\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bcase\s+', stripped):
+            total += 1 + nesting
+        elif re.search(r'\bselect\s+', stripped):
+            total += 1 + nesting
+
+        total += stripped.count(' && ')
+        total += stripped.count(' || ')
+
+        # Track nesting
+        openers = 0
+        if re.search(r'\bif\s+', stripped) and not re.search(r'\belif\s+', stripped):
+            openers += 1
+        if re.search(r'\bfor\s+', stripped):
+            openers += 1
+        if re.search(r'\bwhile\s+', stripped):
+            openers += 1
+        if re.search(r'\buntil\s+', stripped):
+            openers += 1
+        if re.search(r'\bcase\s+', stripped):
+            openers += 1
+        for _ in range(openers):
+            depth_stack.append(nesting)
+            nesting += 1
+        # fi, done, esac close blocks
+        closers = 0
+        if stripped == 'fi' or stripped.startswith('fi ') or stripped.startswith('fi;'):
+            closers += 1
+        if stripped == 'done' or stripped.startswith('done ') or stripped.startswith('done;'):
+            closers += 1
+        if stripped == 'esac' or stripped.startswith('esac ') or stripped.startswith('esac;'):
+            closers += 1
+        for _ in range(closers):
+            if depth_stack:
+                nesting = depth_stack.pop()
+            elif nesting > 0:
+                nesting -= 1
 
     return total
 

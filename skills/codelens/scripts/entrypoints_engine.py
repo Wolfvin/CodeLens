@@ -136,6 +136,29 @@ ENTRYPOINT_PATTERNS = {
                 "label": "js_default_export_main",
                 "filename_filter": {"index.ts", "index.js", "index.tsx", "main.ts", "main.js"},
             },
+            # Elixir — Application callback module
+            {
+                "regex": r'use\s+Application',
+                "language": {".ex", ".exs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "elixir_application",
+            },
+            # Elixir — main function in .exs scripts
+            {
+                "regex": r'def\s+main\s*\(',
+                "language": {".exs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "elixir_main_fn",
+            },
+            # PHP — plain PHP entry point (script with php_sapi_name check)
+            {
+                "regex": r'php_sapi_name\s*\(\s*\)\s*===\s*[\'"]cli[\'"]',
+                "language": {".php"},
+                "extract": "none",
+                "label": "php_cli_entry",
+            },
         ],
     },
 
@@ -335,6 +358,38 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
+            },
+            # Elixir — Phoenix routes
+            {
+                "regex": r'(?:get|post|put|patch|delete|options)\s+["\']([^"\']+)["\']\s*,\s*(\w+)\s*,\s*:(\w+)',
+                "language": {".ex", ".exs"},
+                "extract": "elixir_phoenix_route",
+                "path_group": 1,
+                "label": "elixir_phoenix_route",
+            },
+            # Elixir — Phoenix scope
+            {
+                "regex": r'scope\s+["\']([^"\']+)["\']\s*,\s*(\w+)\s+do',
+                "language": {".ex", ".exs"},
+                "extract": "elixir_phoenix_scope",
+                "path_group": 1,
+                "label": "elixir_phoenix_scope",
+            },
+            # Elixir — Phoenix LiveView route
+            {
+                "regex": r'live\s+["\']([^"\']+)["\']\s*,\s*(\w+)',
+                "language": {".ex", ".exs"},
+                "extract": "elixir_live_route",
+                "path_group": 1,
+                "label": "elixir_phoenix_live",
+            },
+            # PHP — Symfony Route attribute
+            {
+                "regex": r'#\[Route\s*\(\s*(?:"|\')(?:^"|^\')([^"\']+)(?:"|\')\s*',
+                "language": {".php"},
+                "extract": "http_route",
+                "path_group": 1,
+                "label": "symfony_route_attribute",
             },
         ],
     },
@@ -672,6 +727,30 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "gcp_function",
             },
+            # Elixir — Oban worker
+            {
+                "regex": r'use\s+Oban\.Worker',
+                "language": {".ex", ".exs"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "elixir_oban_worker",
+            },
+            # Elixir — GenServer
+            {
+                "regex": r'use\s+GenServer',
+                "language": {".ex", ".exs"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "elixir_genserver",
+            },
+            # Elixir — Supervisor child_spec
+            {
+                "regex": r'child_spec\s*:\s*%{',
+                "language": {".ex", ".exs"},
+                "extract": "handler_only",
+                "handler_group": 0,
+                "label": "elixir_supervisor_child",
+            },
         ],
     },
 
@@ -719,6 +798,14 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "python_all_export",
+            },
+            # Elixir — public def (not defp)
+            {
+                "regex": r'\bdef\s+(\w+)\s*[\(\s]',
+                "language": {".ex", ".exs"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "elixir_public_def",
             },
         ],
     },
@@ -786,6 +873,45 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "test_name",
                 "name_group": 1,
                 "label": "rust_test_module",
+            },
+            # Elixir ExUnit describe/test
+            {
+                "regex": r'describe\s+["\']([^"\']+)["\']',
+                "language": {".ex", ".exs"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "elixir_describe",
+            },
+            {
+                "regex": r'test\s+["\']([^"\']+)["\']',
+                "language": {".ex", ".exs"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "elixir_test",
+            },
+            # Go test function
+            {
+                "regex": r'func\s+(Test\w+)\s*\(\s*t\s*\*\s*testing\.T',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_test_fn",
+            },
+            # Go benchmark function
+            {
+                "regex": r'func\s+(Benchmark\w+)\s*\(\s*b\s*\*\s*testing\.B',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_benchmark_fn",
+            },
+            # PHP PHPUnit test
+            {
+                "regex": r'public\s+function\s+(test\w+)\s*\(',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "phpunit_test",
             },
         ],
     },
