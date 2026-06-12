@@ -13,18 +13,6 @@ _logger = logging.getLogger("codelens.framework_detect")
 from utils import DEFAULT_IGNORE_DIRS
 
 
-def _should_skip_dir(root: str) -> bool:
-    """Check if a directory should be skipped during file walking.
-
-    Uses path-segment-aware matching to avoid false positives.
-    For example, 'target' should match '/target/' but NOT '/test-target-nim/'.
-    """
-    root_norm = root.replace('\\', '/')
-    # Split path into segments for proper matching
-    segments = set(root_norm.split('/'))
-    return bool(segments & DEFAULT_IGNORE_DIRS)
-
-
 # Known framework signatures
 FRAMEWORK_SIGNATURES = {
     "react": {
@@ -71,11 +59,6 @@ FRAMEWORK_SIGNATURES = {
         "packages": ["@angular/core"],
         "config_files": ["angular.json"],
         "indicators": [".component.ts"]
-    },
-    "stencil": {
-        "packages": ["@stencil/core"],
-        "config_files": ["stencil.config.ts", "stencil.config.js"],
-        "indicators": ["@Component", "@Prop", "@State", "@Method", "@Listen", "@Element", "@Watch", "h('", "Host("]
     },
     "sveltekit": {
         "packages": ["@sveltejs/kit"],
@@ -304,6 +287,30 @@ FRAMEWORK_SIGNATURES = {
     "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
     "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
     "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
+    # Elixir frameworks
+    "phoenix": {
+        "packages": [],
+        "hex_packages": ["phoenix"],
+        "config_files": ["mix.exs"],
+        "indicators": [".ex", ".exs", "lib/phoenix.ex"]
+    },
+    "ecto": {
+        "packages": [],
+        "hex_packages": ["ecto", "ecto_sql"],
+        "config_files": [],
+        "indicators": []
+    },
+    "oban": {
+        "packages": [],
+        "hex_packages": ["oban"],
+        "config_files": [],
+        "indicators": []
+    },
+    "elixir": {
+        "packages": [],
+        "config_files": ["mix.exs"],
+        "indicators": [".ex", ".exs"]
+    },
 }
 
 
@@ -388,14 +395,6 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
     if os.path.exists(root_pkg):
         pkg_files.append(root_pkg)
 
-    # v6.5: Also check top-level directories that ARE packages (core/, lib/, src/)
-    # Some monorepos like Ionic put the main package in core/ not packages/
-    top_level_pkg_dirs = ('core', 'lib', 'src')
-    for tld in top_level_pkg_dirs:
-        tld_pkg = os.path.join(workspace, tld, "package.json")
-        if os.path.isfile(tld_pkg) and tld_pkg not in pkg_files:
-            pkg_files.append(tld_pkg)
-
     # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
     monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
     for subdir in monorepo_dirs:
@@ -441,7 +440,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_tailwind": False,
         "has_nextjs": False,
         "has_angular": False,
-        "has_stencil": False,
         "has_fastapi": False,
         "has_flask": False,
         "has_django": False,
@@ -455,7 +453,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
-        "has_nim": False,
+        "has_elixir": False,
+        "has_phoenix": False,
+        "has_ecto": False,
+        "has_oban": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -554,8 +555,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_tailwind"] = True
                     elif fw_name == "angular":
                         detected["has_angular"] = True
-                    elif fw_name == "stencil":
-                        detected["has_stencil"] = True
                     elif fw_name == "tauri":
                         detected["has_tauri"] = True
                     elif fw_name == "electron":
@@ -814,7 +813,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            skip = _should_skip_dir(root)
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
             if skip or '.codelens' in root:
                 continue
             for f in files:
@@ -829,7 +832,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Also check for src-tauri directory
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
-                skip = _should_skip_dir(root)
+                skip = False
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
+                        skip = True
+                        break
                 if skip or '.codelens' in root:
                     continue
                 if 'src-tauri' in dirs:
@@ -846,7 +853,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        skip = _should_skip_dir(root)
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
         if skip:
             continue
 
@@ -863,10 +874,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
-            elif f.endswith('.nim') and not detected["has_nim"]:
-                if "nim" not in detected["frameworks"]:
-                    detected["frameworks"].append("nim")
-                detected["has_nim"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -894,7 +901,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = _should_skip_dir(root)
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
             if skip:
                 continue
             for f in files:
@@ -941,40 +952,115 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 6c. Detect Nim frameworks from .nimble files
-    # Parse .nimble files for dependency/framework detection
-    if detected["has_nim"]:
-        _NIM_FRAMEWORK_INDICATORS = {
-            "jester": ["jester"],
-            "prologue": ["prologue"],
-            "karax": ["karax"],
-            "happyx": ["happyx"],
-            "norm": ["norm"],
-            "nimcrypto": ["nimcrypto"],
-        }
-        for root, dirs, fnames in os.walk(workspace):
-            skip = _should_skip_dir(root)
-            if skip or '.codelens' in root:
+    # 6c. Detect Elixir/Phoenix from mix.exs and mix.lock
+    mix_exs_path = os.path.join(workspace, "mix.exs")
+    mix_lock_path = os.path.join(workspace, "mix.lock")
+    has_mix_exs = os.path.isfile(mix_exs_path)
+
+    if has_mix_exs:
+        detected["has_elixir"] = True
+        if "elixir" not in detected["frameworks"]:
+            detected["frameworks"].append("elixir")
+
+        # Parse mix.exs for Phoenix/Ecto/Oban deps
+        hex_deps = set()
+        try:
+            with open(mix_exs_path, 'r', encoding='utf-8') as f:
+                mix_content = f.read()
+            # Extract hex package names from deps function
+            # Pattern: {:package_name, "~> version"} or {:package_name, github: ...}
+            for m in re.finditer(r'\{:([\w_]+)\s*,', mix_content):
+                dep_name = m.group(1)
+                hex_deps.add(dep_name.lower())
+        except IOError:
+            pass
+
+        # Also check mix.lock for resolved deps (more reliable)
+        if os.path.isfile(mix_lock_path):
+            try:
+                with open(mix_lock_path, 'r', encoding='utf-8') as f:
+                    lock_content = f.read()
+                for m in re.finditer(r'"([\w_]+)"\s*:', lock_content):
+                    dep_name = m.group(1).lower()
+                    hex_deps.add(dep_name)
+            except IOError:
+                pass
+
+        # Match hex deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
                 continue
-            for fn in fnames:
-                if fn.endswith('.nimble'):
-                    try:
-                        nimble_path = os.path.join(root, fn)
-                        with open(nimble_path, 'r', encoding='utf-8') as f:
-                            nimble_content = f.read()
-                        # Check for Nim framework deps in requires clause
-                        for fw_name, indicators in _NIM_FRAMEWORK_INDICATORS.items():
-                            if fw_name in detected["frameworks"]:
-                                continue
-                            for indicator in indicators:
-                                if indicator in nimble_content:
-                                    detected["frameworks"].append(fw_name)
+            hex_pkgs = sig.get("hex_packages", [])
+            for pkg_name in hex_pkgs:
+                if pkg_name.lower() in hex_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "phoenix":
+                        detected["has_phoenix"] = True
+                    elif fw_name == "ecto":
+                        detected["has_ecto"] = True
+                    elif fw_name == "oban":
+                        detected["has_oban"] = True
+                    break
+
+        # Fallback: detect Phoenix from source code patterns if deps weren't found
+        if not detected["has_phoenix"]:
+            # Check for Phoenix-specific modules in lib/ directory
+            phoenix_indicators = [
+                "lib/phoenix.ex",
+                "lib/phoenix/router.ex",
+                "lib/phoenix/endpoint.ex",
+                "lib/phoenix/controller.ex",
+                "lib/phoenix/channel.ex",
+            ]
+            for indicator in phoenix_indicators:
+                if os.path.isfile(os.path.join(workspace, indicator)):
+                    detected["has_phoenix"] = True
+                    if "phoenix" not in detected["frameworks"]:
+                        detected["frameworks"].append("phoenix")
+                    break
+
+            # Also scan for "use Phoenix" or "use Phoenix.Web" patterns in .ex files
+            if not detected["has_phoenix"]:
+                phoenix_code_indicators = [
+                    "use Phoenix",
+                    "use Phoenix.Router",
+                    "use Phoenix.Controller",
+                    "use Phoenix.Endpoint",
+                    "defmodule Phoenix.",
+                ]
+                # Quick scan up to 20 .ex files
+                ex_count = 0
+                for root, dirs, filenames in os.walk(workspace):
+                    dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                    if '.codelens' in root:
+                        dirs.clear()
+                        continue
+                    for fn in filenames:
+                        if fn.endswith(('.ex', '.exs')):
+                            ex_count += 1
+                            if ex_count > 20:
+                                break
+                            try:
+                                fpath = os.path.join(root, fn)
+                                with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                                    content = fh.read(8192)
+                                    for indicator in phoenix_code_indicators:
+                                        if indicator in content:
+                                            detected["has_phoenix"] = True
+                                            if "phoenix" not in detected["frameworks"]:
+                                                detected["frameworks"].append("phoenix")
+                                            break
+                                if detected["has_phoenix"]:
                                     break
-                    except IOError:
-                        pass
+                            except IOError:
+                                pass
+                    if detected["has_phoenix"] or ex_count > 20:
+                        break
+
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
+    # Note: Elixir also has fallback parser support and is no longer unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
@@ -1099,13 +1185,14 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
 
-    # Nim: add Nim-specific paths
-    if fw.get("has_nim"):
-        config["backend_paths"].extend(["src/", "lib/", "nimble/"])
-        # For self-hosting compilers like nim-lang/Nim, also add compiler/ path
-        compiler_dir = os.path.join(workspace, "compiler")
-        if os.path.isdir(compiler_dir):
-            config["backend_paths"].append("compiler/")
+    # Elixir/Phoenix: add Elixir-specific paths
+    if fw.get("has_elixir"):
+        config["backend_paths"].extend(["lib/", "lib/phoenix/", "lib/app/"])
+        config["frontend_paths"].extend(["priv/static/", "assets/"])
+        if fw.get("has_phoenix"):
+            config["backend_paths"].extend(["lib/app_web/", "lib/app_web/controllers/",
+                                            "lib/app_web/channels/", "lib/app_web/router.ex"])
+            config["frontend_paths"].extend(["priv/static/assets/"])
 
     # Monorepo: add sub-directory paths
     if fw.get("is_monorepo"):

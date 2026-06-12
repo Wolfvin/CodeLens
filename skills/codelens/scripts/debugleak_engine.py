@@ -30,7 +30,6 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".go", ".rb",
     ".php", ".dart", ".lua", ".java", ".cs",
-    ".nim", ".nims",
 }
 
 # Test-file patterns — findings in these files are downgraded
@@ -50,15 +49,6 @@ DOCS_EXAMPLE_PATTERNS = {
     "docs_src/", "doc_src/", "documentation/",
     "examples/", "example/", "snippets/",
     "tutorial/", "guides/", "demos/", "demo/",
-}
-
-# v7: Exercise/stub file patterns — files in these dirs contain intentionally
-# incomplete code (pass, NotImplementedError) that is not debug code.
-# Also skip exercise test data files (commented code in test data is expected).
-EXERCISE_STUB_PATTERNS = {
-    "/.meta/", "/stubs/", "/_stub",
-    # v7: Test data files in exercises contain commented-out test cases by design
-    "_test_data.py", "_testdata.", "/fixtures/",
 }
 
 # v6.2: Config file patterns — findings in these files are downgraded to "info"
@@ -122,7 +112,6 @@ PRINT_PATTERNS = [
     (r'\bpprint\.pprint\s*\(', "pprint.pprint()"),
     (r'\bpprint\s*\(', "pprint()"),
     (r'\becho\s*\(', "echo()"),
-    (r'\bdebugEcho\s*\(', "debugEcho()"),  # Nim debug-only echo
     (r'\bfmt\.Println\s*\(', "fmt.Println()"),
     (r'\bfmt\.Printf\s*\(', "fmt.Printf()"),
     (r'\bprintln!\s*\(', "println!()"),
@@ -133,6 +122,12 @@ PRINT_PATTERNS = [
     (r'\bvar_dump\s*\(', "var_dump()"),
     (r'\bprint_r\s*\(', "print_r()"),
     (r'\bphpinfo\s*\(', "phpinfo()"),
+    # Elixir debug output
+    (r'\bIO\.inspect\s*\(', "IO.inspect()"),
+    (r'\bIO\.puts\s*\(', "IO.puts()"),
+    (r'\bIO\.warn\s*\(', "IO.warn()"),
+    (r'\bdbg\s*\(', "dbg()"),
+    (r'\brequire_logger\s*\(', "require_logger()"),
 ]
 
 # v5.9: CLI/framework output functions that are NOT debug leaks.
@@ -172,9 +167,8 @@ DEBUGGER_PATTERNS = [
     (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
     (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
     (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
-    # Nim debug assertions
-    (r'\bdoAssert\s*\(', "doAssert()"),   # Nim: debug-only assertion
-    (r'\bassert\s*\(', "assert()"),       # Nim/Python: assertion (debug guard)
+    # Elixir debug/die statements
+    (r'\bIEx\.pry\s*\(', "IEx.pry()"),     # Elixir debugger breakpoint
 ]
 
 # Rust logging macros from the `log` crate — these are NOT debugger statements.
@@ -196,6 +190,16 @@ RUST_LOG_MACROS = [
     (r'\btracing::warn!\s*\(', "tracing::warn!()"),
     (r'\btracing::error!\s*\(', "tracing::error!()"),
     (r'\btracing::trace!\s*\(', "tracing::trace!()"),
+]
+
+# Elixir Logger patterns — these are NOT debug leaks, they are proper structured logging.
+ELIXIR_LOGGER_PATTERNS = [
+    (r'\bLogger\.debug\s*\(', "Logger.debug()"),
+    (r'\bLogger\.info\s*\(', "Logger.info()"),
+    (r'\bLogger\.warning\s*\(', "Logger.warning()"),
+    (r'\bLogger\.warn\s*\(', "Logger.warn()"),
+    (r'\bLogger\.error\s*\(', "Logger.error()"),
+    (r'\brequire Logger\b', "require Logger"),
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -326,11 +330,6 @@ def detect_debug_leaks(
             # Skip documentation/example directories — their print/TODO/debug code
             # is part of demo code, not leftover debug statements
             if any(p in rel_path for p in DOCS_EXAMPLE_PATTERNS):
-                continue
-
-            # v7: Skip exercise stub/meta directories — their code is intentionally
-            # incomplete (pass, NotImplementedError) and not real debug leaks
-            if any(p in rel_path for p in EXERCISE_STUB_PATTERNS):
                 continue
 
             try:
@@ -591,19 +590,6 @@ def _detect_print_statements(
                 if not is_in_test and not has_debug_pattern:
                     continue  # Standard Rust output, not a debug leak
 
-            # Nim: echo() is the standard output function (like println! in Rust),
-            # NOT a debug leak. debugEcho() is the debug-specific variant and
-            # should be flagged. echo() is only flagged in test files or with
-            # debug-specific patterns.
-            if ext in (".nim", ".nims") and label == "echo()":
-                # Check if the line contains debug-specific patterns
-                has_debug_pattern = bool(re.search(
-                    r'\bdebug\b|\bdbg\b|\btodo\b|\bfixme\b|\bhack\b|\btemp\b|\btrace\b|\bdump\b|\bFIXME\b|\bTODO\b|\bHACK\b',
-                    stripped, re.IGNORECASE
-                ))
-                if not is_test_file and not has_debug_pattern:
-                    continue  # Standard Nim output, not a debug leak
-
             severity = "medium"
             should_remove = True
 
@@ -709,6 +695,37 @@ def _detect_debugger_statements(
         # We flag them as low-severity debug_log entries, not high-severity debugger statements.
         if ext == ".rs":
             for pattern, label in RUST_LOG_MACROS:
+                m = re.search(pattern, stripped)
+                if not m:
+                    continue
+
+                # Downgrade severity in test files — logging in tests is expected
+                if is_test_file:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging in test: {label}"
+                else:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging statement: {label} (structured logging, not a debugger)"
+
+                leaks.append({
+                    "category": "debug_log",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": label,
+                    "message": message,
+                    "content": stripped[:120],
+                    "match": label,
+                    "severity": severity,
+                    "should_remove": should_remove,
+                })
+                break
+
+        # Then check for Elixir Logger (not debugger statements, but debug logging)
+        # Elixir Logger is proper structured logging — flag as low severity.
+        if ext in {".ex", ".exs"}:
+            for pattern, label in ELIXIR_LOGGER_PATTERNS:
                 m = re.search(pattern, stripped)
                 if not m:
                     continue
@@ -887,12 +904,6 @@ def _detect_commented_code(
                 severity = "info"
                 should_remove = False
 
-            # v7: In exercise/test files within exercise directories, downgrade
-            # severity — commented code in exercises is part of the teaching material
-            if is_test_file and '/exercises/' in rel_path:
-                severity = "info"
-                should_remove = False
-
             message = f"{block_end - block_start} commented lines (code score: {code_score})"
             if is_config_file:
                 message += " (in config file — not production code)"
@@ -970,13 +981,6 @@ def _detect_mock_data(
     """Detect hardcoded test data in non-test files."""
     if is_test_file:
         return  # Mock data is expected in test files
-
-    # v6.6: Skip mock_data detection entirely in config files.
-    # Test config files (jest.config.*, playwright.config.*, etc.) legitimately
-    # contain test-related patterns (testEnvironment, testRegex, testDir, etc.)
-    # that are never debug leaks — they're the test runner's configuration.
-    if is_config_file:
-        return
 
     for i, line in enumerate(lines):
         stripped = line.strip()

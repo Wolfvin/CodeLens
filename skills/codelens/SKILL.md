@@ -32,36 +32,25 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Nim, Vue SFC, Svelte, Tailwind CSS, SCSS.
+  v6.5 adds: Elixir/Phoenix framework detection and project identity from mix.exs, Phoenix API route extraction (verb, LiveView, resources, scope, pipe_through), Elixir language/debug-leak/secret detection patterns, priority type resolution for polyglot Elixir+JS projects.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Elixir/Phoenix.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
-
-## What's New in v6.5 — Tested on ionic-team/ionic-framework (2330 files, Stencil+React+Vue+Angular lerna monorepo)
-
-- **Stencil.js framework detection**: `detect_frameworks()` now recognizes `@stencil/core` dependency and `stencil.config.ts` config files. Stencil components (`@Component`, `@Prop`, `@State`, `@Method`, `@Listen`) are detected as framework indicators. Sub-directory scanning also detects Stencil in monorepo packages.
-- **SCSS control flow false positive fix**: `css-deep` specificity_wars engine now skips SCSS directives (`@if`, `@else`, `@each`, `@for`, `@while`, `@mixin`, `@include`, `@function`, `@at-root`) that were incorrectly classified as CSS selectors. Handles both standalone directives and inline closing-brace patterns (`} } @else if $var == val {`). Eliminates 4+ false positives from SCSS mixin/control flow blocks per project.
-- **CSS ID hex-color false positive fix**: `missing-refs` now filters out hex color codes (3-8 hex chars like `a0a0a0`, `a1eb9a`) that were falsely classified as CSS IDs. Reduced missing-refs noise from 163 to 72 issues (91 false positives eliminated) on the Ionic test repo.
-- **Monorepo identity from core sub-package**: `_extract_project_identity()` now looks for a `core/`, `packages/core/`, `lib/`, or `src/` sub-directory package.json when the root package.json has no meaningful name (common in lerna monorepos where root is private). For scoped packages like `@ionic/core`, uses the scope name ("ionic") as the project identity. Fixes "test-target-repo" and "0.0.0" identity on monorepos.
-- **Monorepo core/ directory scanning**: `_find_package_jsons()` now also checks top-level directories like `core/`, `lib/`, `src/` for package.json files, not just standard monorepo directories (`apps/`, `packages/`). This fixes framework detection for repos like Ionic where the main package lives in `core/` not `packages/`.
-- **Stencil wrapper component filtering in state-map**: React wrapper components that wrap Stencil web components (Ion-prefixed like `IonButton`, `IonCheckbox`) are no longer classified as state stores. These are React components, not global state. Reduced state-map entries from 16+ to 6 real stores.
-- **Skip .d.ts in entrypoints**: TypeScript declaration files (`.d.ts`) are no longer listed as entry points. They're type declarations, not executable code. Eliminates noise from type declaration files in the entry points list.
-- **Version**: 6.3.1 → 6.5.0.
 
 # CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.5 — Tested on nim-lang/Nim (3,707 .nim files, self-hosting Nim compiler)
+## What's New in v6.5 — Tested on phoenixframework/phoenix (176 Elixir files, Phoenix web framework)
 
-- **Nim parser wired into scan pipeline**: `fallback_nim.py` existed but was never imported by `scan.py`. Added import, file category (`.nim`/`.nims`), parsing block, and stats. Scan now produces 30,987 nodes + 80,405 edges from 3,707 Nim files (previously: 529 nodes from non-Nim files only).
-- **Framework detection substring matching bug fix**: `if ignore in root` in `framework_detect.py` caused "target" to match "test-target-nim", silently skipping the entire workspace. Replaced with `_should_skip_dir()` using path-segment-aware matching. Now correctly detects `has_nim: True` and frameworks `["nim", "jester"]`.
-- **Smell engine Nim regex fix**: `_extract_function_starts` used `\\s+` (double-escaped) instead of `\s+`, so Nim functions were never detected. Fixed and added `method`/`iterator` to pattern. Also added Nim function end detection (indentation-based, like Python).
-- **Complexity engine Nim function extraction**: Added `_extract_nim_functions()` and `_get_nim_function_body()` with full proc/func/method/iterator/template/macro extraction. Now finds 1,109+ functions (previously: 0).
-- **`echo()` no longer false-positive as debug leak in Nim**: In Nim, `echo()` is standard output. Added Nim-specific filtering — only flagged with debug patterns. `debugEcho()` is always flagged as it's Nim's debug-only output. Also added `doAssert()`/`assert()` to debugger patterns.
-- **Nim framework detection**: `detect_frameworks()` now detects `.nim` files and parses `.nimble` files for jester, prologue, karax, happyx, norm, nimcrypto. Nim recommended config paths include `src/`, `lib/`, `nimble/`, and `compiler/` for self-hosting repos.
-- **Nim entrypoints**: `entrypoints_engine.py` now detects `when isMainModule:` and `proc main()`. Found 273 Nim entrypoints (previously: 2 from C/Python).
-- **Nim project identity in handbook**: Parses `.nimble` files for name/version/description. Classifies as nim-compiler, nim-web-service, nim-database, nim-frontend-app, or nim-project.
-- **`.nim`/`.nims` added to 3 engine SOURCE_EXTENSIONS** that were missing it (statemap, secrets, apimap).
+- **Elixir/Phoenix framework detection**: `framework_detect.py` now detects Elixir projects via `mix.exs` and `mix.lock`, Phoenix framework via hex deps or source code patterns (`use Phoenix`, `defmodule Phoenix.`), Ecto, and Oban. New `has_elixir`, `has_phoenix`, `has_ecto`, `has_oban` flags in detection output.
+- **Elixir project identity**: `_extract_project_identity()` in `handbook.py` now reads `mix.exs` for project name (`app:` atom), version (`@version` or `version:`), and description. Detects Phoenix web framework, Elixir data apps, worker apps, embedded apps. Priority fix: when Elixir files outnumber JS files, Elixir type takes precedence over JS type derived from a minor `package.json` (fixes Phoenix being misidentified as "frontend-library").
+- **Phoenix API route extraction**: `apimap_engine.py` now extracts Phoenix routes from `.ex`/`.exs` files: verb routes (`get`/`post`/`put`/`patch`/`delete`), LiveView routes (`live`), RESTful resources (`resources` with `only`/`except`), scope blocks with prefix inheritance, and `pipe_through` middleware tracking with auth detection.
+- **Elixir language detection**: `_detect_languages()` in `analyze.py` now includes `.ex`/`.exs` → "elixir" plus Swift, Scala, Kotlin, Nim, GDScript extensions.
+- **Elixir debug leak detection**: `debugleak_engine.py` adds Elixir patterns: `IO.inspect()`, `IO.puts()`, `IO.warn()`, `dbg()`, `IEx.pry()`. Proper `Logger.debug/info/warning/error` patterns are classified as structured logging (low severity), not debugger statements.
+- **Elixir secret detection**: `secrets_engine.py` adds `.ex`/`.exs` to SOURCE_EXTENSIONS and Phoenix-specific secret patterns: `secret_key_base`, `encryption_salt`, `signing_salt`, `live_view_signing_salt`.
+- **Elixir path recommendations**: `get_recommended_config()` adds `lib/`, `priv/static/`, `assets/` paths for Elixir/Phoenix projects.
+- **Path normalization fix**: Phoenix route extraction normalizes double-slash paths (e.g., `//posts` → `/posts`) when scope prefix concatenation produces them.
 - **Version**: 6.3.1 → 6.5.0.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
