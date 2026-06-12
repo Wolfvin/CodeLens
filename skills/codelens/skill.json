@@ -1,8 +1,9 @@
 {
   "name": "codelens",
-  "version": "6.2.0",  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v5.8: Rust framework detection (Cargo.toml, tokio, actix-web, axum, warp, rocket, deno_core), Rust HTTP route extraction, Cargo workspace monorepo detection, is_generated_file utility, state-map __dunder runtime helper filtering, smell health_score at top-level. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8+ detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect. Tested on denoland/deno (5400+ files Rust+TS polyglot) and elizaOS/eliza (5300+ files AI agent framework).",
-  "author": "codelens",  "tags": [    "code-analysis",
-    "reference-tracking",
+  "version": "6.2.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 42 commands. v6.2: Fixed critical regex bug in fallback_rust.py (JS named groups → Python). Fixed get_workspace_outline() TypeError. Added C/Make/Lua/Neovim/TypeScript framework detection. Enhanced Lua parser with function-level call edges and Neovim patterns. Added neovim_plugin entrypoint detection. Version consistency fix. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. Tree-sitter + fallback parsers for 15+ langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C/C++/Go/Lua/Tailwind/HTML/CSharp/Java), workspace auto-detect. Tested on redis (C), type-challenges (TS), pydantic (Python+Rust), LazyVim (Lua), typst (Rust).",
+  "author": "codelens",
+  "tags": [    "code-analysis",    "reference-tracking",
     "dead-code",
     "duplicate-detection",
     "frontend",
@@ -148,15 +149,8 @@
     "cargo-workspace",
     "lua",
     "neovim",
-    "zig",
+    "neovim-plugin",
+    "make",
     "cmake",
-    "c",
-    "c-parser",
-    "lua-parser",
-    "zig-parser",
-    "java",
-    "csharp",
-    "polyglot",
-    "polyglot-detection",
-    "preprocessor-filtering",
-    "outline-engine"  ]}
+    "c-framework"  ]
+}

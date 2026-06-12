@@ -7,54 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.2.0] — 2026-06-12
 
-### Tested against medusajs/medusa (22,505 files, 386MB TypeScript monorepo — Yarn workspaces + Turborepo)
-
-Real-world test on a headless commerce platform with 10,900+ TypeScript source files,
-480 Medusa framework API routes, 8,952 backend nodes, 73,078 edges.
-Confirmed: 17,216 smells (health score 85), 480 API routes (424 auth-protected),
-217 secrets (151 test false positives identified), 1,725 functions analyzed (avg CC 2.86).
+### Tested against 5 diverse repositories:
+- **redis/redis** (789 C/H files) — Classic C codebase with Makefile build system
+- **type-challenges/type-challenges** (402 TS files) — Pure TypeScript type declarations
+- **pydantic/pydantic** (404 Python + 125 Rust files) — Python+Rust polyglot with nested Cargo.toml
+- **LazyVim/LazyVim** (155 Lua files) — Neovim plugin framework
+- **typst/typst** (405 Rust files) — Modern Rust typesetting system
 
 ### Added
 
-- **17 new framework signatures**: Express, NestJS, Fastify, Koa, Hono, TypeORM, MikroORM, Prisma, Sequelize, Drizzle, Jest, Vitest, Vite, webpack, esbuild, BullMQ. Backend, ORM, test, and build tool detection now comprehensive.
-- **Monorepo tool detection**: `detect_frameworks()` now detects turborepo, pnpm-workspace, lerna, nx, yarn-workspace, npm-workspace. Sets `is_monorepo: true` and `monorepo_tools: [...]` in result.
-- **Deep monorepo scanning**: `_find_package_jsons()` now recursively walks workspace directories (apps/*, packages/*, packages/modules/*, packages/core/*, etc.) up to 3 levels deep.
-- **ESM module system detection**: Checks `"type": "module"` across all package.json files. Reports `"esm"`, `"cjs"`, or `"mixed"` instead of always `"cjs"`.
-- **ORM detection**: `orm_type` field (e.g., "typeorm", "mikro-orm", "prisma") in framework detection result.
-- **Build tool detection**: `build_tool` field (e.g., "vite", "webpack", "esbuild") in framework detection result.
-- **Test framework detection**: `test_framework` field (e.g., "jest", "vitest", "mocha") in framework detection result.
-- **Backend framework field**: `backend_framework` field (e.g., "express", "nestjs", "fastify") in framework detection result.
-- **Medusa Framework route detection**: API-map now detects Medusa's file-based routing system (`src/api/*/route.ts` with exported GET/POST handlers). Auth protection inferred from `/admin/` and `/auth/` path prefixes.
-- **API-map test file exclusion**: Routes from `.spec.ts`, `.test.ts`, `__tests__/`, `fixtures/`, `e2e/` directories are now excluded. Reduces false positives from 4,261 to ~486 routes on Medusa.
-- **API-map framework classification**: Each route now has a `framework` field (express, fastify, nestjs, medusa, nextjs, etc.). `by_framework` stats dict properly populated.
-- **API-map auth detection**: Routes protected by auth middleware, path prefixes (`/admin/`, `/auth/`), or NestJS `@UseGuards(AuthGuard)` are now flagged with `auth_protected: True`.
-- **API-map false positive reduction**: Expanded `NON_ROUTER_OBJECTS` skip list (76 entries). Strict object validation for Express routes. Handler name validation.
-- **API-map `max_routes` parameter**: Caps total routes returned (default 500). Adds `truncated: True` when exceeded.
-- **Secrets engine test file severity reduction**: Findings in test/fixture/mock files get severity reduced (critical→medium, high→low, medium→info). `in_test_file: True` flag added. `test_false_positives` count in stats.
-- **Secrets engine config schema exclusion**: Lines like `password: { type: "string" }` or `password: schema.string()` in config schema files are detected and severity reduced.
-- **Secrets engine package.json exclusion**: "password"/"secret"/"token" keywords in package.json description/keywords/scripts fields get severity=info.
-- **Secrets engine .env.example/.env.sample exclusion**: Template .env files get severity=info and `in_env_template: True` flag.
-- **State-map `module_constant` type**: New store type for module-level constants without mutations. Distinguished from `global` (mutable state).
-- **State-map TypeScript type filtering**: TypeScript interfaces, types, enums, Zod/Yup/Joi schemas are now classified as `module_constant` instead of `global` store.
-- **State-map result cap**: `max_stores=100` parameter (default) limits result size. `truncated: True` when exceeded.
-- **Handbook `--quick` mode**: New flag to skip expensive engines (smell, secrets, vuln-scan, circular, dead-code) for faster results on large codebases. Completes in ~22s on 22k-file monorepo (was timeout before).
-- **Handbook time budget**: 3-minute global timeout with per-engine time checks. Engines skipped when budget expired.
-- **Handbook engine status tracking**: `engines_ok` and `engines_failed` lists in `meta`. Overall status is `ok`, `degraded`, or `error`.
-- **Handbook `quick_mode` and `elapsed_seconds` in meta**: Reflects execution mode and actual runtime.
+- **C/Make/CMake framework detection**: `detect_frameworks()` now detects C projects from Makefile, CMakeLists.txt, configure.ac, and also from source file counts (>10 .c/.h files) when no build system markers exist. Adds `has_c` field.
+- **Lua/Neovim framework detection**: Detects Neovim plugins from `init.lua`/`init.vim` + `lua/` + `plugin/` directory structure. Detects Lua projects from `.lua` file counts. Adds `has_lua` field.
+- **TypeScript language detection**: Detects TypeScript as a framework from `.ts`/`.tsx` source files even when no tsconfig.json exists. Adds `has_typescript` field.
+- **Neovim plugin entrypoint detection**: New `neovim_plugin` entrypoint type with patterns for `vim.api.nvim_create_user_command`, `vim.keymap.set`, `vim.api.nvim_create_autocmd`, Lua module returns, and lazy.nvim setup. LazyVim now detects 84 entrypoints (was 0).
+- **Enhanced Lua fallback parser** (`fallback_lua.py` v2): Complete rewrite with proper edge format for edge_resolver, function-level call edges, method call detection (`obj:method()`, `obj.method()`), `require()` module resolution, method assignments (`M.foo = function()`), Neovim API call tracking (`vim.api`, `vim.keymap`, etc.), and owner-node resolution for edges.
+- **Nested Cargo.toml detection**: Framework detection now scans subdirectories for Cargo.toml (e.g., `pydantic-core/Cargo.toml`) in addition to root.
+- **Source file counting utility** (`_count_source_files`): New helper function in framework_detect.py that counts source files by extension, enabling language detection from file counts rather than only build markers.
+- **New framework signatures**: Added `make`, `cmake`, `autotools`, `neovim`, `lua`, `typescript`, `laravel` to FRAMEWORK_SIGNATURES.
+- **Lua in entrypoints SOURCE_EXTENSIONS**: Added `.lua` extension support.
+- **Lua test patterns**: Added busted framework `describe`/`it` patterns for test entry detection.
 
 ### Fixed
 
-- **Framework detection missed Express/TypeORM**: Root package.json didn't have these deps, but workspace package.json files did. Deep monorepo scanning now finds them.
-- **Framework detection wrong module_system**: Always reported "cjs" even for ESM projects. Now checks `"type": "module"` in all workspace package.json files.
-- **API-map test file routes**: 4,261 routes mostly from test files. Now excluded, reducing to meaningful routes only.
-- **API-map no framework classification**: `by_framework` was always `{}`. Now properly populated from route detection.
-- **API-map no auth detection**: `auth_protected` was always 0. Now detects auth middleware, path prefixes, and NestJS guards.
-- **Secrets engine false positives in tests/fixtures**: Test mock data flagged as critical secrets. Now severity-reduced with `in_test_file` flag.
-- **Secrets engine false positives in config schemas**: Config type definitions like `password: { type: "string" }` flagged as actual passwords. Now detected as schema patterns.
-- **State-map TS types as stores**: TypeScript interfaces and types classified as state stores. Now classified as `module_constant`.
-- **State-map missing file paths**: Store entries showed `?:3` instead of actual file paths. Now properly populated.
-- **Handbook timeout on large repos**: Timed out on 22k-file monorepo. Quick mode completes in ~22s.
-- **`write_output_files` TypeError**: Called `get_workspace_outline(workspace, max_files=max_files)` but function doesn't accept `max_files`. Fixed to use correct signature.
+- **CRITICAL: `fallback_rust.py` regex crash** (Bug #1): Named capture groups used JavaScript syntax `(?<trait>...)` instead of Python `(?P<trait>...)`, causing `re.error: unknown extension ?<t at position 13`. This crashed scan on ANY repository containing Rust files (pydantic, typst). Fixed to use Python syntax.
+- **CRITICAL: `get_workspace_outline()` TypeError** (Bug #2): `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`, causing `TypeError: got an unexpected keyword argument 'max_files'`. This broke outline/summary generation on ALL scans. Fixed by removing the invalid parameter.
+- **CRITICAL: `fallback_lua.py` missing import** (Bug cascade): `Optional` type was imported at file bottom instead of top, causing `name 'Optional' is not defined` ImportError. This prevented scan/handbook/ask/watch command modules from loading (4/42 commands missing). Fixed by moving import to top.
+- **Version consistency**: `skill.json` said 5.8.0, `CODELENS_VERSION` in utils.py said 5.8.0, but `SKILL-QUICK.md` said v6.2. Updated all to 6.2.0.
+
+### Changed
+
+- **LazyVim detection improvement**: From 0 entrypoints and 100% dead nodes → 84 entrypoints (71 neovim_plugin + 13 test_entry) and 244 active nodes.
+- **Pydantic detection improvement**: From scan crash → successful scan with 11,673 nodes and 184,819 edges. Rust now detected from nested `pydantic-core/Cargo.toml`.
+- **Typst detection improvement**: From scan crash → successful scan with 12,154 nodes and 497,280 edges.
+- **Redis detection improvement**: From `frameworks: []` and `unsupported_langs: ["c", "cpp"]` → `frameworks: ["make", "lua"]` with `has_c: true`.
 
 ## [5.8.0] — 2026-06-12
 
