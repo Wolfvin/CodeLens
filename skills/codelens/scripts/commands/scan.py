@@ -761,7 +761,6 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade", "kotlin"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -773,7 +772,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "ruby": "Ruby",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
+    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will use fallback regex-based parsers for basic extraction."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:

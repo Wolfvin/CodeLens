@@ -582,7 +582,21 @@ def _extract_directory_structure(workspace: str, max_depth: int = 3) -> List[str
 
 
 def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
-    """Compute an overall risk score based on all findings."""
+    """Compute an overall risk score based on all findings.
+
+    v6.2: Density-aware scoring — scales deductions by codebase size so that
+    large, well-maintained projects don't automatically score 0/100 just because
+    they have many files. A 10K-file project with 2K smells (density 0.2) should
+    score much higher than a 10-file project with 2K smells (density 200).
+    """
+    # Get total files for density normalization
+    total_files = max(result.get("scan", {}).get("backend_nodes", 0), 1)
+    # Also check outline data for file count
+    arch_files = result.get("architecture", {}).get("total_files", 0)
+    if arch_files > total_files:
+        total_files = arch_files
+    total_files = max(total_files, 1)  # Avoid division by zero
+
     score = 100  # Start at 100, deduct for issues
 
     critical_count = 0
@@ -592,17 +606,30 @@ def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
     for f in findings:
         total = f.get("total", 0)
         sev = f.get("severity", "low")
+        # Density-aware deduction: scale by sqrt of density, not raw count
+        # This prevents large projects from always scoring 0
+        density = total / total_files
+        # Use sqrt of density to soften the curve for large codebases
+        density_factor = min(density ** 0.5, 3.0)  # Cap at 3x multiplier
+
         if sev == "critical":
             critical_count += total
-            score -= min(total * 5, 30)  # Max -30 per category
+            base_deduction = min(total * 2, 25)
+            deduction = min(int(base_deduction * density_factor), 25)
+            score -= deduction
         elif sev == "high":
             high_count += total
-            score -= min(total * 2, 20)
+            base_deduction = min(total, 15)
+            deduction = min(int(base_deduction * density_factor), 15)
+            score -= deduction
         elif sev == "medium":
             medium_count += total
-            score -= min(total, 10)
+            base_deduction = min(total // 3, 8)
+            deduction = min(int(base_deduction * density_factor), 8)
+            score -= deduction
         else:
-            score -= min(total // 5, 5)
+            deduction = min(total // 10, 3)
+            score -= deduction
 
     score = max(0, min(100, score))
 

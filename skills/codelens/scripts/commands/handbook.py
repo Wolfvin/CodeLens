@@ -475,16 +475,86 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    # v6.2: Try composer.json — detect PHP projects
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_name = composer.get("name", "")
+            if composer_name:
+                # Take last part of vendor/package name
+                identity["name"] = composer_name.split('/')[-1]
+            composer_ver = composer.get("version", "")
+            if composer_ver:
+                identity["version"] = composer_ver
+            # Classify PHP project type
+            composer_require = composer.get("require", {})
+            all_deps = " ".join(list(composer_require.keys()))
+            if "laravel/framework" in composer_require or "illuminate/" in all_deps:
+                php_type = "php-laravel"
+            elif "symfony/symfony" in composer_require or "symfony/" in all_deps:
+                php_type = "php-symfony"
+            elif "drupal/core" in composer_require or "drupal/" in all_deps:
+                php_type = "php-drupal"
+            elif "wordpress" in all_deps.lower():
+                php_type = "php-wordpress"
+            else:
+                php_type = "php-project"
+        except Exception:
+            logger.warning("composer.json parsing failed", exc_info=True)
+
+    # v6.2: Detect C/C++ projects via Makefile/CMakeLists.txt
+    c_type = None
+    has_makefile = os.path.isfile(os.path.join(workspace, 'Makefile'))
+    has_cmake = os.path.isfile(os.path.join(workspace, 'CMakeLists.txt'))
+    if has_makefile or has_cmake:
+        # Count C vs C++ files to determine which dominates
+        c_count = 0
+        cpp_count = 0
+        try:
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fn in filenames:
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext in ('.c', '.h'):
+                        c_count += 1
+                    elif ext in ('.cpp', '.cxx', '.cc', '.cxx', '.hpp', '.hxx', '.hh'):
+                        cpp_count += 1
+        except Exception:
+            pass
+        if c_count > cpp_count:
+            c_type = "c-project"
+        elif cpp_count > c_count:
+            c_type = "cpp-project"
+        else:
+            c_type = "c-cpp-project"
+        # Override name/version from Makefile if possible
+        if has_makefile and identity["version"] == "0.0.0":
+            try:
+                with open(os.path.join(workspace, 'Makefile'), 'r', encoding='utf-8', errors='ignore') as f:
+                    makefile_content = f.read()
+                ver_match = re.search(r'VERSION\s*[:?]?=\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)', makefile_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+            except Exception:
+                pass
+
+    # v6.2: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
+        if c_type:
+            type_parts.append("c" if "c-project" == c_type else "cpp" if "cpp-project" == c_type else "c-cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if php_type:
+            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

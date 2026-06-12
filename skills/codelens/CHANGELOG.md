@@ -5,6 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.10.0] — 2026-06-12
+
+### Tested against 5 large, diverse repositories
+
+Real-world testing on a broad set of unique codebases to validate cross-language
+and cross-framework accuracy:
+
+- **fastapi/fastapi** (1127 source files, Python backend, FastAPI+Pydantic+Starlette)
+- **tailwindlabs/tailwindcss** (391 source files, Rust+TS monorepo, Tailwind CSS engine)
+- **git/git** (999 source files, pure C, with small Rust and Python components)
+- **vuejs/core** (529 source files, TypeScript monorepo, Vue.js reactive system)
+- **laravel/framework** (2932 source files, PHP, Laravel framework with Blade templates)
+
+### Fixed
+
+- **God Object false positives in JS/TS** (99% reduction): The regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched any word followed by `(` (including `if(`, `for(`, `console.log(`), and searched the entire file instead of just inside class bodies. This caused absurd reports like "Class 'if' has 359 methods" or "Class 'and' has 296 methods". Replaced with proper brace-depth-tracking implementation that only counts actual method definitions inside class bodies, similar to the existing Rust impl detection. (smell_engine.py)
+- **PHP interface method false positives as long functions** (90%+ reduction): `_find_function_end()` used brace counting for PHP, but interface/abstract methods have no body (ending with `;`). This caused interface methods like `table()`, `raw()`, `selectOne()` to be reported as 150-205 lines long. Added PHP-specific handling that detects `;`-terminated method signatures as 1-line declarations. (smell_engine.py)
+- **PHP mock_data debug leak false positives** (99% reduction, 12076 → ~0 for Laravel): PHPUnit/Mockery/Laravel framework calls like `$this->createMock()`, `Mockery::mock()`, `Event::fake()` were incorrectly flagged as mock data leaks. Added PHP_MOCK_ALLOWLIST with 14 patterns for framework-specific test doubles. Also added `Test.` and `/Tests/` to TEST_FILE_PATTERNS for PHP PHPUnit convention. (debugleak_engine.py)
+- **PHP debugger false positives** (80%+ reduction): `dd()`, `dump()` flagged in test files; `exit;` incorrectly flagged as debugger statement in CLI scripts; `trap()` matched legitimate PHP methods. Fixed: `dd()`/`dump()` skipped in test files, `exit;` removed from patterns, `trap()` excluded for PHP, bare `die()` downgraded to medium severity. (debugleak_engine.py)
+- **Lines always 0 in architecture/summary output**: `get_workspace_outline()` in outline_engine.py never computed `total_lines`, so `compute_summary()` always returned 0. Added line counting during file iteration. (outline_engine.py)
+- **C/C++/Java/Kotlin/C# incorrectly listed as "unsupported"**: These languages all have fallback regex parsers but were still in `UNSUPPORTED_MARKERS` in framework_detect.py, causing them to be listed as unsupported in scan results. Removed them from the unsupported list. (framework_detect.py)
+- **Binary artifact findings show empty path**: Markdown formatter only checked `item.get("file")` but binary findings use `path` key. Added fallback to `item.get("path")`. (formatters/markdown.py)
+- **Secrets findings show empty description**: Markdown formatter tried `message`/`description`/`name` keys but secrets use `match`/`category`. Added fallback construction from category, match, type, extension, and detection_method fields. (formatters/markdown.py)
+- **Risk score always 0/near-0 for large projects**: The `_compute_risk_score()` formula applied linear deductions (`total * 5` for critical) without accounting for codebase size, so any project with 1000+ files always scored 0. Replaced with density-aware scoring that normalizes by `sqrt(issues/files)` with capped per-category deductions. (commands/analyze.py)
+- **Laravel detected as "unknown" project type**: No `composer.json` detection existed in `_extract_project_identity()`. Added PHP project type detection with Laravel/Symfony/Drupal/WordPress classification. (commands/handbook.py)
+- **git/git detected as "rust-project"**: Only Cargo.toml was checked, not Makefile/CMakeLists.txt. Added C/C++ project detection via Makefile/CMakeLists.txt with file extension counting to determine C vs C++ dominance. (commands/handbook.py)
+- **Laravel version 0.0.0**: `composer.json` version field was not read. Now reads name and version from composer.json. (commands/handbook.py)
+
 ## [5.9.2] — 2026-06-12
 
 ### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)

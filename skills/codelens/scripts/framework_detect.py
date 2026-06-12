@@ -851,15 +851,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect unsupported languages
+    # Note: Go, C, C++, Java, Kotlin, and C# were previously listed here but
+    # now have fallback parser support. They are no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
     }

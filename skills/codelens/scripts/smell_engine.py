@@ -436,6 +436,31 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
+    elif ext == ".php":
+        # PHP: interface/abstract methods end with ';' (no body)
+        # Check if the function line ends with ';' before any '{'
+        start_line = lines[start]
+        semicolon_pos = start_line.find(';')
+        brace_pos = start_line.find('{')
+        if semicolon_pos >= 0 and (brace_pos < 0 or semicolon_pos < brace_pos):
+            # Interface/abstract method declaration — no body, just a signature
+            return start + 1
+        # Otherwise count braces for concrete methods
+        brace_count = 0
+        for i in range(start, min(start + 300, len(lines))):
+            # Check for semicolon before brace on first line (e.g., multiline signature ending with ;)
+            if i == start:
+                line_stripped = lines[i].rstrip()
+                if line_stripped.endswith(';') and brace_count == 0:
+                    return i + 1
+            for ch in lines[i]:
+                if ch == '{':
+                    brace_count += 1
+                elif ch == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        return i + 1
+        return min(start + 300, len(lines))
     else:
         # JS/TS/Rust: count braces
         brace_count = 0
@@ -974,28 +999,86 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
-        class_match = re.search(r'class\s+(\w+)', content)
+        # Count class methods using brace-depth tracking (like Rust impl detection)
+        # This avoids false positives from matching random function calls like if(), for(), etc.
+        lines = content.split('\n')
+        class_blocks = []  # list of (class_name, method_count)
+        in_class = False
+        class_name = ""
+        class_start_depth = 0
+        brace_depth = 0
+        class_method_count = 0
 
-        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-            })
-        elif class_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                "suggestion": "Consider extracting some methods into a separate class."
-            })
+        for line in lines:
+            stripped = line.strip()
+
+            # Track brace depth
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+
+            # Detect class start (export/default/abstract optional prefixes)
+            cls_match = re.match(r'(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)', stripped)
+            if cls_match:
+                # Save previous class if still open
+                if in_class and class_method_count >= GOD_CLASS_METHODS:
+                    class_blocks.append((class_name, class_method_count))
+                in_class = True
+                class_name = cls_match.group(1)
+                if '{' in stripped:
+                    class_start_depth = brace_depth
+                else:
+                    class_start_depth = brace_depth + 1  # opening brace on next line
+                class_method_count = 0
+                continue
+
+            if in_class:
+                # Count actual method definitions inside the class body
+                # Pattern: [async] [visibility] [static] [get|set] methodName( or methodName<
+                if re.match(r'(?:async\s+)?(?:private\s+|public\s+|protected\s+|static\s+|readonly\s+)*(?:get\s+|set\s+)?(?:#\s*)?\*?\s*\w+\s*[<(]', stripped):
+                    # Exclude control-flow keywords and other non-method patterns
+                    first_word = re.match(r'(\w+)', stripped)
+                    if first_word and first_word.group(1) not in {
+                        'if', 'for', 'while', 'switch', 'catch', 'return', 'throw',
+                        'new', 'typeof', 'instanceof', 'void', 'delete', 'class',
+                        'import', 'export', 'function', 'const', 'let', 'var',
+                        'else', 'do', 'try', 'finally', 'with', 'yield', 'await',
+                        'break', 'continue', 'case', 'debugger', 'super', 'this',
+                        'true', 'false', 'null', 'undefined',
+                    }:
+                        class_method_count += 1
+
+                # End class when brace depth returns to (or below) start level
+                if brace_depth < class_start_depth:
+                    in_class = False
+                    if class_method_count >= GOD_CLASS_METHODS:
+                        class_blocks.append((class_name, class_method_count))
+
+        # Handle class still open at end of file
+        if in_class and class_method_count >= GOD_CLASS_METHODS:
+            class_blocks.append((class_name, class_method_count))
+
+        for name, count in class_blocks:
+            if count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": name,
+                    "method_count": count,
+                    "severity": "critical",
+                    "message": f"Class '{name}' has {count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+                })
+            elif count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": name,
+                    "method_count": count,
+                    "severity": "warning",
+                    "message": f"Class '{name}' has {count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class."
+                })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping
