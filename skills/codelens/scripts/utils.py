@@ -579,3 +579,54 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+# ─── Bundled / Vendored File Detection ────────────────────────
+
+BUNDLED_DIR_PREFIXES = frozenset({
+    'deps/', 'vendor/', 'third_party/', 'thirdparty/',
+    'external/', 'externals/', 'submodules/',
+    'vendored/', '__vendored__', 'packages/',
+})
+
+BUNDLED_DIR_NAMES = frozenset({
+    'node_modules', 'vendor', 'deps', 'third_party',
+    'thirdparty', 'external', 'externals', 'submodules',
+    'vendored', '__vendored__', 'packages',
+})
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file is inside a bundled/vendored dependency directory.
+
+    Bundled dependencies (like Redis' deps/lua, deps/jemalloc, or any
+    vendor/ directory) are typically third-party code that should be
+    skipped during code-quality and performance analysis, since:
+    1. The code is not maintained by the project authors
+    2. It inflates metrics (dead-code, complexity, smell counts)
+    3. Fixes should go upstream, not in the consuming project
+
+    Args:
+        rel_path: Relative file path from workspace root (e.g., 'deps/lua/src/lvm.c')
+
+    Returns:
+        True if the file is inside a bundled/vendored directory.
+    """
+    if not rel_path:
+        return False
+
+    # Normalize path separators
+    normalized = rel_path.replace('\\', '/')
+
+    # Check if any path component matches a bundled directory name
+    parts = normalized.split('/')
+    for part in parts:
+        if part in BUNDLED_DIR_NAMES:
+            return True
+
+    # Check if the relative path starts with a known prefix
+    for prefix in BUNDLED_DIR_PREFIXES:
+        if normalized.startswith(prefix):
+            return True
+
+    return False
