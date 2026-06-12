@@ -43,6 +43,8 @@ Usage:
     python3 codelens.py css-deep <workspace]           # Deep CSS analysis (vars, keyframes, specificity)
     python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
+    python3 codelens.py dashboard <workspace>           # Generate HTML visualization dashboard
+    python3 codelens.py history <workspace>             # Show historical trend data
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)
@@ -846,6 +848,7 @@ def main():
         "api-map", "state-map", "handbook", "analyze", "test-map",
         "stack-trace", "config-drift", "type-infer", "ownership",
         "regex-audit", "a11y", "css-deep", "diff", "ask", "validate",
+        "dashboard", "history",
     }
 
     auto_setup_info = None
@@ -882,6 +885,15 @@ def main():
             except Exception:
                 logger.warning("Failed to write output files", exc_info=True)
                 result["outline_generated"] = False
+            # Auto-save history snapshot for trend tracking
+            try:
+                from history_engine import save_snapshot as save_history_snapshot
+                hist_result = save_history_snapshot(workspace, result)
+                result["history_snapshot_saved"] = True
+                result["history_snapshot_file"] = hist_result.get("_snapshot_file", "")
+            except Exception:
+                logger.debug("Failed to save history snapshot", exc_info=True)
+                result["history_snapshot_saved"] = False
 
         # ─── Watch is a long-running command — it already printed output ──
         if args.command == "watch":
