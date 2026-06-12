@@ -974,6 +974,13 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+        # Skip test files entirely — describe()/it() blocks inflate method counts
+        path_lower = '/' + rel_path if not rel_path.startswith('/') else rel_path
+        path_lower = path_lower.lower()
+        test_path_segments = ['/tests/', '/test/', '/__tests__/', '/spec/', '/specs/']
+        if any(seg in path_lower for seg in test_path_segments):
+            return smells
+
         # Count class methods
         method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
         class_match = re.search(r'class\s+(\w+)', content)
@@ -1343,6 +1350,7 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
     test_patterns = (
         '.test.', '.spec.', '.e2e.', '.e2e-spec.',
         '_test.', '_spec.', '.stories.',
+        '-test.', '-tests.',
     )
     mock_patterns = (
         'mock', 'stub', 'fake', 'fixture', 'dummy',
@@ -1358,15 +1366,17 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
         if pattern in basename.lower():
             return True
 
-    # Check path patterns
+    # Check path patterns — use segment-aware, case-insensitive matching
+    # so that "LibJS/Tests/foo.js" matches just like "src/tests/foo.js"
     normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
-    test_dirs = [
-        '/tests/', '/test/', '/__tests__/', '/spec/',
+    normalized_lower = normalized.lower()
+    test_dir_segments = [
+        '/tests/', '/test/', '/__tests__/', '/spec/', '/specs/',
         '/fixtures/', '/fixture/', '/mocks/', '/mock/',
         '/e2e/', '/integration/',
     ]
-    for d in test_dirs:
-        if d in normalized:
+    for d in test_dir_segments:
+        if d in normalized_lower:
             return True
 
     return False

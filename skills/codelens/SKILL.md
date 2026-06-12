@@ -36,9 +36,17 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v6.5
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.5 — Tested on SerenityOS/serenity (18,601 files, C++ OS monorepo)
+
+- **C++ project identity detection**: `handbook` now recognizes C++ projects via `CMakeLists.txt`, extracts project name from `project(Name)` and version from `project(Name VERSION x.y.z)`. Detects `cpp-os` (Kernel/ directory), `cpp-monorepo` (AK/, Base/, Meta/, Ports/, Tests/), and `cpp-project` types.
+- **CMake monorepo detection**: Projects with multiple subdirectory `CMakeLists.txt` files are detected as monorepos with `monorepo_tools: ["cmake-workspace"]`. SerenityOS correctly reports `is_monorepo: true`.
+- **C/C++ removed from `unsupported_langs`**: When fallback C/C++ parsers successfully parse files (7,447 in SerenityOS), `c` and `cpp` are removed from the unsupported list. The `lang_note` now says "parsed via fallback parsers" instead of "not yet supported by tree-sitter".
+- **God object test file false positives fixed**: JS/TS test files in `/Tests/`, `/tests/`, `/test/`, `/__tests__/`, `/spec/`, `/specs/` directories are now skipped with case-insensitive matching. Files like `LibJS/Tests/this-value.js` no longer produce false god object reports (52 FPs eliminated on SerenityOS).
+- **Tested on SerenityOS/serenity**: 18,601 files, 7,447 C++ parsed, 49,671 backend nodes, type `cpp-os-monorepo`, health score 50.
 
 ## What's New in v6.0 — The "Analyze Everything" Release
 

@@ -751,15 +751,30 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "frameworks": config.get("frameworks", []),
         "incremental": incremental,
         "changed_files_count": len(changed_files) if changed_files else 0,
-        "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
-        "lang_note": _build_lang_note(fw) if fw else None,
+        "unsupported_langs": _filter_unsupported_langs(fw, c_cpp_parsed=len(c_cpp_data)) if fw else [],
+        "lang_note": _build_lang_note(fw, c_cpp_parsed=len(c_cpp_data)) if fw else None,
     }
 
 
-def _build_lang_note(fw: Dict) -> Optional[str]:
+def _filter_unsupported_langs(fw: Dict, c_cpp_parsed: int = 0) -> List[str]:
+    """Filter unsupported_langs: remove c/cpp when fallback parsing succeeded."""
+    unsupported = list(fw.get("unsupported_langs", []))
+    if c_cpp_parsed > 0:
+        unsupported = [l for l in unsupported if l not in ("c", "cpp")]
+    return unsupported
+
+
+def _build_lang_note(fw: Dict, c_cpp_parsed: int = 0) -> Optional[str]:
     """Build a note about unsupported languages detected in the workspace."""
-    unsupported = fw.get("unsupported_langs", [])
+    unsupported = _filter_unsupported_langs(fw, c_cpp_parsed=c_cpp_parsed)
     if not unsupported:
+        # If c/cpp were removed due to fallback parsing, note that instead
+        original = fw.get("unsupported_langs", [])
+        c_cpp_removed = [l for l in original if l in ("c", "cpp")] if c_cpp_parsed > 0 else []
+        if c_cpp_removed:
+            lang_names = {"c": "C", "cpp": "C++"}
+            parts = [lang_names.get(l, l) for l in c_cpp_removed]
+            return f"Detected {', '.join(parts)} source files — parsed via fallback parsers ({c_cpp_parsed} files). Analysis covers these languages with limited depth."
         return None
     supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade", "kotlin"}
     lang_names = {
@@ -773,7 +788,15 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "ruby": "Ruby",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
+    note = f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
+    # If c/cpp were removed, append note about fallback parsing
+    original = fw.get("unsupported_langs", [])
+    c_cpp_removed = [l for l in original if l in ("c", "cpp")] if c_cpp_parsed > 0 else []
+    if c_cpp_removed:
+        cpp_names = {"c": "C", "cpp": "C++"}
+        cpp_parts = [cpp_names.get(l, l) for l in c_cpp_removed]
+        note += f" Note: {', '.join(cpp_parts)} files were parsed via fallback parsers ({c_cpp_parsed} files)."
+    return note
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:

@@ -5,6 +5,35 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.5.0] — 2026-06-12
+
+### Tested against SerenityOS/serenity (18,601 source files: 7,447 C/C++, 1,814 HTML, 1,098 JS, 26 Python, C++ OS monorepo)
+
+Real-world test on a complete from-scratch desktop operating system (33.4k stars) with custom kernel,
+userspace libc, GUI toolkit, JS engine (LibJS), and web browser (Ladybird). The largest and most
+architecturally diverse repo tested to date.
+
+### Added
+
+- **C++ project identity detection**: `handbook` now recognizes C++ projects via `CMakeLists.txt`.
+  Extracts project name from `project(Name)` and version from `project(Name VERSION x.y.z)`.
+  Detects three C++ project types: `cpp-os` (Kernel/ directory exists), `cpp-monorepo` (≥3 of
+  AK/Base/Meta/Ports/Tests directories), and `cpp-project` (default CMakeLists.txt-based).
+- **CMake monorepo detection**: Projects with ≥2 subdirectory `CMakeLists.txt` files are detected
+  as monorepos with `monorepo_tools: ["cmake-workspace"]`. Also triggered when Kernel/ directory
+  exists alongside root CMakeLists.txt.
+
+### Fixed
+
+- **C/C++ removed from `unsupported_langs`**: When fallback C/C++ parsers successfully parse files
+  (7,447 in SerenityOS), `c` and `cpp` are removed from the unsupported languages list. The
+  `lang_note` now reads "parsed via fallback parsers (7447 files)" instead of the misleading
+  "not yet supported by tree-sitter parsers".
+- **God object test file false positives**: JS/TS test files in `/Tests/`, `/tests/`, `/test/`,
+  `/__tests__/`, `/spec/`, `/specs/` directories are now skipped with **case-insensitive** matching.
+  Previously, capitalized paths like `LibJS/Tests/` were not caught. 52 false positives eliminated
+  on SerenityOS (critical smells: 1,037 → 985).
+
 ## [5.9.2] — 2026-06-12
 
 ### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
