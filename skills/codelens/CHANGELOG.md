@@ -5,37 +5,37 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-06-12
+## [5.9.0] — 2026-06-12
 
-### The "Analyze Everything" Release
+### Tested against pallets/flask (83 Python files, Flask framework, 1,657 backend nodes, 5,476 edges)
 
-The single biggest improvement for AI agents: **`analyze` command** — one command to understand an entire repository.
+Real-world test on a Python Flask project with `src/` layout (src/flask/).
+Confirmed: Flask framework detection works, 83 Python files parsed, 1,657 backend nodes.
+Found and fixed 7 bugs across 5 engines.
 
 ### Added
 
-- **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces a comprehensive report with: project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations. Use: `codelens analyze /path/to/repo`
-- **PHP support in all engines**: Added `.php` to SOURCE_EXTENSIONS in `debugleak_engine.py`, `smell_engine.py`, `complexity_engine.py`, and `perfhint_engine.py`. PHP files are now scanned for code smells, complexity, debug leaks, and performance hints.
-- **PHP debug leak patterns**: Added detection for `var_dump()`, `print_r()`, `phpinfo()` (print_statement), `dd()`, `dump()`, `ray()`, `dpm()`, `kint()`, `xdebug_var_dump()`, `exit;`, `die()` (debugger).
-- **PHP complexity detection**: Added `_extract_php_functions()` to complexity_engine.py. Detects `public function`, `private function`, `protected function`, and standalone `function` declarations. Computes cyclomatic/cognitive complexity for PHP methods.
-- **PHP smell detection**: Added PHP function/method detection patterns to smell_engine.py for long functions, deep nesting, and many parameters. Detects `(public|private|protected) function name(` and standalone `function name(`.
-- **PHP performance hints**: Added 8 PHP-specific perf patterns:
-  - N+1: Doctrine `$em->find()` / `$repo->find()` inside loops, Eloquent `::find()` / `::where()` inside loops
-  - Sync blocking: `sleep()`, `file_get_contents()` for HTTP URLs, `exec()`/`shell_exec()`/`system()`/`passthru()`
-  - Memory leak: `$this->prop[] = ` without `unset()` in long-running processes
-  - Cache miss: Redis `$redis->keys()` (production danger), `$redis->set()` without TTL
-- **Multi-language SOURCE_EXTENSIONS**: Added `.java`, `.cs`, `.dart`, `.lua` to all applicable engines (smell, complexity, debug-leak).
-- **Risk assessment in analyze**: Computes a 0-100 risk score based on finding severity counts with emoji indicators (🔴🟠🟡🟢).
-- **Prioritized action plan**: Auto-generates P0-P3 action items sorted by severity with concrete next steps.
-- **Contextual recommendations**: Generates language/framework-specific recommendations (e.g., "PHP project — consider phpstan", "Go project — run go vet").
+- **api-map route source tagging**: Routes now include a `source` field (`"production"` or `"test"`) based on file path. Test/example file routes are tagged as `source: "test"`. Stats include `production_routes` and `test_routes` counts. Prevents test routes from being confused with production API endpoints.
+- **`requires_import` pattern constraint in entrypoints**: Entrypoint patterns can now specify `requires_import` to only match when a specific module is actually imported in the file. Applied to FastAPI decorator patterns (`@app.get`, `@router.post`, etc.) so they don't false-match in Flask/Django files.
+- **Python type alias filtering in state-map**: Module-level type definitions (`TypeAlias`, `Type[...]`, `Union[...]`, `Optional[...]`, `Callable[...]`, `Literal[...]`, `Annotated[...]`, `Final[...]`, `ClassVar[...]`, etc.) are no longer classified as state stores. Both assignment form (`X = Union[...]`) and annotation form (`X: TypeAlias = ...`) are detected.
+- **Python private variable filtering in state-map**: Single-underscore-prefixed module variables (`_external`, `_anchor`, `_sentinel`, `_app_option`, etc.) are now skipped as private implementation details, not global state.
+- **CLI output allowlist for debug-leak**: `click.echo()`, `click.secho()`, `sys.stdout.write()`, `sys.stderr.write()`, `logging.*()`, `logger.*()`, `console.print()` (Rich), `typer.echo()` are no longer flagged as debug print statements. These are legitimate CLI output mechanisms, not debug leaks.
+- **HTML template skip in perf-hint**: `.html`, `.htm`, `.jinja`, `.jinja2`, `.djt`, `.vue`, `.svelte` files are now excluded from `inefficient_iteration` scanning. Template `{% for %}` / `v-for` / `{#each}` are compile-time directives, not runtime performance issues.
+- **Python src/ layout detection in config-drift**: `_detect_local_packages()` now also scans `src/` subdirectories for Python packages (directories with `__init__.py`). Also reads `pyproject.toml` `[tool.setuptools.packages.find]` for package name detection. Fixes false "missing dependency" warnings for local packages like `flask` when using src-layout.
 
-### Tested against
+### Fixed
 
-- **ChaosServer** (53 PHP files, custom async PHP server with ReactPHP + Doctrine + Redis): Confirmed all engines work with PHP. Found 30 secrets, 141 smells, 25 debug leaks, 10 complexity hotspots, 5 perf hints.
+- **FastAPI routes detected in Flask projects**: `entrypoints` engine previously matched `@app.get(...)` patterns in any Python file, including Flask projects that don't use FastAPI. Now requires `from fastapi import` or `import fastapi` to be present in the file before matching FastAPI patterns.
+- **API routes from test files**: `api-map` previously listed all routes including those in `tests/` and `examples/` directories as production routes. Now tagged with `source: "test"` for clear separation.
+- **State-map Python type alias false positives**: `ResponseValue`, `HeaderValue`, `RouteCallable`, `T_shell_context_processor`, etc. were classified as `module_constant` state stores. These are type definitions, not mutable state.
+- **State-map Python private variable false positives**: `_external`, `_anchor`, `_sentinel`, `_app_option` etc. were classified as state. These are private module-level variables.
+- **Debug-leak click.echo() false positive**: `click.echo()` is the standard CLI output function, not a debug print. Was flagged as `print_statement`. Now skipped via CLI output allowlist.
+- **Perf-hint HTML template false positives**: Jinja2 `{% for %}` loops in `.html` templates were flagged as `inefficient_iteration`. Template iteration is compile-time, not runtime.
+- **Config-drift Python local module false positives**: `flask`, `js_example`, `task_app`, etc. were reported as missing dependencies. These are local packages within the workspace, not external dependencies.
 
 ### Changed
 
-- **Version bump**: 5.8.1 → 6.0.0
-- **Total commands**: 44 → 45 (added `analyze`)
+- **Version bump**: 5.8.1 → 5.9.0. All version references (utils.py, skill.json, pyproject.toml) now consistent.
 
 ## [5.8.1] — 2026-06-12
 

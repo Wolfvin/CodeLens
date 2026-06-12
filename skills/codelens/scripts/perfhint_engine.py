@@ -823,7 +823,7 @@ def _detect_duplicate_api_calls(
 
 # ─── Category-File Relevance ───────────────────────────────────
 
-def _category_applies_to_file(category: str, ext: str) -> bool:
+def _category_applies_to_file(category: str, ext: str, rel_path: str = "") -> bool:
     """Determine if a performance hint category is relevant to a file extension.
 
     Avoids scanning irrelevant file types (e.g., no n_plus_one in .html files).
@@ -831,6 +831,15 @@ def _category_applies_to_file(category: str, ext: str) -> bool:
     # Categories that apply to all source files
     universal = {"inefficient_iteration", "cache_miss"}
     if category in universal:
+        # v5.9: HTML template files should not be scanned for inefficient_iteration.
+        # Jinja2/Django template {% for %} loops are server-rendered template
+        # iteration, not JavaScript/Python runtime performance issues.
+        if category == "inefficient_iteration" and ext in {".html", ".htm", ".jinja", ".jinja2", ".djt"}:
+            return False
+        # v5.9: Also skip Vue/Svelte template sections — they use v-for/{#each}
+        # which are compile-time directives, not runtime loops.
+        if category == "inefficient_iteration" and ext in {".vue", ".svelte"}:
+            return False
         return True
 
     # Frontend-specific categories

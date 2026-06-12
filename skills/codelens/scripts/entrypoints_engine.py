@@ -197,6 +197,7 @@ ENTRYPOINT_PATTERNS = {
                 "label": "flask_route",
             },
             # FastAPI @app.get/post/etc
+            # v5.9: Only match if FastAPI is actually imported in the file
             {
                 "regex": r'@app\.(get|post|put|delete|patch|head|options)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".py"},
@@ -204,8 +205,10 @@ ENTRYPOINT_PATTERNS = {
                 "method_group": 1,
                 "path_group": 2,
                 "label": "fastapi_route",
+                "requires_import": "fastapi",  # v5.9: Only match when fastapi is imported
             },
             # FastAPI @router.get/post/etc
+            # v5.9: Only match if FastAPI is actually imported in the file
             {
                 "regex": r'@router\.(get|post|put|delete|patch|head|options)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".py"},
@@ -213,6 +216,7 @@ ENTRYPOINT_PATTERNS = {
                 "method_group": 1,
                 "path_group": 2,
                 "label": "fastapi_router_route",
+                "requires_import": "fastapi",  # v5.9: Only match when fastapi is imported
             },
             # Django URL patterns
             {
@@ -942,6 +946,17 @@ def _extract_entrypoints(
     results = []
     regex = pattern_def["regex"]
     extract_type = pattern_def.get("extract", "handler_only")
+
+    # v5.9: Check requires_import constraint — skip pattern if the
+    # required module is not imported in this file (e.g., FastAPI
+    # decorator patterns should not match in Flask-only files).
+    requires_import = pattern_def.get("requires_import")
+    if requires_import:
+        import_pattern = re.compile(
+            rf'(?:from\s+{re.escape(requires_import)}\s+import|import\s+{re.escape(requires_import)})'
+        )
+        if not import_pattern.search(content):
+            return []
 
     try:
         for match in re.finditer(regex, content):

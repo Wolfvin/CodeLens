@@ -1,11 +1,11 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 Quick Reference — concise trigger map, core commands, and decision rules
+  CodeLens v5 Quick Reference — concise trigger map, core commands, and decision rules
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v6.0 — Quick Reference
+# CodeLens v5.9.0 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -21,7 +21,6 @@ description: >
 
 | User Intent | Tool | Command |
 |-------------|------|---------|
-| **Analyze entire repo** | `analyze` | `codelens analyze ws` |
 | Create new class/id/function | `query` | `codelens query "name" ws` |
 | Edit existing code | `query` + `context` | Query first, then context |
 | **Anti-overload summary** | `summary` | `codelens summary ws` |
@@ -120,55 +119,54 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 45 Commands Quick Reference
+## All 44 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|
-| 1 | `analyze` | P0 | **Full repo analysis: init+scan+all engines in one command** |
-| 2 | `init` | P0 | Initialize workspace |
-| 3 | `scan` | P0 | Scan & build registry |
-| 4 | `query` | P0 | Check if name exists |
-| 5 | `list` | P3 | List with filter |
-| 6 | `detect` | P3 | Detect frameworks |
-| 7 | `watch` | P3 | File watcher |
-| 8 | `handbook` | P0 | Project handbook for AI agents |
-| 9 | `ask` | P1 | Natural language query router |
-| 10 | `search` | P1 | Regex search |
-| 11 | `symbols` | P1 | Registry symbol search |
-| 12 | `trace` | P1 | Call chain trace |
-| 13 | `impact` | P1 | Change impact analysis |
-| 14 | `outline` | P2 | File structure outline |
-| 15 | `missing-refs` | P2 | CSS/HTML mismatch |
-| 16 | `diff` | P2 | Registry diff |
-| 17 | `circular` | P2 | Circular dependency |
-| 18 | `context` | P1 | Rich symbol context (+quality) |
-| 19 | `dependents` | P2 | Module import tracking |
-| 20 | `validate` | P3 | Registry sanity check |
-| 21 | `dataflow` | P0 | Source→sink analysis |
-| 22 | `smell` | P0 | Code smell detection |
-| 23 | `side-effect` | P1 | Pure vs impure |
-| 24 | `refactor-safe` | P1 | Rename/move safety |
-| 25 | `dead-code` | P1 | Enhanced dead code |
-| 26 | `stack-trace` | P2 | Error propagation |
-| 27 | `test-map` | P2 | Test coverage |
-| 28 | `config-drift` | P2 | Dependency drift |
-| 29 | `type-infer` | P3 | Type inference |
-| 30 | `ownership` | P3 | Code ownership |
-| 31 | `secrets` | P0 | Hardcoded secret scan |
-| 32 | `entrypoints` | P0 | Entry point mapping |
-| 33 | `api-map` | P1 | Route→handler mapping |
-| 34 | `state-map` | P1 | State management |
-| 35 | `env-check` | P1 | Environment audit |
-| 36 | `debug-leak` | P2 | Debug code detection |
-| 37 | `complexity` | P2 | Complexity scoring |
-| 38 | `regex-audit` | P3 | Regex safety audit |
-| 39 | `a11y` | P3 | Accessibility audit |
-| 40 | `vuln-scan` | P0 | CVE vulnerability scan |
-| 41 | `perf-hint` | P1 | Performance hints |
-| 42 | `css-deep` | P2 | Deep CSS analysis |
-| 43 | `summary` | P0 | **Anti-overload condensed view** |
-| 44 | `binary-scan` | P1 | **Binary/Tauri/Electron RE analysis** |
-| 45 | `artifact-scan` | P1 | **Compiled artifact reverse engineering** |
+| 1 | `init` | P0 | Initialize workspace |
+| 2 | `scan` | P0 | Scan & build registry |
+| 3 | `query` | P0 | Check if name exists |
+| 4 | `list` | P3 | List with filter |
+| 5 | `detect` | P3 | Detect frameworks |
+| 6 | `watch` | P3 | File watcher |
+| 7 | `handbook` | P0 | Project handbook for AI agents |
+| 8 | `ask` | P1 | Natural language query router |
+| 9 | `search` | P1 | Regex search |
+| 10 | `symbols` | P1 | Registry symbol search |
+| 11 | `trace` | P1 | Call chain trace |
+| 12 | `impact` | P1 | Change impact analysis |
+| 13 | `outline` | P2 | File structure outline |
+| 14 | `missing-refs` | P2 | CSS/HTML mismatch |
+| 15 | `diff` | P2 | Registry diff |
+| 16 | `circular` | P2 | Circular dependency |
+| 17 | `context` | P1 | Rich symbol context (+quality) |
+| 18 | `dependents` | P2 | Module import tracking |
+| 19 | `validate` | P3 | Registry sanity check |
+| 20 | `dataflow` | P0 | Source→sink analysis |
+| 21 | `smell` | P0 | Code smell detection |
+| 22 | `side-effect` | P1 | Pure vs impure |
+| 23 | `refactor-safe` | P1 | Rename/move safety |
+| 24 | `dead-code` | P1 | Enhanced dead code |
+| 25 | `stack-trace` | P2 | Error propagation |
+| 26 | `test-map` | P2 | Test coverage |
+| 27 | `config-drift` | P2 | Dependency drift |
+| 28 | `type-infer` | P3 | Type inference |
+| 29 | `ownership` | P3 | Code ownership |
+| 30 | `secrets` | P0 | Hardcoded secret scan |
+| 31 | `entrypoints` | P0 | Entry point mapping |
+| 32 | `api-map` | P1 | Route→handler mapping |
+| 33 | `state-map` | P1 | State management |
+| 34 | `env-check` | P1 | Environment audit |
+| 35 | `debug-leak` | P2 | Debug code detection |
+| 36 | `complexity` | P2 | Complexity scoring |
+| 37 | `regex-audit` | P3 | Regex safety audit |
+| 38 | `a11y` | P3 | Accessibility audit |
+| 39 | `vuln-scan` | P0 | CVE vulnerability scan |
+| 40 | `perf-hint` | P1 | Performance hints |
+| 41 | `css-deep` | P2 | Deep CSS analysis |
+| 42 | `summary` | P0 | **Anti-overload condensed view** |
+| 43 | `binary-scan` | P1 | **Binary/Tauri/Electron RE analysis** (v5.9) |
+| 44 | `artifact-scan` | P1 | **Compiled artifact reverse engineering** (v5.9) |
 
 ## CLI Usage Pattern
 
@@ -179,12 +177,7 @@ CLI="python3 $CODELENS_DIR/scripts/codelens.py"
 # Workspace is AUTO-DETECTED if omitted (NEW in v5.1)
 # Fallback: cwd → parent dirs → last workspace → cwd
 
-# ═══ ONE-SHOT FULL ANALYSIS (NEW v6.0) ═══
-$CLI analyze /path/to/repo              # Everything in one command
-$CLI analyze /path/to/repo --focus security  # Security-focused only
-$CLI analyze /path/to/repo --detail full     # All findings, no filtering
-
-# Setup (manual, if not using analyze)
+# Setup
 $CLI init
 $CLI scan
 
@@ -205,8 +198,7 @@ $CLI vuln-scan
 $CLI perf-hint
 $CLI css-deep
 
-# Agent-first commands
-$CLI analyze /repo         # One-shot full repo analysis (NEW v6.0)
+# Agent-first commands (NEW v5.2)
 $CLI handbook              # One-shot project orientation
 $CLI ask "dead code?"      # Natural language query
 $CLI context "fn" -f markdown  # Markdown output

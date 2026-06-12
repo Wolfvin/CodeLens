@@ -1798,6 +1798,32 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         '__loader__', '__cached__', '__version__',
     }
 
+    # v5.9: Python type alias patterns — these are type definitions, NOT state.
+    # Matches: X: TypeAlias = ..., X = TypeAlias, X: Type[...], X = Union[...],
+    # X: Optional[...] = None, X = Callable[..., ...], etc.
+    # Also matches prefixed forms: t.Union, t.Optional, typing.Union, etc.
+    PY_TYPE_ALIAS_VALUE_PATTERNS = re.compile(
+        r'^(?:TypeAlias|Type\[|Union\[|Optional\[|Callable\[|Literal\['
+        r'|Annotated\[|Final\[|ClassVar\[|Sequence\[|Mapping\['
+        r'|Iterable\[|Iterator\[|Awaitable\[|AsyncIterator\['
+        r'|Protocol\[|TypedDict|NamedTuple|Enum\('
+        r'|typing\.|collections\.abc\.'
+        r'|t\.Union|t\.Optional|t\.Callable|t\.Literal|t\.Annotated'
+        r'|t\.Final|t\.ClassVar|t\.Sequence|t\.Mapping|t\.Iterable'
+        r'|t\.Iterator|t\.Awaitable|t\.Protocol|t\.Type'
+        r'|cabc\.|c\.Union|c\.Optional'
+        r'|str\s*\||int\s*\||float\s*\||bool\s*\||bytes\s*\||None\s*\|'
+        r')'
+    )
+
+    # v5.9: Names that start with underscore (private) and are NOT state.
+    # Single-underscore-prefixed names are private module variables.
+    PY_PRIVATE_SKIP = {
+        '_external', '_anchor', '_sentinel', '_app_option', '_debug_option',
+        '_env_file_option', '_internal', '_default', '_fallback', '_proxy',
+        '_wrapper', '_cache', '_instance', '_registry', '_lock', '_handler',
+    }
+
     lines = content.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -1819,6 +1845,54 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 # v5.8: Skip ALL_CAPS constants
                 # (e.g., VERBOSE, CLI, ROOT are all-caps single-word constants)
                 if var_name == var_name.upper() and len(var_name) >= 3:
+                    continue
+
+                # v5.9: Skip Python type aliases (TypeAlias, Type[...], Union[...], etc.)
+                # These are type definitions, not runtime state.
+                if PY_TYPE_ALIAS_VALUE_PATTERNS.search(value_part):
+                    continue
+
+                # v5.9: Multi-line type alias detection.
+                # Many type aliases use multi-line assignment:
+                #   X = (
+                #       t.Union[...]
+                #   )
+                # The value_part is just '(' for these. Look ahead a few lines
+                # to check if the continuation contains type alias patterns.
+                if value_part == '(' and i + 1 < len(lines):
+                    is_multiline_type_alias = False
+                    for peek_idx in range(i + 1, min(i + 5, len(lines))):
+                        peek_line = lines[peek_idx].strip()
+                        if not peek_line or peek_line == ')':
+                            continue
+                        if PY_TYPE_ALIAS_VALUE_PATTERNS.search(peek_line):
+                            is_multiline_type_alias = True
+                            break
+                    if is_multiline_type_alias:
+                        continue
+
+                # v5.9: Also detect type aliases in annotation form:
+                # X: TypeAlias = ...  or  X: SomeType = ...
+                type_annotation_match = re.match(
+                    r'^([A-Z_]\w+)\s*:\s*(?:TypeAlias|Type\[|Union\[|Optional\[|Callable\[|'
+                    r'Literal\[|Annotated\[|Final\[|ClassVar\[|Sequence\[|Mapping\['
+                    r')',
+                    stripped
+                )
+                if type_annotation_match:
+                    continue
+
+                # v5.9: Skip private module-level variables (underscore-prefixed).
+                # These are internal implementation details, not global state.
+                if var_name.startswith('_') and not var_name.startswith('__'):
+                    # Only skip if the name is in our known private name set
+                    # or if it looks like a private helper (single underscore + lowercase)
+                    if var_name in PY_PRIVATE_SKIP or (len(var_name) > 1 and var_name[1:].islower()):
+                        continue
+
+                # v5.9: Skip Python TypeVar conventions (T_ prefix).
+                # Names like T_shell_context_processor, T_teardown are type variables.
+                if var_name.startswith('T_') and var_name[2:].isidentifier():
                     continue
 
                 # v5.8: Skip path references and env var lookups

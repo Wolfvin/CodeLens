@@ -449,16 +449,73 @@ def _detect_local_packages(workspace: str) -> Set[str]:
     the [package] name from each member's Cargo.toml.
 
     For Python, detects directories with __init__.py as local packages.
+    Also scans src/ subdirectories (common in src-layout projects).
     """
     local = set()
 
-    # Detect Python local packages
-    for entry in os.listdir(workspace):
-        entry_path = os.path.join(workspace, entry)
-        if os.path.isdir(entry_path):
-            # Check if it's a Python package (has __init__.py)
-            if os.path.exists(os.path.join(entry_path, '__init__.py')):
-                local.add(entry)
+    # Detect Python local packages — walk the workspace and src/ subdirectories
+    # v5.9: Also scan src/ layout and deeper nesting for local packages
+    scan_dirs = [workspace]
+    src_dir = os.path.join(workspace, 'src')
+    if os.path.isdir(src_dir):
+        scan_dirs.append(src_dir)
+    # v5.9: Also scan examples/ and tests/ subdirectories for local test/example packages
+    examples_dir = os.path.join(workspace, 'examples')
+    if os.path.isdir(examples_dir):
+        scan_dirs.append(examples_dir)
+
+    for scan_dir in scan_dirs:
+        if not os.path.isdir(scan_dir):
+            continue
+        for entry in os.listdir(scan_dir):
+            entry_path = os.path.join(scan_dir, entry)
+            if os.path.isdir(entry_path):
+                # Check if it's a Python package (has __init__.py)
+                if os.path.exists(os.path.join(entry_path, '__init__.py')):
+                    local.add(entry)
+                # v5.9: Also check for Python packages in subdirectories
+                # (e.g., examples/tutorial/flaskr, examples/javascript/js_example)
+                # and src/ sub-paths (e.g., src/flask/)
+                try:
+                    for sub_entry in os.listdir(entry_path):
+                        sub_path = os.path.join(entry_path, sub_entry)
+                        if os.path.isdir(sub_path) and os.path.exists(os.path.join(sub_path, '__init__.py')):
+                            local.add(sub_entry)
+                        # Also check one level deeper (e.g., examples/celery/src/task_app/)
+                        try:
+                            for deep_entry in os.listdir(sub_path):
+                                deep_path = os.path.join(sub_path, deep_entry)
+                                if os.path.isdir(deep_path) and os.path.exists(os.path.join(deep_path, '__init__.py')):
+                                    local.add(deep_entry)
+                        except (PermissionError, OSError):
+                            pass
+                except (PermissionError, OSError):
+                    pass
+
+    # v5.9: Also detect Python packages from pyproject.toml [tool.setuptools.packages.find]
+    # and from the imports themselves — if a module exists as a directory in the
+    # workspace, it's local, not external.
+    pyproject_path = os.path.join(workspace, 'pyproject.toml')
+    if os.path.isfile(pyproject_path):
+        try:
+            with open(pyproject_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Extract package names from [tool.setuptools.packages.find]
+            m = re.search(r'\[tool\.setuptools\.packages\.find\]', content)
+            if m:
+                # Look for 'include' or 'where' in the section
+                section_start = m.end()
+                section = content[section_start:section_start + 500]
+                for name_m in re.finditer(r'(?:include|where)\s*=\s*\[([^\]]+)\]', section):
+                    for pkg_m in re.finditer(r'"([^"]+)"', name_m.group(1)):
+                        pkg = pkg_m.group(1)
+                        # Handle glob patterns like "flask*"
+                        if '*' in pkg:
+                            pkg = pkg.replace('*', '').replace('/', '').rstrip('.')
+                        if pkg:
+                            local.add(pkg)
+        except (IOError, OSError):
+            pass
 
     # Detect Rust workspace members and crate-local modules
     cargo_toml = os.path.join(workspace, "Cargo.toml")
@@ -645,6 +702,9 @@ def _compute_drift(
         'zoneinfo',
         # Common Python meta-packages
         'setuptools', 'pip', 'pkg_resources', 'ensurepip',
+        # v5.9: Python type-checking / test internals
+        '_pytest', '_typeshed', '_io', '_thread', '_signal',
+        '_weakref', '_abc', '_collections_abc', '_operator',
         # ── Rust built-ins ──
         'std', 'core', 'alloc',
     }
