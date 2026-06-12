@@ -378,7 +378,7 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> Tuple[str,
     unique_files = set(f for f in files if f)
     common_count = sum(1 for fn in fn_names if fn in _RUST_COMMON_METHOD_NAMES)
     if common_count >= len(fn_names) // 2 + 1 and len(unique_files) > 1:
-        return "info"
+        return "info", test_involvement
 
     # Cross-class name collision detection:
     # If the cycle contains multiple functions with the SAME name but from DIFFERENT

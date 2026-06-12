@@ -5,6 +5,31 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.0.1] — 2026-06-12
+
+### Tested against screenpipe/screenpipe (1962 files, Rust+TS+Swift Tauri monorepo)
+
+Real-world test on a massive Tauri desktop app with 15,308 backend nodes, 93,755 edges, and
+1,286 CSS classes. Screenpipe is a 24/7 AI screen & mic recorder (19k+ GitHub stars) with
+Rust core, TypeScript/React frontend, Swift integrations, and a complex monorepo structure
+(cargo-workspace + multiple apps). This is the most diverse and challenging test target to date.
+
+### Fixed
+
+- **CRITICAL: `is_bundled_file()` missing from utils.py** — The function was imported by
+  `complexity_engine.py` and `perfhint_engine.py`, but never defined in `utils.py`. This caused
+  ImportError cascade that completely disabled 4 commands: `ask`, `complexity`, `context`, and
+  `perf-hint`. Added the missing function with detection for dist/build/out directories, bundled
+  file extensions (.bundle.js, .chunk.js, .global.js), minified files, and declaration files.
+- **`_classify_cycle_severity()` returned single value instead of tuple** — In `circular_engine.py`
+  line 381, the Rust common method names check returned `return "info"` (single value) instead of
+  `return "info", test_involvement` (tuple). This caused `ValueError: too many values to unpack`
+  in `_format_function_cycle()` and crashed both `circular` and `handbook` commands on repos with
+  Rust common method name cycles (e.g., `new()`, `get()`, `read()`, `write()` across crates).
+- **`impact_engine.py` redundant `node_by_fn = None`** — Line 44 had a duplicate initialization
+  `node_by_fn = None` that was immediately overwritten by line 33. Removed the redundant line
+  for code clarity.
+
 ## [7.0.0] — 2026-06-12
 
 ### Tested against freqtrade/freqtrade (480 Python files, crypto trading bot)
