@@ -19,6 +19,7 @@ Usage:
 
 import os
 import time
+import math
 from typing import Dict, Any, List, Optional
 from commands import register_command
 from utils import logger
@@ -167,9 +168,26 @@ def analyze_repository(
     try:
         from outline_engine import get_workspace_outline
         outline = get_workspace_outline(workspace, max_files=200)
+
+        # Compute total lines from outlined files
+        total_lines = 0
+        for o in outline.get("outlines", []):
+            line_count = o.get("outline", o).get("line_count", 0)
+            if line_count == 0:
+                # Fallback: count lines in the file
+                try:
+                    fpath = os.path.join(workspace, o.get("file", ""))
+                    if os.path.exists(fpath):
+                        with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                            total_lines += sum(1 for _ in f)
+                except Exception:
+                    pass
+            else:
+                total_lines += line_count
+
         result["architecture"] = {
             "total_files": outline.get("files_outlined", 0),
-            "total_lines": outline.get("total_lines", 0),
+            "total_lines": total_lines,
             "directories": _extract_directory_structure(workspace),
             "entry_points": [],
             "key_modules": [],
@@ -582,7 +600,12 @@ def _extract_directory_structure(workspace: str, max_depth: int = 3) -> List[str
 
 
 def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
-    """Compute an overall risk score based on all findings."""
+    """Compute an overall risk score based on all findings.
+
+    v5.9.3: Fixed score=0 bug. The old formula used absolute subtraction with per-category
+    caps, but with many categories it was easy to reach 0. New formula uses density-based
+    scoring relative to project size, with diminishing returns per additional issue.
+    """
     score = 100  # Start at 100, deduct for issues
 
     critical_count = 0
@@ -594,15 +617,21 @@ def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
         sev = f.get("severity", "low")
         if sev == "critical":
             critical_count += total
-            score -= min(total * 5, 30)  # Max -30 per category
+            # Use logarithmic scaling: each additional issue has less impact
+            # This prevents the score from going to 0 with large issue counts
+            deduction = min(15, 3 + int(math.log2(max(total, 1))))
+            score -= deduction
         elif sev == "high":
             high_count += total
-            score -= min(total * 2, 20)
+            deduction = min(10, 2 + int(math.log2(max(total, 1))))
+            score -= deduction
         elif sev == "medium":
             medium_count += total
-            score -= min(total, 10)
+            deduction = min(7, 1 + int(math.log2(max(total, 1))))
+            score -= deduction
         else:
-            score -= min(total // 5, 5)
+            deduction = min(3, int(math.log2(max(total, 1))))
+            score -= deduction
 
     score = max(0, min(100, score))
 

@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, is_bundled_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -108,6 +108,10 @@ def detect_smells(
 
             # Skip minified files
             if '.min.' in filename:
+                continue
+
+            # Skip bundled/compiled files (dist/, build/, .global.js, etc.)
+            if is_bundled_file(rel_path):
                 continue
 
             # Skip generated files (generated/, vendor/, _pb2.py, etc.)
@@ -974,28 +978,102 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
-        class_match = re.search(r'class\s+(\w+)', content)
+        # Count class methods — improved v5.9.3: Only count methods inside class bodies
+        # Use class body scoping to avoid counting control flow, function calls, etc.
+        # Strategy: find class { ... } blocks, then count method-like definitions inside
+        lines = content.split('\n')
+        class_method_counts = {}  # class_name -> method_count
 
-        if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "critical",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
-            })
-        elif class_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "class": class_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Class '{class_match.group(1)}' has {method_count} methods (threshold: {GOD_CLASS_METHODS})",
-                "suggestion": "Consider extracting some methods into a separate class."
-            })
+        in_class = False
+        class_name = ""
+        brace_depth = 0
+        class_start_depth = 0
+        method_count = 0
+
+        # Keywords that are NOT method definitions
+        _non_method_keywords = frozenset({
+            'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'return',
+            'throw', 'try', 'catch', 'finally', 'new', 'delete', 'typeof',
+            'instanceof', 'void', 'yield', 'await', 'break', 'continue',
+            'import', 'export', 'from', 'require', 'console',
+        })
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Track brace depth
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+
+            # Detect class declaration start
+            class_match = re.match(r'(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)', stripped)
+            if class_match and '{' in stripped:
+                if in_class:
+                    # Save previous class before starting new one
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
+                in_class = True
+                class_name = class_match.group(1)
+                class_start_depth = brace_depth
+                method_count = 0
+                continue
+            elif class_match:
+                # Class without opening brace on same line
+                if in_class:
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
+                in_class = True
+                class_name = class_match.group(1)
+                class_start_depth = brace_depth + 1
+                method_count = 0
+                continue
+
+            if in_class:
+                # End class block when brace depth returns
+                if brace_depth < class_start_depth:
+                    in_class = False
+                    if method_count >= GOD_CLASS_METHODS:
+                        class_method_counts[class_name] = method_count
+                    continue
+
+                # Count method definitions inside class body
+                # Method patterns: methodName() {, methodName = () =>, get propName(), etc.
+                method_match = re.match(
+                    r'(?:public\s+|private\s+|protected\s+|static\s+|abstract\s+|readonly\s+|override\s+)*'
+                    r'(?:async\s+)?'
+                    r'(?:get\s+|set\s+|#)?'
+                    r'([a-zA-Z_$][\w$]*)\s*(?:<[^>]+>)?\s*\(',
+                    stripped
+                )
+                if method_match:
+                    name = method_match.group(1)
+                    # Skip non-method keywords, constructor calls, and property access chains
+                    if name not in _non_method_keywords and not stripped.startswith('.'):
+                        method_count += 1
+
+        # Report god objects from all detected classes
+        for cls_name, count in class_method_counts.items():
+            if count >= GOD_CLASS_METHODS_CRITICAL:
+                smells.append({
+                    "file": rel_path,
+                    "class": cls_name,
+                    "method_count": count,
+                    "severity": "critical",
+                    "message": f"Class '{cls_name}' has {count} methods (critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
+                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle."
+                })
+            elif count >= GOD_CLASS_METHODS:
+                smells.append({
+                    "file": rel_path,
+                    "class": cls_name,
+                    "method_count": count,
+                    "severity": "warning",
+                    "message": f"Class '{cls_name}' has {count} methods (threshold: {GOD_CLASS_METHODS})",
+                    "suggestion": "Consider extracting some methods into a separate class."
+                })
 
     elif ext == ".py":
         # Count class methods in Python with proper scoping
