@@ -16,6 +16,35 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 
 ---
 
+## Zero-Config for AI — Just Run Any Command
+
+CodeLens now supports **zero-config AI usage**. If no registry exists, running any analysis command automatically triggers `init` + `scan`:
+
+```bash
+$CLI query "myFunction" --lite
+# → If no .codelens/ exists: auto-init + auto-scan → then query
+# → Returns: {status:"ok", found:true|false, action:"CREATE"|"EXTEND"|"ASK"|"STOP"}
+```
+
+### AI-Optimized Flags (work with ANY command)
+
+| Flag | Effect | When to use |
+|------|--------|-------------|
+| `--top N` | Limit list results to top N items | Large repos, token budget concerns |
+| `--max-tokens N` | Truncate output to fit ~N tokens | Strict context window limits |
+| `--lite` | Minimal output for decision-making | Quick yes/no checks |
+| `--format ai` | Normalized schema: `{stats, items[], truncated, recommendations}` | Consistent parsing across commands |
+
+### The One Command You Need
+
+```bash
+$CLI query "name" --lite    # Auto-setup + minimal response = {found, action}
+```
+
+If `action: CREATE` → safe to write. If anything else → check first.
+
+---
+
 ## Onboarding — First-Time AI Setup
 
 This section guides a new AI agent through the complete CodeLens setup process from zero to productive.
@@ -222,14 +251,17 @@ def cl_query(name, workspace):
 
 ### Token Budget Strategy
 
-CodeLens output can be large. Follow these strategies to stay within token budgets:
+CodeLens output can be large. Use these AI-optimized flags to stay within token budgets:
 
-1. **Use `--detail minimal`** for `summary` and `handbook` when you only need an overview
-2. **Use `--severity critical`** or `--severity high` for `smell`, `secrets`, `perf-hint`, `vuln-scan` to filter noise
-3. **Use `--category`** filters on `dead-code`, `smell`, `perf-hint`, `debug-leak` to narrow scope
-4. **Use `query` before `context`** — if `found:false`, no need for context
-5. **Use `list --filter dead --limit 20`** instead of full registry dump
-6. **Avoid `analyze`** for large repos — it runs all engines. Use specific commands instead.
+1. **`--lite`** for `query` — returns just `{found, action}` instead of full node details + callers + callees
+2. **`--top 10`** for any command — limits list results to 10 items (universal flag)
+3. **`--max-tokens 500`** for any command — automatically truncates output to fit within ~500 tokens
+4. **`--format ai`** for any command — normalizes output to consistent `{stats, items[], truncated, recommendations}` schema
+5. **`--severity critical`** for `smell`, `secrets`, `perf-hint`, `vuln-scan` — filters noise
+6. **`--category`** filters on `dead-code`, `smell`, `perf-hint`, `debug-leak` — narrow scope
+7. Use `query --lite` before `context` — if `found:false`, no need for context
+8. Use `list --filter dead --top 20` instead of full registry dump
+9. Avoid `analyze` for large repos — it runs all engines. Use specific commands instead.
 
 ### Reference Files
 

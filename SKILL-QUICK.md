@@ -3,7 +3,7 @@
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
 > **AI Loading Guide**: Read THIS FILE FIRST. Do NOT read scripts/*.py unless debugging errors.
-> All commands support `--format json|markdown` and auto-detect workspace if omitted.
+> All commands support `--format json|markdown|ai`, auto-detect workspace, and AI-optimized flags: `--top N`, `--max-tokens N`, `--lite`.
 
 ## First-Time Setup
 
@@ -27,9 +27,24 @@ $CLI query "myFunction"    # Check before writing
 
 **After code changes**: always `$CLI scan --incremental` (~1-5s) before re-querying.
 
+## AI-Optimized Flags (work with ANY command)
+
+| Flag | Effect | Example |
+|------|--------|---------|
+| `--top N` | Limit all list results to N items | `$CLI smell --top 5` |
+| `--max-tokens N` | Truncate output to fit within ~N tokens | `$CLI complexity --max-tokens 500` |
+| `--lite` | Minimal output for AI decision-making | `$CLI query "fn" --lite` |
+| `--format ai` | Normalized schema: `{stats, items[], truncated}` | `$CLI dead-code --format ai` |
+
+**Zero-config AI usage:** Just run any command — if no registry exists, CodeLens auto-runs `init` + `scan`.
+
+```bash
+$CLI query "myFunction" --lite    # Auto-init+scan if needed, returns {found, action}
+```
+
 ## State Prerequisites
 
-1. No `.codelens/` → auto-run `init` → `scan` first
+1. **No `.codelens/` → AUTO: init + scan runs automatically** (zero-config!)
 2. Registry stale (>24h) → auto-run `scan --incremental`
 3. After code changes → always `scan --incremental` before re-query
 
