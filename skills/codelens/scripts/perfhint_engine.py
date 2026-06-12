@@ -95,6 +95,17 @@ PERF_HINT_CATEGORIES = {
                 "hint": "ORM query inside loop — potential N+1 query problem",
                 "fix_suggestion": "Use .filter(id__in=ids) or prefetch_related() / select_related() for batch loading.",
             },
+            # v5.9: Python generic _fetch_* / _get_* helper calls inside loops
+            # This catches patterns like: for uid in ids: user = _fetch_user(uid)
+            {
+                "regex": (
+                    r'(?:for\s+\w+\s+in\s+)'
+                    r'[^\n]{0,80}?'
+                    r'(?:_fetch_|_get_|_load_|_query_|_find_)\w+\s*\(\s*\w+'
+                ),
+                "hint": "Per-item fetch call inside loop — likely N+1 query pattern",
+                "fix_suggestion": "Batch the fetch operation outside the loop, or use a bulk query with .filter(id__in=ids).",
+            },
             # Knex / Sequelize / TypeORM in loops
             {
                 "regex": (
@@ -188,7 +199,7 @@ PERF_HINT_CATEGORIES = {
     "sync_blocking": {
         "severity": "critical",
         "category": "sync_blocking",
-        "description": "Synchronous file/HTTP operations in request handlers",
+        "description": "Synchronous blocking operations in async/request contexts",
         "patterns": [
             # fs.readFileSync / fs.writeFileSync inside route handlers
             {
@@ -237,6 +248,24 @@ PERF_HINT_CATEGORIES = {
                 ),
                 "hint": "Blocking HTTP request (requests library) in route handler — stalls the worker",
                 "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP, or offload to a background task.",
+            },
+            # v5.9: Python time.sleep() inside async function — blocks the event loop
+            {
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?time\.sleep\s*\(',
+                "hint": "time.sleep() inside async function — blocks the entire event loop",
+                "fix_suggestion": "Use asyncio.sleep() instead of time.sleep() in async functions to avoid blocking the event loop.",
+            },
+            # v5.9: Python requests.get/post inside async function — blocking HTTP in async
+            {
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?requests\.(?:get|post|put|delete|patch|head)\s*\(',
+                "hint": "Blocking requests.get/post inside async function — stalls the event loop",
+                "fix_suggestion": "Use httpx.AsyncClient or aiohttp for async HTTP requests inside async functions.",
+            },
+            # v5.9: Python subprocess in async function without asyncio
+            {
+                "regex": r'async\s+def\s+\w+[^}]{0,500}?subprocess\.(?:call|run|check_output|check_call)\s*\(',
+                "hint": "Blocking subprocess call inside async function — stalls the event loop",
+                "fix_suggestion": "Use asyncio.create_subprocess_exec() for non-blocking subprocess calls in async functions.",
             },
         ],
     },
@@ -314,6 +343,18 @@ PERF_HINT_CATEGORIES = {
                 "self_call_regex": True,  # Flag: check if function calls itself
                 "hint": "Recursive function without memoization — may recompute identical sub-problems",
                 "fix_suggestion": "Add memoization (functools.lru_cache, or a custom cache Map) to avoid redundant computation.",
+            },
+            # v5.9: Python string concatenation in loop (result += ...) — O(n²) pattern
+            {
+                "regex": r'(?:for\s+\w+\s+in\s+|while\s+)[^\n]{0,80}?result\s*\+=\s*(?:str\s*\()?[\w.\[\]]+',
+                "hint": "String concatenation inside loop using += — O(n²) time complexity",
+                "fix_suggestion": "Use list.append() + ''.join() for O(n) string building instead of repeated concatenation.",
+            },
+            # v5.9: Python list.append in loop (suggest list comprehension)
+            {
+                "regex": r'(?:for\s+\w+\s+in\s+)range\s*\([^)]+\):\s*\n\s*(?:result|items|output)\s*\.\s*append\s*\(',
+                "hint": "list.append() inside for-range loop — list comprehension is faster and more Pythonic",
+                "fix_suggestion": "Replace with a list comprehension: [expression for i in range(n)]",
             },
         ],
     },
