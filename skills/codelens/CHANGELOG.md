@@ -5,54 +5,31 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
-## [7.2.0] — 2026-06-12
+## [7.0.0] — 2026-06-12
 
-### Tested against laravel/framework (2,934 files: 2,801 PHP + 124 Blade + 3 JS + 2 CSS + 4 Shell, PHP framework monorepo)
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 
-Real-world test on a pure PHP framework project — the Laravel framework source code itself.
-This exposed critical blind spots across 10+ engines that had zero PHP support, despite PHP
-being one of the most popular web languages. Prior testing covered JS/TS, Python, Rust, Go,
-C/C++, GDScript, and Lua — but never PHP.
-
-### Fixed
-
-- **CRITICAL: `outline_engine.py` PHP class methods not extracted** — `_outline_php()` only extracted top-level standalone functions (`indent == 0`), completely skipping methods inside class/interface/trait/enum bodies. For a typical PHP class with 10 methods, 0 were counted. This caused `total_functions: 11` for 2,801 PHP files (only 11 files had standalone functions). Added brace-depth tracking to capture methods with visibility modifiers, static/abstract flags.
-
-- **CRITICAL: `statemap_engine.py` `.php` not in `SOURCE_EXTENSIONS`** — The engine skipped ALL PHP files entirely (0 stores, 3 files scanned). Added `.php` to `SOURCE_EXTENSIONS`, PHP keyword/builtin skip lists, and `_extract_php_state()` function detecting: PHP superglobals (`$_SESSION`, `$_GET`, `$_POST`), Laravel Config state (`Config::get/set/has`, `config()`), Laravel Facade state (`Cache::`, `Session::`, `DB::`, `Redis::`), and Eloquent model state (`$fillable`, `$hidden`, `protected static $`). Result: 0 → 173 stores.
-
-- **CRITICAL: `dataflow_engine.py` `.php` not in `SOURCE_EXTENSIONS` + zero PHP patterns** — The engine had no PHP source/sink/sanitizer patterns. All PHP files were skipped (1 source, 0 sinks, 3 files). Added PHP superglobal sources (`$_GET/POST/REQUEST/COOKIE/SERVER`), Laravel request sources (`$request->input()`, `request()->all()`, `Input::get()`), PHP env sources (`env()`, `getenv()`, `$_ENV`), PHP SQL sinks (`DB::raw`, `DB::select`, `mysqli_query`, `PDO::query`), PHP command exec sinks (`exec()`, `shell_exec()`, `system()`, `Artisan::call()`), PHP file write sinks, PHP sanitizers (`htmlspecialchars`, `PDO::prepare`, `$request->validate()`, `filter_var()`). Result: 1 → 1,155 sources, 0 → 711 sinks, 18 taint violations.
-
-- **CRITICAL: `sideeffect_engine.py` `.php` not in `SOURCE_EXTENSIONS` + zero PHP patterns** — The engine skipped all PHP files (0 functions, 3 files). Added `.php` to extensions, 7 PHP side-effect pattern groups (php_io, php_output, php_network, php_database, php_state, php_external, php_random — 51 total patterns), PHP function extraction with visibility modifiers, PHP magic method skip list. Result: 0 → 25,830 functions, 2,175 impure, 9.3s elapsed.
-
-- **`framework_detect.py` `has_laravel` false on laravel/framework itself** — When the repo IS the framework, `composer.json` doesn't list itself in `require`. The `name` field (`"laravel/framework"`) and `replace` section (all `illuminate/*` packages) were never checked. Added `composer.json` `name` field check and `replace` section check for framework self-detection. Also added `src/Illuminate/` as Laravel indicator and `symfony/symfony` to Symfony composer_packages.
-
-- **`smell_engine.py` no PHP god-object/deep-nesting/many-params detection** — PHP code quality smells were completely missed. Added PHP class method/property counting for god-object detection (brace-depth tracked), PHP brace-based deep nesting detection, and PHP function parameter counting with visibility modifier support. Result: 0 → 162 god_objects, 0 → 407 deep_nesting, 0 → 161 many_params.
-
-- **`secrets_engine.py` PHPUnit test file patterns missing** — Files named `*Test.php` and `*TestCase.php` (standard PHPUnit conventions) were not recognized as test files, causing false positives. Added `Test.php` and `TestCase.php` to test file patterns. Also added `env()`, `getenv()`, `$_ENV`, `config()` to environment reference patterns. Fixed critical false positive in DbCommand.php where `$connection['password']` variable reference was flagged as hardcoded secret — now downgraded when PHP variable `$` is present.
-
-- **`entrypoints_engine.py` no Laravel scheduled/queue/event entry points** — Added detection for: `$schedule->command()/call()/job()/exec()` (scheduled tasks), `implements ShouldQueue` (queue jobs), `dispatch()` calls (queue dispatch), `Event::listen()` (event listeners), `$listen` property in EventServiceProvider (event provider). Result: 0 → 56 cron_job entry points, 1 event_handler detected.
-
-- **`handbook.py` version `"0.0.0"` for PHP projects** — `composer.json` commonly omits `version` field (managed via git tags). Added fallback chain: git tags → VERSION file → CHANGELOG.md version headers → composer.json `extra.branch-alias`. Result: `"0.0.0"` → `"13.15.0"`.
-
-- **`handbook.py` wrong conventions for PHP projects** — Showed `import_style: "ES modules"` and `module_system: "ESM"` for pure PHP projects. Now detects PHP projects and overrides to `import_style: "composer_autoload"`, `module_system: "Composer"`, `error_handling: "exceptions"`. Added PHP naming conventions (PascalCase classes, camelCase methods).
-
-- **`handbook.py` wrong directory descriptions for PHP/Laravel** — `config-stubs/` showed as "directory", `types/` as "TypeScript type definitions", `src/` as generic "Application source code". Now has Laravel-specific descriptions: "Laravel configuration stubs", "PHP type definition stubs", "Laravel framework source code (Illuminate components)", etc.
-
-- **5 engines timeout on large PHP projects** — `smell`, `dead-code`, `complexity`, `entrypoints`, `api-map` all timed out on 2,801 PHP files. Added `MAX_FILES` and `TIMEOUT_SEC` constants with early-exit checks in scanning loops: smell (5,000 files / 120s), deadcode (5,000 / 120s), complexity (5,000 / 120s), entrypoints (5,000 / 120s), apimap (5,000 / 120s). All commands now complete within time limits.
+Real-world test on a pure Python exercise platform with no web frameworks, no pyproject.toml,
+and no package.json — exposed identity detection gaps, framework detection blind spots,
+and multiple false positive patterns in smell/dead-code/debug-leak engines.
 
 ### Added
 
-- **PHP class method extraction in outline** — Methods inside classes, interfaces, traits, and enums are now extracted with visibility (public/private/protected), static, and abstract flags. Populates `methods` array in class entries.
-- **PHP/Laravel state management detection** — Detects Laravel Config stores, Facade state, Eloquent model state, and PHP superglobals.
-- **PHP taint analysis** — Full PHP source → sink → sanitizer data flow tracking with Laravel-specific patterns.
-- **PHP side-effect analysis** — 51 PHP-specific side-effect patterns across IO, output, network, database, state, external service, and randomness categories.
-- **PHP code smell detection** — God-object (method+property counting), deep nesting (brace-depth), many parameters (with type hints and variadic params).
-- **Laravel entry point detection** — Scheduled tasks, queue jobs, event listeners, and event providers.
-- **composer.json self-detection** — Checks `name` field and `replace` section for framework identity (when the repo IS the framework).
-- **PHPUnit test file recognition** — `*Test.php` and `*TestCase.php` patterns.
-- **PHP environment reference detection** — `env()`, `getenv()`, `$_ENV`, `config()`.
-- **Timeout protection** — 5 additional engines now have file count and time limits for large codebases.
-- **PHP convention detection** — Correct `composer_autoload` / `Composer` / `exceptions` for PHP projects.
+- **Identity detection for Python projects without pyproject.toml**: Projects with only `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now correctly identify as `python-project` instead of `unknown`. Requires at least 1 Python project file + 5 `.py` files.
+- **Exercism-style project detection**: Projects with `config.json` containing `exercises` + `language` fields detected as `exercise-platform` type.
+- **README.md description extraction**: `_extract_readme_description()` function extracts the first paragraph from `README.md`, `README.rst`, or `README.txt`. Cleans markdown links, bold, and italic formatting. Falls back to `config.json` `blurb` field for exercism tracks.
+- **config.json identity extraction**: Exercism-style projects using `config.json` with `slug`, `language`, `version`, and `blurb` fields now correctly populate project identity.
+- **setup.py name/version extraction**: Python projects using `setup.py` instead of `pyproject.toml` now have their name and version correctly detected.
+- **pytest framework detection from config files**: `pytest.ini` and `conftest.py` at workspace root now trigger `pytest` framework detection (added to `FRAMEWORK_SIGNATURES`).
+- **Directory map hints for exercise platforms**: Added descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, and `bin/`.
+
+### Fixed
+
+- **cron_job entrypoint false positive**: Tightened `cron_literal` regex from matching any 5 space-separated fields to requiring fields starting with `*` and at least 5 space-separated tokens. Prevents false positives like matching test assertion strings that happen to contain space-separated words.
+- **Deep nesting false positive for Python subTest**: Files using `with self.subTest()` patterns (2+ occurrences) are now skipped for deep nesting detection, as the context manager nesting is expected test structure, not a code smell.
+- **Dead code false positive for exercise stubs**: Files in `/.meta/`, `/stubs/` directories excluded from dead code detection. Exercise implementation files that are >50% `pass`/`...`/`NotImplementedError` are also excluded.
+- **Debug leak false positive for exercise stubs**: Exercise stub directories (`/.meta/`, `/stubs/`) and test data files (`_test_data.py`, `/fixtures/`) excluded from debug leak detection. Commented code in exercise test files downgraded to `info` severity.
+- **README description extraction returns HTML tags**: Added check to skip descriptions that are just HTML tags (e.g., `<br>`) with length < 20 characters.
 
 ## [6.4.0] — 2026-06-12
 

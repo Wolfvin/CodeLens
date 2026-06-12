@@ -51,6 +51,15 @@ DOCS_EXAMPLE_PATTERNS = {
     "tutorial/", "guides/", "demos/", "demo/",
 }
 
+# v7: Exercise/stub file patterns — files in these dirs contain intentionally
+# incomplete code (pass, NotImplementedError) that is not debug code.
+# Also skip exercise test data files (commented code in test data is expected).
+EXERCISE_STUB_PATTERNS = {
+    "/.meta/", "/stubs/", "/_stub",
+    # v7: Test data files in exercises contain commented-out test cases by design
+    "_test_data.py", "_testdata.", "/fixtures/",
+}
+
 # v6.2: Config file patterns — findings in these files are downgraded to "info"
 # severity and should_remove is set to False. Config files like jest.config.js
 # contain test-related patterns (testEnvironment, testRegex, etc.) that are
@@ -312,6 +321,11 @@ def detect_debug_leaks(
             # Skip documentation/example directories — their print/TODO/debug code
             # is part of demo code, not leftover debug statements
             if any(p in rel_path for p in DOCS_EXAMPLE_PATTERNS):
+                continue
+
+            # v7: Skip exercise stub/meta directories — their code is intentionally
+            # incomplete (pass, NotImplementedError) and not real debug leaks
+            if any(p in rel_path for p in EXERCISE_STUB_PATTERNS):
                 continue
 
             try:
@@ -852,6 +866,12 @@ def _detect_commented_code(
             # v7.0: In Django settings files, downgrade severity — commented-out
             # config options are intentional, not debug code
             if is_settings_file:
+                severity = "info"
+                should_remove = False
+
+            # v7: In exercise/test files within exercise directories, downgrade
+            # severity — commented code in exercises is part of the teaching material
+            if is_test_file and '/exercises/' in rel_path:
                 severity = "info"
                 should_remove = False
 

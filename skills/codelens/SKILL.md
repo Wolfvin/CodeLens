@@ -40,15 +40,18 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v7.0 — Tested on ggerganov/llama.cpp (2966 files, C/C++/CUDA/Python AI inference engine)
+## What's New in v7.0 — Tested on exercism/python (516 Python files, exercise platform)
 
-- **C/C++ no longer "unsupported"**: C and C++ are removed from the `unsupported_langs` list since the fallback parser (`fallback_c.py`) produces meaningful results — function definitions, struct/class detection, call edges, and API-exported declarations. The `lang_note` now correctly describes C/C++ as "parsed with regex-based fallback" instead of "unsupported".
-- **CUDA (.cu/.cuh) file support**: CUDA source files are now discovered and parsed alongside C/C++ files. Projects like llama.cpp with 184+ `.cu` files and 74+ `.cuh` files now get full coverage.
-- **API-exported function declarations in headers**: Function declarations prefixed with common C/C++ export macros (GGML_API, LLAMA_API, __declspec(dllexport), __attribute__((visibility("default"))), and 40+ more) are now properly extracted from header files. Previously, `llama_decode` and similar API functions were invisible to CodeLens. Now 140+ `llama_` functions are detected from `llama.h`.
-- **Framework detection deprioritizes minor web UI in C/C++-dominant repos**: When C/C++ files significantly outnumber JS/TS files (2x ratio), web UI frameworks (svelte, tailwind, react, vue) from minor UI components are removed from the primary framework list. llama.cpp was incorrectly reported as "svelte/tailwind" — now correctly shows "cmake".
-- **Adaptive timeout budgets for `summary`**: Time budget now scales with codebase size: small (<500 files) → 90s, medium (500-2000) → 180s, large (>2000) → 300s. Prevents premature engine skipping on large repos.
-- **C/C++ project type classification**: `handbook` now classifies CMake projects by content heuristics: `ml-inference-engine` (ggml/llama/tensor), `gpu-computing` (cuda/cudnn), `multimedia-library` (opencv/ffmpeg), `graphics-engine` (opengl/vulkan), `network-server` (libevent/nginx).
-- **`has_cpp` and `c_cpp_file_count` in framework detection**: New fields for downstream engines to make C/C++-aware decisions.
+- **Identity detection for Python projects without pyproject.toml**: Projects with only `requirements.txt`, `pytest.ini`, `setup.py`, or `conftest.py` now correctly identify as `python-project` instead of `unknown`. Exercism-style projects with `config.json` + `exercises/` directory detected as `exercise-platform`.
+- **README.md description extraction**: Project description is now automatically extracted from the first paragraph of `README.md`, `README.rst`, or `README.txt`. Markdown formatting (links, bold, italic) is cleaned for plain-text output.
+- **config.json identity extraction**: Exercism-style projects that use `config.json` with `slug`/`language`/`version` fields now correctly populate project identity.
+- **setup.py name/version extraction**: Python projects using `setup.py` instead of `pyproject.toml` now have their name and version correctly detected.
+- **pytest framework detection from config files**: `pytest.ini` and `conftest.py` at workspace root now trigger `pytest` framework detection (not just `pip_packages`).
+- **cron_job entrypoint false positive fix**: Tightened the `cron_literal` regex to require at least 5 space-separated fields starting with `*`. Prevents false positives like matching test assertion strings that happen to contain space-separated words.
+- **Deep nesting false positive fix for Python subTest**: Files using `with self.subTest()` patterns (common in Python test suites) are now skipped for deep nesting detection, as the context manager nesting is expected test structure.
+- **Dead code false positive fix for exercise stubs**: Files in `/.meta/`, `/stubs/` directories, and Python exercise files that are >50% `pass`/`...`/`NotImplementedError` are now excluded from dead code detection.
+- **Debug leak false positive fix for exercise stubs**: Exercise stub and `.meta` directories are now excluded from debug leak detection, as their incomplete code is intentional.
+- **Directory map hints for exercise platforms**: Added directory descriptions for `exercises/`, `concepts/`, `reference/`, `practice/`, `solutions/`, `stubs/`, `.meta/`, and `bin/`.
 - **Version**: 6.3.1 → 7.0.0.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)

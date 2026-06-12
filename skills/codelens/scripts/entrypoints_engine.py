@@ -638,8 +638,11 @@ ENTRYPOINT_PATTERNS = {
                 "label": "celery_beat",
             },
             # crontab literals in Python
+            # v7: Tightened regex to require at least 3 space-separated fields
+            # (minute hour day-of-month) and must not be a variable name.
+            # Avoids false positives like matching test assertion strings.
             {
-                "regex": r'["\']((?:\*\s*,?){0,5}(?:\d+|\*)\s+(?:\d+|\*)\s+(?:\d+|\*)\s+(?:\d+|\*)\s+(?:\d+|\*))["\']',
+                "regex": r'["\'](\*(?:\s+[\d\*]+){4,})["\']',
                 "language": {".py", ".js", ".mjs", ".cjs", ".ts"},
                 "extract": "cron_schedule",
                 "schedule_group": 1,

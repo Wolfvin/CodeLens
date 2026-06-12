@@ -1161,6 +1161,26 @@ def _detect_unused_exports(
         if any(x in file_path for x in ['/docs_src/', '/doc_src/', '/examples/', '/example/',
                                           '/documentation/', '/docs/examples/', '/snippets/']):
             continue
+        # v7: Skip exercise stub files — they contain only "pass" or placeholder
+        # implementations that are intentionally empty. Dead code in stubs is expected.
+        if any(x in file_path for x in ['/.meta/', '/stubs/', '/_stub']):
+            continue
+        # v7: Skip exercise implementation files (e.g., exercises/practice/*/)
+        # where the file is a stub with only "pass" — these are meant to be filled in
+        if '/exercises/' in file_path and '/.meta/' not in file_path:
+            # Check if the file is a stub (contains mostly "pass" statements)
+            abs_file_path = os.path.join(workspace, file_path) if not os.path.isabs(file_path) else file_path
+            if os.path.isfile(abs_file_path):
+                try:
+                    with open(abs_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        stub_content = f.read()
+                    # If file is mostly "pass" or "...", it's a stub
+                    non_empty_lines = [l.strip() for l in stub_content.split('\n') if l.strip() and not l.strip().startswith('#')]
+                    pass_lines = [l for l in non_empty_lines if l in ('pass', '...', 'raise NotImplementedError')]
+                    if len(non_empty_lines) > 0 and len(pass_lines) / len(non_empty_lines) >= 0.5:
+                        continue
+                except (IOError, OSError):
+                    pass
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
         # For Python packages, skip __init__.py — these are re-export entry points
