@@ -97,7 +97,7 @@ def analyze_impact(
                 caller_node = node_by_id.get(from_id)
                 if caller_node:
                     affected["direct"].append({
-                        "type": "function",
+                        "type": caller_node.get("type", "function"),
                         "name": caller_node["fn"],
                         "file": caller_node.get("file", ""),
                         "line": caller_node.get("line", 0),
@@ -113,7 +113,7 @@ def analyze_impact(
                 callee_node = node_by_id.get(to_id)
                 if callee_node:
                     affected["direct"].append({
-                        "type": "function",
+                        "type": callee_node.get("type", "function"),
                         "name": callee_node["fn"],
                         "file": callee_node.get("file", ""),
                         "line": callee_node.get("line", 0),
@@ -122,7 +122,7 @@ def analyze_impact(
                     })
                 elif to_fn:
                     affected["direct"].append({
-                        "type": "function",
+                        "type": "function",  # Unresolved node, fallback to function
                         "name": to_fn,
                         "file": "",
                         "line": 0,
@@ -147,7 +147,7 @@ def analyze_impact(
                         caller_node = node_by_id.get(from_id)
                         if caller_node and current_depth >= 1:
                             affected["indirect"].append({
-                                "type": "function",
+                                "type": caller_node.get("type", "function"),
                                 "name": caller_node["fn"],
                                 "file": caller_node.get("file", ""),
                                 "line": caller_node.get("line", 0),
@@ -171,11 +171,11 @@ def analyze_impact(
                             ]
                             if not other_callers:
                                 affected["indirect"].append({
-                                    "type": "function",
+                                    "type": callee_node.get("type", "function"),
                                     "name": callee_node["fn"],
                                     "file": callee_node.get("file", ""),
                                     "line": callee_node.get("line", 0),
-                                    "relation": f"will become dead code (only called by {name})",
+                                    "relation": f"will become dead code (only called by {name}",
                                     "risk": "high",
                                     "domain": "backend"
                                 })
@@ -189,7 +189,7 @@ def analyze_impact(
                 ]
                 for sibling in impl_siblings:
                     affected["direct"].append({
-                        "type": "function",
+                        "type": sibling.get("type", "function"),
                         "name": sibling["fn"],
                         "file": sibling.get("file", ""),
                         "line": sibling.get("line", 0),

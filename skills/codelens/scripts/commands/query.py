@@ -232,7 +232,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             result = {
                 "status": "ok",
                 "found": True,
-                "type": "function",
+                "type": node.get("type", "function"),
                 "domain": "backend",
                 "action": action,
                 "action_reason": action_reason,
@@ -243,7 +243,9 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                     "status": node_status,
                     "file": node.get("file", ""),
                     "line": node.get("line", 0),
-                    "async": node.get("async", False)
+                    "async": node.get("async", False),
+                    "impl_for": node.get("impl_for"),
+                    "superclasses": node.get("superclasses")
                 },
                 "callers": callers,
                 "callees": callees,
@@ -287,7 +289,7 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         action, action_reason = _get_query_action(node_status)
         summary = {
             "domain": "backend",
-            "type": "function",
+            "type": node.get("type", "function"),
             "id": node["id"],
             "fn": node["fn"],
             "file": node.get("file", ""),
@@ -295,6 +297,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
             "status": node_status,
             "ref_count": node.get("ref_count", 0),
             "action": action,
+            "impl_for": node.get("impl_for"),
+            "superclasses": node.get("superclasses"),
         }
         if node.get("component"):
             summary["component"] = True

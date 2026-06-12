@@ -77,7 +77,7 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
 
         for node in backend.get("nodes", []):
             entry = {
-                "type": "function",
+                "type": node.get("type", "function"),
                 "name": node["fn"],
                 "ref_count": node.get("ref_count", 0),
                 "status": node.get("status", "active"),

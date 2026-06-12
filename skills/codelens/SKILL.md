@@ -36,17 +36,17 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.5
+# CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.5 — Tested on SerenityOS/serenity (18,601 files, C++ OS monorepo)
+## What's New in v5.9.3 — Tested on fastapi/fastapi (1,120 Python files)
 
-- **C++ project identity detection**: `handbook` now recognizes C++ projects via `CMakeLists.txt`, extracts project name from `project(Name)` and version from `project(Name VERSION x.y.z)`. Detects `cpp-os` (Kernel/ directory), `cpp-monorepo` (AK/, Base/, Meta/, Ports/, Tests/), and `cpp-project` types.
-- **CMake monorepo detection**: Projects with multiple subdirectory `CMakeLists.txt` files are detected as monorepos with `monorepo_tools: ["cmake-workspace"]`. SerenityOS correctly reports `is_monorepo: true`.
-- **C/C++ removed from `unsupported_langs`**: When fallback C/C++ parsers successfully parse files (7,447 in SerenityOS), `c` and `cpp` are removed from the unsupported list. The `lang_note` now says "parsed via fallback parsers" instead of "not yet supported by tree-sitter".
-- **God object test file false positives fixed**: JS/TS test files in `/Tests/`, `/tests/`, `/test/`, `/__tests__/`, `/spec/`, `/specs/` directories are now skipped with case-insensitive matching. Files like `LibJS/Tests/this-value.js` no longer produce false god object reports (52 FPs eliminated on SerenityOS).
-- **Tested on SerenityOS/serenity**: 18,601 files, 7,447 C++ parsed, 49,671 backend nodes, type `cpp-os-monorepo`, health score 50.
+- **API-map middleware file-scoping fix**: Middleware detected via `app.add_middleware()` was incorrectly applied to ALL routes in the workspace. Now scoped to routes from the same file only. In multi-app projects (e.g., FastAPI docs_src with 78 tutorial apps), this eliminates cross-contamination where `GZipMiddleware` from one tutorial appeared on every route.
+- **Backend node type propagation**: All backend nodes stored their `type` (`function`, `class`, etc.) in the registry, but 6 command outputs hardcoded `type: "function"`. Fixed in: `symbols`, `context`, `query` (single + multi-match), `impact`, `list`, `trace`. Classes like `FastAPI` now correctly show as `type: "class"` with `superclasses` info, not `type: "function"`.
+- **Handbook version word-boundary fix**: `pyproject.toml` version regex `version\s*=` matched `minversion = "9.0"` because `version` is a substring of `minversion`. Added `\b` word boundary: `\bversion\s*=`. FastAPI's version now correctly shows `0.136.3` instead of `9.0`.
+- **pyproject.toml description extraction**: Handbook only extracted `description` from `package.json`. Now also reads `description = "..."` from `[project]` section in `pyproject.toml`. Python projects get proper descriptions.
+- **Dynamic version fallback**: Many Python projects use `dynamic = ["version"]` in pyproject.toml with the actual version in `pkg/__init__.py` as `__version__ = "x.y.z"`. Handbook now detects this pattern and falls back to reading `__version__` from the package's `__init__.py`.
 
 ## What's New in v6.0 — The "Analyze Everything" Release
 
