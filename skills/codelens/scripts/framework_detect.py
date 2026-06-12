@@ -37,8 +37,13 @@ FRAMEWORK_SIGNATURES = {
     },
     "vue": {
         "packages": ["vue"],
-        "config_files": ["vue.config.js", "vite.config.js"],
+        "config_files": ["vue.config.js"],
         "indicators": [".vue"]
+    },
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.js", "vite.config.ts", "vite.config.mts"],
+        "indicators": []
     },
     "svelte": {
         "packages": ["svelte"],
@@ -412,6 +417,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "frameworks": [],
         "has_react": False,
         "has_vue": False,
+        "has_vite": False,
         "has_svelte": False,
         "has_tailwind": False,
         "has_nextjs": False,
@@ -521,6 +527,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_nextjs"] = True
                     elif fw_name == "vue":
                         detected["has_vue"] = True
+                    elif fw_name == "vite":
+                        detected["has_vite"] = True
                     elif fw_name == "svelte":
                         detected["has_svelte"] = True
                     elif fw_name == "tailwind":
@@ -594,6 +602,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "vite":
+                    detected["has_vite"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False

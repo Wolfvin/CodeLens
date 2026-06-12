@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.3.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.3.1: Critical fix — 4 broken commands restored (ask, complexity, context, perf-hint) due to missing is_bundled_file. apimap_engine NoneType crash on path=None fixed. Tested on meilisearch/meilisearch (Rust search engine, 21 crates, 490K edges). v6.3: Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo). Large repo timeout fixes, false positive fixes, analyze/handbook timeout flags.",  "author": "codelens",  "tags": [    "code-analysis",
+  "version": "6.5.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.5: Tested on calcom/cal.com (5050 TS files, Turborepo monorepo). Fixed: Vue false positive from Vite config, secrets false positives in enum definitions and .env.example files, API map keyword false positives (Query.if), dead code false positives for Next.js lifecycle functions, dataflow timeout crash. Added Vite as first-class framework, dataflow --max-files/--timeout CLI flags.",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
     "duplicate-detection",    "frontend",    "backend",
@@ -15,6 +15,7 @@
     "vue",
     "svelte",
     "tailwind",
+    "vite",
     "tree-sitter",
     "ast-parsing",
     "call-graph",

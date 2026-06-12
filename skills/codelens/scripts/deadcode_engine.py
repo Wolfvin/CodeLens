@@ -1282,6 +1282,21 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                     if node_type == "function":
                         continue
 
+            # v6.5: Skip Next.js framework-called lifecycle functions
+            # These are called by the Next.js framework at runtime, not by user code,
+            # so they always have ref_count == 0 but are NOT dead code.
+            _nextjs_lifecycle_functions = {
+                'getServerSideProps', 'getStaticProps', 'getStaticPaths',
+                'getInitialProps', 'generateMetadata', 'generateStaticParams',
+                'generateViewport', 'viewport', 'metadata',
+                'head', 'Head',  # Next.js <Head> component patterns
+                'route', 'default',  # Next.js App Router route handlers
+            }
+            if name in _nextjs_lifecycle_functions:
+                # Only skip for .ts/.tsx/.js/.jsx files (Next.js context)
+                if file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.mjs')):
+                    continue
+
             display_name = f"{impl_for}::{name}" if impl_for else name
             dead_items.append({
                 "file": file_path,

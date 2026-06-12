@@ -40,6 +40,17 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.5 — Tested on calcom/cal.com (5,050 TS/TSX files, Turborepo monorepo, 22 packages)
+
+- **Bugfix: Vue false positive from Vite config**: `vite.config.js` was listed as a Vue config file, causing ALL Vite-based projects (React, Svelte, etc.) to be falsely detected as using Vue. Now `vite.config.js` is correctly associated with the new `vite` framework entry. Frameworks now report `has_vite: true` separately from `has_vue: true`. The `vue_mode` config is only set when actual `.vue` files or `vue` package dependency exists. Eliminates the contradiction where `has_vue: false` but "vue" appeared in frameworks list.
+- **Bugfix: Secrets false positives in enum definitions**: TypeScript/JavaScript enum values like `IncorrectEmailPassword = "incorrect-email-password"` and `UserMissingPassword = "missing-password"` were flagged as critical `password` secrets. Added `_is_enum_or_constant_definition()` context-aware filter that detects PascalCase/ALL_CAPS identifiers assigned kebab-case string values (enum pattern) and skips them. Critical findings dropped from 8 to 1 on cal.com.
+- **Bugfix: Secrets false positives in .env.example**: `.env.example`, `.env.sample`, `.env.template`, and `.env.demo` files were scanned for secrets in Phase 2 (.env file scanner) and reported `DATABASE_URL` and other template values as critical `connection_string` findings. Now skipped entirely — these files contain placeholder/example values, not real secrets.
+- **Bugfix: API map keyword false positives**: GraphQL resolver extraction pattern `(\w+)\s*[:=]\s*\(` matched JS/TS reserved words like `if`, `else`, `for` as GraphQL field names, producing routes like `QUERY Query.if`. Added reserved word filtering (36 keywords) to `_extract_graphql_schema()`, `_extract_graphql_code()`, and `_find_next_js_function()`. Keyword false positives eliminated entirely.
+- **Bugfix: Dead code false positives for Next.js lifecycle functions**: `generateMetadata`, `getServerSideProps`, `getStaticProps`, `getStaticPaths`, `getInitialProps`, `generateStaticParams`, `generateViewport` were flagged as dead code because they have `ref_count == 0` — they're called by the Next.js framework at runtime, not by user code. Added Next.js lifecycle function skip list to `_detect_dead_from_registry()`, only applied for `.ts`/`.tsx`/`.js`/`.jsx` files.
+- **Bugfix: Dataflow timeout crash**: `dataflow` command had hardcoded `max_files=5000` and `timeout_sec=120` with no CLI override. On repos with 5000+ files, it would timeout and produce no output (JSONDecodeError). Added `--max-files` (default 3000) and `--timeout` (default 120) CLI arguments to the dataflow command. Now produces valid output even on large repos.
+- **Vite as first-class framework**: Added `vite` framework entry with config files `vite.config.js`, `vite.config.ts`, `vite.config.mts`. Projects using Vite are now correctly identified without being misattributed to Vue. `has_vite: true` flag added to `detect_frameworks()` output.
+- **Version**: 6.3.1 → 6.5.0.
+
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 
 - **Bugfix: `is_bundled_file` missing from utils.py**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) were silently broken due to missing `is_bundled_file` function in `utils.py`. Now added with proper path-based and extension-based detection for minified, bundled, and dist/build output files.
