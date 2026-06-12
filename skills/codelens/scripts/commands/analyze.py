@@ -330,8 +330,20 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float) -> None:
-    """Safely run an analysis engine with time budget check."""
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, start_time: float, total_budget: float, per_engine_timeout: float = 60.0) -> None:
+    """Safely run an analysis engine with time budget check and per-engine timeout.
+
+    Args:
+        findings: List to append results to.
+        category: Engine category name (e.g., 'secrets').
+        label: Human-readable label (e.g., 'Hardcoded Secrets').
+        engine_fn: Callable that runs the engine and returns a dict or None.
+        start_time: Global start time for budget calculation.
+        total_budget: Total time budget in seconds.
+        per_engine_timeout: Maximum seconds a single engine may run before being
+            killed. Prevents one slow engine from blocking the entire analysis.
+            Defaults to 60 seconds.
+    """
     elapsed = time.time() - start_time
     remaining = total_budget - elapsed
 
@@ -349,10 +361,57 @@ def _run_engine(findings: List[Dict], category: str, label: str, engine_fn, star
         })
         return
 
+    # Per-engine timeout: cap at remaining budget, but at least 5s
+    engine_budget = min(per_engine_timeout, remaining)
+    if engine_budget < 5:
+        findings.append({
+            "category": category,
+            "label": label,
+            "total": 0,
+            "severity": "info",
+            "skipped": True,
+            "skip_reason": f"Insufficient time budget ({remaining:.1f}s remaining)",
+            "action": f"Run '{category}' engine individually for full results",
+        })
+        return
+
     try:
         engine_start = time.time()
-        result = engine_fn()
+
+        # Run engine with per-engine timeout using threading
+        import threading
+        engine_result = [None]  # Mutable container for thread result
+        engine_error = [None]   # Mutable container for thread error
+
+        def _run():
+            try:
+                engine_result[0] = engine_fn()
+            except Exception as e:
+                engine_error[0] = e
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=engine_budget)
+
+        if thread.is_alive():
+            # Thread timed out — it's a daemon thread so it won't block exit
+            logger.warning(f"Engine {category} timed out after {engine_budget:.1f}s")
+            findings.append({
+                "category": category,
+                "label": label,
+                "total": 0,
+                "severity": "info",
+                "skipped": True,
+                "skip_reason": f"Engine timed out after {engine_budget:.0f}s (repo may be too large for this engine in aggregate mode)",
+                "action": f"Run '{category}' engine individually for full results",
+            })
+            return
+
+        if engine_error[0] is not None:
+            raise engine_error[0]
+
         engine_elapsed = time.time() - engine_start
+        result = engine_result[0]
         if result:
             result["elapsed_seconds"] = round(engine_elapsed, 2)
             findings.append(result)

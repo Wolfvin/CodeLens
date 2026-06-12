@@ -642,25 +642,68 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             lua_type = "lua-project"
 
     # v6.4: Combined type detection — handle polyglot projects
+    # v6.4.1: Count source files by extension for language significance filtering
+    _lang_counts = {"ts": 0, "js": 0, "tsx": 0, "jsx": 0, "rs": 0, "py": 0,
+                    "go": 0, "php": 0, "c": 0, "cpp": 0, "h": 0, "hpp": 0,
+                    "lua": 0, "vue": 0, "svelte": 0}
+    try:
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for f in files:
+                ext = os.path.splitext(f)[1].lstrip('.')
+                if ext in _lang_counts:
+                    _lang_counts[ext] += 1
+    except Exception:
+        pass
+
+    _ts_count = _lang_counts.get("ts", 0) + _lang_counts.get("tsx", 0)
+    _js_count = _lang_counts.get("js", 0) + _lang_counts.get("jsx", 0)
+    _rust_count = _lang_counts.get("rs", 0)
+    _py_count = _lang_counts.get("py", 0)
+    _go_count = _lang_counts.get("go", 0)
+    _php_count = _lang_counts.get("php", 0)
+    _c_cpp_count = _lang_counts.get("c", 0) + _lang_counts.get("cpp", 0) + _lang_counts.get("h", 0) + _lang_counts.get("hpp", 0)
+    _lua_count = _lang_counts.get("lua", 0)
+    _total_source = sum(_lang_counts.values())
+
+    # v6.4.1: If TS files significantly outnumber JS files, upgrade js_type to typescript
+    if _ts_count > _js_count * 2 and _ts_count >= 10:
+        if js_type in ("node-project", None):
+            js_type = "typescript-project"
+
+    # v6.4.1: Filter out minor languages (<5% of source files) from polyglot type
+    # This prevents "rust-c-cpp-monorepo" when C files are just 0.3% of the codebase
+    _MIN_POLYGLOT_RATIO = 0.05  # 5% threshold
+    def _is_significant(count, total):
+        return total > 0 and (count / total) >= _MIN_POLYGLOT_RATIO
+
     active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
+        # Only include languages that are significant (>5% of source files)
         type_parts = []
-        if rust_type:
+        if rust_type and _is_significant(_rust_count, _total_source):
             type_parts.append("rust")
-        if go_type:
+        if go_type and _is_significant(_go_count, _total_source):
             type_parts.append("go")
         if js_type:
-            type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type:
+            # TypeScript if TS files > JS files, or js_type explicitly mentions typescript
+            use_ts = _ts_count > _js_count or "typescript" in (js_type or "")
+            type_parts.append("typescript" if use_ts else "js")
+        if python_type and _is_significant(_py_count, _total_source):
             type_parts.append("python")
-        if php_type:
+        if php_type and _is_significant(_php_count, _total_source):
             type_parts.append("php")
-        if c_cpp_type:
+        if c_cpp_type and _is_significant(_c_cpp_count, _total_source):
             type_parts.append("c-cpp")
-        if lua_type:
+        if lua_type and _is_significant(_lua_count, _total_source):
             type_parts.append("lua")
+
+        # Fallback: if filtering removed all types, use the original active_types
+        if not type_parts:
+            type_parts = [t.split("-")[0] for t in active_types[:3]]
+
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

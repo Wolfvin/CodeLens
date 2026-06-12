@@ -355,6 +355,10 @@ LINE_EXCLUSION_PATTERNS = [
     # Angular/React template patterns
     re.compile(r'\[\w+\]\s*='),                  # Angular property binding [prop]=value
     re.compile(r'\{\{.*\|'),                       # Angular pipe {{ value | pipe }}
+    # v6.4.1: Integrity/subresource hash lines — these are content verification hashes, not secrets
+    re.compile(r'(?i)integrity\s*[=:]\s*["\']sha[235]\d{2}-'),
+    # v6.4.1: example.com URLs in any code (test fixture data, not real credentials)
+    re.compile(r'(?i)https?://(?:[a-z0-9-]+\.)?example\.(?:com|org|net)'),
 ]
 
 # ─── Test File Patterns ─────────────────────────────────────────
@@ -408,6 +412,11 @@ ENTROPY_EXCLUSION_PATTERNS = [
     re.compile(r'^\{%'),                                      # Django/Jinja2 {% ... %}
     re.compile(r'^<%='),                                      # ERB <%= ... %>
     re.compile(r'^[A-Za-z0-9+/]+=*$'),                        # Pure base64 (likely encoded data, not secret)
+    # v6.4.1: Integrity hashes — Subresource Integrity (SRI) and lockfile integrity
+    # These are SHA-256/384/512 hashes used for content verification, NOT secrets.
+    # Examples: "sha512-1fygroTLlHu66zi..." in lockfiles, "sha384-oqVuAfXRKap7fdgcCY5uykM6+R9GqQ8K/uxy9rx7HNQlGYl1kPzQho1wx4JwY8wC"
+    re.compile(r'^sha[235]\d{2}-', re.IGNORECASE),            # SRI hash prefix
+    re.compile(r'^[a-f0-9]{64,}$', re.IGNORECASE),           # Full SHA-256/512 hex strings (not secrets)
 ]
 
 def detect_secrets(

@@ -103,6 +103,8 @@ def map_api_routes(
 
     routes: List[Dict[str, Any]] = []
     frameworks_detected: Set[str] = set()
+    # v6.4.1: Track whether each framework was detected in production code or only in tests
+    _framework_production_sources: Dict[str, bool] = {}  # fw_name -> seen_in_production
     middleware_map: Dict[str, List[Dict]] = defaultdict(list)
     route_groups: List[Dict[str, Any]] = []
     files_scanned = 0
@@ -272,12 +274,57 @@ def map_api_routes(
     # v5.9: Tag route source (production vs test/example) based on file path
     for route in routes:
         route_file = route.get("file", "")
+        # v6.4.1: Normalize to have leading slash for consistent matching
+        # "tests/specs/..." should match "/tests/" pattern
+        normalized_file = '/' + route_file if not route_file.startswith('/') else route_file
         if "source" not in route:
-            route["source"] = "test" if any(x in route_file for x in [
+            route["source"] = "test" if any(x in normalized_file for x in [
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
             ]) else "production"
+
+    # v6.4.1: Filter out test-only frameworks from frameworks_detected
+    # If a framework only appears in test/example files, don't list it as
+    # a primary framework. This prevents "express" from showing up when the
+    # only Express usage is in test fixtures.
+    _fw_has_production_route: Dict[str, bool] = {}
+    for route in routes:
+        route_fw = route.get("framework", "")
+        if route_fw:
+            if route.get("source") == "production":
+                _fw_has_production_route[route_fw] = True
+
+    # Also check route file paths for frameworks detected during scanning
+    # that don't have per-route framework tags (e.g., "express" from JS extraction)
+    _test_path_indicators = {'/tests/', '/test/', '/__tests__/', '/spec/',
+                              'test_', '_test.', '.test.', '.spec.',
+                              '/examples/', '/example/'}
+    _fw_production_routes = set()
+    _fw_test_routes = set()
+    for route in routes:
+        rfile = route.get("file", "")
+        # v6.4.1: Normalize path for consistent matching
+        normalized_rfile = '/' + rfile if not rfile.startswith('/') else rfile
+        is_prod = not any(x in normalized_rfile for x in _test_path_indicators)
+        # Check all frameworks that could match this route
+        for fw in frameworks_detected:
+            # A route is associated with a framework if:
+            # 1. The route has an explicit framework tag matching this fw, OR
+            # 2. The framework name appears in the route's file path (e.g., "express" in "express_with_koa/main.ts")
+            if route.get("framework", "") == fw or fw in rfile.lower():
+                if is_prod:
+                    _fw_production_routes.add(fw)
+                else:
+                    _fw_test_routes.add(fw)
+
+    # Remove frameworks that only exist in test files
+    test_only_frameworks = _fw_test_routes - _fw_production_routes
+    if test_only_frameworks:
+        # v6.4.1: Always remove test-only frameworks — they misrepresent the project.
+        # A framework detected only from test fixtures is not a project framework.
+        for fw in test_only_frameworks:
+            frameworks_detected.discard(fw)
 
     # v6.3.1: Filter out test routes if production_only is requested
     if production_only:

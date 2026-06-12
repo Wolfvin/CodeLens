@@ -130,9 +130,24 @@ def _trace_error_chain(
     callers_map: Dict[str, List[Dict]],
     node_by_id: Dict[str, Dict],
     workspace: str,
-    max_depth: int
+    max_depth: int,
+    max_chain_entries: int = 500,
+    lazy_error_check: bool = True
 ) -> Dict[str, Any]:
-    """BFS trace of error propagation up the call stack."""
+    """BFS trace of error propagation up the call stack.
+
+    Args:
+        start_node: The node where the error originates.
+        callers_map: Map from node_id to list of caller info dicts.
+        node_by_id: Map from node_id to node dict.
+        workspace: Absolute path to workspace.
+        max_depth: Maximum BFS depth.
+        max_chain_entries: Maximum number of chain entries before truncation.
+            Prevents OOM/hang on repos with millions of edges. Default 500.
+        lazy_error_check: If True, defer _check_error_handling to a
+            post-processing step. This makes the BFS phase O(V+E) instead
+            of O(V+E) * file_read_cost, which is critical for large repos.
+    """
     start_id = start_node["id"]
 
     chain = [{
@@ -146,8 +161,12 @@ def _trace_error_chain(
 
     visited = {start_id}
     queue = deque([(start_id, 1)])
+    truncated = False
 
-    while queue:
+    # Track which chain entries need deferred error-handling check
+    entries_needing_check = []
+
+    while queue and not truncated:
         current_id, depth = queue.popleft()
 
         if depth > max_depth:
@@ -172,8 +191,14 @@ def _trace_error_chain(
                 seen_callers_at_depth.add(caller_id)
                 unique_callers.append(caller_info)
 
-        for caller_info in unique_callers:
+        # Limit breadth at each level to prevent explosion on high-fanout nodes
+        for caller_info in unique_callers[:50]:
             caller_id = caller_info["caller_id"]
+
+            # Check total chain entries limit
+            if len(chain) >= max_chain_entries:
+                truncated = True
+                break
 
             if caller_id in visited:
                 # Cyclic reference — add a single marker, not one per edge
@@ -193,26 +218,60 @@ def _trace_error_chain(
 
             if caller_id in node_by_id:
                 n = node_by_id[caller_id]
-                # Check if this caller has error handling
-                has_handling = _check_error_handling(n, workspace)
 
-                chain_entry = {
-                    "depth": depth,
-                    "node_id": caller_id,
-                    "fn": n.get("fn", ""),
-                    "file": n.get("file", ""),
-                    "line": n.get("line", 0),
-                    "async": n.get("async", False),
-                    "has_error_handling": has_handling["has_handling"],
-                    "handling_type": has_handling["type"]
-                }
-                chain.append(chain_entry)
-
-                # Only continue tracing if no error handling (error propagates further)
-                if not has_handling["has_handling"]:
+                if lazy_error_check:
+                    # Defer expensive file-reading check to post-processing
+                    # For BFS traversal, assume no error handling so we
+                    # continue tracing all paths (safe over-approximation)
+                    chain_entry = {
+                        "depth": depth,
+                        "node_id": caller_id,
+                        "fn": n.get("fn", ""),
+                        "file": n.get("file", ""),
+                        "line": n.get("line", 0),
+                        "async": n.get("async", False),
+                        "has_error_handling": None,  # deferred
+                        "handling_type": None,         # deferred
+                    }
+                    chain.append(chain_entry)
+                    entries_needing_check.append(chain_entry)
                     queue.append((caller_id, depth + 1))
+                else:
+                    # Original behavior: check error handling immediately
+                    has_handling = _check_error_handling(n, workspace)
+                    chain_entry = {
+                        "depth": depth,
+                        "node_id": caller_id,
+                        "fn": n.get("fn", ""),
+                        "file": n.get("file", ""),
+                        "line": n.get("line", 0),
+                        "async": n.get("async", False),
+                        "has_error_handling": has_handling["has_handling"],
+                        "handling_type": has_handling["type"]
+                    }
+                    chain.append(chain_entry)
 
-    return {
+                    # Only continue tracing if no error handling (error propagates further)
+                    if not has_handling["has_handling"]:
+                        queue.append((caller_id, depth + 1))
+
+    # Deferred error-handling check: only check top entries to limit I/O
+    if lazy_error_check and entries_needing_check:
+        # Check at most 100 entries (prioritize shallow depth)
+        entries_to_check = sorted(entries_needing_check, key=lambda e: e.get("depth", 0))[:100]
+        for entry in entries_to_check:
+            node = node_by_id.get(entry["node_id"])
+            if node:
+                has_handling = _check_error_handling(node, workspace)
+                entry["has_error_handling"] = has_handling["has_handling"]
+                entry["handling_type"] = has_handling["type"]
+        # Mark remaining deferred entries
+        for entry in entries_needing_check:
+            if entry["has_error_handling"] is None:
+                entry["has_error_handling"] = False
+                entry["handling_type"] = "unchecked"
+
+    result = {
         "origin": {
             "fn": start_node.get("fn", ""),
             "file": start_node.get("file", ""),
@@ -221,6 +280,12 @@ def _trace_error_chain(
         "chain": chain,
         "chain_length": len(chain)
     }
+
+    if truncated:
+        result["truncated"] = True
+        result["truncation_note"] = f"Chain truncated at {max_chain_entries} entries (increase max_chain_entries for deeper analysis)"
+
+    return result
 
 
 def _check_error_handling(node: Dict, workspace: str) -> Dict[str, Any]:
