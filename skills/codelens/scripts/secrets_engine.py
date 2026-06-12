@@ -356,6 +356,8 @@ TEST_FILE_PATTERNS = [
     'test/', 'tests/', 'spec/', 'specs/',
     '/__mocks__/', '.mock.', '/mock/', '/mocks/',
     '.stories.', '.story.',
+    '/__fixtures__/', '/fixtures/', '/fixture/',
+    '/e2e/', '.e2e.',
 ]
 
 # ─── Credential Template Path Patterns ──────────────────────────
@@ -366,6 +368,20 @@ CREDENTIAL_PATH_PATTERNS = [
     '/credential-definitions/',
     '/credential_templates/',
     '/benchmark/',  # Mock/fixture data for benchmarks
+]
+
+# ─── Config Schema Line Patterns ───────────────────────────────
+# Lines that define config schemas, not actual secret values.
+# E.g., `password: { type: "string" }` is a schema definition.
+
+CONFIG_SCHEMA_LINE_PATTERNS = [
+    re.compile(r'(?i)password\s*:\s*\{\s*type'),            # password: { type: "string" }
+    re.compile(r'(?i)password\s*:\s*schema\.'),              # password: schema.string()
+    re.compile(r'(?i)password\?\s*:\s*string'),              # password?: string
+    re.compile(r'(?i)(?:secret|token|apikey|api_key)\s*:\s*\{\s*type'),  # secret: { type: ...
+    re.compile(r'(?i)(?:secret|token|apikey|api_key)\?\s*:\s*string'),   # secret?: string
+    re.compile(r'type\s*:\s*["\']string["\']'),            # type: "string" (schema property)
+    re.compile(r'(?i)(?:schema|properties|definition)\s*:\s*\{'),  # schema: { ... }
 ]
 
 # .env variable name patterns that indicate secrets
@@ -512,6 +528,9 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
     """Scan file content for known secret patterns."""
     findings = []
     lines = content.split('\n')
+    filename = os.path.basename(rel_path)
+    is_pkg_json = filename == 'package.json'
+    is_test_or_fixture = _is_test_or_fixture_file(rel_path)
 
     for category, definition in SECRET_PATTERNS.items():
         for pattern in definition["patterns"]:
@@ -544,12 +563,26 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if _is_example_or_placeholder_line(line_text):
                         continue
 
+                    # Skip config schema definition lines (not actual secrets)
+                    if _is_config_schema_line(line_text):
+                        continue
+
+                    # Skip package.json metadata fields (description, keywords, scripts)
+                    if is_pkg_json and _is_package_json_metadata_line(line_text):
+                        continue
+
                     # Mask the value for safe reporting
                     masked = _mask_value(raw_value)
 
-                    # Determine severity (reduce for test files)
+                    # Determine severity
                     severity = definition["severity"]
-                    if is_test:
+
+                    # Reduce severity for package.json findings (metadata, not real secrets)
+                    if is_pkg_json:
+                        severity = "info"
+
+                    # Reduce severity for test/fixture files
+                    if is_test_or_fixture:
                         severity = _reduce_severity(severity)
 
                     finding = {
@@ -560,8 +593,10 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                         "severity": severity,
                         "category": definition["category"],
                     }
-                    if is_test:
+                    if is_test_or_fixture:
                         finding["in_test_file"] = True
+                    if is_pkg_json:
+                        finding["in_package_json"] = True
 
                     findings.append(finding)
             except re.error:
@@ -579,6 +614,7 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
     """
     findings = []
     lines = content.split('\n')
+    is_test_or_fixture = _is_test_or_fixture_file(rel_path)
 
     # Extract quoted strings from the content
     quoted_strings = re.findall(
@@ -638,12 +674,16 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
             if _is_example_or_placeholder_line(line_text):
                 continue
 
+            # Skip config schema definition lines (not actual secrets)
+            if _is_config_schema_line(line_text):
+                continue
+
             # Determine likely category based on context
             likely_category = _infer_category_from_value(candidate)
 
-            # Determine severity (reduce for test files)
+            # Determine severity (reduce for test/fixture files)
             severity = _severity_for_category(likely_category)
-            if is_test:
+            if is_test_or_fixture:
                 severity = _reduce_severity(severity)
 
             finding = {
@@ -655,7 +695,7 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
                 "category": likely_category,
                 "entropy": round(entropy, 2),
             }
-            if is_test:
+            if is_test_or_fixture:
                 finding["in_test_file"] = True
 
             findings.append(finding)
@@ -680,6 +720,9 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+
+            # Check if this is a template .env file (.env.example, .env.sample, etc.)
+            is_template = _is_env_template_file(filename)
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -721,16 +764,25 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
                     masked = _mask_value(raw_value)
                     category = _category_from_env_key(key_name)
 
-                    env_findings.append({
+                    # Reduce severity for template .env files (.env.example, .env.sample)
+                    severity = _severity_for_category(category)
+                    if is_template:
+                        severity = "info"
+
+                    env_finding = {
                         "type": "env_secret",
                         "file": rel_path,
                         "line": i + 1,
                         "match": masked,
-                        "severity": _severity_for_category(category),
+                        "severity": severity,
                         "category": category,
                         "env_key": key_name,
                         "entropy": round(entropy, 2) if entropy > ENTROPY_THRESHOLD else None,
-                    })
+                    }
+                    if is_template:
+                        env_finding["in_env_template"] = True
+
+                    env_findings.append(env_finding)
 
             env_files.append({
                 "path": rel_path,
@@ -852,6 +904,73 @@ def _is_test_file(rel_path: str) -> bool:
     files have their severity reduced and get an in_test_file flag.
     """
     return any(indicator in rel_path for indicator in TEST_FILE_PATTERNS)
+
+def _is_test_or_fixture_file(rel_path: str) -> bool:
+    """Check if a file is a test, spec, fixture, mock, or e2e file.
+
+    Broader than _is_test_file — catches fixtures, mocks, and e2e files
+    that should have reduced severity for secret findings.
+    """
+    # File extension patterns
+    test_ext_patterns = (
+        '.spec.ts', '.test.ts', '.spec.js', '.test.js',
+        '.spec.jsx', '.test.jsx', '.spec.tsx', '.test.tsx',
+        '.e2e.ts', '.e2e.js', '.stories.ts', '.stories.js',
+        '.e2e.tsx', '.e2e.jsx', '.stories.tsx', '.stories.jsx',
+    )
+    for pat in test_ext_patterns:
+        if rel_path.endswith(pat):
+            return True
+
+    # Directory patterns
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    dir_indicators = [
+        '/__tests__/', '/test/', '/tests/', '/spec/',
+        '/fixtures/', '/fixture/', '/mocks/', '/e2e/',
+        '/__fixtures__/', '/__mocks__/',
+    ]
+    start_indicators = [
+        '__tests__/', 'test/', 'tests/', 'spec/',
+        'fixtures/', 'fixture/', 'mocks/', 'e2e/',
+        '__fixtures__/', '__mocks__/',
+    ]
+    return (any(ind in normalized for ind in dir_indicators) or
+            any(rel_path.startswith(ind) for ind in start_indicators))
+
+def _is_config_schema_line(line: str) -> bool:
+    """Check if a line is a config/schema definition, not an actual secret value.
+
+    Catches patterns like:
+    - password: { type: "string" }    (config schema property)
+    - password: schema.string()       (schema builder)
+    - password?: string               (TypeScript type definition)
+    - secret: { type: "string" }      (same for other secret types)
+    """
+    return any(pat.search(line) for pat in CONFIG_SCHEMA_LINE_PATTERNS)
+
+def _is_package_json_metadata_line(line: str) -> bool:
+    """Check if a line in package.json is in a metadata field (description, keywords, scripts).
+
+    In package.json, password/secret/token keywords in these fields are
+    metadata descriptions, not actual secrets.
+    """
+    stripped = line.strip()
+    # Check if we're inside a description, keywords, or scripts field
+    if re.match(r'^"(?:description|keywords|scripts)"\s*:', stripped):
+        return True
+    return False
+
+def _is_env_template_file(filename: str) -> bool:
+    """Check if a .env file is a template (e.g., .env.example, .env.sample).
+
+    Template .env files contain placeholder values, not real secrets.
+    """
+    template_names = {
+        '.env.example', '.env.sample', '.env.template', '.env.tpl',
+        '.env.local.example', '.env.production.example',
+        '.env.staging.example', '.env.test.example',
+    }
+    return filename in template_names
 
 def _is_docs_or_example_file(rel_path: str) -> bool:
     """Check if a file is in a documentation or examples directory.
@@ -980,15 +1099,15 @@ def _is_credential_template_file(rel_path: str, content: str) -> bool:
 def _reduce_severity(severity: str) -> str:
     """Reduce severity level for findings in test files.
 
-    critical → medium, high → low, medium → low, low → low
+    critical → medium, high → low, medium → info, low → info
     """
     reduction_map = {
         "critical": "medium",
         "high": "low",
-        "medium": "low",
-        "low": "low",
+        "medium": "info",
+        "low": "info",
     }
-    return reduction_map.get(severity, "low")
+    return reduction_map.get(severity, "info")
 
 def _infer_category_from_value(value: str) -> str:
     """Infer the likely secret category from the value's format."""
@@ -1092,10 +1211,13 @@ def _compute_stats(
         by_category[f.get("category", "unknown")] += 1
         by_severity[f.get("severity", "unknown")] += 1
 
+    test_false_positives = sum(1 for f in findings if f.get("in_test_file"))
+
     return {
         "total_secrets": len(findings),
         "by_category": dict(by_category),
         "by_severity": dict(by_severity),
+        "test_false_positives": test_false_positives,
         "env_files_checked": len(env_files),
     }
 

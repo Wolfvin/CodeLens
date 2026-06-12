@@ -34,7 +34,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant"}
 
 # ─── JS/TS Keywords & Built-ins (false-positive filter) ────────
 
@@ -75,6 +75,12 @@ _JS_BUILTIN_METHODS = frozenset({
 })
 
 
+_TS_TYPE_SUFFIXES = (
+    'Payload', 'Params', 'Request', 'Response', 'Result',
+    'Input', 'Output', 'DTO', 'Args', 'Var', 'Ref',
+)
+
+
 def _is_js_keyword_or_builtin(name: str) -> bool:
     """Check if a name is a JS/TS keyword or built-in method.
 
@@ -82,6 +88,102 @@ def _is_js_keyword_or_builtin(name: str) -> bool:
     management extractors (Pinia, Vuex, etc.).
     """
     return name in _JS_KEYWORDS or name in _JS_BUILTIN_METHODS
+
+
+def _is_typescript_type_definition(content: str, var_name: str, line_idx: int) -> bool:
+    """Check if a variable is actually a TypeScript type/interface/enum definition.
+
+    Examines the source content around the given line to detect if the name
+    is a type definition rather than a runtime value (state store).
+
+    Args:
+        content: Full file content
+        var_name: The variable name to check
+        line_idx: 0-based line index in the content
+
+    Returns:
+        True if this appears to be a type definition, not a runtime value.
+    """
+    lines = content.split('\n')
+
+    # Check nearby lines (current and 2 before) for type/interface/enum keywords
+    for offset in range(3):
+        check_idx = line_idx - offset
+        if check_idx < 0 or check_idx >= len(lines):
+            continue
+        check_line = lines[check_idx].strip()
+
+        # Direct type/interface/enum declarations
+        if re.match(r'^(?:export\s+)?(?:interface|type|enum)\s+', check_line):
+            return True
+
+        # const enum declarations
+        if re.match(r'^(?:export\s+)?const\s+enum\s+', check_line):
+            return True
+
+    # Check current line for type annotation patterns
+    if line_idx < len(lines):
+        current_line = lines[line_idx]
+
+        # TypeScript type annotation: const X: SomeType = ...
+        # These are often type/schema definitions, not mutable state
+        if re.search(r':\s*(?:Readonly|Partial|Record|Pick|Omit|Required)\b', current_line):
+            return True
+
+        # const X = { ... } as const — immutable by definition
+        if re.search(r'\bas\s+const\b', current_line):
+            return True
+
+        # Zod/schema library patterns: const X = z.object({...})
+        if re.search(r'\bz\.(object|string|number|boolean|array|tuple|enum|union|intersection)\b', current_line):
+            return True
+
+        # Yup schema patterns: const X = yup.object().shape({...})
+        if re.search(r'\byup\.(object|string|number|boolean|array)\b', current_line):
+            return True
+
+        # Joi schema patterns: const X = Joi.object({...})
+        if re.search(r'\bJoi\.(object|string|number|boolean|array)\b', current_line):
+            return True
+
+    # Check if the name itself suggests it's a type definition
+    # TypeScript type names often end with Payload, Params, Request, etc.
+    if var_name.endswith(_TS_TYPE_SUFFIXES):
+        return True
+
+    return False
+
+
+def _is_simple_constant(value_part: str) -> bool:
+    """Check if a value is a simple literal constant (not mutable state).
+
+    Simple constants like const X = "value", const X = 42, const X = { a: 1 }
+    with only literal values are immutable by convention, not state stores.
+    """
+    value = value_part.strip()
+
+    # String literal
+    if re.match(r'^["\'`]', value):
+        return True
+
+    # Numeric literal
+    if re.match(r'^\d+(?:\.\d+)?$', value):
+        return True
+
+    # Boolean/null/undefined
+    if re.match(r'^(?:true|false|null|undefined)$', value):
+        return True
+
+    # Object with only literal values: { key: "value", num: 42 }
+    # This is a simple constant object, not mutable state
+    if re.match(r'^\{\s*\}', value):  # Empty object
+        return True
+
+    # as const — immutable assertion
+    if re.search(r'\bas\s+const\s*;?\s*$', value):
+        return True
+
+    return False
 
 
 def _extract_section(body: str, section_name: str) -> Optional[str]:
@@ -130,7 +232,8 @@ def _extract_section(body: str, section_name: str) -> Optional[str]:
 def map_state(
     workspace: str,
     store_name: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_stores: int = 100
 ) -> Dict[str, Any]:
     """
     Map all state management patterns across the workspace.
@@ -139,6 +242,7 @@ def map_state(
         workspace: Absolute path to workspace
         store_name: Optional filter for a specific store name
         config: CodeLens config dict
+        max_stores: Maximum number of stores to return (default 100)
 
     Returns:
         Dict with stats, stores, state_flow, recommendations
@@ -415,6 +519,36 @@ def map_state(
     # artifacts from cross-file resolution that couldn't find a source.
     stores = [s for s in stores if s.get("defined_in", "")]
 
+    # ─── Post-processing: Reclassify global stores without mutations ──
+    # A "global" store with no actions/mutations is not really mutable state —
+    # it's a module-level constant. Reclassify as module_constant.
+    for store in stores:
+        if store.get("type") == "global":
+            actions = store.get("actions", [])
+            has_mutations = len(actions) > 0
+            if not has_mutations:
+                store["type"] = "module_constant"
+
+    # ─── Post-processing: Filter module_constant without consumers ──
+    # Module-level constants that nobody imports are dead code, not interesting state.
+    stores = [
+        s for s in stores
+        if s.get("type") != "module_constant" or s.get("consumers")
+    ]
+
+    # ─── Post-processing: Validate file paths ────────────────────
+    # Ensure all store entries have proper defined_in paths (not empty, ?, or malformed)
+    stores = [
+        s for s in stores
+        if s.get("defined_in", "") and not s.get("defined_in", "").startswith("?")
+    ]
+
+    # ─── Validate flow entry file paths ──────────────────────────
+    state_flow = [
+        f for f in state_flow
+        if f.get("file", "") and not f.get("file", "").startswith("?")
+    ]
+
     if store_name:
         stores = [s for s in stores if store_name.lower() in s.get("name", "").lower()]
         state_flow = [
@@ -432,6 +566,31 @@ def map_state(
 
     total_slices = sum(len(s.get("slices", [])) for s in stores)
 
+    # ─── Truncate if exceeding max_stores ─────────────────────
+    truncated = False
+    total_before_truncation = len(stores)
+    if len(stores) > max_stores:
+        truncated = True
+        # Sort by interest: stores with most consumers/actions first
+        def _store_interest_score(s: Dict) -> int:
+            consumers = len(s.get("consumers", []))
+            actions = len(s.get("actions", []))
+            slices = len(s.get("slices", []))
+            # Framework stores are more interesting than module_constant
+            type_bonus = 0 if s.get("type") == "module_constant" else 10
+            return consumers * 3 + actions * 2 + slices + type_bonus
+
+        stores.sort(key=_store_interest_score, reverse=True)
+        stores = stores[:max_stores]
+
+        # Also filter state_flow to only include entries for kept stores
+        kept_store_names = {s.get("name", "") for s in stores}
+        state_flow = [
+            f for f in state_flow
+            if f.get("to", "") in kept_store_names
+            or f.get("from", "") in kept_store_names
+        ]
+
     # ─── Recommendations ──────────────────────────────────────
 
     recommendations = _generate_state_recommendations(
@@ -444,6 +603,8 @@ def map_state(
         "stats": {
             "total_stores": len(stores),
             "total_slices": total_slices,
+            "total_before_truncation": total_before_truncation,
+            "truncated": truncated,
             "by_type": dict(by_type),
             "files_scanned": files_scanned,
             "frameworks_detected": sorted(frameworks_detected),
@@ -1444,6 +1605,14 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if var_name == var_name.upper() and len(var_name) >= 3:
                 continue
 
+            # Skip TypeScript type/interface/enum definitions
+            if _is_typescript_type_definition(content, var_name, i):
+                continue
+
+            # Skip const enum declarations (TypeScript)
+            if re.match(r'^const\s+enum\s+', stripped):
+                continue
+
             # v5.8: Skip variables whose value is a path/env reference
             # (e.g., ROOT = path.resolve(...), PORT = process.env.PORT)
             is_path_or_env = False
@@ -1512,6 +1681,12 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
                 # Skip factories that are NOT state-related
                 pass
 
+            # Skip export const X: SomeType = ... that are just type exports
+            # (e.g., export const MySchema: SomeType = { ... } where the type annotation
+            # indicates this is a schema/definition, not mutable state)
+            if re.match(r'^(?:export\s+)?(?:const|let|var)\s+\w+\s*:\s*(?:Readonly|Partial|Record|Pick|Omit|Required|z\.)', stripped):
+                continue
+
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
             is_mutable = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
@@ -1521,9 +1696,10 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if is_immutable:
                 continue
 
-            # For things that don't match either pattern, include them
-            # (could be function calls that return mutable objects)
-            store_type = "global"
+            # Classify as module_constant if it's a simple constant or has no mutations
+            # module_constant = immutable constant, global = mutable state
+            is_simple_const = _is_simple_constant(value_part)
+            store_type = "module_constant" if (is_simple_const or not is_mutable) else "global"
             framework = "module_level_js"
 
             stores.append({
@@ -2009,12 +2185,12 @@ def _generate_state_recommendations(
         })
 
     # Module-level state without framework
-    module_level = [s for s in stores if s.get("type") == "global"]
+    module_level = [s for s in stores if s.get("type") in ("global", "module_constant")]
     if len(module_level) > 10:
         recommendations.append({
             "type": "architecture",
             "severity": "warning",
-            "message": f"{len(module_level)} module-level global variables detected",
+            "message": f"{len(module_level)} module-level global variables/constants detected",
             "suggestion": "Consider using a proper state management library instead of scattered global variables.",
         })
 
