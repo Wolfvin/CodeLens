@@ -525,8 +525,9 @@ def _detect_commented_code(
             i += 1
         block_end = i
 
-        # Need at least 3 consecutive commented lines
-        if block_end - block_start < 3:
+        # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
+        min_initial = 5 if ext == ".go" else 3
+        if block_end - block_start < min_initial:
             continue
 
         # Check if the block looks like code
@@ -537,7 +538,11 @@ def _detect_commented_code(
 
         code_score = _score_commented_code_likelihood(comment_lines, ext)
 
-        if code_score >= 2:
+        # v5.8.1: Go projects use multi-line comments heavily for godoc,
+        # so require a higher threshold (3 instead of 2) to avoid false positives.
+        threshold = 3 if ext == ".go" else 2
+
+        if code_score >= threshold:
             severity = "low"
             should_remove = True
 
@@ -749,6 +754,13 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         r'::',
         r'\w+\.\w+\(',
     ]
+    code_indicators_go = [
+        r'(?:func|var|const|type|struct|interface|return|if|else|for|range|switch|case|go|defer|select|chan|map)\s',
+        r'[{}();]',
+        r':=',
+        r'\w+\.\w+\(',
+        r'\w+\s*,\s*\w+\s*:=',
+    ]
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
         indicators = code_indicators_js
@@ -756,8 +768,20 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         indicators = code_indicators_py
     elif ext == ".rs":
         indicators = code_indicators_rs
+    elif ext == ".go":
+        indicators = code_indicators_go
     else:
         indicators = code_indicators_js  # Default to JS-like
+
+    # v5.8.1: Skip copyright/license/header blocks — these are legitimate
+    # multi-line comments, NOT commented-out code.
+    first_line = comment_lines[0].strip().lower() if comment_lines else ""
+    _LICENSE_KEYWORDS = ('copyright', 'license', 'licensed', 'spdx', 'authors',
+                         'copyrights', 'all rights reserved', 'permission is hereby',
+                         'redistribution', 'mozilla public license', 'gpl', 'lgpl',
+                         'apache license', 'bsd', 'mit license', 'isc license')
+    if any(kw in first_line for kw in _LICENSE_KEYWORDS):
+        return 0
 
     for line in comment_lines:
         if not line:

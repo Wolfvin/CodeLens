@@ -17,8 +17,7 @@ def add_args(parser):
 
 
 def execute(args, workspace):
-    return detect_perf_hints(workspace, severity=args.severity, category=args.category,
-                             max_files=getattr(args, 'max_files', 5000))
+    return detect_perf_hints(workspace, severity=args.severity, category=args.category)
 
 
 register_command("perf-hint", "Detect performance anti-patterns", add_args, execute)

@@ -5,6 +5,35 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.8.1] — 2026-06-12
+
+### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
+
+Real-world test on a pure Go distributed SQL database with 116,033 backend nodes and 113,338 edges.
+Confirmed: 2,287 smells (health score 70), 200 dead items, 106 circular deps, 11,291 debug leaks,
+1,716 entrypoints, 13 secrets, 4 CVEs, 32 API routes, 15 state stores.
+
+### Added
+
+- **Go project type detection in handbook**: `handbook` now parses `go.mod` to extract module name, Go version, and classify Go projects into types: `go-database`, `go-web-service`, `go-grpc-service`, `go-infrastructure`, `go-project`. Module name extraction (e.g., `github.com/cockroachdb/cockroach` → name: `cockroach`, version from `go` directive).
+- **Go framework content-based detection**: `detect_frameworks()` now reads `go.mod` content instead of just checking file existence. Detects `gin`, `echo`, `fiber`, `chi`, `mux`, `grpc`, `protobuf` only when the dependency string actually appears in go.mod. Prevents false positives where every Go project was classified as gin/echo.
+- **Go-specific code indicators for debug-leak**: Added `code_indicators_go` with Go-specific patterns (`func`, `var`, `const`, `type`, `:=`, `chan`, `select`, `defer`, `range`). Previously defaulted to JS indicators which caused massive over-detection.
+- **License block detection in debug-leak**: `_score_commented_code_likelihood()` now returns 0 for comment blocks that start with copyright/license keywords (copyright, SPDX, Apache License, BSD, MIT, GPL, etc.). Eliminates thousands of false positives from license headers.
+
+### Fixed
+
+- **`get_workspace_outline()` TypeError**: `write_output_files()` in `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`. Removed invalid keyword argument.
+- **`perf-hint` TypeError crash**: `perf_hint.py` called `detect_perf_hints(workspace, ..., max_files=5000)` but the function doesn't accept `max_files`. Removed invalid keyword argument.
+- **gin/echo false positive for Go projects**: Every Go project with a `go.mod` was incorrectly classified as using gin and echo frameworks because both had `"config_files": ["go.mod"]`. Changed to `config_files: []` and use content-based detection instead.
+- **Go listed as "unsupported language"**: Go has a fallback parser (`fallback_go.py`) and is actively parsed during scan, but was still listed in `unsupported_langs` with the message "not yet supported by tree-sitter parsers". Removed Go from the unsupported markers list.
+- **Handbook `type: unknown` and `version: 0.0.0` for Go projects**: Go projects without package.json or Cargo.toml had no identity detection. Added `go.mod` parsing to extract name, version, and type classification.
+- **Debug-leak Go commented_code false positives**: Go projects use multi-line `//` comments heavily for godoc, generating 22,433 false "commented code" findings on cockroachdb. Fixed by: (1) requiring 5+ consecutive lines for Go (vs 3 for other languages), (2) requiring score ≥ 3 for Go (vs 2), (3) adding Go-specific code indicators, (4) skipping license/copyright blocks. Result: 22,433 → 6,734 (70% reduction).
+
+### Changed
+
+- **Go project classification priority**: Module name patterns (cockroachdb, postgres, mysql, etc.) now take priority over dependency-based classification for more accurate type detection.
+- **Version bump**: 5.8.0 → 5.8.1
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

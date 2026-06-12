@@ -40,7 +40,17 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
+## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
+
+- **Go project type detection**: `handbook` parses `go.mod` for module name, Go version, and classifies projects as `go-database`, `go-web-service`, `go-grpc-service`, `go-infrastructure`, or `go-project`.
+- **Go framework content-based detection**: `detect_frameworks()` reads go.mod content (not just file existence). Detects gin/echo/fiber/chi/mux/grpc/protobuf only when dependency actually appears. No more false positives on non-web Go projects.
+- **Go removed from unsupported_langs**: Go has fallback parser support and is actively scanned, so it's no longer listed as "unsupported".
+- **Go debug-leak commented_code false positive reduction**: 22,433 → 6,734 findings (70% reduction) via Go-specific code indicators, higher block length threshold (5 vs 3), higher score threshold (3 vs 2), and license block skip.
+- **Bugfix: `get_workspace_outline()` TypeError**: Removed invalid `max_files` kwarg.
+- **Bugfix: `perf-hint` TypeError crash**: Removed invalid `max_files` kwarg from `detect_perf_hints()` call.
+- **Bugfix: Handbook `type: unknown` and `version: 0.0.0`** for Go projects: Now extracts identity from go.mod.
+
+## What's New in v5.8.0 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
 
 - **Rust framework detection**: `detect_frameworks()` now parses `Cargo.toml` for dependencies and detects `rust`, `tokio`, `actix-web`, `axum`, `warp`, `rocket`, `deno_core`. Also scans workspace members' `Cargo.toml` in `crates/`, `ext/`, `libs/`, `packages/`.
 - **Rust HTTP route extraction**: `api-map` now detects routes from Rust web frameworks: actix-web (`#[get]`/`#[post]` attributes, `web::resource()`), axum (`.route("/path", get(handler))`), warp (`warp::path("segment")`), rocket (`#[get]`/`#[post]` attributes).

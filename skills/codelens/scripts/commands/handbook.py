@@ -398,14 +398,51 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
+    # v5.8.1: Try go.mod — detect Go projects
+    go_type = None
+    go_mod_path = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_mod_content = f.read()
+            # Extract module name and Go version
+            module_match = re.search(r'^module\s+(\S+)', go_mod_content, re.MULTILINE)
+            go_ver_match = re.search(r'^go\s+(\S+)', go_mod_content, re.MULTILINE)
+            if module_match:
+                mod_name = module_match.group(1)
+                # Use last segment of module path as project name
+                identity["name"] = mod_name.split('/')[-1]
+            if go_ver_match:
+                identity["version"] = go_ver_match.group(1)
+            # Classify Go project type based on dependencies and module name
+            mod_name_lower = mod_name.lower() if module_match else ""
+            if any(kw in mod_name_lower for kw in ('cockroachdb', 'postgres', 'mysql', 'sqlite', 'mongodb', 'redis', 'etcd', 'database', 'sql', 'db/')):
+                go_type = "go-database"
+            elif 'database/sql' in go_mod_content:
+                go_type = "go-database"
+            elif 'gin-gonic' in go_mod_content or 'labstack/echo' in go_mod_content:
+                go_type = "go-web-service"
+            elif 'k8s.io/' in go_mod_content or 'kubernetes' in go_mod_content:
+                go_type = "go-infrastructure"
+            elif 'google.golang.org/grpc' in go_mod_content:
+                go_type = "go-grpc-service"
+            elif 'net/http' in go_mod_content:
+                go_type = "go-web-service"
+            else:
+                go_type = "go-project"
+        except Exception:
+            logger.warning("go.mod parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
             type_parts.append("rust")
+        if go_type:
+            type_parts.append("go")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
