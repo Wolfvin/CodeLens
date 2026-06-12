@@ -108,6 +108,33 @@ description: >
 
 ---
 
+## Command vs Command — Disambiguation Guide
+
+| You want... | Use | Not | Why |
+|-------------|-----|-----|-----|
+| "Does this name exist?" | `query` | `symbols` | query checks registry + status, symbols only lists matches |
+| "Who calls this function?" | `trace --direction up` | `symbols` | trace follows call graph, symbols only searches names |
+| "Quick info about a symbol" | `context` | `trace` | context gives 1-level callers/callees + code, trace goes deep |
+| "Full call chain depth" | `trace` | `context` | trace follows multi-level call graph, context is 1-level |
+| "Find text/pattern in code" | `search` | `symbols` | search is regex on source code, symbols queries the registry |
+| "Check code quality broadly" | `smell` | `complexity` | smell detects 10 categories, complexity is one specific metric |
+| "Measure how complex this is" | `complexity` | `smell` | complexity gives cyclomatic/cognitive scores, smell is qualitative |
+| "Pre-delete check" | `impact --action delete` | `dead-code` | impact shows who BREAKS, dead-code shows what's UNUSED |
+| "Find unused code" | `dead-code` | `impact` | dead-code finds unreachable/unused items, impact traces breakage |
+| "Pre-rename check" | `refactor-safe` | `impact` | refactor-safe checks rename/move safety specifically |
+| "Project overview for AI" | `summary` | `handbook` | summary = prioritized findings, handbook = project identity/conventions |
+| "Project identity & conventions" | `handbook` | `summary` | handbook = frameworks/conventions/structure, summary = quality findings |
+| "Security audit" | `secrets` first | `vuln-scan` | secrets scans YOUR code, vuln-scan scans DEPENDENCIES |
+| "Dependency vulnerabilities" | `vuln-scan` | `secrets` | vuln-scan checks CVE databases, secrets finds hardcoded keys |
+| "CSS issues" | `css-deep` | `missing-refs` | css-deep is comprehensive CSS analysis, missing-refs is CSS/HTML mismatch only |
+| "Where does this app start?" | `entrypoints` | `api-map` | entrypoints finds ALL entry types, api-map focuses on HTTP routes |
+| "Map API routes" | `api-map` | `entrypoints` | api-map maps REST/GraphQL/gRPC, entrypoints is broader |
+| "Environment variables audit" | `env-check` | `secrets` | env-check tracks usage/missing, secrets finds hardcoded values |
+| "Detect frameworks" | `detect` | `handbook` | detect = quick framework list, handbook = full project orientation |
+| "Don't know which command" | `ask "question"` | (any specific) | ask routes natural language to the right command |
+
+---
+
 ## All 45 Commands — Grouped by Category
 
 ### Setup & Registry
