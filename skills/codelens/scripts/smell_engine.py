@@ -1,5 +1,5 @@
 """
-Code Smell Detector for CodeLens — v4
+Code Smell Detector for CodeLens — v3
 Systematically detects code smells that AI struggles to find without reading every file.
 
 Smell Categories:
@@ -15,29 +15,21 @@ Smell Categories:
 10. Complex Conditional — overly complex if/switch/ternary
 
 Each smell gets a severity (info, warning, critical) and refactoring suggestion.
-
-v4: Single-pass scan (merged 3 walks into 1), added MAX_FILES cap,
-    uses walk_source_files for consistent file walking.
 """
 
 import os
 import re
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, walk_source_files
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte", ".go", ".php"
+    ".py", ".rs", ".vue", ".svelte"
 }
-
-# Performance caps
-MAX_FILES = 3000  # Maximum files to scan
-MAX_SMELLS_PER_CATEGORY = 200  # Cap per-category results
-MAX_TOTAL_SMELLS = 2000  # Cap total results
 
 # Thresholds
 LONG_FUNCTION_LINES = 50
@@ -50,6 +42,7 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
+MAX_FILE_SIZE = 500 * 1024  # 500KB
 
 
 def detect_smells(
@@ -60,10 +53,6 @@ def detect_smells(
 ) -> Dict[str, Any]:
     """
     Detect code smells across the workspace.
-
-    v4: Single-pass scan — all 3 previous walks merged into 1.
-    Duplicate patterns and inconsistent patterns are now collected
-    during the main scan pass instead of separate walks.
 
     Args:
         workspace: Absolute path to workspace
@@ -93,185 +82,113 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
-    truncated = False
 
-    # ─── Single-pass scan using walk_source_files ────────────
-    # Collect data for ALL categories in one pass, including
-    # duplicate patterns and inconsistent patterns.
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
 
-    # For duplicate_pattern: collect function signatures across files
-    fn_signatures: Dict[str, List[Dict]] = defaultdict(list) if "duplicate_pattern" in categories else {}
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in SOURCE_EXTENSIONS:
+                continue
 
-    # For inconsistent: track error/async/export patterns
-    error_patterns = {"try_catch": 0, "promise_catch": 0, "result_type": 0, "exception": 0}
-    async_patterns = {"async_await": 0, "promise_then": 0, "callback": 0}
-    export_patterns = {"es_module": 0, "commonjs": 0}
-    inconsistent_file_count = 0
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
 
-    source_files = walk_source_files(workspace, extensions=SOURCE_EXTENSIONS, max_files=MAX_FILES)
-    truncated = len(source_files) >= MAX_FILES
+            # Skip minified files
+            if '.min.' in filename:
+                continue
 
-    for rel_path, ext, content in source_files:
-        files_scanned += 1
-        lines = content.split('\n')
-        line_count = len(lines)
+            # Skip generated files (generated/, vendor/, _pb2.py, etc.)
+            if is_generated_file(rel_path):
+                continue
 
-        # Track if this is a docs/examples/test file for scoring
-        is_docs_or_example = _is_docs_or_example(rel_path)
-        if not is_docs_or_example:
-            production_files_scanned += 1
+            # Skip files exceeding size cap
+            try:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
 
-        # ─── Per-file smell detection (merged from Walk #1) ──
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
+                continue
 
-        # Large file detection
-        if "large_file" in categories:
-            if line_count > LARGE_FILE_LINES_CRITICAL:
-                all_smells["large_file"].append({
-                    "file": rel_path,
-                    "line_count": line_count,
-                    "severity": "critical",
-                    "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES_CRITICAL})",
-                    "suggestion": "Split into multiple modules. Extract related functionality."
-                })
-            elif line_count > LARGE_FILE_LINES:
-                all_smells["large_file"].append({
-                    "file": rel_path,
-                    "line_count": line_count,
-                    "severity": "warning",
-                    "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES})",
-                    "suggestion": "Consider splitting into smaller modules."
-                })
+            files_scanned += 1
+            lines = content.split('\n')
+            line_count = len(lines)
 
-        # Long function detection
-        if "long_fn" in categories:
-            fns = _detect_long_functions(content, ext, rel_path)
-            all_smells["long_fn"].extend(fns[:MAX_SMELLS_PER_CATEGORY])
+            # Track if this is a docs/examples/test file for scoring
+            is_docs_or_example = _is_docs_or_example(rel_path)
+            if not is_docs_or_example:
+                production_files_scanned += 1
 
-        # Deep nesting detection
-        if "deep_nesting" in categories:
-            nested = _detect_deep_nesting(content, ext, rel_path)
-            all_smells["deep_nesting"].extend(nested[:MAX_SMELLS_PER_CATEGORY])
-
-        # Too many parameters
-        if "many_params" in categories:
-            params = _detect_many_params(content, ext, rel_path)
-            all_smells["many_params"].extend(params[:MAX_SMELLS_PER_CATEGORY])
-
-        # Callback hell
-        if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-            cb = _detect_callback_hell(content, rel_path)
-            all_smells["callback_hell"].extend(cb[:MAX_SMELLS_PER_CATEGORY])
-
-        # Magic values
-        if "magic_values" in categories:
-            magic = _detect_magic_values(content, ext, rel_path)
-            all_smells["magic_values"].extend(magic[:MAX_SMELLS_PER_CATEGORY])
-
-        # Complex conditionals
-        if "complex_conditional" in categories:
-            conds = _detect_complex_conditionals(content, ext, rel_path)
-            all_smells["complex_conditional"].extend(conds[:MAX_SMELLS_PER_CATEGORY])
-
-        # God object (classes/modules with too many methods)
-        # Skip test/mock files — they inherently have many methods and are not production code
-        if "god_object" in categories and not _is_test_or_mock_file(rel_path):
-            gods = _detect_god_objects(content, ext, rel_path)
-            all_smells["god_object"].extend(gods[:MAX_SMELLS_PER_CATEGORY])
-
-        # ─── Duplicate pattern data collection (merged from Walk #2) ──
-        if "duplicate_pattern" in categories:
-            for m in re.finditer(
-                r'(?:function\s+\w+|const\s+\w+\s*=\s*(?:async\s+)?\(|def\s+\w+|(?:pub\s+)?fn\s+\w+)\s*\([^)]*\)',
-                content
-            ):
-                sig = m.group(0).strip()
-                normalized = re.sub(r'\s+', ' ', sig)
-                line_num = content[:m.start()].count('\n') + 1
-                fn_signatures[normalized].append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "signature": sig
-                })
-
-        # ─── Inconsistent pattern data collection (merged from Walk #3) ──
-        if "inconsistent" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-            inconsistent_file_count += 1
-
-            # Error handling patterns
-            if 'try' in content and 'catch' in content:
-                error_patterns["try_catch"] += 1
-            if '.catch(' in content:
-                error_patterns["promise_catch"] += 1
-            if 'Result<' in content or 'Ok(' in content:
-                error_patterns["result_type"] += 1
-            if 'try:' in content and 'except' in content:
-                error_patterns["exception"] += 1
-
-            # Async patterns
-            if 'async ' in content or 'await ' in content:
-                async_patterns["async_await"] += 1
-            if '.then(' in content:
-                async_patterns["promise_then"] += 1
-            if re.search(r'function\s*\(\s*err', content):
-                async_patterns["callback"] += 1
-
-            # Export patterns
-            if re.search(r'export\s+(default\s+)?', content):
-                export_patterns["es_module"] += 1
-            if 'module.exports' in content or 'require(' in content:
-                export_patterns["commonjs"] += 1
-
-    # ─── Process cross-file patterns from collected data ─────
-
-    # Duplicate pattern detection from collected signatures
-    if "duplicate_pattern" in categories:
-        for sig, locations in fn_signatures.items():
-            unique_files = set(loc["file"] for loc in locations)
-            if len(unique_files) >= 3:
-                all_smells["duplicate_pattern"].append({
-                    "files": list(unique_files),
-                    "occurrences": len(locations),
-                    "signature": sig,
-                    "severity": "warning" if len(unique_files) >= 5 else "info",
-                    "message": f"Similar function signature found in {len(unique_files)} files",
-                    "suggestion": "Extract into a shared utility module."
-                })
-        all_smells["duplicate_pattern"] = all_smells["duplicate_pattern"][:30]  # Cap results
-
-    # Inconsistent pattern detection from collected data
-    if "inconsistent" in categories and inconsistent_file_count > 0:
-        # Check for inconsistency in error handling
-        total_error = sum(error_patterns.values())
-        if total_error > 3:
-            dominant = max(error_patterns, key=error_patterns.get)
-            for pattern, count in error_patterns.items():
-                if pattern != dominant and count > 0 and count < total_error * 0.3:
-                    all_smells["inconsistent"].append({
-                        "type": "error_handling_inconsistency",
+            # Large file detection
+            if "large_file" in categories:
+                if line_count > LARGE_FILE_LINES_CRITICAL:
+                    all_smells["large_file"].append({
+                        "file": rel_path,
+                        "line_count": line_count,
+                        "severity": "critical",
+                        "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES_CRITICAL})",
+                        "suggestion": "Split into multiple modules. Extract related functionality."
+                    })
+                elif line_count > LARGE_FILE_LINES:
+                    all_smells["large_file"].append({
+                        "file": rel_path,
+                        "line_count": line_count,
                         "severity": "warning",
-                        "message": f"Mixed error handling: {pattern} ({count} files) vs {dominant} ({error_patterns[dominant]} files)",
-                        "suggestion": f"Standardize on {dominant} pattern across the codebase."
+                        "message": f"File has {line_count} lines (threshold: {LARGE_FILE_LINES})",
+                        "suggestion": "Consider splitting into smaller modules."
                     })
 
-        # Check for async inconsistency
-        total_async = sum(async_patterns.values())
-        if total_async > 3:
-            if async_patterns["async_await"] > 0 and async_patterns["promise_then"] > 0:
-                all_smells["inconsistent"].append({
-                    "type": "async_style_inconsistency",
-                    "severity": "info",
-                    "message": f"Mixed async styles: async/await ({async_patterns['async_await']}) vs .then() ({async_patterns['promise_then']})",
-                    "suggestion": "Prefer async/await for consistency."
-                })
+            # Long function detection
+            if "long_fn" in categories:
+                fns = _detect_long_functions(content, ext, rel_path)
+                all_smells["long_fn"].extend(fns)
 
-        # Check for module system inconsistency
-        if export_patterns["es_module"] > 0 and export_patterns["commonjs"] > 0:
-            all_smells["inconsistent"].append({
-                "type": "module_system_inconsistency",
-                "severity": "warning",
-                "message": f"Mixed module systems: ESM ({export_patterns['es_module']} files) vs CJS ({export_patterns['commonjs']} files)",
-                "suggestion": "Standardize on one module system."
-            })
+            # Deep nesting detection
+            if "deep_nesting" in categories:
+                nested = _detect_deep_nesting(content, ext, rel_path)
+                all_smells["deep_nesting"].extend(nested)
+
+            # Too many parameters
+            if "many_params" in categories:
+                params = _detect_many_params(content, ext, rel_path)
+                all_smells["many_params"].extend(params)
+
+            # Callback hell
+            if "callback_hell" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                cb = _detect_callback_hell(content, rel_path)
+                all_smells["callback_hell"].extend(cb)
+
+            # Magic values
+            if "magic_values" in categories:
+                magic = _detect_magic_values(content, ext, rel_path)
+                all_smells["magic_values"].extend(magic)
+
+            # Complex conditionals
+            if "complex_conditional" in categories:
+                conds = _detect_complex_conditionals(content, ext, rel_path)
+                all_smells["complex_conditional"].extend(conds)
+
+            # God object (classes/modules with too many methods)
+            # Skip test/mock files — they inherently have many methods and are not production code
+            if "god_object" in categories and not _is_test_or_mock_file(rel_path):
+                gods = _detect_god_objects(content, ext, rel_path)
+                all_smells["god_object"].extend(gods)
+
+    # Duplicate pattern detection (cross-file, only if requested)
+    if "duplicate_pattern" in categories:
+        dupes = _detect_duplicate_patterns(workspace)
+        all_smells["duplicate_pattern"] = dupes
+
+    # Inconsistent patterns (cross-file)
+    if "inconsistent" in categories:
+        inconsistent = _detect_inconsistent_patterns(workspace)
+        all_smells["inconsistent"] = inconsistent
 
     # Apply severity filter
     if severity_filter:
@@ -382,8 +299,7 @@ def detect_smells(
             "critical": critical_count,
             "warning": warning_count,
             "info": info_count,
-            "health_score": health_score,
-            "truncated": truncated
+            "health_score": health_score
         },
         "by_category": {
             cat: smells for cat, smells in all_smells.items() if smells
@@ -728,7 +644,16 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
 
 
 def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
-    """Detect magic numbers and strings (unexplained constants)."""
+    """Detect magic numbers and strings (unexplained constants).
+
+    v2 improvements:
+    - Skip generated files (path checked externally, but also skip by content markers)
+    - Python-aware: skip numbers in const assignments (UPPER_CASE =), type annotations,
+      default arguments, f-strings, docstrings, and known Python patterns
+    - Expanded common_numbers with common Python/Rust constants
+    - Skip numbers in dict/list literals (likely config)
+    - Skip numbers that are part of string content
+    """
     smells = []
     lines = content.split('\n')
 
@@ -737,20 +662,27 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         'config', 'eslint', 'prettier', 'vitest', 'jest',
         'playwright', 'postcss', 'next.config', 'tsconfig',
         '.fixture.', '.stories.', '.story.', '.test.', '.spec.',
+        'constants', 'const.py', 'consts', 'enums',
     ]
     rel_lower = rel_path.lower()
     if any(kw in rel_lower for kw in config_file_keywords):
         return smells
 
-    # Numbers that are likely magic (not 0, 1, -1, 2, or common HTTP codes)
-    common_numbers = {0, 1, -1, 2, 3, 10, 100, 256, 1000, 200, 201, 204, 301, 302, 400, 401, 403, 404, 500, 502, 503}
+    # Numbers that are likely NOT magic (common constants, HTTP codes, etc.)
+    common_numbers = {
+        0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 20, 24, 30, 32, 36,
+        48, 50, 60, 64, 100, 128, 200, 256, 300, 360, 500, 512, 1000, 1024,
+        # HTTP status codes
+        200, 201, 202, 204, 206, 301, 302, 304, 307, 308,
+        400, 401, 403, 404, 405, 409, 422, 429, 500, 502, 503, 504,
+    }
 
     # Context patterns that indicate config-like lines (skip numbers on these)
     config_context_patterns = [
         '.config.', '.config(', 'eslint', 'prettier', 'vitest',
         'jest', 'playwright', 'tailwind',
     ]
-    
+
     # JSX/TSX style prop patterns — numbers in style/CSS props are not magic values
     jsx_style_patterns = [
         r'width\s*[:=]', r'height\s*[:=]', r'padding\s*[:=]', r'margin\s*[:=]',
@@ -761,11 +693,50 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         r'timeout\s*[:=]', r'port\s*[:=]',
     ]
 
+    # Python-specific skip patterns — these are NOT magic values
+    python_skip_patterns = [
+        r'^\s*[A-Z_][A-Z0-9_]*\s*=',     # UPPER_CASE = constant assignment
+        r'^\s*def\s+\w+',                   # function definition (default args)
+        r'^\s*class\s+\w+',                 # class definition
+        r'.*:\s*(int|float|str|bool)\s*=',   # type annotation with default
+        r'.*#.*type:\s*ignore',              # type: ignore comments
+        r'^\s*"""', r'^\s*"""',             # docstrings
+        r'^\s*return\s+',                   # return statements (often correct)
+        r'.*range\(',                        # range() calls
+        r'.*enumerate\(',                    # enumerate() calls
+        r'.*\.format\(',                     # .format() calls
+        r'.*%[sd]$',                         # %-formatting
+        r'.*os\.path\.',                     # os.path operations
+        r'.*logging\.',                      # logging configuration
+        r'.*assert\s+',                      # assert statements
+        r'.*pytest\.',                       # pytest configuration
+        r'.*@pytest\.',                      # pytest decorators
+        r'.*unittest\.',                     # unittest configuration
+        r'.*__version__',                    # version declarations
+        r'.*__all__',                        # __all__ exports
+        r'.*typing\.',                       # typing module
+        r'.*Optional\[',                     # Optional types
+        r'.*Union\[',                        # Union types
+    ]
+
+    in_docstring = False
+
     for i, line in enumerate(lines):
         stripped = line.strip()
 
+        # Track docstring boundaries
+        if '"""' in stripped or "'''" in stripped:
+            count = stripped.count('"""') + stripped.count("'''")
+            if count == 1:
+                in_docstring = not in_docstring
+            continue  # Skip docstring lines entirely
+        if in_docstring:
+            continue
+
         # Skip comments, imports, and console/logs
         if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith('import'):
+            continue
+        if stripped.startswith('from ') and ' import ' in stripped:
             continue
         if 'console.' in stripped or 'print(' in stripped or 'log!' in stripped:
             continue
@@ -774,10 +745,15 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         stripped_lower = stripped.lower()
         if any(pat in stripped_lower for pat in config_context_patterns):
             continue
-        
+
         # Skip JSX style prop lines in TSX/JSX files
         if ext in {'.tsx', '.jsx'}:
             if any(re.search(pat, stripped) for pat in jsx_style_patterns):
+                continue
+
+        # Python-specific skips
+        if ext == '.py':
+            if any(re.search(pat, stripped) for pat in python_skip_patterns):
                 continue
 
         # Check for magic numbers
@@ -790,13 +766,25 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             if num in common_numbers or num > 10000:
                 continue
 
-            # Check if number is part of a const/let/var declaration
+            # Check if number is part of a const/let/var/UPPER_CASE declaration
             if 'const ' in stripped or 'let ' in stripped or 'var ' in stripped:
                 continue
 
-            # Check if it's in an array literal or object (likely config)
+            # Python: skip UPPER_CASE constant assignments
+            if ext == '.py' and re.match(r'^\s*[A-Z_][A-Z0-9_]*\s*=', stripped):
+                continue
+
+            # Check if it's in an array literal or object/dict (likely config)
             if stripped.startswith('[') or stripped.startswith('{'):
                 continue
+
+            # Python: skip if number is in a dict literal context (key: value)
+            if ext == '.py' and ':' in stripped and not stripped.startswith('if ') and not stripped.startswith('elif '):
+                # Could be dict literal {key: 42} or type annotation
+                if re.search(r'[:=]\s*\d+', stripped):
+                    # Check if it's a variable assignment like x: int = 42
+                    if re.match(r'^\s*\w+\s*:\s*\w+\s*=\s*', stripped):
+                        continue
 
             smells.append({
                 "file": rel_path,
@@ -944,23 +932,6 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     # Collect function signatures across files
     fn_signatures: Dict[str, List[Dict]] = defaultdict(list)
 
-    # Language-idiomatic signatures to exclude from duplicate detection
-    # These are standard patterns that naturally appear in many files
-    _EXCLUDED_SIGNATURES = {
-        # Rust standard entry points and trait impls
-        'fn main()', 'fn fmt(&self, f: &mut fmt::Formatter', 'fn fmt(&self, f: &mut std::fmt::Formatter',
-        'fn clone(&self)', 'fn drop(&mut self)', 'fn new(', 'fn default()', 'fn from(',
-        'fn into(', 'fn as_ref(', 'fn deref(&self)', 'fn deref_mut(&mut self)',
-        'fn as_str(&self)', 'fn to_string(&self)', 'fn hash(', 'fn eq(&self,',
-        'fn partial_cmp(&self,', 'fn cmp(&self,', 'fn poll(', 'fn expecting(&self,',
-        'fn from_str(s:', 'fn from_str(', 'fn schema_name()', 'pub fn new(',
-        # Python standard methods
-        'def __init__(self', 'def __str__(self', 'def __repr__(self',
-        'def __len__(self', 'def __eq__(self', 'def __hash__(self',
-        # JS/TS standard patterns
-        'function constructor(', 'function render()', 'function componentDidMount(',
-    }
-
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
@@ -975,10 +946,19 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # Skip minified files
+            if '.min.' in filename:
+                continue
+
+            # Skip files exceeding size cap
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             # Extract function bodies (first line only as signature)
@@ -989,16 +969,6 @@ def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
                 sig = m.group(0).strip()
                 # Normalize signature for comparison
                 normalized = re.sub(r'\s+', ' ', sig)
-
-                # Skip language-idiomatic signatures
-                skip = False
-                for excluded in _EXCLUDED_SIGNATURES:
-                    if normalized.startswith(excluded):
-                        skip = True
-                        break
-                if skip:
-                    continue
-
                 line_num = content[:m.start()].count('\n') + 1
                 fn_signatures[normalized].append({
                     "file": rel_path,
@@ -1061,10 +1031,19 @@ def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
 
             file_path = os.path.join(root, filename)
 
+            # Skip minified files
+            if '.min.' in filename:
+                continue
+
+            # Skip files exceeding size cap
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            except IOError:
+                if os.path.getsize(file_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
+            if content is None:
                 continue
 
             file_count += 1
