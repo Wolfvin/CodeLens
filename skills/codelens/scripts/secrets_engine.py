@@ -268,8 +268,9 @@ SAFE_VALUE_PATTERNS = [
     # e.g., "password: videoRef.meetingPassword" or "password: config.secret"
     # These contain dots (property access) or optional chaining (?.)
     r'(?i)^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*|\?\.[a-zA-Z_$][\w$]*)+',
-    # ALL_CAPS identifiers (env var names like N8N_RUNNERS_GRANT_TOKEN, not actual secrets)
-    r'^[A-Z][A-Z0-9_]{5,}$',
+    # ALL_CAPS identifiers (env var names, not actual secrets)
+    # IMPORTANT: Must contain at least one underscore to distinguish from AWS keys (AKIA...)
+    r'^[A-Z][A-Z0-9]*_[A-Z0-9_]+$',
     # Angle-bracket placeholders: <USER>, <PASS>, <YOUR_API_KEY>, <CLIENT_ID>
     r'^<[A-Za-z_]+>$',
     # URL placeholder patterns: s3://ACCESSKEY:SECRETKEY@...
@@ -329,7 +330,8 @@ LINE_EXCLUSION_PATTERNS = [
     # Placeholder/example indicator lines
     re.compile(r'(?i)placeholder\s*[:=]'),        # placeholder: 'value'
     re.compile(r'(?i)\be\.g\.\b'),              # e.g. "from:example@gmail.com"
-    re.compile(r'(?i)\bexample[s]?\b'),           # example values
+    # Example indicator in value or comment only (not in variable name or path)
+    re.compile(r"""(?i)(?:#\s.*\bexample|//\s.*\bexample|['"]\s*example[s]?\s*['"])\b"""),
     re.compile(r'(?i)\bfor example\b'),           # For example, ...
     # Lines that are just comments (not code with embedded secrets)
     re.compile(r'^\s*(//|#|/\*|\*)\s'),          # Comment-only lines
@@ -344,7 +346,8 @@ LINE_EXCLUSION_PATTERNS = [
     # HTML content in descriptions
     re.compile(r'(?i)<(?:a |href|img |src=)'),
     # Property definitions in credential/node files (not actual assignments)
-    re.compile(r"(?i)(?:displayName|name|type|default|placeholder|hint|description)\s*[:=]\s*['\"]"),
+    # NOTE: Removed 'name' and 'type' from filter — they can contain real secrets
+    re.compile(r"(?i)(?:displayName|placeholder|hint|description)\s*[:=]\s*['\"]"),
     # Test assertion patterns
     re.compile(r'(?i)(?:expect|assert|should)\s*\('),
     # String concatenation / template literals (variable references)

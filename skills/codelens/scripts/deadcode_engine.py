@@ -113,13 +113,13 @@ def detect_dead_code(
             lines = content.split('\n')
 
             # ─── Unreachable Code ────────────────────────
-            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".php", ".rb", ".lua", ".ex", ".exs", ".nim", ".nims", ".java", ".cs", ".swift", ".scala", ".dart", ".sh", ".bash", ".zsh"}:
                 if len(results["unreachable"]) < max_results:
                     unreachable = _detect_unreachable_code(content, ext, rel_path)
                     results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
-            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".php", ".rb", ".lua", ".ex", ".exs", ".nim", ".nims", ".java", ".cs", ".swift", ".scala", ".dart", ".sh", ".bash", ".zsh"}:
                 if len(results["unused_vars"]) < max_results:
                     unused = _detect_unused_variables(content, ext, rel_path)
                     results["unused_vars"].extend(unused)
@@ -145,6 +145,33 @@ def detect_dead_code(
 
             elif ext == ".php":
                 _collect_php_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext in {".ex", ".exs"}:
+                _collect_elixir_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".rb":
+                _collect_ruby_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext in {".nim", ".nims"}:
+                _collect_nim_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".java":
+                _collect_java_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".cs":
+                _collect_csharp_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".swift":
+                _collect_swift_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext in {".scala", ".sc"}:
+                _collect_scala_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".dart":
+                _collect_dart_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext in {".sh", ".bash", ".zsh"}:
+                _collect_shell_exports_imports(content, rel_path, all_exports, all_imports)
 
         if truncated:
             break
@@ -854,6 +881,254 @@ def _collect_php_exports_imports(
             "type": "php_class",
             "line": line_num
         })
+
+def _collect_elixir_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Elixir function/macro definitions and alias/use/import references."""
+    # Elixir alias/use/import
+    for m in re.finditer(r'(?:alias|use|import)\s+([\w.]+)', content):
+        name = m.group(1).split('.')[-1]
+        imports[rel_path].add(name)
+
+    # Elixir public functions (def, not defp)
+    for m in re.finditer(r'\bdef\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "elixir_def",
+            "line": line_num
+        })
+
+    # Elixir macros (defmacro)
+    for m in re.finditer(r'\bdefmacro\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "elixir_macro",
+            "line": line_num
+        })
+
+
+def _collect_ruby_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Ruby class/module definitions and require references."""
+    # Ruby require
+    for m in re.finditer(r'require\s+[\'"]([^\'"]+)[\'"]', content):
+        name = m.group(1).split('/')[-1]
+        imports[rel_path].add(name)
+
+    # Ruby class definitions
+    for m in re.finditer(r'class\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "ruby_class",
+            "line": line_num
+        })
+
+    # Ruby module definitions
+    for m in re.finditer(r'module\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "ruby_module",
+            "line": line_num
+        })
+
+    # Ruby public method definitions
+    for m in re.finditer(r'def\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "ruby_method",
+            "line": line_num
+        })
+
+
+def _collect_nim_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Nim proc/func/type definitions and import references."""
+    # Nim import
+    for m in re.finditer(r'import\s+([\w/]+)', content):
+        name = m.group(1).split('/')[-1]
+        imports[rel_path].add(name)
+
+    # Nim exported procs (marked with *)
+    for m in re.finditer(r'proc\s+(\w+)\*', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "nim_proc",
+            "line": line_num
+        })
+
+    # Nim exported types
+    for m in re.finditer(r'type\s+(\w+)\*', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "nim_type",
+            "line": line_num
+        })
+
+
+def _collect_java_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Java class definitions and import references."""
+    # Java import
+    for m in re.finditer(r'import\s+(?:static\s+)?([\w.]+)', content):
+        name = m.group(1).split('.')[-1]
+        imports[rel_path].add(name)
+
+    # Java class definitions
+    for m in re.finditer(r'(?:public\s+)?(?:abstract\s+|final\s+)?class\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "java_class",
+            "line": line_num
+        })
+
+    # Java interface definitions
+    for m in re.finditer(r'(?:public\s+)?interface\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "java_interface",
+            "line": line_num
+        })
+
+
+def _collect_csharp_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect C# class definitions and using references."""
+    # C# using
+    for m in re.finditer(r'using\s+([\w.]+)', content):
+        name = m.group(1).split('.')[-1]
+        imports[rel_path].add(name)
+
+    # C# class definitions
+    for m in re.finditer(r'(?:public|internal)\s+(?:static\s+|sealed\s+|abstract\s+)?class\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "csharp_class",
+            "line": line_num
+        })
+
+
+def _collect_swift_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Swift struct/class/func definitions and import references."""
+    # Swift import
+    for m in re.finditer(r'import\s+(\w+)', content):
+        imports[rel_path].add(m.group(1))
+
+    # Swift public functions
+    for m in re.finditer(r'(?:public|open)\s+(?:static\s+)?func\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "swift_func",
+            "line": line_num
+        })
+
+    # Swift public struct/class
+    for m in re.finditer(r'(?:public|open)\s+(?:final\s+)?(?:struct|class)\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "swift_type",
+            "line": line_num
+        })
+
+
+def _collect_scala_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Scala class/object definitions and import references."""
+    # Scala import
+    for m in re.finditer(r'import\s+([\w.]+)', content):
+        name = m.group(1).split('.')[-1]
+        imports[rel_path].add(name)
+
+    # Scala class/object definitions
+    for m in re.finditer(r'(?:class|object|trait|case\s+class)\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "scala_def",
+            "line": line_num
+        })
+
+
+def _collect_dart_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Dart class/function definitions and import references."""
+    # Dart import
+    for m in re.finditer(r"import\s+['\"]([^'\"]+)['\"]", content):
+        name = m.group(1).split('/')[-1].replace('.dart', '')
+        imports[rel_path].add(name)
+
+    # Dart class definitions
+    for m in re.finditer(r'(?:class|abstract\s+class|enum|mixin)\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "dart_class",
+            "line": line_num
+        })
+
+
+def _collect_shell_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Shell function definitions and source references."""
+    # Shell source/dot include
+    for m in re.finditer(r'(?:source|\.)\s+([^\s;]+)', content):
+        name = os.path.basename(m.group(1))
+        imports[rel_path].add(name)
+
+    # Shell function definitions
+    for m in re.finditer(r'(?:function\s+)?(\w+)\s*\(\)\s*\{', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "shell_function",
+            "line": line_num
+        })
+
 
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],

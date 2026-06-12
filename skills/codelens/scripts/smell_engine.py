@@ -566,10 +566,34 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
         return len(lines)
     elif ext in {".ex", ".exs"}:
         # Elixir: count do/end pairs
+        # IMPORTANT: Must avoid double-counting 'do' and must skip one-liner 'do:' syntax
         depth = 0
+        in_heredoc = False
         for i in range(start, min(start + 200, len(lines))):
             stripped = lines[i].strip()
-            depth += stripped.count(' do') + stripped.count(' do,') + stripped.endswith(' do')
+            # Skip heredoc content (""" or ''')
+            if not in_heredoc:
+                if stripped.count('"""') >= 2 or stripped.count("'''") >= 2:
+                    continue  # Single-line heredoc
+                if '"""' in stripped or "'''" in stripped:
+                    in_heredoc = True
+                    continue
+            else:
+                if '"""' in stripped or "'''" in stripped:
+                    in_heredoc = False
+                continue  # Skip heredoc content
+            # Count one-liner do: syntax (e.g., def foo(x), do: x + 1)
+            inline_do_colon = len(re.findall(r'\bdo:', stripped))
+            # Count block-opening 'do' keywords (not do:)
+            # Match: 'do' at end of line, or 'do' after pipe like 'do |args|'
+            # But NOT 'do:' (one-liner), NOT inside words like 'module'
+            if stripped.endswith(' do') or stripped.endswith(' do|'):
+                depth += 1
+            elif re.search(r'\bdo\b(?!\s*:)', stripped):
+                # Inline 'do' not at end — e.g., "for x <- list do"
+                depth += 1
+            # Subtract one-liner do: (they don't have corresponding 'end')
+            depth -= inline_do_colon
             depth -= stripped.count('end')
             if depth <= 0 and i > start:
                 return i + 1
@@ -662,10 +686,25 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     in_deep_block = False
     deep_block_level = 0
     deep_block_start = 0
+    in_heredoc = False  # Track heredoc/dedent content for Elixir/Ruby
 
     for i, line in enumerate(lines):
         # Calculate indentation level
         stripped = line.lstrip()
+        
+        # Skip heredoc/dedent content (Elixir @doc """, Ruby =begin, etc.)
+        if ext in {".ex", ".exs", ".rb"}:
+            if not in_heredoc:
+                if stripped.count('"""') >= 2 or stripped.count("'''") >= 2:
+                    continue  # Single-line heredoc
+                if '"""' in stripped or "'''" in stripped:
+                    in_heredoc = True
+                    continue
+            else:
+                if '"""' in stripped or "'''" in stripped:
+                    in_heredoc = False
+                continue  # Skip heredoc content from nesting analysis
+        
         if not stripped or stripped.startswith('//') or stripped.startswith('#'):
             continue
 
@@ -678,8 +717,12 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
                      ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".zig"}:
             # Rust/Go/Java/C#/Swift/Scala/C/C++/Zig: 4 spaces per level
             level = indent // 4
-        elif ext in {".ex", ".exs", ".rb", ".nim", ".nims"}:
-            # Elixir/Ruby/Nim: 2 spaces per level
+        elif ext in {".ex", ".exs"}:
+            # Elixir: 2 spaces per level, but has ~2 levels of structural overhead
+            # (defmodule do + def do) that aren't real nesting
+            level = max(0, (indent // 2) - 2)
+        elif ext in {".rb", ".nim", ".nims"}:
+            # Ruby/Nim: 2 spaces per level
             level = indent // 2
         else:
             # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
