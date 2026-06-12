@@ -28,7 +28,9 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte"
+    ".py", ".rs", ".vue", ".svelte",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx", ".hh", ".hxx",
+    ".lua", ".java", ".go", ".cs", ".php", ".zig",
 }
 
 # Thresholds

@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v5.8: Rust framework detection (Cargo.toml, tokio, actix-web, axum, warp, rocket, deno_core), Rust HTTP route extraction, Cargo workspace monorepo detection, is_generated_file utility, state-map __dunder runtime helper filtering, smell health_score at top-level. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8+ detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect. Tested on denoland/deno (5400+ files Rust+TS polyglot) and elizaOS/eliza (5300+ files AI agent framework).",
+  "version": "6.3.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v6.3: Full C/C++ outline & smell analysis, Lua/Java/PHP/Zig outline parsers, polyglot project identity (C+Lua+Zig+Go), framework detection from file extensions, max_files fix in outline engine, preprocessor directive filtering. v5.8: Rust framework detection, Cargo workspace monorepo, state-map filtering, smell health_score. Agent-optimized: ask routing, markdown formatters, decision trees, quality metrics. Tree-sitter + fallback parsers for 16+ langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C/C++/Go/Java/Lua/C#/Zig/HTML). Tested on denoland/deno, elizaOS/eliza, neovim/neovim (C+Lua polyglot).",
   "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
@@ -147,5 +147,19 @@
     "warp",
     "rocket",
     "deno-core",
-    "cargo-workspace"  ]
+    "cargo-workspace",
+    "lua",
+    "neovim",
+    "zig",
+    "cmake",
+    "c",
+    "c-parser",
+    "lua-parser",
+    "zig-parser",
+    "java",
+    "csharp",
+    "polyglot",
+    "polyglot-detection",
+    "preprocessor-filtering",
+    "outline-engine"  ]
 }

@@ -398,14 +398,84 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
+    # v6.3: Try CMakeLists.txt for C/C++ projects
+    c_cpp_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # Extract project name and version from cmake
+            proj_match = re.search(r'project\s*\(\s*(\w+)(?:\s+VERSION\s+(\S+))?', content, re.IGNORECASE)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+                if proj_match.group(2):
+                    identity["version"] = proj_match.group(2)
+            c_cpp_type = "c-cpp-project"
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
+
+    # v6.3: Check for Lua projects
+    lua_type = None
+    _has_lua_files = False
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        if any(f.endswith('.lua') for f in files):
+            _has_lua_files = True
+            break
+    if _has_lua_files:
+        lua_type = "lua-project"
+
+    # v6.3: Check for Zig projects
+    zig_type = None
+    zig_build_path = os.path.join(workspace, 'build.zig')
+    if os.path.isfile(zig_build_path):
+        zig_type = "zig-project"
+        try:
+            with open(zig_build_path, 'r', encoding='utf-8') as f:
+                content = f.read(4096)
+            # Try to extract project name from pub const name = ...
+            name_match = re.search(r'pub\s+const\s+name\s*=\s*"([^"]+)"', content)
+            ver_match = re.search(r'pub\s+const\s+version\s*=\s*"([^"]+)"', content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+
+    # v6.3: Also try Makefile for version info
+    makefile_path = os.path.join(workspace, 'Makefile')
+    if os.path.isfile(makefile_path) and identity["version"] == "0.0.0":
+        try:
+            with open(makefile_path, 'r', encoding='utf-8') as f:
+                content = f.read(8192)
+            ver_match = re.search(r'(?:VERSION|version)\s*[:?]?=\s*(\S+)', content)
+            if ver_match:
+                identity["version"] = ver_match.group(1).strip('"').strip("'")
+        except Exception:
+            pass
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, c_cpp_type, lua_type, zig_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
             type_parts.append("rust")
+        if c_cpp_type:
+            type_parts.append("c-cpp")
+        if lua_type:
+            type_parts.append("lua")
+        if zig_type:
+            type_parts.append("zig")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

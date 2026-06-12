@@ -39,6 +39,7 @@ def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
         stripped = line.strip()
         if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('#'):
             continue
+        # Skip lines inside block comments
         m = re.search(r'(?:static\s+|inline\s+|extern\s+)*'
                        r'(?:const\s+)?(?:[\w:*&<>\[\]]+\s+)+'
                        r'(\w+)\s*\([^)]*\)\s*(?:\{|;)', stripped)
@@ -46,7 +47,9 @@ def parse_c_fallback(content: str, rel_path: str) -> Dict[str, Any]:
             fn_name = m.group(1)
             if fn_name in ('if', 'else', 'while', 'for', 'switch', 'return',
                             'sizeof', 'typedef', 'struct', 'enum', 'class',
-                            'case', 'break', 'continue', 'namespace'):
+                            'case', 'break', 'continue', 'namespace',
+                            'ifdef', 'ifndef', 'endif', 'define', 'include',
+                            'pragma', 'if', 'elif', 'else'):
                 continue
             nodes.append({
                 "id": f"{rel_path}:{fn_name}", "type": "function", "name": fn_name, "fn": fn_name,
