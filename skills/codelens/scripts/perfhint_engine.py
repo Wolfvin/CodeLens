@@ -40,6 +40,7 @@ PER_FILE_TIMEOUT_SEC = 5     # Max seconds per file across all patterns
 MAX_MATCHES_PER_PATTERN = 50  # Cap matches per pattern per file to prevent runaway results
 MAX_TOTAL_FINDINGS = 500      # Cap total findings to prevent explosion
 WIDE_QUANT_TRUNCATION = 15000  # Truncate content to this size for patterns with wide quantifiers
+GLOBAL_TIMEOUT_SEC = 120      # Max seconds for entire scan (prevents hangs on huge repos)
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -474,6 +475,7 @@ def detect_perf_hints(
     findings: List[Dict[str, Any]] = []
     files_scanned = 0
     truncated = False
+    start_time = time.monotonic()
 
     # Categories to scan (apply filter early)
     categories_to_scan = PERF_HINT_CATEGORIES
@@ -500,6 +502,12 @@ def detect_perf_hints(
 
     # ─── Phase 1: File discovery & per-file scanning ─────────
     for root, dirs, filenames in os.walk(workspace):
+        # Global timeout check
+        if time.monotonic() - start_time > GLOBAL_TIMEOUT_SEC:
+            truncated = True
+            logger.warning(f"perf-hint: global timeout ({GLOBAL_TIMEOUT_SEC}s) reached, truncating scan")
+            break
+
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
         if '.codelens' in root:
             dirs.clear()
@@ -552,6 +560,11 @@ def detect_perf_hints(
             if len(findings) >= MAX_TOTAL_FINDINGS:
                 truncated = True
                 break
+            # Global timeout check (inside inner loop too)
+            if time.monotonic() - start_time > GLOBAL_TIMEOUT_SEC:
+                truncated = True
+                logger.warning(f"perf-hint: global timeout ({GLOBAL_TIMEOUT_SEC}s) reached during scan")
+                break
 
         if truncated:
             break
@@ -590,6 +603,7 @@ def detect_perf_hints(
     # ─── Compute stats ────────────────────────────────────────
     stats = _compute_stats(findings, files_scanned)
     stats["truncated"] = truncated
+    stats["elapsed_sec"] = round(time.monotonic() - start_time, 1)
 
     # v6.4: Add source classification and by_source stats
     _TEST_EXAMPLE_PATTERNS = [
@@ -1258,12 +1272,35 @@ class _RegexTimeout(Exception):
     pass
 
 
+# ─── Regex compilation cache (avoids recompiling same patterns 125K+ times) ─
+_regex_cache: Dict[str, "re.Pattern"] = {}
+_REGEX_CACHE_MAX = 200  # Evict oldest when cache exceeds this size
+
+
+def _get_compiled(pattern: str, flags: int = re.DOTALL) -> "re.Pattern":
+    """Get a compiled regex from cache, or compile and cache it."""
+    key = (pattern, flags)
+    if key in _regex_cache:
+        return _regex_cache[key]
+    compiled = re.compile(pattern, flags)
+    if len(_regex_cache) >= _REGEX_CACHE_MAX:
+        # Evict oldest entries (first 50)
+        keys_to_remove = list(_regex_cache.keys())[:50]
+        for k in keys_to_remove:
+            del _regex_cache[k]
+    _regex_cache[key] = compiled
+    return compiled
+
+
 def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEOUT_SEC):
     """
     Run re.finditer with a time limit to prevent catastrophic backtracking.
     Returns list of matches (capped at MAX_MATCHES_PER_PATTERN), or None if timed out.
+    
+    Uses signal.alarm on Unix for efficient timeout (no thread overhead).
+    Falls back to direct execution with match-count limits on Windows/error.
     """
-    compiled = re.compile(pattern, re.DOTALL)
+    compiled = _get_compiled(pattern)
 
     # For short content, just run directly (no timeout overhead)
     if len(content) < 5000:
@@ -1277,47 +1314,40 @@ def _timed_finditer(pattern: str, content: str, timeout: float = PER_REGEX_TIMEO
         except (re.error, RuntimeError):
             return None
 
-    # For longer content, use threading-based timeout
-    try:
-        import threading
+    # For longer content on Unix, use signal.alarm for efficient timeout
+    # (no thread creation overhead — critical for repos with 5000+ files)
+    import signal
+    if hasattr(signal, 'SIGALRM'):
+        def _timeout_handler(signum, frame):
+            raise _RegexTimeout()
 
-        result = [None]  # Use list to share between threads
-        error = [None]
-
-        def _run():
+        old_handler = signal.getsignal(signal.SIGALRM)
+        try:
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.setitimer(signal.ITIMER_REAL, timeout)
             try:
                 matches = []
                 for i, match in enumerate(compiled.finditer(content)):
                     if i >= MAX_MATCHES_PER_PATTERN:
                         break
                     matches.append(match)
-                result[0] = matches
-            except (re.error, RuntimeError) as e:
-                error[0] = e
+                return matches
+            except _RegexTimeout:
+                logger.debug(f"Regex timed out after {timeout}s for pattern: {pattern[:80]}...")
+                return None
+            except (re.error, RuntimeError):
+                return None
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old_handler)
 
-        worker = threading.Thread(target=_run, daemon=True)
-        worker.start()
-        worker.join(timeout=timeout)
-
-        if worker.is_alive():
-            # Thread is still running — it will be cleaned up at exit
-            # because it's daemon. Log and skip this pattern.
-            logger.debug(f"Regex timed out after {timeout}s for pattern: {pattern[:80]}...")
-            return None
-
-        if error[0]:
-            return None
-
-        return result[0]
-
-    except Exception:
-        # Fallback: just try running directly with a result limit
-        try:
-            matches = []
-            for i, match in enumerate(compiled.finditer(content)):
-                if i >= MAX_MATCHES_PER_PATTERN:
-                    break
-                matches.append(match)
-            return matches
-        except (re.error, RuntimeError):
-            return None
+    # Fallback: direct execution with match-count limits (no thread overhead)
+    try:
+        matches = []
+        for i, match in enumerate(compiled.finditer(content)):
+            if i >= MAX_MATCHES_PER_PATTERN:
+                break
+            matches.append(match)
+        return matches
+    except (re.error, RuntimeError):
+        return None

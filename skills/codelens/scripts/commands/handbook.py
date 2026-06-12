@@ -29,18 +29,18 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
-    parser.add_argument("--timeout", type=int, default=120,
-                        help="Total time budget in seconds for handbook generation (default: 120). "
+    parser.add_argument("--timeout", type=int, default=180,
+                        help="Total time budget in seconds for handbook generation (default: 180). "
                              "Remaining engines are skipped when budget is nearly exhausted.")
 
 
 def execute(args, workspace):
     max_files = getattr(args, 'max_files', 5000)
-    timeout = getattr(args, 'timeout', 120)
+    timeout = getattr(args, 'timeout', 180)
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -62,10 +62,11 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
 
     def _should_skip(engine_name: str) -> bool:
         """Check if we should skip an engine due to time budget."""
-        if _remaining() < 15:
+        remaining = time_budget - (time.monotonic() - start_time)
+        if remaining < 30:  # Need at least 30s remaining to start an engine
             engines_skipped.append(engine_name)
             logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
-                           f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
+                           f"({remaining:.1f}s remaining)")
             return True
         return False
 
@@ -124,7 +125,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         pass
     else:
         try:
-            smell_result = detect_smells(workspace)
+            smell_result = detect_smells(workspace, max_files=max_files)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -140,7 +141,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         pass
     else:
         try:
-            ep_result = map_entrypoints(workspace, exclude_tests=True)
+            ep_result = map_entrypoints(workspace, exclude_tests=True, max_files=max_files)
             entrypoints = [
                 {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
                 for e in ep_result.get("entrypoints", [])[:30]

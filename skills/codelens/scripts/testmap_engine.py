@@ -15,9 +15,15 @@ This is the FIRST thing AI should check before modifying code.
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
+
+# ─── Safety Limits ────────────────────────────────────────────
+MAX_TESTMAP_FILES = 3000       # Max files to scan
+MAX_SOURCE_FUNCTIONS = 10000   # Max total functions to check (prevents O(n²) explosion)
+GLOBAL_TESTMAP_TIMEOUT = 120   # Max seconds for entire scan
 
 SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
 
@@ -118,16 +124,59 @@ def map_test_coverage(
                 source_info = _parse_source_file(content, ext, rel_path)
                 source_files[rel_path] = source_info
 
+    # ─── Build lookup indices for O(1) matching ─────────
+    # Index test files by basename (for fast file-name matching)
+    test_basename_index: Dict[str, List[str]] = defaultdict(list)  # src_basename → [test_paths]
+    test_import_index: Dict[str, List[str]] = defaultdict(list)    # src_basename → [test_paths]
+    for test_path, test_info in test_files.items():
+        test_basename = os.path.basename(test_path)
+        # Extract potential source basenames from test filename
+        for suffix in ('.test.', '.spec.', '_test.'):
+            if suffix in test_basename:
+                src_base = test_basename.split(suffix)[0]
+                test_basename_index[src_base].append(test_path)
+                break
+        # Index by imports
+        for imp in test_info.get("imports", []):
+            imp_base = os.path.splitext(os.path.basename(imp))[0]
+            test_import_index[imp_base].append(test_path)
+
     # ─── Build coverage map ──────────────────────────────
     coverage_map: Dict[str, Dict[str, Any]] = {}  # file → {fn → {tested: bool, test_files: [...]}}
+    start_time = time.monotonic()
+    total_functions_checked = 0
 
     for src_path, src_info in source_files.items():
+        # Global timeout check
+        if time.monotonic() - start_time > GLOBAL_TESTMAP_TIMEOUT:
+            logger.warning(f"test-map: global timeout ({GLOBAL_TESTMAP_TIMEOUT}s) reached, truncating coverage map")
+            break
+
         coverage_map[src_path] = {}
+        src_basename = os.path.splitext(os.path.basename(src_path))[0]
+
+        # Pre-compute candidate test files using indices (O(1) instead of O(n))
+        candidate_tests = set()
+        # From basename index
+        for tb in [src_basename, src_basename.lower()]:
+            candidate_tests.update(test_basename_index.get(tb, []))
+        # From import index
+        for tb in [src_basename, src_basename.lower()]:
+            candidate_tests.update(test_import_index.get(tb, []))
+        # Also add inline Rust tests
+        inline_key = src_path + '#[cfg(test)]'
+        if inline_key in test_files:
+            candidate_tests.add(inline_key)
 
         for fn_name in src_info.get("functions", []):
-            # Check if this function is tested
+            total_functions_checked += 1
+            if total_functions_checked > MAX_SOURCE_FUNCTIONS:
+                break
+
+            # Check if this function is tested (only against candidates, not ALL test files)
             test_matches = _find_tests_for_function(
-                fn_name, src_path, test_files, workspace
+                fn_name, src_path, test_files, workspace,
+                candidate_tests=candidate_tests
             )
 
             coverage_map[src_path][fn_name] = {
@@ -135,6 +184,9 @@ def map_test_coverage(
                 "test_files": test_matches,
                 "confidence": _compute_confidence(test_matches, fn_name)
             }
+
+        if total_functions_checked > MAX_SOURCE_FUNCTIONS:
+            break
 
     # ─── If specific function requested ──────────────────
     if function_name:
@@ -408,58 +460,70 @@ def _find_tests_for_function(
     fn_name: str,
     src_path: str,
     test_files: Dict[str, Dict],
-    workspace: str
+    workspace: str,
+    candidate_tests: Optional[Set[str]] = None
 ) -> List[str]:
-    """Find test files that test a specific function."""
+    """Find test files that test a specific function.
+    
+    If candidate_tests is provided, only search those test files instead of all.
+    This reduces complexity from O(all_test_files) to O(relevant_test_files).
+    """
     matches = []
     src_basename = os.path.splitext(os.path.basename(src_path))[0]
+    
+    # Use candidate_tests if provided, otherwise fall back to all test files
+    test_paths_to_check = candidate_tests if candidate_tests is not None else test_files.keys()
 
-    for test_path, test_info in test_files.items():
+    for test_path_key in test_paths_to_check:
+        # Get test_info (handle both set iteration and dict key access)
+        if test_path_key not in test_files:
+            continue
+        test_info = test_files[test_path_key]
         # v5.10: Strategy 0: Inline Rust tests (path contains #[cfg(test)])
         # These are inline tests in the same source file
-        if test_path.endswith('#[cfg(test)]'):
+        if test_path_key.endswith('#[cfg(test)]'):
             # The source path is the test path without the #[cfg(test)] suffix
-            inline_src_path = test_path[:-len('#[cfg(test)]')]
+            inline_src_path = test_path_key[:-len('#[cfg(test)]')]
             if inline_src_path == src_path:
                 # Same file inline test — check if function name matches
                 if fn_name in test_info.get("tested_functions", set()):
-                    matches.append(test_path)
+                    matches.append(test_path_key)
                     continue
                 for test_name in test_info.get("test_names", []):
                     if fn_name.lower() in test_name.lower():
-                        matches.append(test_path)
+                        matches.append(test_path_key)
                         break
                 continue
 
         # Strategy 1: File name matching (auth.test.ts → auth.ts)
-        test_basename = os.path.basename(test_path)
+        test_basename = os.path.basename(test_path_key)
         # Go: precise mapping foo.go → foo_test.go (same directory)
         if src_path.endswith('.go'):
             src_dir = os.path.dirname(src_path)
-            test_dir = os.path.dirname(test_path)
+            test_dir = os.path.dirname(test_path_key)
             if src_dir == test_dir and test_basename == f"{src_basename}_test.go":
-                matches.append(test_path)
+                matches.append(test_path_key)
                 continue
         elif src_basename in test_basename:
-            matches.append(test_path)
+            matches.append(test_path_key)
             continue
 
         # Strategy 2: Import matching (test imports source file)
         for imp in test_info.get("imports", []):
             if src_basename in imp or src_path.replace('\\', '/') in imp:
-                matches.append(test_path)
+                matches.append(test_path_key)
                 continue
 
         # Strategy 3: Function name in test descriptions
         if fn_name in test_info.get("tested_functions", set()):
-            matches.append(test_path)
+            matches.append(test_path_key)
             continue
 
         # Strategy 4: Function name appears in test file content (loose match)
         # This is checked via test_names containing the function name
         for test_name in test_info.get("test_names", []):
             if fn_name.lower() in test_name.lower():
-                matches.append(test_path)
+                matches.append(test_path_key)
                 break
 
     return list(set(matches))[:10]
@@ -490,26 +554,20 @@ def _find_untested_files(
     workspace: str
 ) -> List[Dict]:
     """Find source files that have no corresponding test file."""
+    # Build index for O(1) lookup
+    test_basenames = set()
+    test_import_basenames = set()
+    for test_path, test_info in test_files.items():
+        test_basename = os.path.splitext(os.path.basename(test_path))[0]
+        test_basenames.add(test_basename.lower())
+        for imp in test_info.get("imports", []):
+            imp_base = os.path.splitext(os.path.basename(imp))[0]
+            test_import_basenames.add(imp_base.lower())
+
     untested = []
-
     for src_path in source_files:
-        src_basename = os.path.splitext(os.path.basename(src_path))[0]
-        has_test = False
-
-        for test_path in test_files:
-            test_basename = os.path.basename(test_path)
-            if src_basename in test_basename:
-                has_test = True
-                break
-
-            # Check if any test imports this source
-            for imp in test_files[test_path].get("imports", []):
-                if src_basename in imp:
-                    has_test = True
-                    break
-
-            if has_test:
-                break
+        src_basename = os.path.splitext(os.path.basename(src_path))[0].lower()
+        has_test = src_basename in test_basenames or src_basename in test_import_basenames
 
         if not has_test:
             fns = source_files[src_path].get("functions", [])
@@ -529,21 +587,19 @@ def _find_orphan_tests(
     workspace: str
 ) -> List[Dict]:
     """Find test files that don't correspond to any source file."""
-    orphans = []
+    # Build index for O(1) lookup
+    source_basenames = set()
+    for src_path in source_files:
+        src_basename = os.path.splitext(os.path.basename(src_path))[0]
+        source_basenames.add(src_basename.lower())
 
+    orphans = []
     for test_path in test_files:
         test_basename = os.path.splitext(os.path.basename(test_path))[0]
         # Remove .test/.spec suffix (JS/TS) or _test suffix (Go/Rust/Python)
         base_name = re.sub(r'(?:\.(test|spec)|_test)$', '', test_basename)
 
-        has_source = False
-        for src_path in source_files:
-            src_basename = os.path.splitext(os.path.basename(src_path))[0]
-            if src_basename == base_name:
-                has_source = True
-                break
-
-        if not has_source:
+        if base_name.lower() not in source_basenames:
             orphans.append({
                 "file": test_path,
                 "test_count": len(test_files[test_path].get("test_names", [])),

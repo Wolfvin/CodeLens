@@ -121,20 +121,15 @@ def execute(args, workspace):
     )
 
 
-def _time_left(start: float, budget: float = 180) -> float:
-    """Return remaining seconds within the time budget.
-    v7: Default budget increased from 90s to 180s for large repos with 20K+ nodes.
-    """
+def _time_left(start: float, budget: float = 120) -> float:
+    """Return remaining seconds within the time budget."""
     return max(0.0, budget - (time.time() - start))
 
 
 def _count_source_files(workspace: str) -> int:
-    """Quick count of source files for auto-detect sizing.
-    v7: Added .cu, .cuh (CUDA) and .mm, .m (Objective-C) extensions."""
+    """Quick count of source files for auto-detect sizing."""
     SOURCE_EXTS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.vue', '.svelte',
-                   '.html', '.css', '.scss', '.java', '.kt', '.c', '.cpp', '.h', '.hpp',
-                   '.cu', '.cuh', '.php', '.rb', '.mm', '.m', '.swift', '.dart',
-                   '.cc', '.cxx', '.hxx'}
+                   '.html', '.css', '.scss', '.java', '.kt', '.c', '.cpp', '.h', '.php', '.rb'}
     count = 0
     for root, dirs, files in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build',
@@ -177,20 +172,9 @@ def generate_summary(
     skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
 
-    # v7: Adaptive time budget based on codebase size
-    # Small repos (<500 files): 90s, Medium (500-2000): 180s, Large (>2000): 300s
-    source_count = _count_source_files(workspace)
-    if source_count > 2000:
-        _time_budget = 300.0
-    elif source_count > 500:
-        _time_budget = 180.0
-    else:
-        _time_budget = 90.0
-
     # ─── Auto-detect detail level based on codebase size ──────────
     if detail == "auto":
-        # Reuse source_count from adaptive budget calculation (already counted above)
-        file_count = source_count
+        file_count = _count_source_files(workspace)
         if file_count < 100:
             detail = "full"
         elif file_count < 1000:
@@ -281,15 +265,18 @@ def generate_summary(
 
     # ─── 4. Prioritized Findings ─────────────────────────
     findings = []
+    # For summary, cap max_files to prevent timeout on huge repos
+    # On repos with 20K+ files, even 1500 files causes 60+ seconds
+    summary_max_files = min(max_files, 500)
 
     if focus in ("security", "all"):
         # Security findings
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("secrets")
         else:
             try:
                 from secrets_engine import detect_secrets
-                sec = detect_secrets(workspace)
+                sec = detect_secrets(workspace, max_files=min(summary_max_files, 500))
                 sec_stats = sec.get("stats", {})
                 if sec_stats.get("total_secrets", 0) > 0:
                     # Get only the highest severity items
@@ -306,7 +293,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Secrets scan failed in summary")
 
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("vulnerabilities")
         else:
             try:
@@ -324,12 +311,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Vuln scan failed in summary")
 
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("dataflow")
         else:
             try:
                 from dataflow_engine import trace_dataflow
-                df = trace_dataflow(workspace)
+                df = trace_dataflow(workspace, max_files=summary_max_files, timeout_sec=30.0)
                 violations = df.get("stats", {}).get("violations", 0)
                 if violations > 0:
                     df_items = df.get("violations", [])
@@ -348,12 +335,12 @@ def generate_summary(
 
     if focus in ("quality", "all"):
         # Quality findings
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("code_smells")
         else:
             try:
                 from smell_engine import detect_smells
-                smell = detect_smells(workspace, max_files=max_files)
+                smell = detect_smells(workspace, max_files=summary_max_files)
                 smell_stats = smell.get("stats", {})
                 if smell_stats.get("total_smells", 0) > 0:
                     top_items = smell.get("top_priority", [])[:max_items]
@@ -373,12 +360,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Smell scan failed in summary")
 
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("debug_leaks")
         else:
             try:
                 from debugleak_engine import detect_debug_leaks
-                dl = detect_debug_leaks(workspace)
+                dl = detect_debug_leaks(workspace, max_files=summary_max_files)
                 dl_stats = dl.get("stats", {})
                 if dl_stats.get("total_leaks", 0) > 0:
                     high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
@@ -400,7 +387,7 @@ def generate_summary(
 
     if focus in ("architecture", "all"):
         # Architecture findings
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("circular")
         else:
             try:
@@ -424,12 +411,12 @@ def generate_summary(
             except Exception:
                 logger.debug("Circular detection failed in summary")
 
-        if _time_left(start, _time_budget) < 5:
+        if _time_left(start) < 5:
             skipped_engines.append("dead_code")
         else:
             try:
                 from deadcode_engine import detect_dead_code
-                dc = detect_dead_code(workspace, max_files=max_files)
+                dc = detect_dead_code(workspace, max_files=summary_max_files)
                 dc_stats = dc.get("stats", {})
                 dead_count = dc_stats.get("total_dead_code", 0)
                 if dead_count > 0:

@@ -13,11 +13,14 @@ def add_args(parser):
                         help="Filter by entry point type")
     parser.add_argument("--exclude-tests", action="store_true", default=False,
                         help="Exclude test_entry type from scanning (reduces noise on large repos)")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Maximum number of files to scan (default: 5000)")
 
 
 def execute(args, workspace):
     return map_entrypoints(workspace, entry_type=args.entry_type,
-                           exclude_tests=args.exclude_tests)
+                           exclude_tests=args.exclude_tests,
+                           max_files=args.max_files)
 
 
 register_command("entrypoints", "Map execution entry points", add_args, execute)
