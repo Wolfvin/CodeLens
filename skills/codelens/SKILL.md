@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6.1 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v6.2 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -32,14 +32,28 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Lua, C/C++, GLSL.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Lua, C/C++, GLSL, GDScript, Kotlin.
   Powered by tree-sitter for accurate AST-based parsing.
-  Fallback parsers for: Java, Kotlin, C/C++, Go, Lua, C#, PHP.
+  Fallback parsers for: Java, Kotlin, C/C++, Go, Lua, C#, PHP, GDScript, Dart, Swift, Scala, Ruby, Elixir, Shell.
 ---
 
-# CodeLens v6.1
+# CodeLens v6.2
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.2 — The "Game Engine & Polyglot" Release
+
+- **GDScript (.gd) support**: Full GDScript fallback parser with function, class, signal, extends, preload/load extraction. 690 .gd files parsed in Godot test.
+- **SCons build system detection**: Detects SConstruct files, classifies as `cpp-game-engine` (with GDScript), `cpp-graphics`, or `cpp-project`.
+- **Game engine framework detection**: Detects Godot (SConstruct/project.godot/.gd), Unreal (.uproject), Unity (.unity), SCons build system.
+- **Kotlin (.kt) as separate language**: No longer merged with Java. Separate parsing with existing Kotlin fallback parser.
+- **Smart C++ vs Python identity**: When C++ files outnumber Python 5:1+ in a CMake/SCons project, Python is classified as "build-scripts" not the main language. Fixes Godot being misidentified as "python-project".
+- **Architecture total_lines fallback**: When outline engine returns 0 lines (non-tree-sitter languages), counts lines from all source files directly. Godot: 4,691,750 lines correctly reported.
+- **Timeout protection for handbook/summary/analyze**: Time-budget aware engine execution. Sub-engines skipped gracefully with `timed_out_engines` list when approaching timeout.
+- **max_files propagation**: `handbook` and `analyze` now pass `max_files` limit to smell, dead-code, and other file-intensive engines.
+- **Game engine directory hints**: Added core, servers, modules, platform, drivers, scene, editor directory descriptions.
+- **project.godot name extraction**: Reads `config/name` from project.godot for accurate project identity.
+- **Tested on godotengine/godot** (14,007 files, 418MB: C++/GDScript/C#/Java/Kotlin/GLSL game engine).
 
 ## What's New in v6.1 — The "Analyze Everything, Even Games" Release
 

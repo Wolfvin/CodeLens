@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.0: Fixed binary-scan crash (missing scan_tauri_artifacts), Drupal false positive (too-generic modules/ indicator), HTTP/network library detection (axios/undici/got/ky/superagent/node-fetch/request), new_expression parsing (class instantiation edges — new ClassName() no longer appears dead). Tested on redis/redis (30MB C database), axios/axios (JS HTTP client), libuv/libuv (C networking), undici/undici (JS HTTP/1.1 client), google/leveldb (C++ database).",  "author": "codelens",
+  "version": "6.2.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.2.0: GDScript (.gd) parser, SCons build system detection, game engine framework detection (Godot/Unreal/Unity), Kotlin as separate language, smart C++ vs Python identity (5:1 ratio), timeout protection for handbook/summary/analyze, total_lines fallback for non-tree-sitter languages. Tested on godotengine/godot (14K files, C++/GDScript/C#/Java/Kotlin/GLSL game engine).",  "author": "codelens",
   "tags": [    "code-analysis",    "reference-tracking",
     "dead-code",    "duplicate-detection",    "frontend",    "backend",
     "rust",
@@ -162,5 +162,13 @@
     "new-expression",
     "class-instantiation",
     "tauri-artifacts",
-    "drupal-detection"
+    "drupal-detection",
+    "gdscript",
+    "godot",
+    "game-engine",
+    "scons",
+    "kotlin",
+    "unreal",
+    "unity",
+    "timeout-protection"
   ]}

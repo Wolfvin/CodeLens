@@ -5,6 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
 
+## [6.2.0] — 2026-06-12
+
+### Game Engine & Polyglot Release
+
+**Tested on godotengine/godot (14,007 files, 418MB: C++/GDScript/C#/Java/Kotlin/GLSL game engine)**
+
+#### New Features
+
+- **GDScript (.gd) fallback parser** (`fallback_gdscript.py`): Extracts functions, classes (class_name, inner class), signals, extends, preload/load imports, and constants from GDScript files. 690 .gd files parsed in Godot test.
+- **SCons build system detection**: Detects SConstruct files and classifies projects as `cpp-game-engine`, `cpp-graphics`, or `cpp-project` based on content analysis and GDScript file presence.
+- **Game engine framework detection**: New framework signatures for Godot (SConstruct/project.godot/.gd), Unreal (.uproject), Unity (.unity), and SCons build system. `has_godot`, `has_unreal`, `has_unity`, `has_scons` flags in detect_frameworks() output.
+- **Kotlin (.kt) as separate language category**: No longer merged with Java. Separate `kotlin` category in discover_files() and scan output. 53 .kt files correctly categorized in Godot test.
+- **Smart C++ vs Python identity**: When C++ files outnumber Python files by 5:1+ in a CMake/SCons project, Python type is downgraded to "build-scripts" indicator. Fixes Godot being misidentified as "python-project" — now correctly "cpp-game-engine".
+- **Architecture total_lines fallback**: When outline engine returns 0 lines (non-tree-sitter languages), counts lines from all source files directly. Godot: 4,691,750 lines correctly reported (was 0).
+- **Timeout protection for handbook/summary/analyze**: Time-budget aware engine execution. Sub-engines skipped gracefully with `timed_out_engines` list when approaching timeout (90s for handbook/summary, 120s for analyze).
+- **max_files propagation**: `handbook` and `analyze` commands now pass `max_files` limit to smell, dead-code, and other file-intensive engines to prevent timeout on large repos.
+- **Game engine directory hints**: Added core, servers, modules, platform, drivers, scene, editor directory descriptions in handbook output.
+- **project.godot name extraction**: Reads `config/name` from project.godot for accurate project identity in Godot projects.
+
+#### Bug Fixes
+
+- **Fixed handbook UnboundLocalError**: `import time` inside a try block shadowed the module-level import, causing `_time_left()` to fail with "cannot access local variable 'time'". Removed the redundant local import.
+- **Fixed identity misclassification**: SCons projects with pyproject.toml (like Godot) were classified as "python-project" because Python type took precedence. Now C++ build system types take priority over Python when C++ files dominate.
+
 ## [5.10.0] — 2026-06-12
 
 ### Polyglot Expansion — 6 New Language Parsers

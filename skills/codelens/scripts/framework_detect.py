@@ -281,6 +281,31 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": []
     },
+    # Game engines & build systems
+    "godot": {
+        "packages": [],
+        "config_files": ["SConstruct", "project.godot"],
+        "indicators": [".gd"],
+        "pip_packages": [],
+    },
+    "unreal": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".uproject"],
+        "pip_packages": [],
+    },
+    "unity": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".unity"],
+        "pip_packages": [],
+    },
+    "scons": {
+        "packages": [],
+        "config_files": ["SConstruct", "Sconscript"],
+        "indicators": [],
+        "pip_packages": [],
+    },
 }
 
 
@@ -337,6 +362,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_http_library": False,
+        "has_godot": False,
+        "has_unreal": False,
+        "has_unity": False,
+        "has_scons": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -443,6 +472,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "scons":
+                    detected["has_scons"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -678,6 +711,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            elif f.endswith('.gd') and not detected["has_godot"]:
+                if "godot" not in detected["frameworks"]:
+                    detected["frameworks"].append("godot")
+                detected["has_godot"] = True
+            elif f.endswith('.uproject') and not detected["has_unreal"]:
+                if "unreal" not in detected["frameworks"]:
+                    detected["frameworks"].append("unreal")
+                detected["has_unreal"] = True
+            elif f.endswith('.unity') and not detected["has_unity"]:
+                if "unity" not in detected["frameworks"]:
+                    detected["frameworks"].append("unity")
+                detected["has_unity"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -699,6 +744,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "unreal":
+                    detected["has_unreal"] = True
+                elif fw_name == "unity":
+                    detected["has_unity"] = True
+                elif fw_name == "scons":
+                    detected["has_scons"] = True
                 break
 
     # 6. Detect Tailwind from CSS content

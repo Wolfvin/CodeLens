@@ -3,8 +3,9 @@
 import os
 import json
 import re
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from registry import load_config, ensure_codelens_dir
 from framework_detect import detect_frameworks
@@ -35,6 +36,11 @@ def execute(args, workspace):
     return cmd_handbook(workspace, max_files=max_files)
 
 
+def _time_left(start: float, budget: float = 90) -> float:
+    """Return remaining seconds within the time budget."""
+    return max(0.0, budget - (time.time() - start))
+
+
 def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
@@ -42,6 +48,8 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
     max_files caps the scan file count to prevent timeout on huge repos.
     """
+    start = time.time()
+    skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
@@ -54,7 +62,6 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     registry_path = os.path.join(workspace, '.codelens', 'backend.json')
     if os.path.exists(registry_path):
         try:
-            import time
             mtime = os.path.getmtime(registry_path)
             if time.time() - mtime < 300:  # 5 minutes freshness
                 from registry import load_backend_registry, load_frontend_registry
@@ -91,80 +98,109 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         frameworks = config.get("frameworks", [])
 
     # 5. Health (from smell engine)
-    try:
-        smell_result = detect_smells(workspace)
-        health = {
-            "score": smell_result.get("stats", {}).get("health_score", 0),
-            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-            "critical": smell_result.get("stats", {}).get("critical", 0),
-            "warning": smell_result.get("stats", {}).get("warning", 0),
-        }
-    except Exception:
-        logger.warning("Health detection failed", exc_info=True)
-        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    smell_result = {}
+    if _time_left(start) < 5:
+        skipped_engines.append("smell")
+        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0, "skipped": True}
+    else:
+        try:
+            smell_result = detect_smells(workspace, max_files=max_files)
+            health = {
+                "score": smell_result.get("stats", {}).get("health_score", 0),
+                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+                "critical": smell_result.get("stats", {}).get("critical", 0),
+                "warning": smell_result.get("stats", {}).get("warning", 0),
+            }
+        except Exception:
+            logger.warning("Health detection failed", exc_info=True)
+            health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
     # 6. Entrypoints
-    try:
-        ep_result = map_entrypoints(workspace)
-        entrypoints = [
-            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-            for e in ep_result.get("entrypoints", [])[:30]
-        ]
-    except Exception:
-        logger.warning("Entrypoint mapping failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("entrypoints")
         entrypoints = []
+    else:
+        try:
+            ep_result = map_entrypoints(workspace)
+            entrypoints = [
+                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+                for e in ep_result.get("entrypoints", [])[:30]
+            ]
+        except Exception:
+            logger.warning("Entrypoint mapping failed", exc_info=True)
+            entrypoints = []
 
     # 7. API Routes
-    try:
-        api_result = map_api_routes(workspace)
-        api_routes = [
-            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-            for r in api_result.get("routes", [])[:50]
-        ]
-    except Exception:
-        logger.warning("API route mapping failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("apimap")
         api_routes = []
+    else:
+        try:
+            api_result = map_api_routes(workspace)
+            api_routes = [
+                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+                for r in api_result.get("routes", [])[:50]
+            ]
+        except Exception:
+            logger.warning("API route mapping failed", exc_info=True)
+            api_routes = []
 
     # 8. State management
-    try:
-        state_result = map_state(workspace)
-        state_stores = [
-            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-            for s in state_result.get("stores", [])[:20]
-        ]
-    except Exception:
-        logger.warning("State management mapping failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("statemap")
         state_stores = []
+    else:
+        try:
+            state_result = map_state(workspace)
+            state_stores = [
+                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+                for s in state_result.get("stores", [])[:20]
+            ]
+        except Exception:
+            logger.warning("State management mapping failed", exc_info=True)
+            state_stores = []
 
     # 9. Risks (circular deps, dead code, secrets)
     risks = []
-    try:
-        circ_result = detect_circular(workspace)
-        for chain in circ_result.get("chains", [])[:5]:
-            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
-    except Exception:
-        logger.warning("Circular dependency detection failed", exc_info=True)
-    try:
-        dead_result = detect_dead_code(workspace)
-        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
-        if dead_count > 0:
-            risks.append({"type": "dead_code", "count": dead_count})
-    except Exception:
-        logger.warning("Dead code detection failed", exc_info=True)
-    try:
-        secrets_result = detect_secrets(workspace)
-        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-        if secrets_count > 0:
-            risks.append({"type": "secrets", "count": secrets_count})
-    except Exception:
-        logger.warning("Secrets detection failed", exc_info=True)
-    try:
-        vuln_result = scan_vulnerabilities(workspace)
-        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-        if vuln_count > 0:
-            risks.append({"type": "vulnerabilities", "count": vuln_count})
-    except Exception:
-        logger.warning("Vulnerability scan failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("circular")
+    else:
+        try:
+            circ_result = detect_circular(workspace)
+            for chain in circ_result.get("chains", [])[:5]:
+                risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+        except Exception:
+            logger.warning("Circular dependency detection failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("dead_code")
+    else:
+        try:
+            dead_result = detect_dead_code(workspace, max_files=max_files)
+            dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+            if dead_count > 0:
+                risks.append({"type": "dead_code", "count": dead_count})
+        except Exception:
+            logger.warning("Dead code detection failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("secrets")
+    else:
+        try:
+            secrets_result = detect_secrets(workspace)
+            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+            if secrets_count > 0:
+                risks.append({"type": "secrets", "count": secrets_count})
+        except Exception:
+            logger.warning("Secrets detection failed", exc_info=True)
+    if _time_left(start) < 5:
+        skipped_engines.append("vulnscan")
+    else:
+        try:
+            vuln_result = scan_vulnerabilities(workspace)
+            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+            if vuln_count > 0:
+                risks.append({"type": "vulnerabilities", "count": vuln_count})
+        except Exception:
+            logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
@@ -210,6 +246,11 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         },
         "files_by_language": summary.get("files_by_language", {})
     }
+
+    # Add timeout info if any engines were skipped
+    if skipped_engines:
+        handbook["timed_out"] = True
+        handbook["timed_out_engines"] = skipped_engines
 
     # Write handbook.json
     codelens_dir = os.path.join(workspace, '.codelens')
@@ -475,6 +516,39 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # Check for SCons build system (SConstruct file)
+    scons_type = None
+    gd_count = 0
+    scons_path = os.path.join(workspace, 'SConstruct')
+    if os.path.isfile(scons_path):
+        try:
+            with open(scons_path, 'r', encoding='utf-8', errors='ignore') as f:
+                scons_content = f.read()
+            # SConstruct files often define project name
+            name_match = re.search(r'project_name\s*=\s*["\']([^"\']+)["\']', scons_content) or \
+                         re.search(r'["\']([^"\']+)["\'].*application', scons_content)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            # Detect Godot Engine specifically
+            scons_lower = scons_content.lower()
+            gd_count = 0
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fname in files:
+                    if fname.endswith('.gd'):
+                        gd_count += 1
+
+            if 'godot' in scons_lower or gd_count > 50:
+                scons_type = "cpp-game-engine"
+            elif 'pygame' in scons_lower or 'sdl' in scons_lower:
+                scons_type = "cpp-game-engine"
+            elif any(kw in scons_lower for kw in ('opengl', 'vulkan', 'directx', 'gpu')):
+                scons_type = "cpp-graphics"
+            else:
+                scons_type = "cpp-project"
+        except Exception:
+            logger.warning("SConstruct parsing failed", exc_info=True)
+
     # v6.1: Try CMakeLists.txt — detect CMake/C++ projects
     cmake_type = None
     cmake_path = os.path.join(workspace, 'CMakeLists.txt')
@@ -511,13 +585,33 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("CMakeLists.txt parsing failed", exc_info=True)
 
+    # v6.2: When both C++ (CMake/SCons) and Python types exist, check which is dominant
+    if (cmake_type or scons_type) and python_type:
+        cpp_exts = {'.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'}
+        py_exts = {'.py'}
+        cpp_count = 0
+        py_count = 0
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            for fname in filenames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in cpp_exts:
+                    cpp_count += 1
+                elif ext in py_exts:
+                    py_count += 1
+        # If C++ dominates, downgrade Python to "build-scripts" indicator
+        if cpp_count > py_count * 5:
+            python_type = "python-build-scripts"
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
+    active_types = [t for t in [cmake_type, scons_type, rust_type, go_type, js_type, python_type] if t is not None and t != "python-build-scripts"]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if cmake_type:
+            type_parts.append("cpp")
+        if scons_type:
             type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
@@ -525,11 +619,14 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("go")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type:
+        if python_type and python_type != "python-build-scripts":
             type_parts.append("python")
         # v6.1: Add Lua indicator for C++ projects with Lua scripting
         if cmake_type and lua_count > 10:
             type_parts.append("lua")
+        # Add GDScript indicator for C++/SCons projects with GDScript files
+        if (cmake_type or scons_type) and gd_count > 10:
+            type_parts.append("gdscript")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -607,6 +704,14 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'cmake': 'CMake build modules',
         'fastlane': 'Mobile deployment automation',
         'misc': 'Miscellaneous files',
+        # v6.2: Game engine / Godot project directory hints
+        'core': 'Core engine modules',
+        'servers': 'Engine server subsystems',
+        'modules': 'Engine extension modules',
+        'platform': 'Platform-specific implementations',
+        'drivers': 'Hardware driver wrappers',
+        'scene': 'Scene tree and nodes',
+        'editor': 'Editor application code',
     }
     dir_map = {}
     try:

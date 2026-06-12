@@ -21,7 +21,7 @@ import os
 import time
 from typing import Dict, Any, List, Optional
 from commands import register_command
-from utils import logger
+from utils import logger, DEFAULT_IGNORE_DIRS
 
 
 def add_args(parser):
@@ -49,12 +49,18 @@ def execute(args, workspace):
     )
 
 
+def _time_left(start: float, budget: float = 120) -> float:
+    """Return remaining seconds within the time budget."""
+    return max(0.0, budget - (time.time() - start))
+
+
 def analyze_repository(
     workspace: str,
     focus: str = "all",
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
+    max_files: int = 5000,
 ) -> Dict[str, Any]:
     """
     Full repository analysis — the single command to understand an entire codebase.
@@ -70,6 +76,7 @@ def analyze_repository(
     - Navigate the codebase efficiently
     """
     start_time = time.time()
+    skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
 
     # Severity filter based on detail level
@@ -147,6 +154,22 @@ def analyze_repository(
             "version": "0.0.0",
         }
 
+    # If name is directory-based (test-repo-*) or generic, try harder
+    if result["identity"].get("name", "").startswith("test-repo-") or result["identity"].get("type") == "unknown":
+        # Try project.godot for Godot projects
+        godot_project = os.path.join(workspace, "project.godot")
+        if os.path.isfile(godot_project):
+            try:
+                with open(godot_project, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        if line.strip().startswith("config/name"):
+                            name = line.split("=", 1)[1].strip().strip('"')
+                            if name:
+                                result["identity"]["name"] = name
+                            break
+            except Exception:
+                pass
+
     # ─── Phase 3: Frameworks & Languages ─────────────────────
 
     try:
@@ -177,7 +200,7 @@ def analyze_repository(
             ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
             ".html", ".css", ".scss", ".sql", ".sh",
             ".glsl", ".fsh", ".vsh", ".frag", ".vert",
-            ".kt", ".cmake",
+            ".kt", ".gd", ".cmake",
         }
         actual_file_count = 0
         actual_line_count = 0
@@ -193,6 +216,26 @@ def analyze_repository(
         # Use actual count if higher than outlined count
         total_files = max(outline.get("files_outlined", 0), actual_file_count)
         total_lines = outline.get("total_lines", 0)
+        # If total_lines is 0, count lines from all source files
+        if total_lines == 0:
+            _source_exts = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs",
+                            ".vue", ".svelte", ".php", ".go", ".java", ".cs", ".dart", ".lua",
+                            ".rb", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                            ".html", ".css", ".scss", ".sh", ".glsl", ".fsh", ".vsh",
+                            ".frag", ".vert", ".gd", ".kt", ".mm"}
+            line_count = 0
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fname in filenames:
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in _source_exts:
+                        fpath = os.path.join(root, fname)
+                        try:
+                            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                                line_count += sum(1 for _ in f)
+                        except (IOError, OSError):
+                            pass
+            total_lines = line_count
         result["architecture"] = {
             "total_files": total_files,
             "total_lines": total_lines,
@@ -264,40 +307,78 @@ def analyze_repository(
 
     # --- Security ---
     if focus in ("security", "all"):
-        _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items))
-        _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
-                    lambda: _detect_vulns(workspace, max_items))
-        _run_engine(findings, "dataflow_violations", "Data Flow Violations",
-                    lambda: _detect_dataflow(workspace, max_items))
-        _run_engine(findings, "env_issues", "Environment Issues",
-                    lambda: _detect_env(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("secrets")
+        else:
+            _run_engine(findings, "secrets", "Secrets Detection",
+                        lambda: _detect_secrets(workspace, severity_filter, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("vulnerabilities")
+        else:
+            _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
+                        lambda: _detect_vulns(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("dataflow_violations")
+        else:
+            _run_engine(findings, "dataflow_violations", "Data Flow Violations",
+                        lambda: _detect_dataflow(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("env_issues")
+        else:
+            _run_engine(findings, "env_issues", "Environment Issues",
+                        lambda: _detect_env(workspace, max_items))
 
     # --- Quality ---
     if focus in ("quality", "all"):
-        _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items))
-        _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items))
-        _run_engine(findings, "complexity", "Complexity Hotspots",
-                    lambda: _detect_complexity(workspace, max_items))
-        _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("code_smells")
+        else:
+            _run_engine(findings, "code_smells", "Code Smells",
+                        lambda: _detect_smells(workspace, severity_filter, max_items, max_files))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("debug_leaks")
+        else:
+            _run_engine(findings, "debug_leaks", "Debug Code Leaks",
+                        lambda: _detect_debug(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("complexity")
+        else:
+            _run_engine(findings, "complexity", "Complexity Hotspots",
+                        lambda: _detect_complexity(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("dead_code")
+        else:
+            _run_engine(findings, "dead_code", "Dead Code",
+                        lambda: _detect_dead_code(workspace, max_items, max_files))
 
     # --- Architecture ---
     if focus in ("architecture", "all"):
-        _run_engine(findings, "circular_dependencies", "Circular Dependencies",
-                    lambda: _detect_circular(workspace, max_items))
-        _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items))
-        _run_engine(findings, "config_drift", "Dependency Drift",
-                    lambda: _detect_config_drift(workspace, max_items))
-        _run_engine(findings, "binary_artifacts", "Binary Artifacts",
-                    lambda: _detect_binaries(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("circular_dependencies")
+        else:
+            _run_engine(findings, "circular_dependencies", "Circular Dependencies",
+                        lambda: _detect_circular(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("perf_hints")
+        else:
+            _run_engine(findings, "perf_hints", "Performance Hints",
+                        lambda: _detect_perf(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("config_drift")
+        else:
+            _run_engine(findings, "config_drift", "Dependency Drift",
+                        lambda: _detect_config_drift(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("binary_artifacts")
+        else:
+            _run_engine(findings, "binary_artifacts", "Binary Artifacts",
+                        lambda: _detect_binaries(workspace, max_items))
 
     result["findings"] = findings
     result["total_finding_categories"] = len(findings)
     result["total_issues"] = sum(f.get("total", 0) for f in findings)
+    if skipped_engines:
+        result["timed_out_engines"] = skipped_engines
 
     # ─── Phase 8: Risk Assessment ─────────────────────────────
 
@@ -405,9 +486,9 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
+def _detect_smells(workspace: str, severity_filter: set, max_items: int, max_files: int = 5000) -> Optional[Dict]:
     from smell_engine import detect_smells
-    smell = detect_smells(workspace)
+    smell = detect_smells(workspace, max_files=max_files)
     total = smell.get("stats", {}).get("total_smells", 0)
     if total == 0:
         return None
@@ -467,9 +548,9 @@ def _detect_complexity(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
+def _detect_dead_code(workspace: str, max_items: int, max_files: int = 5000) -> Optional[Dict]:
     from deadcode_engine import detect_dead_code
-    dc = detect_dead_code(workspace)
+    dc = detect_dead_code(workspace, max_files=max_files)
     total = dc.get("stats", {}).get("total_dead_code", 0)
     if total == 0:
         return None

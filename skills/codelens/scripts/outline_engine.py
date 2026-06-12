@@ -133,7 +133,8 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.php'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.php',
+        '.gd', '.kt'
     }
 
     outlines = []
