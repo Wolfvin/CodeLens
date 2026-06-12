@@ -77,6 +77,14 @@ VALIDATION_PATTERNS = {
 }
 
 
+def _is_test_file(file_path: str) -> bool:
+    """Check if a file path looks like a test file."""
+    lower = file_path.replace('\\', '/').lower()
+    test_patterns = ['.test.', '.spec.', '__tests__/', '/test/', '/tests/',
+                     '_test.', '_spec.', '.e2e.']
+    return any(p in lower for p in test_patterns)
+
+
 def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
@@ -400,10 +408,7 @@ def map_api_routes(
 
     # Apply production_only filter if requested
     if production_only:
-        test_indicators = ['/tests/', '/test/', '/__tests__/', '/spec/',
-                          'test_', '_test.', '.test.', '.spec.',
-                          '/examples/', '/example/']
-        routes = [r for r in routes if not any(x in r.get('file', '') for x in test_indicators)]
+        routes = [r for r in routes if not _is_test_file(r.get("file", ""))]
 
     return {
         "status": "ok",
@@ -417,6 +422,7 @@ def map_api_routes(
             "auth_protected": auth_count,
             "public": public_count,
             "files_scanned": files_scanned,
+            "production_only_filter": production_only,
         },
         "routes": routes,
         "route_groups": route_groups,

@@ -32,7 +32,6 @@ SOURCE_EXTENSIONS = {
 # Performance limits for large codebases
 MAX_FILES_PER_CATEGORY = 5000    # Max files to scan per category
 MAX_RESULTS_PER_CATEGORY = 200   # Max results to return per category
-DEADCODE_TIMEOUT_SEC = 120       # Hard timeout for dead code detection
 
 
 def detect_dead_code(
@@ -71,7 +70,7 @@ def detect_dead_code(
     results: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     truncated = False
-    TIMEOUT_BUDGET = DEADCODE_TIMEOUT_SEC  # seconds — prevent hanging on huge repos
+    TIMEOUT_BUDGET = 90  # seconds — prevent hanging on huge repos
 
     start_time = time.time()
     timed_out = False
@@ -325,12 +324,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     match_start_depth = 0
     last_arm_depth = 0
 
-    # v6.3.1: Go select/switch case tracking — same logic as Rust match
-    # Each case in a select/switch is an independent branch, so return/break
-    # inside one case does NOT make the next case unreachable.
-    in_go_select = False
-    go_select_start_depth = 0
-
     for i, line in enumerate(lines):
         stripped = line.strip()
 
@@ -356,17 +349,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             # End match when we return to the depth where match started
             if in_match and brace_depth <= match_start_depth and '{' not in stripped:
                 in_match = False
-
-        # v6.3.1: Track Go select/switch statements
-        if ext == ".go":
-            if re.match(r'\s*select\s*\{', stripped) or re.match(r'\s*switch\s+', stripped):
-                in_go_select = True
-                go_select_start_depth = brace_depth
-            # End select/switch when we drop BELOW the depth where it started
-            # (a closing } at the select level). Don't end on same-depth lines
-            # like return/break inside case branches.
-            if in_go_select and brace_depth < go_select_start_depth:
-                in_go_select = False
 
         # Detect function start
         if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -414,21 +396,10 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 if ext == ".rs" and in_match:
                     found_terminal = False  # Reset, don't flag match arm terminals
                     continue
-                # v6.3.1: In Go select/switch, terminal statements in one case
-                # do NOT make the next case unreachable — each case is independent.
-                if ext == ".go" and in_go_select:
-                    found_terminal = False
-                    continue
-                # v6.3.1: In Go/JS/TS, "return func(...) {" or "return () => {"
-                # means the body of the anonymous function is the return value,
-                # NOT unreachable code after a return. Skip flagging as terminal.
-                if ext in {".go", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                    if re.match(r'(?:return|throw)\s+(?:func\s*\(|\([\s\S]*?\)\s*=>\s*\{)', stripped):
-                        continue
                 # v8: Multi-line return statements in Rust/C-like languages.
                 # If the return line doesn't end with ';' or '}' or ')' or ']', the
                 # return expression continues on the next line — don't flag as terminal yet.
-                if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".go"}:
+                if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                     if not stripped.endswith(';') and not stripped.endswith('}') and not stripped.endswith(')') and not stripped.endswith(']'):
                         continue  # Not a complete return statement yet
                 found_terminal = True
@@ -447,12 +418,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     found_terminal = False
                     continue
 
-            # v6.3.1: Go select/switch case separator — new case resets the terminal flag
-            if ext == ".go" and in_go_select:
-                if re.match(r'\s*case\s+', stripped) or re.match(r'\s*default\s*:', stripped):
-                    found_terminal = False
-                    continue
-
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
             #     This avoids resetting on every '}' (e.g. if-blocks inside functions).
@@ -460,7 +425,6 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = False
                 found_terminal = False
                 in_match = False
-                in_go_select = False
                 continue
 
             # Lua: detect function end via 'end' keyword
@@ -1196,31 +1160,7 @@ def _detect_unused_exports(
         if any(x in file_path for x in ['/docs_src/', '/doc_src/', '/examples/', '/example/',
                                           '/documentation/', '/docs/examples/', '/snippets/']):
             continue
-        # v7: Skip exercise stub files — they contain only "pass" or placeholder
-        # implementations that are intentionally empty. Dead code in stubs is expected.
-        if any(x in file_path for x in ['/.meta/', '/stubs/', '/_stub']):
-            continue
-        # v7: Skip exercise implementation files (e.g., exercises/practice/*/)
-        # where the file is a stub with only "pass" — these are meant to be filled in
-        if '/exercises/' in file_path and '/.meta/' not in file_path:
-            # Check if the file is a stub (contains mostly "pass" statements)
-            abs_file_path = os.path.join(workspace, file_path) if not os.path.isabs(file_path) else file_path
-            if os.path.isfile(abs_file_path):
-                try:
-                    with open(abs_file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        stub_content = f.read()
-                    # If file is mostly "pass" or "...", it's a stub
-                    non_empty_lines = [l.strip() for l in stub_content.split('\n') if l.strip() and not l.strip().startswith('#')]
-                    pass_lines = [l for l in non_empty_lines if l in ('pass', '...', 'raise NotImplementedError')]
-                    if len(non_empty_lines) > 0 and len(pass_lines) / len(non_empty_lines) >= 0.5:
-                        continue
-                except (IOError, OSError):
-                    pass
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
-            continue
-        # Skip TypeScript declaration files (.d.ts) — these define public type APIs
-        # and are consumed externally by type checkers, not by internal imports
-        if file_path.endswith('.d.ts') or file_path.endswith('.d.mts') or file_path.endswith('.d.cts'):
             continue
         # For Python packages, skip __init__.py — these are re-export entry points
         if file_path.endswith('__init__.py') or file_path.endswith('__init__.pyi'):
@@ -1342,21 +1282,6 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                     if node_type == "function":
                         continue
 
-            # v6.5: Skip Next.js framework-called lifecycle functions
-            # These are called by the Next.js framework at runtime, not by user code,
-            # so they always have ref_count == 0 but are NOT dead code.
-            _nextjs_lifecycle_functions = {
-                'getServerSideProps', 'getStaticProps', 'getStaticPaths',
-                'getInitialProps', 'generateMetadata', 'generateStaticParams',
-                'generateViewport', 'viewport', 'metadata',
-                'head', 'Head',  # Next.js <Head> component patterns
-                'route', 'default',  # Next.js App Router route handlers
-            }
-            if name in _nextjs_lifecycle_functions:
-                # Only skip for .ts/.tsx/.js/.jsx files (Next.js context)
-                if file_path.endswith(('.ts', '.tsx', '.js', '.jsx', '.mjs')):
-                    continue
-
             display_name = f"{impl_for}::{name}" if impl_for else name
             dead_items.append({
                 "file": file_path,
@@ -1442,7 +1367,14 @@ def _detect_library_package(workspace: str) -> bool:
 
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:
-    """Detect CSS classes defined but never used in HTML/JS/TSX."""
+    """Detect CSS classes defined but never used in HTML/JS/TSX.
+
+    A CSS class is considered "zombie" only if:
+    1. It has ref_count == 0 (not referenced in any JS/TSX code)
+    2. It is NOT used in any HTML files (classes used in HTML are not zombie)
+    3. It has an actual CSS definition (skip classes with no known CSS source)
+    4. It is not a Tailwind utility class or a JS operator/expression
+    """
     try:
         from registry import load_frontend_registry
         frontend = load_frontend_registry(workspace)
@@ -1459,32 +1391,38 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
 
     zombie = []
 
-    # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
         name = cls["name"]
-        if cls["status"] == "dead" and not cls.get("js"):
-            # Skip Tailwind utility classes — they're framework-defined, not user-defined
-            if has_tailwind_check and is_tailwind_class(name):
-                continue
-            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
-            if not re.match(r'^[a-zA-Z_]', name):
-                continue
-            zombie.append({
-                "file": (cls.get("css") or [{}])[0].get("path",
-                         (cls.get("html") or [{}])[0].get("path", "unknown"))
-                         if (cls.get("css") and len(cls.get("css", [])) > 0) or
-                            (cls.get("html") and len(cls.get("html", [])) > 0)
-                         else "unknown",
-                "line": (cls.get("css") or [{}])[0].get("line",
-                        (cls.get("html") or [{}])[0].get("line", 0))
-                        if (cls.get("css") and len(cls.get("css", [])) > 0) or
-                           (cls.get("html") and len(cls.get("html", [])) > 0)
-                        else 0,
-                "class": name,
-                "severity": "info",
-                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
-            })
+        if cls["status"] != "dead":
+            continue
+
+        # Skip Tailwind utility classes — they're framework-defined, not user-defined
+        if has_tailwind_check and is_tailwind_class(name):
+            continue
+        # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
+        if not re.match(r'^[a-zA-Z_]', name):
+            continue
+        # Skip classes used in HTML — they're not zombie CSS even without JS usage
+        if cls.get("html"):
+            continue
+        # Skip classes with no CSS definition — they may be framework-generated
+        # or defined in a way that the scanner couldn't track
+        css_entries = cls.get("css", [])
+        if not css_entries:
+            # If no CSS definition exists and no JS usage, this is likely a
+            # dynamically-applied or framework-generated class, not a zombie CSS rule
+            continue
+
+        # Use the first CSS definition's path and line
+        first_css = css_entries[0] if css_entries else {}
+        zombie.append({
+            "file": first_css.get("path", "unknown"),
+            "line": first_css.get("line", 0),
+            "class": name,
+            "severity": "info",
+            "message": f"CSS class '.{name}' defined but never used in HTML or JS",
+            "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
+        })
 
     return zombie[:50]
 
