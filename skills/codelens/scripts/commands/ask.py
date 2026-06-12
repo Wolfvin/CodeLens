@@ -438,8 +438,11 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     # Remove common question words
     cleaned = q
     for prefix in ["where is ", "where's ", "where does ", "what is ", "what's ",
+                    "what does ", "what do ", "why does ", "why do ",
+                    "when does ", "when do ", "how does ", "how is ",
+                    "how can ", "how should ",
                     "show me ", "find definition of ", "find def ", "find ",
-                    "search for ", "how does ", "how is ", "trace ", "impact of ",
+                    "search for ", "trace ", "impact of ",
                     "what happens if i change ", "what happens if i delete ",
                     "can i change ", "can i delete ", "is this code safe ",
                     "is it safe ", "safe to change ", "safe to remove ",
@@ -452,7 +455,10 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
     cleaned = cleaned.rstrip("?!. ").strip()
 
     # Remove common English filler words and type keywords
-    for filler in ["the ", "a ", "an ", "this ", "that ", "these ", "those ",
+    # Include pronouns like "i ", "we " that appear after question prefixes
+    # e.g. "how can i find..." → strip "how can " → "i find..." → strip "i " → "find..."
+    for filler in ["the ", "a ", "an ", "i ", "we ", "you ", "they ", "my ", "our ",
+                   "this ", "that ", "these ", "those ",
                    "function ", "class ", "method ", "variable ", "const ",
                    "module ", "file ", "component ", "hook ", "type ",
                    "interface ", "enum "]:

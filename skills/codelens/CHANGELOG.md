@@ -5,6 +5,45 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [6.3.2] — 2026-06-12
+
+### Tested against spacedriveapp/spacedrive (2,905 files, 1,166 Rust files, 404 TS/TSX, 62K edges)
+
+Real-world test on a Tauri VDFS (Virtual Distributed Filesystem) file explorer monorepo —
+a unique architecture combining a Rust core with P2P networking, React/TSX frontend,
+Tauri desktop app, React Native mobile app, and WASM extensions. This repo exposed
+false positives in the secrets engine and dead code in the query command.
+
+### Fixed
+
+- **`secrets` engine URI scheme false positive** (HIGH): The URL-embedded password pattern
+  `[\w+\-\.]+:([^\s@"\']{4,})@` matched URI paths like `sidecar://content_id/thumbs/grid@2x.webp`
+  as passwords because the capture group `[^\s@"\']` allowed `/` characters. URI schemes with
+  `://` and `@` in the path (common in custom protocol handlers) were incorrectly flagged as
+  `password` with severity `critical`. Fixed by adding `/` to the excluded character class:
+  `[^\s/@"\']{4,}`. This still correctly captures real URL-embedded passwords like
+  `user:password@host.com` and `ftp://user:pass@host.com` (which match from the `user:pass`
+  portion), while rejecting paths with `/` that are clearly URI paths, not credentials.
+
+- **`ask` command symbol extraction missed common question prefixes** (MEDIUM): The
+  `_extract_symbol_name()` function only stripped prefixes like "what is", "where is",
+  "how does" but missed "what does", "what do", "why does", "why do", "when does",
+  "when do", "how can", "how should". This caused questions like "What does the Library
+  struct do?" to extract "what" as the symbol instead of "library", making the ask
+  command completely useless for these common question patterns. Added all 8 missing
+  prefixes. Also added pronoun fillers ("i ", "we ", "you ", "they ", "my ", "our ")
+  to prevent them from being extracted as symbol names (e.g., "How can I find..."
+  now extracts "find" instead of "i").
+
+- **`query --fuzzy` was dead code when zero exact matches** (HIGH): The fuzzy matching
+  block was placed AFTER the `total_matches == 0` early return, meaning `--fuzzy` was
+  completely non-functional when there were no exact matches — precisely the scenario
+  where fuzzy matching is most needed. For example, `query spawn --fuzzy` returned
+  "Name does not exist. Safe to create." even though `symbols spawn` found 12 matches.
+  Moved the fuzzy matching block BEFORE the early return so it executes when either
+  `--fuzzy` is enabled OR no exact matches are found. Removed the duplicate fuzzy
+  block that was unreachable at the bottom of the function.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
