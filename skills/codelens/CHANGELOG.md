@@ -5,37 +5,30 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [7.1.0] — 2026-06-12
+## [7.0.1] — 2026-06-12
 
-### Tested against nestjs/nest (1673 TypeScript files, lerna monorepo, 11 packages)
+### Tested against screenpipe/screenpipe (1962 files, Rust+TS+Swift Tauri monorepo)
 
-Real-world test on the NestJS framework itself — a decorator-based TypeScript monorepo with HTTP controllers, GraphQL resolvers, gRPC services, microservice patterns, and WebSocket gateways. This test target exposed critical gaps in CodeLens's handling of decorator-based frameworks, monorepo package detection, and class-method-centric codebases.
-
-### Added
-
-- **NestJS framework detection** — `detect_frameworks()` now detects `@nestjs/core` and `@nestjs/common` from package.json dependencies. Identifies NestJS platform (express or fastify from `@nestjs/platform-express`/`@nestjs/platform-fastify`) and 17 feature packages (graphql, microservices, websockets, grpc, authentication, openapi, scheduling, queues, events, cqrs, typeorm, prisma, mongoose, sequelize, config). Falls back to decorator pattern scanning (`@Controller`, `@Module`, `@Injectable`, `@Get`, `@Post`) with a 2-hit minimum to avoid false positives.
-- **NestJS decorator-based API route detection** — New `_extract_nestjs_routes()` parser in apimap_engine.py that detects routes from NestJS decorator patterns: `@Controller('path')` + `@Get('path')`/`@Post('path')`/etc. for HTTP routes, `@Resolver()` + `@Query()`/`@Mutation()`/`@Subscription()` for GraphQL, `@GrpcMethod()` for gRPC, and `@MessagePattern()`/`@EventPattern()` for microservices. Combines controller prefix with method path (e.g., `@Controller('cats')` + `@Get(':id')` → `GET /cats/:id`). Extracts proper handler names (method name, not decorator parameter). Sets `framework: "nestjs"` on all routes. Route count: 0 → 353 on nestjs/nest.
-- **NestJS decorator definition file filtering** — Files in `/decorators/http/`, `/decorators/microservices/`, and files containing decorator factory signatures (`export const Get =`, `createMappingDecorator`) are excluded from route detection. Eliminated 22 false positives from `route-params.decorator.ts`.
-- **NestJS DI provider state mapping** — statemap_engine.py now detects `@Module({ providers: [...] })` patterns and registers provider classes as `global` type stores with `framework: "nestjs_di"` and `nestjs_role: "provider"`.
-- **`is_bundled_file()` utility** — New function in utils.py that detects bundled/compiled artifacts (dist/, build/, out/ directories, .bundle./.chunk./.global. patterns, .min.js/.min.css, .d.ts). Fixes ImportError that broke 4 commands (ask, complexity, context, perf_hint).
-- **Localhost connection string filtering** — secrets_engine.py now filters connection strings containing `localhost`, `127.0.0.1`, `0.0.0.0`, or `::1`. MongoDB, Redis, RabbitMQ, PostgreSQL, MySQL localhost URLs are no longer flagged as critical secrets. Reduced false positives from 17 → 1 on nestjs/nest.
-- **Secrets findings: value and line_content fields** — All secrets findings now include `value` (masked) and `line_content` fields for actionable output. Previously these were empty.
-- **Class method smell detection** — smell_engine.py now detects TypeScript/JS class methods with access modifiers (`public/private/protected`) for `long_fn` and `many_params` categories. `long_fn` detection: 22 → 85. `many_params` detection: 5 → 49 on nestjs/nest.
-- **TypeScript export dead code detection** — deadcode_engine.py now detects `export interface`, `export type`, `export enum`, `export declare`, and `export abstract class` patterns. Added `import type { X }` support for correct usage tracking. Unused exports cap increased from 50 → 200. Dead code findings: 0 → 476 on nestjs/nest.
-- **NestJS dataflow input sources** — dataflow_engine.py now detects 13 NestJS decorator-based input sources: `@Body()`, `@Param()`, `@Query()`, `@Headers()`, `@Cookies()`, `@UploadedFile()`, `@UploadedFiles()`, `@Request()`, `@Req()`, `@Res()`, `@Session()`, `@Ip()`, `@HostParam()`. Sources: 997 → 1173. Production violations: 17 → 48.
-- **Side-effect engine: class method detection + performance limits** — sideeffect_engine.py now detects class methods (`methodName() {`, `async methodName() {`, `private methodName() {`, `methodName = () => {`). Added module-level effect detection (IIFEs, console.log, fetch, global assignments). Added performance limits (max_files=5000, max_functions=2000, timeout=60s). Functions analyzed: 151 → 2000. Impure: 0 → 286. Completes in ~45s (previously timed out).
-- **Context-aware directory descriptions** — handbook now describes `hooks/` as "Git hooks (husky)" for NestJS/non-React projects instead of always "Custom React hooks".
+Real-world test on a massive Tauri desktop app with 15,308 backend nodes, 93,755 edges, and
+1,286 CSS classes. Screenpipe is a 24/7 AI screen & mic recorder (19k+ GitHub stars) with
+Rust core, TypeScript/React frontend, Swift integrations, and a complex monorepo structure
+(cargo-workspace + multiple apps). This is the most diverse and challenging test target to date.
 
 ### Fixed
 
-- **CRITICAL: `is_bundled_file` missing from utils.py** — 4 commands (ask, complexity, context, perf_hint) failed with ImportError. Now defined in utils.py with proper bundled/compiled file detection.
-- **CRITICAL: No NestJS framework detection** — NestJS was completely invisible to `detect` command. Now properly detected with platform and feature identification.
-- **CRITICAL: API map detected decorator definitions as routes** — Files like `packages/common/decorators/http/route-params.decorator.ts` (the decorator factory implementations) were misidentified as actual routes. Now properly filtered.
-- **State map: NestJS decorators misclassified as stores** — `Get`, `Post`, `Delete`, `NestFactory`, `RequestMapping`, `RouteConstraints`, etc. were classified as "module_constant" stores. Added 30+ decorator names to skip list and `/decorators/` path filtering.
-- **Handbook: `hooks/` described as "Custom React hooks"** — Now context-aware: React projects get "Custom React hooks", NestJS projects get "Git hooks (husky)".
-- **Handbook: platform-fastify detected as "express"** — `packages/platform-fastify` was labeled with framework "express". Now correctly labeled "fastify".
-- **Smell engine: `is_generated_file()` called with path instead of filename** — Function expected just the filename but received the full relative path, causing some false matches/mismatches.
-- **Side-effect engine: infinite timeout on large projects** — No timeout, file cap, or result cap. Engine walked all files indefinitely. Now has proper limits.
+- **CRITICAL: `is_bundled_file()` missing from utils.py** — The function was imported by
+  `complexity_engine.py` and `perfhint_engine.py`, but never defined in `utils.py`. This caused
+  ImportError cascade that completely disabled 4 commands: `ask`, `complexity`, `context`, and
+  `perf-hint`. Added the missing function with detection for dist/build/out directories, bundled
+  file extensions (.bundle.js, .chunk.js, .global.js), minified files, and declaration files.
+- **`_classify_cycle_severity()` returned single value instead of tuple** — In `circular_engine.py`
+  line 381, the Rust common method names check returned `return "info"` (single value) instead of
+  `return "info", test_involvement` (tuple). This caused `ValueError: too many values to unpack`
+  in `_format_function_cycle()` and crashed both `circular` and `handbook` commands on repos with
+  Rust common method name cycles (e.g., `new()`, `get()`, `read()`, `write()` across crates).
+- **`impact_engine.py` redundant `node_by_fn = None`** — Line 44 had a duplicate initialization
+  `node_by_fn = None` that was immediately overwritten by line 33. Removed the redundant line
+  for code clarity.
 
 ## [7.0.0] — 2026-06-12
 

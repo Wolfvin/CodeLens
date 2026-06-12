@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "7.1.0"
+CODELENS_VERSION = "7.0.1"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -405,31 +405,39 @@ GENERATED_FILE_PATTERNS = frozenset({
 
 
 def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative file path looks like a bundled/compiled/minified file.
+    """Check if a relative file path looks like a bundled/compiled output file.
 
-    Skips files in dist/, build/, out/ directories, and files with
-    common bundled/minified extensions (.min.js, .bundle.js, .global.js, etc.).
+    Detects files that are build artifacts rather than source code:
+    - Files in dist/, build/, out/, .output/ directories
+    - Files with bundled extensions (.bundle.js, .chunk.js, .global.js)
+    - Minified files (.min.js, .min.css)
+    - Declaration files (.d.ts)
 
     Args:
-        rel_path: Relative path from workspace root (e.g., 'dist/app.min.js')
+        rel_path: Relative path from workspace root (e.g., 'dist/app.bundle.js')
 
     Returns:
-        True if the file appears to be a bundled/compiled artifact.
+        True if the file appears to be bundled/compiled output.
     """
-    lower = rel_path.replace('\\', '/').lower()
-    # Skip known output directories
-    for prefix in ('dist/', 'build/', 'out/', '.output/', '.nuxt/', '.next/',
-                   'storybook-static/', '.svelte-kit/'):
-        if lower.startswith(prefix) or f'/{prefix}' in lower:
-            return True
-    # Skip minified / bundled filename patterns
-    for pattern in ('.min.js', '.min.css', '.bundle.js', '.chunk.js',
-                    '.global.js', '.vendors.js', '.vendor.js'):
-        if lower.endswith(pattern):
-            return True
-    # Skip declaration / source-map files
-    if lower.endswith('.d.ts') or lower.endswith('.d.ts.map') or lower.endswith('.js.map'):
+    normalized = rel_path.replace('\\', '/')
+    parts = normalized.split('/')
+
+    # Check if file is in a known build output directory
+    bundled_dirs = frozenset({'dist', 'build', 'out', '.output', '.cache', 'storybook-static'})
+    if any(p in bundled_dirs for p in parts):
         return True
+
+    # Check file extension patterns
+    lower = normalized.lower()
+    bundled_suffixes = (
+        '.bundle.js', '.chunk.js', '.global.js',
+        '.min.js', '.min.css',
+        '.d.ts', '.d.ts.map',
+        '.map',
+    )
+    if lower.endswith(bundled_suffixes):
+        return True
+
     return False
 
 
@@ -457,32 +465,5 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
-        return True
-    return False
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file path looks like a bundled/compiled artifact that should be skipped.
-
-    Detects dist/, build/, and bundled file patterns that are not meaningful
-    for code quality analysis.
-
-    Args:
-        rel_path: Relative file path from workspace root.
-
-    Returns:
-        True if the file appears to be bundled/compiled.
-    """
-    parts = rel_path.replace('\\', '/').split('/')
-    # Skip files in dist/ or build/ directories
-    if 'dist' in parts or 'build' in parts or 'out' in parts:
-        return True
-    lower = rel_path.lower()
-    # Skip bundled/compiled file patterns
-    if '.bundle.' in lower or '.chunk.' in lower or '.global.' in lower:
-        return True
-    if lower.endswith('.min.js') or lower.endswith('.min.css'):
-        return True
-    if lower.endswith('.d.ts'):
         return True
     return False

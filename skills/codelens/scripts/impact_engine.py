@@ -40,9 +40,6 @@ def analyze_impact(
     risk = "low"
     recommendations = []
 
-    # Initialize structures that may not be set for all domains
-    node_by_fn = {}
-
     # ─── Backend Impact ─────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
@@ -175,7 +172,7 @@ def analyze_impact(
                                     "name": callee_node["fn"],
                                     "file": callee_node.get("file", ""),
                                     "line": callee_node.get("line", 0),
-                                    "relation": f"will become dead code (only called by {name}",
+                                    "relation": f"will become dead code (only called by {name})",
                                     "risk": "high",
                                     "domain": "backend"
                                 })

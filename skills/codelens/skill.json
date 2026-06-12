@@ -1,9 +1,7 @@
 {
   "name": "codelens",
-  "version": "7.1.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 47 commands. v7.1: NestJS full support (decorator-based API detection, framework detection, DI provider state mapping), is_bundled_file fix (4 commands unbroken), localhost secret filtering, class method smell detection, TS dead code exports, NestJS dataflow sources, side-effect timeout + class method detection. Tested on nestjs/nest (1673 TS files, lerna monorepo).",
-  "author": "codelens",
-  "tags": [    "code-analysis",
+  "version": "7.0.1",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v7.0.1: Critical fix — is_bundled_file() missing from utils.py (4 commands broken: ask, complexity, context, perf-hint), circular_engine _classify_cycle_severity tuple mismatch fix, impact_engine node_by_fn cleanup. Tested on screenpipe/screenpipe (1962 files, Rust+TS+Swift Tauri monorepo, 15K+ nodes, 93K+ edges).","author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",    "dead-code",
     "duplicate-detection",    "frontend",    "backend",
     "rust",    "html",

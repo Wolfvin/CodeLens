@@ -4,9 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelens"
-version = "7.1.0"
-description = "Live Codebase Reference Intelligence — 47 commands for AI-powered code analysis, security auditing, and quality scoring. v7.1: NestJS full support, decorator-based API detection, is_bundled_file fix, localhost secret filtering, class method smell detection."readme = "README.md"
-license = {text = "MIT"}
+version = "7.0.1"
+description = "Live Codebase Reference Intelligence — 45 commands for AI-powered code analysis, security auditing, and quality scoring. v6.1: Rust ECS/Bevy support, per-engine timeout, WGSL shaders, compile-time macro filtering."readme = "README.md"license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [    {name = "Wolfvin"},]
 keywords = [
