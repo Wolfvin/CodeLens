@@ -83,6 +83,10 @@ def detect_dead_code(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # v6.4: Skip minified files
+            if '.min.js' in filename or '.min.css' in filename:
+                continue
+
             # File-count limit to prevent timeout on huge repos
             if files_scanned >= max_files:
                 truncated = True
@@ -755,6 +759,10 @@ def _detect_dead_listeners(workspace: str) -> List[Dict]:
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                continue
+
+            # v6.4: Skip minified files
+            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             file_path = os.path.join(root, filename)

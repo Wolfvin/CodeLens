@@ -7,31 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
-### Tested against starship/starship (248 source files: 245 Rust + 3 HTML, Rust CLI prompt customizer)
+### Tested against Wilfred/difftastic (Rust CLI diff tool, 30K nodes, polyglot: Rust + C + JS + PHP test fixtures)
 
-Real-world test on a Rust CLI tool with 3,098 backend nodes and 14,555 edges.
-Confirmed: 887 smells (health score 75), 200 dead items, 26 circular deps, 432 debug leaks,
-2,104 complexity results, 7 detected frameworks (rust, clap, serde, log, rayon, gix, shadow-rs), 2 secrets.
-
-### Fixed
-
-- **Rust debug-leak false positive**: `log::debug!()`, `log::info!()`, `log::warn!()`, `log::error!()`, `log::trace!()`, and `tracing::*!()` macros from the `log`/`tracing` crates were incorrectly classified as high-severity `debugger` statements. They are now classified as low-severity `debug_log` (structured logging, not a debugger). Only `dbg!()` remains as a true debugger statement. Reduced high-severity false positives from 40 → 0 on Rust projects.
-- **Rust dead code false positive**: Trait implementation methods (`Default::default`, `From::from`, `Display::fmt`, `Clone::clone`, etc.) with `ref_count == 0` were incorrectly flagged as dead code. Standard library trait impls are now correctly excluded. `#[cfg(test)]` function patterns and `build.rs` functions are also excluded.
-- **XXX in string literals**: `XXX` patterns inside string literals (e.g., test paths like `"a/xxx/yyy"`) were incorrectly flagged as code markers. Now skipped when inside quoted strings.
+Real-world test on a pure Rust CLI project with vendored tree-sitter parsers and
+sample/demo fixture directories. Identified and fixed 8 major issues caused by
+scanning non-project code (minified files, test fixtures, vendored code).
 
 ### Added
 
-- **New `debug_log` category**: Separate from `debugger`, captures structured logging statements (Rust `log::debug!()`, `tracing::info!()`, Go `log.Debug()`) that are NOT debugger statements but may indicate debug-level logging in production code.
-- **19 new Rust crate detections**: `clap`, `structopt`, `serde`, `reqwest`, `hyper`, `sqlx`, `diesel`, `sea-orm`, `tonic`, `prost`, `tracing`, `log`, `slog`, `bevy`, `egui`, `iced`, `tauri`, `rayon`, `gix`, `shadow-rs`. Each has a `category` field (cli, database, grpc, logging, etc.).
-- **Rust `#[tokio::main]` and `#[actix::main]` entry points**: Async main entry points are now detected as `main` type entry points.
-- **Rust `build.rs` entry point**: Cargo build scripts are now detected as `module_export` type entry points with `rust_build_rs` label.
-- **Rust HTTP route detection**: Actix-web (`#[get("/path")]`), Axum (`.route("/path", get(handler))`), Rocket (`#[get = "/path"]`), Warp (`warp::path("segment")`).
-- **Rust `#[cfg(debug_assertions)]` detection**: Added to `dev_only` category in debug-leak engine.
+- **Auto-exclude minified files**: `.min.js` and `.min.css` files are now skipped during scan, entrypoints detection, and dead-code analysis. These files produce massive false positives (fake entrypoints, fake debug leaks, god objects from minified code) and contain no meaningful analysis data.
+- **Auto-exclude fixture/sample/demo directories**: `demo_files/`, `sample_files/`, `testdata/`, `test_data/`, `test-fixtures/`, `fixtures/` are now in `DEFAULT_IGNORE_DIRS`. Prevents test fixture files from polluting real codebase analysis.
+- **Auto-exclude vendored code directories**: `vendored_parsers/`, `vendored/`, `third_party/`, `thirdparty/`, `external/`, `submodules/` are now in `DEFAULT_IGNORE_DIRS`. Vendored code is not project code and should not be analyzed.
+- **File-count-weighted framework detection**: Frameworks are now validated against actual file counts. A project with only 1-2 PHP files (likely test fixtures) will no longer be classified as a "PHP project". Frameworks with <5% of total source files are pruned from detection results.
+- **Standard library method tagging**: Common Rust/Python/JS standard library methods (`.to_owned()`, `.map()`, `.clone()`, `.unwrap()`, `len()`, `str()`, `.forEach()`, etc.) are now tagged as `std_lib` instead of `unresolved` in callee analysis. This prevents agents from chasing dead ends in the standard library.
+- **Ask routing for architecture/module questions**: Natural language questions like "what are the main modules?", "architecture?", "codebase structure?", "project layout?" now route to `handbook` instead of falling through to code search.
+- **Outline shows function names**: The `outline` command in markdown format now displays actual function/class names with line numbers, not just counts. E.g., `**functions:** 10 — main (L142), diff_file (L404), ...` instead of `**functions:** 10`.
+- **Scan respects DEFAULT_IGNORE_DIRS**: The scan command's `discover_files()` now checks `DEFAULT_IGNORE_DIRS` in addition to config ignore patterns. Previously, fixture and vendored directories were excluded by engines but NOT by the scan file discovery.
+
+### Fixed
+
+- **Dead-code total display**: Markdown formatter used `stats.get('total_dead', 0)` but the actual key is `total_dead_code`. This caused "Total dead: 0" even when findings were listed. Now correctly shows the total.
+- **Query name display in markdown**: Multi-match query results stored the name in `"query"` key but the markdown formatter looked for `"name"`. This caused `Query: `` (empty name)`. Now checks both `"name"` and `"query"` keys.
+- **PHP false positive in framework detection**: A single PHP test file in a fixture directory would cause the entire project to be classified as using PHP. Now requires >=3 PHP files or significant PHP file ratio.
+- **Tailwind false positive in framework detection**: Tailwind CSS detection from test fixture HTML files no longer triggers for non-web projects.
+- **Minified JS false positives**: `asciinema-player.min.js` and similar files no longer produce fake entrypoints (set_interval, dom_event_listener, jest_it), fake debug leaks, fake god objects, or fake performance hints.
 
 ### Changed
 
-- **Version bumped to 6.4.0**: Reflects the significant Rust ecosystem improvements.
-- **`debugger` category in debug-leak**: Rust `debug!()` pattern removed from DEBUGGER_PATTERNS. Moved to new RUST_LOG_MACROS list for proper classification.
+- **Version bump**: 5.8.1 → 6.4.0
+- **Health score more accurate**: On difftastic, health score dropped from 60 → 40 after removing false positives from vendored/demo files. The lower score is more accurate since it reflects actual project code quality.
+- **Node count reduced**: On difftastic, backend nodes dropped from 30,022 → 606 after excluding demo_files/, sample_files/, and vendored_parsers/. All 29,416 removed nodes were from non-project code.
 
 ## [5.8.1] — 2026-06-12
 

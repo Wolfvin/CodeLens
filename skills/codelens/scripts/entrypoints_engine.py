@@ -901,6 +901,10 @@ def map_entrypoints(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
+            # v6.4: Skip minified files (.min.js, .min.css)
+            if '.min.js' in filename or '.min.css' in filename:
+                continue
+
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 

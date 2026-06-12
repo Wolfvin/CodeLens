@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
-from utils import logger
+from utils import logger, DEFAULT_IGNORE_DIRS
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -782,7 +782,15 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
         
+        # v6.4: Check both config ignore patterns AND DEFAULT_IGNORE_DIRS
         if should_ignore(rel_root, config):
+            dirs.clear()
+            continue
+
+        # v6.4: Also skip directories in DEFAULT_IGNORE_DIRS (fixtures, vendored, etc.)
+        # This ensures demo_files/, sample_files/, vendored_parsers/, etc. are always excluded
+        parts = rel_root.replace('\\', '/').split('/')
+        if any(p in DEFAULT_IGNORE_DIRS for p in parts):
             dirs.clear()
             continue
 
@@ -801,6 +809,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
             # Skip TypeScript declaration files (auto-generated, no runtime code)
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
+                continue
+
+            # Skip minified files (.min.js, .min.css) — no meaningful analysis possible
+            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             if ext in ('.html', '.htm'):

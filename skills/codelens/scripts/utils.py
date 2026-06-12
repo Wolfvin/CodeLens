@@ -32,6 +32,13 @@ DEFAULT_IGNORE_DIRS = frozenset({
     '_archive', 'coverage', '.pytest_cache', '.tox',
     'bin', 'obj', '.terraform', '.cargo', '.rustup',
     'storybook-static', '.storybook',
+    # Fixture / test-data / sample directories (v6.4)
+    'demo_files', 'sample_files', 'testdata', 'test_data',
+    'test-fixtures', 'test_fixtures', 'fixtures',
+    '__tests__/fixtures', 'tests/fixtures', 'test/fixtures',
+    # Vendored / third-party code directories (v6.4)
+    'vendored_parsers', 'vendored', 'third_party', 'thirdparty',
+    'external', 'submodules',
 })
 
 DEFAULT_IGNORE_EXTENSIONS = frozenset({

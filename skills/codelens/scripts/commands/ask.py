@@ -78,6 +78,12 @@ _KEYWORD_WEIGHTS: Dict[str, int] = {
     "what matters": 3, "what's important": 3, "priority": 3,
     "auto summary": 3, "auto detect": 3,
 
+    # Architecture/module terms (v6.4)
+    "module": 3, "modules": 3, "main modules": 3, "architecture": 3,
+    "codebase structure": 3, "code organization": 3,
+    "component structure": 3, "project layout": 3,
+    "project structure": 3, "what are the main": 3,
+
     # Action words (weight 1) — lower specificity
     "show me": 1, "find": 1, "search for": 1, "look for": 1,
     "trace": 1, "scan": 1, "analyze": 1, "index": 1,
@@ -331,6 +337,12 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
          "api-map", {}, "high"),
 
         # ─── Generic patterns (scored lower by keyword weight) ────
+
+        # Architecture / module structure (v6.4 — was misrouted to code search)
+        (["module", "modules", "main modules", "architecture", "codebase structure",
+          "how is the code organized", "code organization", "component structure",
+          "project layout", "project structure", "what are the main"],
+         "handbook", {}, "high"),
 
         # Context / definition queries
         (["where is", "where's", "where does", "find definition", "find def", "what is", "what's"],
