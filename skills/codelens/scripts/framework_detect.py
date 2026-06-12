@@ -276,14 +276,17 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
-        "indicators": ["sites/default/", "web/modules/", "web/themes/"]
+        "indicators": ["sites/default/", "sites/all/"]
     },
-    "hugo": {
-        "packages": [],
-        "composer_packages": [],
-        "config_files": ["hugo.toml", "config.toml", "config.yaml", "config.json"],
-        "indicators": ["archetypes/", "layouts/", "content/", "static/"]
-    },
+    # HTTP/network library signatures — these are detected both as dependency and
+    # when the repo IS the library (package.json name field match)
+    "axios": {"packages": ["axios"], "composer_packages": [], "config_files": [], "indicators": []},
+    "undici": {"packages": ["undici"], "composer_packages": [], "config_files": [], "indicators": []},
+    "got": {"packages": ["got"], "composer_packages": [], "config_files": [], "indicators": []},
+    "ky": {"packages": ["ky"], "composer_packages": [], "config_files": [], "indicators": []},
+    "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
+    "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
+    "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
 }
 
 
@@ -425,9 +428,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_express": False,
-        "has_hugo": False,
-        "has_drupal": False,
-        "has_deno": False,
+        "has_http_library": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -534,12 +535,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_express"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
-                    elif fw_name == "hugo":
-                        detected["has_hugo"] = True
-                    elif fw_name == "drupal":
-                        detected["has_drupal"] = True
-                    elif fw_name == "deno":
-                        detected["has_deno"] = True
+                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
+                        detected["has_http_library"] = True
                     break
 
         # Detect CSS preprocessor
@@ -549,6 +546,29 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             detected["css_preprocessor"] = "less"
         elif "stylus" in all_deps or "styl" in all_deps:
             detected["css_preprocessor"] = "stylus"
+
+    # 1b. Check if root package.json "name" matches an HTTP library name
+    # When the repo IS the HTTP library itself, it won't list itself as a dependency.
+    _HTTP_LIBRARY_NAMES = frozenset({
+        "axios", "undici", "got", "ky", "superagent", "node-fetch",
+        "request", "needle", "bent", "make-fetch-happen", "simple-get",
+        "node-http", "phin", "wreck", "terra",
+    })
+    root_pkg_path = os.path.join(workspace, "package.json")
+    if os.path.isfile(root_pkg_path):
+        try:
+            with open(root_pkg_path, 'r', encoding='utf-8') as f:
+                root_pkg = json.load(f)
+            pkg_name = root_pkg.get("name", "")
+            # Strip @scope/ prefix for scoped packages
+            if "/" in pkg_name:
+                pkg_name = pkg_name.split("/", 1)[1]
+            if pkg_name in _HTTP_LIBRARY_NAMES:
+                if pkg_name not in detected["frameworks"]:
+                    detected["frameworks"].append(pkg_name)
+                detected["has_http_library"] = True
+        except (json.JSONDecodeError, IOError):
+            pass
 
     # 2. Check config files (root + subdirectories for monorepos)
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -574,12 +594,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "hugo":
-                    detected["has_hugo"] = True
-                elif fw_name == "drupal":
-                    detected["has_drupal"] = True
-                elif fw_name == "deno":
-                    detected["has_deno"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -910,24 +924,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages
-    # Languages with working fallback parsers are NOT listed as unsupported,
-    # even though they lack tree-sitter grammars. The fallback parsers provide
-    # good-enough extraction for functions, classes, imports, and calls.
-    _LANGS_WITH_FALLBACK = {
-        "java", "kotlin", "c", "cpp", "csharp", "swift", "ruby",
-        "go", "lua", "php", "shell", "elixir", "dart", "scala",
-        "r", "haskell", "nim", "gdscript",
-    }
+    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # Note: Go was previously listed here but now has fallback parser support.
+    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
-        "perl": ["cpanfile", "Makefile.PL", "Build.PL"],
-        "ocaml": ["dune", "dune-project"],
-        "clojure": ["deps.edn", "project.clj"],
-        "fsharp": [".fsproj"],
-        "zig": ["build.zig"],
-        "erlang": ["rebar.config", "erlang.mk"],
-        "fortran": ["Makefile"],
-        "haskell": ["stack.yaml", "cabal.project"],  # haskell has a fallback parser but may miss advanced features
+        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "kotlin": ["build.gradle.kts"],
+        "c": ["CMakeLists.txt", "Makefile"],
+        "cpp": ["CMakeLists.txt", "Makefile"],
+        "csharp": [".csproj", ".sln"],
+        "swift": ["Package.swift", "Package.resolved"],
+        "ruby": ["Gemfile", "Rakefile"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:

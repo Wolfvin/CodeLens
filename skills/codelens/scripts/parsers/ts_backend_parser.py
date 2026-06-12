@@ -88,12 +88,13 @@ class TSBackendParser(BaseParser):
         declarations = []
 
         def visit(node: Node, _, depth):
-            # Handle export_statement by recursing into children
+            # Handle export_statement by recursing into children and marking exported
             if node.type == 'export_statement':
                 for child in node.children:
                     if child.type in ('function_declaration', 'generator_function_declaration'):
                         decl = self._parse_function_decl(child, source, file_path)
                         if decl:
+                            decl["node"]["exported"] = True
                             declarations.append(decl)
                     elif child.type == 'lexical_declaration':
                         # export const foo = () => {}
@@ -101,6 +102,7 @@ class TSBackendParser(BaseParser):
                             if subchild.type == 'variable_declarator':
                                 decl = self._parse_variable_declarator(subchild, source, file_path)
                                 if decl:
+                                    decl["node"]["exported"] = True
                                     declarations.append(decl)
                 return False  # Don't double-count by continuing walk
 

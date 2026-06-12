@@ -152,6 +152,34 @@ with 16+ Rust crates (including procedural/derive macros), 1,166 Rust files, 405
 
 - **meilisearch/meilisearch** (GitHub): Used as test target for v6.3.1 — a search engine written in Rust with 21 workspace crates, 692 .rs files, 12214 backend nodes, 490543 edges. Detected frameworks: rust, tokio, actix-web. Monorepo with cargo-workspace. Health score: 50/100 (677 critical smells, god object Index with 99 methods). 2 potential secrets in open_api_utils.rs. 1299 debug leaks (851 commented code, 310 debug_log). 402 dead code items. 200 circular dependencies.
 
+
+## [6.1.0] — 2026-06-12
+
+### Tested against database & XHR/network repos: Redis, LevelDB, Axios, Undici, libuv
+
+Round 2 real-world testing targeting database systems (Redis C, LevelDB C++) and
+HTTP/network libraries (Axios JS, Undici JS, libuv C). Exposed critical dead-code
+accuracy gaps where exported symbols were falsely marked as "dead".
+
+### Fixed
+
+- **CRITICAL: JS/TS exported symbols falsely marked as dead** (`js_backend_parser.py`, `ts_backend_parser.py`, `fallback_js_backend.py`): The `export` keyword was never propagated to backend registry nodes. Exported classes like `AxiosError`, `EventEmitter`, and `CustomError` appeared as "dead" (0 ref_count, `exported: False`). Now all three parsers detect `export_statement` AST nodes and set `exported: True` on function/class/variable declarations. AxiosError now correctly shows `status: "active"`.
+- **CRITICAL: Incremental scan status computation ignores exported/component/pub flags** (`incremental.py`): `merge_backend_data()` used simple `ref_count == 0 -> dead` without checking `exported`, `component`, or `pub` flags. Now uses the same 3-condition check as `edge_resolver.resolve_edges()`.
+- **HIGH: Rust `pub fn` falsely marked as dead** (`edge_resolver.py`): `resolve_edges()` only checked `exported` and `component` flags, but Rust uses `"pub": True` (separate key). A `pub fn` with no internal callers was marked `"dead"`. Now also checks `node.get("pub", False)`.
+- **HIGH: Dead-code engine misses exported/component flags** (`deadcode_engine.py`): `_detect_dead_from_registry()` skipped `pub` functions but not `exported` or `component` nodes. Now checks all three flags.
+- **MEDIUM: Drupal false positive on non-PHP repos** (`framework_detect.py`): Generic indicators `modules/` and `themes/` matched Redis directory. Replaced with specific indicators `sites/default/` and `sites/all/`. Redis no longer falsely detected as Drupal.
+- **MEDIUM: HTTP/network libraries not detected** (`framework_detect.py`): Added 7 HTTP library signatures (axios, undici, got, ky, superagent, node-fetch, request), `has_http_library` flag, and `package.json` name field detection for when the repo IS the library.
+- **MEDIUM: PascalCase classes too narrow in tree-sitter JS parser** (`js_backend_parser.py`): Only React-extending classes were `component: True`. Now any PascalCase class is marked as `component: True`.
+
+### Test Repos Used
+
+| Repo | Language | Size | Theme | Key Finding |
+|------|----------|------|-------|-------------|
+| redis/redis | C | ~70MB | Database | Drupal FP (modules/ dir) |
+| axios/axios | JS | ~5MB | XHR/Network | AxiosError dead, HTTP lib detection |
+| nodejs/undici | JS/TS | ~40MB | XHR/Network | HTTP lib detection |
+
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

@@ -1228,6 +1228,7 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
 
         # v6: Report functions with ref_count == 0 and status == "dead"
         # But skip: main() functions (entry points), pub functions (public API),
+        # exported symbols (JS/TS export), components (React/PascalCase classes),
         # and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
@@ -1241,6 +1242,12 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
+                continue
+            # Skip exported symbols (JS/TS) — they're part of the public API
+            if node.get("exported", False):
+                continue
+            # Skip components (React/PascalCase classes) — consumed externally
+            if node.get("component", False):
                 continue
             # Skip test fixtures and example files
             # v6.4: Expanded to catch examples/, e2e/, __tests__/, stories/

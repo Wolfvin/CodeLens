@@ -28,13 +28,19 @@ def parse_js_backend_fallback(content, file_path):
 
     # Detect function declarations: function name(...), const name = (), const name = function
     for line_num, line in enumerate(content.split('\n'), 1):
+        # Check if this line has an export keyword (for marking exported symbols)
+        is_exported = bool(re.match(r'\s*export\s+', line))
+
         # function name(
         for m in re.finditer(r'\b(?:async\s+)?function\s+([a-zA-Z_]\w*)\s*\(', line):
             name = m.group(1)
             if name not in skip_names:
                 node_id = f"{file_path}:{line_num}"
-                nodes.append({"id": node_id, "fn": name, "file": file_path,
-                              "line": line_num, "async": 'async' in line[:m.start()]})
+                node_data = {"id": node_id, "fn": name, "file": file_path,
+                             "line": line_num, "async": 'async' in line[:m.start()]}
+                if is_exported:
+                    node_data["exported"] = True
+                nodes.append(node_data)
                 fn_map[name] = node_id
 
         # class declarations: class ClassName, class ClassName extends ..., class ClassName implements ...
@@ -46,6 +52,8 @@ def parse_js_backend_fallback(content, file_path):
                 node_data = {"id": node_id, "fn": name, "file": file_path,
                              "line": line_num, "async": False, "node_type": "class",
                              "component": is_component}
+                if is_exported:
+                    node_data["exported"] = True
                 # Extract heritage info (extends/implements)
                 heritage_match = re.search(r'\bclass\s+' + re.escape(name) + r'\s+(extends|implements)\s+([^{]+)', line)
                 if heritage_match:
@@ -58,8 +66,11 @@ def parse_js_backend_fallback(content, file_path):
             name = m.group(1)
             if name not in skip_names:
                 node_id = f"{file_path}:{line_num}"
-                nodes.append({"id": node_id, "fn": name, "file": file_path,
-                              "line": line_num, "async": 'async' in line[:m.start()]})
+                node_data = {"id": node_id, "fn": name, "file": file_path,
+                             "line": line_num, "async": 'async' in line[:m.start()]}
+                if is_exported:
+                    node_data["exported"] = True
+                nodes.append(node_data)
                 fn_map[name] = node_id
 
         # const/let/var name = function
@@ -67,8 +78,11 @@ def parse_js_backend_fallback(content, file_path):
             name = m.group(1)
             if name not in skip_names and name not in fn_map:
                 node_id = f"{file_path}:{line_num}"
-                nodes.append({"id": node_id, "fn": name, "file": file_path,
-                              "line": line_num, "async": 'async' in line[:m.start()]})
+                node_data = {"id": node_id, "fn": name, "file": file_path,
+                             "line": line_num, "async": 'async' in line[:m.start()]}
+                if is_exported:
+                    node_data["exported"] = True
+                nodes.append(node_data)
                 fn_map[name] = node_id
 
     # Detect function calls (simplified — within function bodies)

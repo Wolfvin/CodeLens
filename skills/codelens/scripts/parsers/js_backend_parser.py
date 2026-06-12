@@ -86,10 +86,36 @@ class JSBackendParser(BaseParser):
         def visit(node: Node, _, depth):
             decl_info = None
 
+            # Detect export_statement wrapper and mark exported
+            if node.type == 'export_statement':
+                for child in node.children:
+                    if child.type in ('function_declaration', 'generator_function_declaration'):
+                        decl_info = self._parse_function_decl(child, source, file_path)
+                        if decl_info:
+                            decl_info["node"]["exported"] = True
+                    elif child.type == 'class_declaration':
+                        decl_info = self._parse_class_decl(child, source, file_path)
+                        if decl_info:
+                            decl_info["node"]["exported"] = True
+                    elif child.type == 'lexical_declaration':
+                        # export const foo = () => {}
+                        for subchild in child.children:
+                            if subchild.type == 'variable_declarator':
+                                decl_info = self._parse_variable_declarator(subchild, source, file_path)
+                                if decl_info:
+                                    decl_info["node"]["exported"] = True
+                if decl_info:
+                    declarations.append(decl_info)
+                return False  # Don't double-count by continuing walk inside export_statement
+
             if node.type == 'function_declaration' or node.type == 'generator_function_declaration':
                 decl_info = self._parse_function_decl(node, source, file_path)
 
             elif node.type == 'variable_declarator':
+                # Only process if parent is NOT an export_statement (to avoid double-counting)
+                if node.parent and node.parent.type == 'lexical_declaration':
+                    if node.parent.parent and node.parent.parent.type == 'export_statement':
+                        return True  # Already handled above
                 decl_info = self._parse_variable_declarator(node, source, file_path)
 
             elif node.type == 'class_declaration':
@@ -211,10 +237,11 @@ class JSBackendParser(BaseParser):
         line = self.get_line(node)
         node_id = f"{file_path}:{line}"
 
-        # Determine if it's a React component (PascalCase + extends Component)
-        is_component = class_name[0].isupper() and (
-            heritage and ('Component' in heritage or 'React' in heritage)
-        )
+        # Determine if it's a meaningful class (PascalCase) or React component.
+        # Any PascalCase class is marked as component to prevent false dead-code
+        # marking for domain classes like AxiosError, EventEmitter, CustomError.
+        # React-specific: extends Component or React.
+        is_component = class_name[0].isupper()
 
         result = {
             "node": {
