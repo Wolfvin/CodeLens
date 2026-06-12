@@ -9,13 +9,16 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--name", default=None, help="Specific function to analyze (optional)")
     parser.add_argument("--file", default=None, help="Filter by file path")
+    parser.add_argument("--max-files", type=int, default=3000,
+                        help="Max files to scan (default: 3000)")
 
 
 def execute(args, workspace):
     return analyze_side_effects(
         workspace,
         function_name=args.name,
-        file_filter=args.file
+        file_filter=args.file,
+        max_files=args.max_files
     )
 
 

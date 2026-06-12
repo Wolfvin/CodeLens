@@ -38,7 +38,8 @@ def map_test_coverage(
     workspace: str,
     function_name: Optional[str] = None,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Map test coverage for functions in the workspace.
@@ -51,6 +52,7 @@ def map_test_coverage(
         function_name: Optional function name to check
         file_filter: Optional file path filter for source files
         config: CodeLens config
+        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with test coverage map, tested/untested functions
@@ -60,6 +62,7 @@ def map_test_coverage(
     # Collect source files and test files
     source_files: Dict[str, Dict] = {}   # rel_path → {functions: [...], imports: [...]}
     test_files: Dict[str, Dict] = {}     # rel_path → {test_names: [...], imports: [...]}
+    files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -68,6 +71,10 @@ def map_test_coverage(
             continue
 
         for filename in filenames:
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -83,6 +90,8 @@ def map_test_coverage(
                     content = f.read()
             except IOError:
                 continue
+
+            files_scanned += 1
 
             is_test = any(re.search(p, rel_path) for p in TEST_FILE_PATTERNS)
 

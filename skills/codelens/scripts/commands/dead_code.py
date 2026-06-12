@@ -9,12 +9,18 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--categories", nargs="+", default=None,
                         help="Categories: unreachable, unused_exports, zombie_css, unused_vars, dead_listeners")
+    parser.add_argument("--max-files", type=int, default=3000,
+                        help="Max files to scan (default: 3000)")
+    parser.add_argument("--max-results", type=int, default=100,
+                        help="Max results per category (default: 100)")
 
 
 def execute(args, workspace):
     result = detect_dead_code(
         workspace,
-        categories=args.categories
+        categories=args.categories,
+        max_files=args.max_files,
+        max_results=args.max_results
     )
     # Add removal safety assessment
     if result.get("status") == "ok":

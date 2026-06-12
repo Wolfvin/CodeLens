@@ -183,7 +183,15 @@ def _detect_workspace() -> Optional[str]:
 
 
 def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
-    """Resolve workspace path with auto-detect fallback chain."""
+    """Resolve workspace path with auto-detect fallback chain.
+
+    Priority:
+    1. Explicit workspace_arg if it's a valid directory
+    2. Last used workspace (if still valid) — strong fallback for subcommands
+       that take positional args before workspace (e.g., symbols, search, trace)
+    3. Auto-detect from cwd/project markers
+    4. cwd as last resort
+    """
     if workspace_arg:
         ws = os.path.abspath(workspace_arg)
         if os.path.isdir(ws):
@@ -191,6 +199,12 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
             return ws
         else:
             print(f"[CodeLens] Warning: '{workspace_arg}' is not a valid directory. Attempting auto-detect...", file=sys.stderr)
+
+    # Try last used workspace first (stronger than auto-detect for subcommands)
+    last = _load_last_workspace()
+    if last:
+        _save_last_workspace(last)
+        return last
 
     detected = _detect_workspace()
     if detected:

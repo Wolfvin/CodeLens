@@ -168,7 +168,8 @@ def audit_accessibility(
     workspace: str,
     category: Optional[str] = None,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Audit the workspace for accessibility issues.
@@ -181,6 +182,7 @@ def audit_accessibility(
                   link_text, focus_management
         severity: Optional severity filter ("high", "medium", "low")
         config: CodeLens configuration dict
+        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with status, stats, issues, WCAG mapping, and recommendations
@@ -211,6 +213,7 @@ def audit_accessibility(
 
     issues: List[Dict] = []
     files_scanned = 0
+    truncated = False
 
     # Track headings across all files for heading order analysis
     all_headings: List[Dict] = []
@@ -222,6 +225,11 @@ def audit_accessibility(
             continue
 
         for filename in filenames:
+            # File-count limit to prevent timeout on huge repos
+            if files_scanned >= max_files:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in TEMPLATE_EXTENSIONS:
                 continue
@@ -336,6 +344,7 @@ def audit_accessibility(
             "files_scanned": files_scanned,
             "by_category": dict(by_category),
             "by_severity": dict(by_severity),
+            "truncated": truncated,
         },
         "issues": issues,
         "wcag_mapping": wcag_map,
