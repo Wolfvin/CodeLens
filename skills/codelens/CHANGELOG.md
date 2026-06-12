@@ -57,6 +57,27 @@ support that were invisible on JS/TS/Rust/Go projects.
 
 - **`c_type` in polyglot detection**: Extended the polyglot type builder to include C projects alongside Rust, Go, JS, and Python types.
 
+## [6.4.0] — 2026-06-12
+
+### Tested against neovim/neovim (3,856 files: 506 C/C++ + 816 Lua + 12 Shell + 8 Python + 4 JS, C/Lua text editor project)
+
+Real-world test on a C/Lua polyglot project (CMake + Lua runtime). This test exposed
+critical issues with non-web projects that have no package.json, pyproject.toml, or Cargo.toml.
+
+### Fixed
+
+- **Critical: `is_bundled_file` missing from `utils.py`** — 4 commands (`ask`, `complexity`, `context`, `perf-hint`) crashed on import because `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils` but it didn't exist. Added `is_bundled_file()` with directory segment detection (dist/, build/, vendor/, etc.) and bundled filename suffix detection (.bundle.js, .chunk.js, .umd.js, etc.).
+- **Critical: `audit_environment` ImportError in `analyze` command** — `_detect_env()` in `analyze.py` called `from envcheck_engine import audit_environment` but the actual function name is `check_env_vars`. Fixed to use the correct import and adapt the response structure.
+- **C/C++ no longer listed as "unsupported"** — `framework_detect.py` listed C, C++, Java, Kotlin, C#, Swift, Ruby as "unsupported" based on build system markers (CMakeLists.txt, pom.xml, etc.), even though fallback parsers for ALL these languages were working and extracting thousands of nodes. Now only truly unsupported languages (Zig, OCaml, Perl, Clojure, F#, Erlang, Fortran) are listed. Updated `lang_note` message to be more accurate.
+- **Identity detection for C/CMake projects** — Handbook reported `type: unknown`, `version: 0.0.0`, `name: <folder>` for C/C++ projects. Added CMakeLists.txt parsing to extract project name (`project(Name)`), version (`project(Name VERSION x.y.z)` and `set(VERSION_MAJOR/MINOR/PATCH)`), and classify project type (c-lua-application, c-gui-application, c-service, c-library, c-application, c-project).
+
+### Added
+
+- **Languages field in handbook output** — New `languages` key in handbook response with accurate language distribution (e.g., `{"Lua": 816, "C/C++": 506, "Shell/Bash": 12}`). Merges outline engine data with scan result's `files_scanned` for complete coverage including fallback parser languages.
+- **Architecture detection in handbook** — New `architecture` key with pattern detection: `core-plugin` (C core + Lua runtime), `client-server`, `mvc`, `core-api`, `fullstack`, `monorepo`, etc. Also includes `key_directories` and `description`.
+- **CMake `set(VERSION_MAJOR/MINOR/PATCH)` version extraction** — Projects that don't use `project(Name VERSION x.y.z)` but instead use `set(NVIM_VERSION_MAJOR 0)` etc. now get version detected correctly.
+- **`compute_summary` now includes fallback parser languages** — `files_by_language` in `summary.json` previously only contained tree-sitter supported languages (Python, JS, etc.). Now merges `scan_result.files_scanned` data so C/C++, Lua, Go, Java, Kotlin, etc. appear in the summary.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

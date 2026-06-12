@@ -93,6 +93,35 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
                         "ids": len(frontend.get("ids", [])) if isinstance(frontend.get("ids"), list) else frontend.get("ids", 0)
                     }
                 }
+                # v6.4: Load files_scanned from summary.json for language/architecture detection
+                summary_path = os.path.join(workspace, '.codelens', 'summary.json')
+                if os.path.isfile(summary_path):
+                    try:
+                        with open(summary_path, 'r', encoding='utf-8') as sf:
+                            summary_data = json.load(sf)
+                            if 'files_by_language' in summary_data:
+                                # Reconstruct files_scanned from files_by_language
+                                # The keys in summary.json are raw scan keys (e.g., 'c_cpp', 'lua')
+                                # or outline language names (e.g., 'python', 'javascript')
+                                lang_reverse = {
+                                    "html": "html", "css": "css", "javascript": "js_backend",
+                                    "tsx": "tsx", "rust": "rust", "python": "python",
+                                    "vue": "vue", "svelte": "svelte", "java": "java",
+                                    "kotlin": "kotlin", "c_cpp": "c_cpp", "go": "go",
+                                    "lua": "lua", "csharp": "csharp", "php": "php",
+                                    "blade": "blade", "ruby": "ruby", "elixir": "elixir",
+                                    "dart": "dart", "swift": "swift", "scala": "scala",
+                                    "shell": "shell", "gdscript": "gdscript",
+                                    "haskell": "haskell", "nim": "nim", "r": "r",
+                                }
+                                files_scanned = {}
+                                for lang_name, count in summary_data['files_by_language'].items():
+                                    key = lang_reverse.get(lang_name, lang_name)
+                                    files_scanned[key] = count
+                                if files_scanned:
+                                    scan_result["files_scanned"] = files_scanned
+                    except (json.JSONDecodeError, IOError):
+                        pass
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
@@ -234,6 +263,8 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         },
         "identity": identity,
         "frameworks": frameworks,
+        "languages": _extract_languages(scan_result),
+        "architecture": _detect_architecture(workspace, scan_result),
         "structure": {
             "directory_map": directory_map,
             "entrypoints": entrypoints,
@@ -440,80 +471,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         if "yarn-workspace" not in identity["monorepo_tools"]:
             identity["monorepo_tools"].append("yarn-workspace")
 
-    # v6.4: Monorepo main package identity — for monorepos, the root package.json
-    # often has a placeholder name/version. Try to find the "main" sub-package
-    # that matches the repo name or has the most significant content.
-    if identity["is_monorepo"]:
-        _main_pkg_found = False
-        _repo_basename = os.path.basename(os.path.abspath(workspace))
-        for subdir in _MONOREPO_SUBDIRS:
-            if _main_pkg_found:
-                break
-            subdir_path = os.path.join(workspace, subdir)
-            if not os.path.isdir(subdir_path):
-                continue
-            try:
-                for entry in sorted(os.listdir(subdir_path)):
-                    entry_pkg = os.path.join(subdir_path, entry, "package.json")
-                    if not os.path.isfile(entry_pkg):
-                        continue
-                    try:
-                        with open(entry_pkg, 'r', encoding='utf-8') as f:
-                            pkg = json.load(f)
-                        pkg_name = pkg.get("name", "")
-                        pkg_version = pkg.get("version", "")
-                        # Match: sub-package name matches repo basename,
-                        # or sub-package name contains the repo basename,
-                        # or sub-package has "main"/"module"/"exports" (it's a library)
-                        # and root has no real version
-                        is_main_pkg = (
-                            pkg_name == _repo_basename
-                            or pkg_name.endswith("/" + _repo_basename)
-                            or (pkg_name.replace("@", "").split("/")[-1] == _repo_basename)
-                            or (entry == _repo_basename and ("main" in pkg or "module" in pkg or "exports" in pkg))
-                        )
-                        if is_main_pkg and pkg_version and pkg_version != "0.0.0":
-                            identity["name"] = pkg_name
-                            identity["version"] = pkg_version
-                            identity["description"] = pkg.get("description", identity.get("description", ""))
-                            _main_pkg_found = True
-                            break
-                    except Exception:
-                        pass
-            except OSError:
-                pass
-        # Fallback: if no match by name, try the largest sub-package with a version
-        if not _main_pkg_found and identity.get("version", "0.0.0") in ("0.0.0", ""):
-            for subdir in _MONOREPO_SUBDIRS:
-                if _main_pkg_found:
-                    break
-                subdir_path = os.path.join(workspace, subdir)
-                if not os.path.isdir(subdir_path):
-                    continue
-                try:
-                    for entry in sorted(os.listdir(subdir_path)):
-                        entry_pkg = os.path.join(subdir_path, entry, "package.json")
-                        if not os.path.isfile(entry_pkg):
-                            continue
-                        try:
-                            with open(entry_pkg, 'r', encoding='utf-8') as f:
-                                pkg = json.load(f)
-                            pkg_name = pkg.get("name", "")
-                            pkg_version = pkg.get("version", "")
-                            # Pick the first sub-package that has a real version
-                            # and has "main"/"module"/"exports" (it's a publishable library)
-                            if (pkg_version and pkg_version != "0.0.0"
-                                    and ("main" in pkg or "module" in pkg or "exports" in pkg)):
-                                identity["name"] = pkg_name
-                                identity["version"] = pkg_version
-                                identity["description"] = pkg.get("description", identity.get("description", ""))
-                                _main_pkg_found = True
-                                break
-                        except Exception:
-                            pass
-                except OSError:
-                    pass
-
     # v6.3: Also check root package.json for "workspaces" field (npm/yarn workspaces)
     if has_package_json and not identity["is_monorepo"]:
         try:
@@ -601,97 +558,67 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # Fallback: detect Python from requirements.txt, setup.py, or .py files
-    if python_type is None:
-        req_path = os.path.join(workspace, 'requirements.txt')
-        setup_py_path = os.path.join(workspace, 'setup.py')
-        setup_cfg_path = os.path.join(workspace, 'setup.cfg')
-        if os.path.isfile(req_path):
-            # Analyze requirements.txt content to classify
-            try:
-                with open(req_path, 'r', encoding='utf-8') as f:
-                    req_content = f.read().lower()
-                if any(fw in req_content for fw in ('fastapi', 'flask', 'django', 'starlette', 'sanic', 'aiohttp')):
-                    python_type = "backend-api"
-                elif any(fw in req_content for fw in ('pytest', 'tox', 'nox', 'hypothesis')):
-                    python_type = "python-test-suite"
-                else:
-                    python_type = "python-project"
-            except Exception:
-                python_type = "python-project"
-        elif os.path.isfile(setup_py_path) or os.path.isfile(setup_cfg_path):
-            python_type = "python-library"
-        else:
-            # Check if any .py files exist (shallow scan — top-level only)
-            for entry in os.listdir(workspace):
-                if entry.endswith('.py'):
-                    python_type = "python-project"
-                    break
-
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
-
-    # v6.4: Detect C/C++ projects via Makefile (for identity type)
+    # v6.4: Try CMakeLists.txt — detect C/C++ projects
     c_type = None
-    _C_MAKEFILE_MARKERS = {"Makefile", "makefile", "GNUmakefile", "CMakeLists.txt", "Makefile.am"}
-    _has_makefile = any(
-        os.path.isfile(os.path.join(workspace, marker))
-        for marker in _C_MAKEFILE_MARKERS
-    )
-    if _has_makefile:
-        # Check if there are actual C/C++ source files
-        _has_c_sources = False
-        for root_d, _, fnames in os.walk(workspace):
-            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
-                continue
-            if '.codelens' in root_d:
-                continue
-            for fn in fnames:
-                if fn.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
-                    _has_c_sources = True
-                    break
-            if _has_c_sources:
-                break
-        if _has_c_sources:
-            # Try to extract name from Makefile (first target or PROJECT name)
-            for mf_name in ('Makefile', 'makefile', 'GNUmakefile'):
-                mf_path = os.path.join(workspace, mf_name)
-                if os.path.isfile(mf_path):
-                    try:
-                        with open(mf_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            mf_content = f.read(4096)
-                        # Look for VERSION = or VERSION:=
-                        ver_match = re.search(r'VERSION\s*[:?]?=\s*"?([^"\s\n]+)"?', mf_content)
-                        if ver_match:
-                            identity["version"] = ver_match.group(1)
-                        # Look for PROGRAM/APP/TARGET name
-                        prog_match = re.search(r'(?:PROGRAM|APP|TARGET|PROG)\s*[:?]?=\s*"?([^"\s\n]+)"?', mf_content)
-                        if prog_match:
-                            identity["name"] = prog_match.group(1)
-                    except Exception:
-                        pass
-                    break
-            # Classify based on project structure
-            has_redis_patterns = os.path.isfile(os.path.join(workspace, 'redis.conf'))
-            has_nginx_patterns = os.path.isdir(os.path.join(workspace, 'conf')) and os.path.isdir(os.path.join(workspace, 'src'))
-            if has_redis_patterns:
-                c_type = "c-database"
-            elif has_nginx_patterns:
-                c_type = "c-infrastructure"
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            # Extract project name and version from CMakeLists.txt
+            # Common patterns: project(Name VERSION x.y.z), project(Name), PROJECT_NAME
+            proj_match = re.search(r'project\s*\(\s*(\w[\w-]*)', cmake_content)
+            ver_match = re.search(r'project\s*\([^)]*VERSION\s+(\d+\.\d+[\d.]*)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1).lower()
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            else:
+                # Try CMake set() version variables: set(PROJ_VERSION_MAJOR X), etc.
+                maj = re.search(r'set\s*\(\s*\w*VERSION_MAJOR\s+(\d+)\)', cmake_content)
+                min_ = re.search(r'set\s*\(\s*\w*VERSION_MINOR\s+(\d+)\)', cmake_content)
+                pat = re.search(r'set\s*\(\s*\w*VERSION_PATCH\s+(\d+)\)', cmake_content)
+                if maj and min_:
+                    version = f"{maj.group(1)}.{min_.group(1)}"
+                    if pat:
+                        version += f".{pat.group(1)}"
+                    identity["version"] = version
+            # Classify C/C++ project type
+            cmake_lower = cmake_content.lower()
+            src_dir = os.path.join(workspace, 'src')
+            has_lua = os.path.isdir(os.path.join(workspace, 'runtime', 'lua')) or any(
+                f.endswith('.lua') for root, _, files in os.walk(workspace)
+                for f in files[:20]  # Sample first 20 files per dir
+            )
+            if has_lua:
+                c_type = "c-lua-application"
+            elif any(kw in cmake_lower for kw in ('gtk', 'qt', 'sdl', 'opengl', 'vulkan')):
+                c_type = "c-gui-application"
+            elif any(kw in cmake_lower for kw in ('grpc', 'protobuf', 'protobuf')):
+                c_type = "c-service"
+            elif any(kw in cmake_lower for kw in ('test', 'benchmark')):
+                c_type = "c-library"
+            elif os.path.isdir(src_dir) and sum(
+                1 for f in os.listdir(src_dir) if f.endswith(('.c', '.h', '.cpp', '.hpp'))
+            ) > 3:
+                c_type = "c-application"
             else:
                 c_type = "c-project"
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
 
+    # v6: Combined type detection — handle polyglot projects
     active_types = [t for t in [js_type, python_type, rust_type, go_type, c_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if c_type:
-            type_parts.append("c")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if c_type:
+            type_parts.append("c")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
@@ -718,6 +645,139 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["type"] += "-monorepo"
 
     return identity
+
+
+def _extract_languages(scan_result: Dict[str, Any]) -> Dict[str, int]:
+    """Extract language distribution from scan result.
+
+    Returns a dict mapping language name to file count,
+    sorted by count descending.
+    """
+    files_scanned = scan_result.get("files_scanned", {})
+    # Map scan keys to human-readable language names
+    lang_map = {
+        "html": "HTML",
+        "css": "CSS",
+        "js_frontend": "JavaScript",
+        "js_backend": "JavaScript",
+        "tsx": "TypeScript (TSX)",
+        "rust": "Rust",
+        "python": "Python",
+        "vue": "Vue",
+        "svelte": "Svelte",
+        "java": "Java",
+        "kotlin": "Kotlin",
+        "c_cpp": "C/C++",
+        "go": "Go",
+        "lua": "Lua",
+        "csharp": "C#",
+        "php": "PHP",
+        "blade": "Blade",
+        "ruby": "Ruby",
+        "elixir": "Elixir",
+        "dart": "Dart",
+        "swift": "Swift",
+        "scala": "Scala",
+        "shell": "Shell/Bash",
+        "gdscript": "GDScript",
+        "haskell": "Haskell",
+        "nim": "Nim",
+        "r": "R",
+    }
+    # Aggregate by language name (e.g., js_frontend + js_backend → JavaScript)
+    merged: Dict[str, int] = {}
+    for key, count in files_scanned.items():
+        if count > 0:
+            name = lang_map.get(key, key)
+            merged[name] = merged.get(name, 0) + count
+    # Sort by count descending
+    return dict(sorted(merged.items(), key=lambda x: x[1], reverse=True))
+
+
+def _detect_architecture(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect project architecture from directory structure and scan data.
+
+    Identifies common patterns like MVC, monorepo, microservices,
+    client-server, plugin-based, etc.
+    """
+    arch = {
+        "pattern": "unknown",
+        "description": "",
+        "key_directories": [],
+    }
+
+    # Check key directories
+    src_dir = os.path.join(workspace, 'src')
+    has_src = os.path.isdir(src_dir)
+
+    # Collect top-level directories
+    top_dirs = set()
+    try:
+        for entry in os.listdir(workspace):
+            if os.path.isdir(os.path.join(workspace, entry)) and not entry.startswith('.'):
+                top_dirs.add(entry)
+    except OSError:
+        pass
+
+    # Detect patterns
+    files_scanned = scan_result.get("files_scanned", {})
+    has_frontend = any(files_scanned.get(k, 0) > 0 for k in ("html", "css", "js_frontend", "tsx", "vue", "svelte"))
+    has_backend = any(files_scanned.get(k, 0) > 0 for k in ("js_backend", "rust", "python", "java", "go", "c_cpp", "lua", "php", "ruby", "elixir", "dart", "swift", "scala", "kotlin", "csharp"))
+
+    if has_src:
+        src_subdirs = set()
+        try:
+            for entry in os.listdir(src_dir):
+                if os.path.isdir(os.path.join(src_dir, entry)):
+                    src_subdirs.add(entry)
+        except OSError:
+            pass
+
+        # Client-server pattern (e.g., src/client/ + src/server/)
+        if {'client', 'server'} & src_subdirs:
+            arch["pattern"] = "client-server"
+            arch["description"] = "Separate client and server code directories"
+            arch["key_directories"] = sorted(src_subdirs)
+        # MVC / layered pattern
+        elif {'controllers', 'models', 'views'} & src_subdirs or {'routes', 'controllers', 'services'} & src_subdirs:
+            arch["pattern"] = "mvc"
+            arch["description"] = "Model-View-Controller or layered architecture"
+            arch["key_directories"] = sorted(src_subdirs)
+        # C/C++ core with extension/plugin layer (e.g., src/nvim/ + runtime/lua/)
+        elif files_scanned.get('c_cpp', 0) > 50 and files_scanned.get('lua', 0) > 50:
+            arch["pattern"] = "core-plugin"
+            arch["description"] = "Core C/C++ implementation with Lua/plugin extension layer"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif 'api' in src_subdirs and 'core' in src_subdirs:
+            arch["pattern"] = "core-api"
+            arch["description"] = "Core engine with API layer"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif has_frontend and has_backend:
+            arch["pattern"] = "fullstack"
+            arch["description"] = "Full-stack application with frontend and backend"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif has_backend:
+            arch["pattern"] = "backend"
+            arch["description"] = "Backend application/service"
+            arch["key_directories"] = sorted(src_subdirs)
+        else:
+            arch["pattern"] = "source-tree"
+            arch["description"] = "Source code organized under src/"
+            arch["key_directories"] = sorted(src_subdirs)
+    elif 'runtime' in top_dirs and files_scanned.get('c_cpp', 0) > 50:
+        arch["pattern"] = "core-runtime"
+        arch["description"] = "Core engine with runtime/extension layer"
+        arch["key_directories"] = sorted(top_dirs)
+    elif has_frontend and has_backend:
+        arch["pattern"] = "fullstack-flat"
+        arch["description"] = "Full-stack application with flat structure"
+        arch["key_directories"] = sorted(top_dirs)
+    elif 'apps' in top_dirs or 'packages' in top_dirs:
+        arch["pattern"] = "monorepo"
+        arch["description"] = "Monorepo with apps/ and/or packages/ directories"
+        arch["key_directories"] = sorted(top_dirs)
+
+    return arch
 
 
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:

@@ -32,7 +32,6 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  v6.4 adds: is_bundled_file() fix (4 broken commands restored), dataflow .pipe() false positive elimination, safe DOM reset skip (innerHTML=''), monorepo main package identity detection, production-first dataflow violation ordering.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
@@ -41,14 +40,15 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.4 — Tested on styled-components/styled-components (521 files, TS/TSX pnpm monorepo, CSS-in-JS)
+## What's New in v6.4 — Tested on neovim/neovim (3.8K files, C+Lua CMake project)
 
-- **CRITICAL: `is_bundled_file()` missing from `utils.py`**: 4 command modules (`ask`, `complexity`, `context`, `perf-hint`) and 3 analyze engines (`complexity`, `perf_hints`, `env_issues`) were completely broken due to missing `is_bundled_file` function in `utils.py`. The function was referenced in `complexity_engine.py` and `perfhint_engine.py` imports but never defined. Now added: detects files in build output directories (`dist/`, `build/`, `out/`, `.next/`), minified files (`.min.js`, `.min.css`), bundled files (`.bundle.js`, `.chunk.js`, `.global.js`), source maps (`.map`), and TypeScript declarations (`.d.ts`, `.d.cts`, `.d.mts`). Also fixed `analyze` command's `env_issues` engine: was importing non-existent `audit_environment` instead of `check_env_vars`, causing all env-check results to be skipped.
-- **Dataflow `.pipe()` false positive fix**: The overly broad `\.pipe\s*\(` pattern in `file_write` sink matched Node.js stream operations like `readableStream.pipe(transformer)` and `pipeableStream.pipe(transformer)`, falsely flagging them as file write sinks. Now only matches explicit stream-to-file patterns (`readableStream.pipe`, `writableStream.pipe`, `createWriteStream`). Also added `createWriteStream` as a file_write sink pattern.
-- **Dataflow safe DOM reset skip**: `innerHTML = ''` and `outerHTML = ''` (empty string assignments) are safe DOM resets, not XSS risks. Now skipped during sink detection. `textContent =` assignments also skipped (textContent doesn't parse HTML).
-- **Dataflow production vs test prioritization**: In `analyze` command, production dataflow violations are now listed first, followed by test file violations. Added `production_total` and `test_total` counts to output.
-- **Monorepo main package identity detection**: For monorepos, the root `package.json` often has a placeholder name/version (e.g., `styled-components-project` / `0.0.0`). CodeLens now walks `packages/*`, `apps/*`, `services/*` to find the main sub-package by matching repo basename, scoped package name, or the first publishable library with `main`/`module`/`exports` fields. Result: `styled-components` / `6.4.1` instead of `styled-components-project` / `0.0.0`.
-- **Version**: 6.3.0 → 6.4.0.
+- **Critical: `is_bundled_file` missing from `utils.py`**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) crashed on import. Added `is_bundled_file()` with directory segment detection (dist/, build/, vendor/) and bundled filename suffix detection (.bundle.js, .chunk.js, .umd.js, etc.).
+- **Critical: `audit_environment` ImportError in analyze**: Wrong function name — fixed to use `check_env_vars`.
+- **C/C++ no longer listed as "unsupported"**: Fallback parsers for C, C++, Java, Kotlin, C#, Swift, Ruby, Go, Lua, PHP, Shell, Elixir, Dart, Scala, R, Haskell, Nim, GDScript were working but languages were incorrectly listed as unsupported. Only truly unsupported languages (Zig, OCaml, Perl, Clojure, F#, Erlang, Fortran) are now listed.
+- **CMakeLists.txt identity detection**: Handbook now parses CMakeLists.txt for project name (`project(Name)`), version (`project(Name VERSION x.y.z)` and `set(VERSION_MAJOR/MINOR/PATCH)`), and classifies project type (c-lua-application, c-gui-application, c-service, c-library, c-application, c-project).
+- **Languages field in handbook**: New `languages` key with accurate language distribution including fallback parser languages (e.g., `{"Lua": 816, "C/C++": 506}`).
+- **Architecture detection in handbook**: New `architecture` key with pattern detection (core-plugin, client-server, mvc, core-api, fullstack, monorepo, etc.) and key directories listing.
+- **`compute_summary` includes fallback parser languages**: `files_by_language` in `summary.json` now includes C/C++, Lua, Go, Java, etc. from `scan_result.files_scanned`.
 
 ## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 

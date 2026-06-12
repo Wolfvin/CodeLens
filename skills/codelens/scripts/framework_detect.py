@@ -276,50 +276,7 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": [],
-        "indicators": ["sites/default/", "sites/all/", "profiles/"]
-    },
-    # Python tooling and testing frameworks
-    "pytest": {
-        "packages": [],
-        "pip_packages": ["pytest"],
-        "config_files": ["pytest.ini", "conftest.py", "pyproject.toml"],
-        "indicators": ["conftest.py", "test_", "_test.py"]
-    },
-    "poetry": {
-        "packages": [],
-        "pip_packages": ["poetry"],
-        "config_files": ["poetry.lock"],
-        "indicators": []
-    },
-    "setuptools": {
-        "packages": [],
-        "pip_packages": ["setuptools"],
-        "config_files": ["setup.py", "setup.cfg"],
-        "indicators": []
-    },
-    "tox": {
-        "packages": [],
-        "pip_packages": ["tox"],
-        "config_files": ["tox.ini", "pyproject.toml"],
-        "indicators": []
-    },
-    "sphinx": {
-        "packages": [],
-        "pip_packages": ["sphinx"],
-        "config_files": ["conf.py", "docs/conf.py"],
-        "indicators": []
-    },
-    "nox": {
-        "packages": [],
-        "pip_packages": ["nox"],
-        "config_files": ["noxfile.py"],
-        "indicators": []
-    },
-    "hatch": {
-        "packages": [],
-        "pip_packages": ["hatch"],
-        "config_files": ["hatch.toml", "pyproject.toml"],
-        "indicators": []
+        "indicators": ["sites/default/", "modules/", "themes/"]
     },
 }
 
@@ -462,7 +419,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_express": False,
-        "has_pytest": False, "has_poetry": False, "has_python": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -603,10 +559,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "pytest":
-                    detected["has_pytest"] = True
-                elif fw_name == "poetry":
-                    detected["has_poetry"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -663,64 +615,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             # Also find list-style deps: "fastapi>=0.89"
             for m in re.finditer(r'["\']([a-zA-Z0-9_-]+)[><=!~]', content):
                 pip_deps.add(m.group(1).lower())
-            # Poetry list-style deps: dependencies = ["requests>=2.0", "flask"]
-            for m in re.finditer(r'["\']([a-zA-Z0-9_][a-zA-Z0-9._-]*)[><=!~\[]', content):
-                dep_name = m.group(1).lower()
-                # Filter out version-like strings and common non-package patterns
-                if not dep_name.replace('.', '').replace('-', '').isdigit():
-                    pip_deps.add(dep_name)
-            # Also detect Poetry array-style dependencies under [tool.poetry.dependencies]
-            # Parse sections manually for Poetry format
-            in_poetry_deps = False
-            for line in content.split('\n'):
-                stripped = line.strip()
-                if stripped.startswith('['):
-                    section = stripped.strip('[]').strip()
-                    in_poetry_deps = section in ('tool.poetry.dependencies',
-                                                  'tool.poetry.dev-dependencies',
-                                                  'tool.poetry.group.dev.dependencies',
-                                                  'project.dependencies')
-                    continue
-                if in_poetry_deps:
-                    # Poetry inline: flask = "^2.0"
-                    m = re.match(r'^([a-zA-Z0-9_-]+)\s*=', stripped)
-                    if m:
-                        dep_name = m.group(1).lower()
-                        if dep_name not in ('python', 'version', 'path', 'extras', 'source'):
-                            pip_deps.add(dep_name)
-                    # PEP 621 array-style: dependencies = ["flask>=2.0", "requests"]
-                    elif stripped.startswith('"') or stripped.startswith("'"):
-                        # Line inside an array: "flask>=2.0"
-                        dep_match = re.match(r'["\']([a-zA-Z0-9_-]+)', stripped)
-                        if dep_match:
-                            pip_deps.add(dep_match.group(1).lower())
         except IOError:
             logger.debug("Failed to parse pyproject.toml", exc_info=True)
-
-    # 3b2. Pipfile
-    pipfile_path = os.path.join(workspace, "Pipfile")
-    if os.path.exists(pipfile_path):
-        try:
-            with open(pipfile_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            # Parse [packages] and [dev-packages] sections
-            in_packages = False
-            for line in content.split('\n'):
-                stripped = line.strip()
-                if stripped.startswith('['):
-                    section = stripped.strip('[]').strip()
-                    in_packages = section in ('packages', 'dev-packages')
-                    continue
-                if in_packages and '=' in stripped:
-                    pkg_name = stripped.split('=')[0].strip().lower()
-                    if pkg_name and not pkg_name.startswith('#'):
-                        pip_deps.add(pkg_name)
-                elif in_packages and stripped and not stripped.startswith('#'):
-                    pkg_name = stripped.split('=')[0].strip().lower()
-                    if pkg_name:
-                        pip_deps.add(pkg_name)
-        except IOError:
-            logger.debug("Failed to parse Pipfile", exc_info=True)
 
     # 3c. Check pip deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -736,10 +632,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_flask"] = True
                 elif fw_name == "django":
                     detected["has_django"] = True
-                elif fw_name == "pytest":
-                    detected["has_pytest"] = True
-                elif fw_name == "poetry":
-                    detected["has_poetry"] = True
                 break
 
     # 3d. Check PHP/composer.json for framework detection
@@ -919,10 +811,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
-            # Detect Python project from .py files (shallow — only first match)
-            elif f.endswith('.py') and "python" not in detected["frameworks"]:
-                detected["frameworks"].append("python")
-                detected["has_python"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -944,8 +832,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "pytest":
-                    detected["has_pytest"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -1003,15 +889,24 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C#, Swift, Ruby)
-    # Note: Go and C/C++ were previously listed here but now have fallback parser
-    # support. They are no longer listed as unsupported.
+    # 7. Detect unsupported languages
+    # Languages with working fallback parsers are NOT listed as unsupported,
+    # even though they lack tree-sitter grammars. The fallback parsers provide
+    # good-enough extraction for functions, classes, imports, and calls.
+    _LANGS_WITH_FALLBACK = {
+        "java", "kotlin", "c", "cpp", "csharp", "swift", "ruby",
+        "go", "lua", "php", "shell", "elixir", "dart", "scala",
+        "r", "haskell", "nim", "gdscript",
+    }
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        "perl": ["cpanfile", "Makefile.PL", "Build.PL"],
+        "ocaml": ["dune", "dune-project"],
+        "clojure": ["deps.edn", "project.clj"],
+        "fsharp": [".fsproj"],
+        "zig": ["build.zig"],
+        "erlang": ["rebar.config", "erlang.mk"],
+        "fortran": ["Makefile"],
+        "haskell": ["stack.yaml", "cabal.project"],  # haskell has a fallback parser but may miss advanced features
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -1019,36 +914,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
-
-    # 7b. Detect C/C++ projects via Makefile / CMakeLists.txt
-    # C/C++ have fallback parser support, so they are NOT in unsupported_langs.
-    # We still detect them as frameworks for identity and config purposes.
-    _C_MAKEFILE_MARKERS = {
-        "Makefile", "makefile", "GNUmakefile",
-        "CMakeLists.txt", "Makefile.am",
-    }
-    _has_makefile = any(
-        os.path.exists(os.path.join(workspace, marker))
-        for marker in _C_MAKEFILE_MARKERS
-    )
-    if _has_makefile:
-        # Check if there are actual C/C++ source files to confirm
-        _has_c_sources = False
-        for root_d, _, fnames in os.walk(workspace):
-            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
-                continue
-            if '.codelens' in root_d:
-                continue
-            for fn in fnames:
-                if fn.endswith(('.c', '.h', '.cpp', '.hpp', '.cc', '.cxx')):
-                    _has_c_sources = True
-                    break
-            if _has_c_sources:
-                break
-
-        if _has_c_sources:
-            if "c_project" not in detected["frameworks"]:
-                detected["frameworks"].append("c_project")
 
     return detected
 
