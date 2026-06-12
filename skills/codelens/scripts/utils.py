@@ -430,3 +430,7 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+# Alias for backward compatibility — some engines import is_bundled_file
+is_bundled_file = is_generated_file
