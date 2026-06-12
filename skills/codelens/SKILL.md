@@ -36,9 +36,20 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v7
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v7.0 — Tested on ggerganov/llama.cpp (2966 files, C/C++/CUDA/Python AI inference engine)
+
+- **C/C++ no longer "unsupported"**: C and C++ are removed from the `unsupported_langs` list since the fallback parser (`fallback_c.py`) produces meaningful results — function definitions, struct/class detection, call edges, and API-exported declarations. The `lang_note` now correctly describes C/C++ as "parsed with regex-based fallback" instead of "unsupported".
+- **CUDA (.cu/.cuh) file support**: CUDA source files are now discovered and parsed alongside C/C++ files. Projects like llama.cpp with 184+ `.cu` files and 74+ `.cuh` files now get full coverage.
+- **API-exported function declarations in headers**: Function declarations prefixed with common C/C++ export macros (GGML_API, LLAMA_API, __declspec(dllexport), __attribute__((visibility("default"))), and 40+ more) are now properly extracted from header files. Previously, `llama_decode` and similar API functions were invisible to CodeLens. Now 140+ `llama_` functions are detected from `llama.h`.
+- **Framework detection deprioritizes minor web UI in C/C++-dominant repos**: When C/C++ files significantly outnumber JS/TS files (2x ratio), web UI frameworks (svelte, tailwind, react, vue) from minor UI components are removed from the primary framework list. llama.cpp was incorrectly reported as "svelte/tailwind" — now correctly shows "cmake".
+- **Adaptive timeout budgets for `summary`**: Time budget now scales with codebase size: small (<500 files) → 90s, medium (500-2000) → 180s, large (>2000) → 300s. Prevents premature engine skipping on large repos.
+- **C/C++ project type classification**: `handbook` now classifies CMake projects by content heuristics: `ml-inference-engine` (ggml/llama/tensor), `gpu-computing` (cuda/cudnn), `multimedia-library` (opencv/ffmpeg), `graphics-engine` (opengl/vulkan), `network-server` (libevent/nginx).
+- **`has_cpp` and `c_cpp_file_count` in framework detection**: New fields for downstream engines to make C/C++-aware decisions.
+- **Version**: 6.3.1 → 7.0.0.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 

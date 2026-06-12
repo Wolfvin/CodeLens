@@ -121,15 +121,20 @@ def execute(args, workspace):
     )
 
 
-def _time_left(start: float, budget: float = 90) -> float:
-    """Return remaining seconds within the time budget."""
+def _time_left(start: float, budget: float = 180) -> float:
+    """Return remaining seconds within the time budget.
+    v7: Default budget increased from 90s to 180s for large repos with 20K+ nodes.
+    """
     return max(0.0, budget - (time.time() - start))
 
 
 def _count_source_files(workspace: str) -> int:
-    """Quick count of source files for auto-detect sizing."""
+    """Quick count of source files for auto-detect sizing.
+    v7: Added .cu, .cuh (CUDA) and .mm, .m (Objective-C) extensions."""
     SOURCE_EXTS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.vue', '.svelte',
-                   '.html', '.css', '.scss', '.java', '.kt', '.c', '.cpp', '.h', '.php', '.rb'}
+                   '.html', '.css', '.scss', '.java', '.kt', '.c', '.cpp', '.h', '.hpp',
+                   '.cu', '.cuh', '.php', '.rb', '.mm', '.m', '.swift', '.dart',
+                   '.cc', '.cxx', '.hxx'}
     count = 0
     for root, dirs, files in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build',
@@ -172,9 +177,20 @@ def generate_summary(
     skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
 
+    # v7: Adaptive time budget based on codebase size
+    # Small repos (<500 files): 90s, Medium (500-2000): 180s, Large (>2000): 300s
+    source_count = _count_source_files(workspace)
+    if source_count > 2000:
+        _time_budget = 300.0
+    elif source_count > 500:
+        _time_budget = 180.0
+    else:
+        _time_budget = 90.0
+
     # ─── Auto-detect detail level based on codebase size ──────────
     if detail == "auto":
-        file_count = _count_source_files(workspace)
+        # Reuse source_count from adaptive budget calculation (already counted above)
+        file_count = source_count
         if file_count < 100:
             detail = "full"
         elif file_count < 1000:
@@ -268,7 +284,7 @@ def generate_summary(
 
     if focus in ("security", "all"):
         # Security findings
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("secrets")
         else:
             try:
@@ -290,7 +306,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Secrets scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("vulnerabilities")
         else:
             try:
@@ -308,7 +324,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Vuln scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("dataflow")
         else:
             try:
@@ -332,7 +348,7 @@ def generate_summary(
 
     if focus in ("quality", "all"):
         # Quality findings
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("code_smells")
         else:
             try:
@@ -357,7 +373,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Smell scan failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("debug_leaks")
         else:
             try:
@@ -384,7 +400,7 @@ def generate_summary(
 
     if focus in ("architecture", "all"):
         # Architecture findings
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("circular")
         else:
             try:
@@ -408,7 +424,7 @@ def generate_summary(
             except Exception:
                 logger.debug("Circular detection failed in summary")
 
-        if _time_left(start) < 5:
+        if _time_left(start, _time_budget) < 5:
             skipped_engines.append("dead_code")
         else:
             try:

@@ -643,7 +643,20 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 identity["name"] = proj_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            c_cpp_type = "cmake-project"
+            # v7: Classify CMake project by content heuristics
+            cmake_lower = cmake_content.lower()
+            if 'ggml' in cmake_lower or 'llama' in cmake_lower or 'tensor' in cmake_lower:
+                c_cpp_type = "ml-inference-engine"
+            elif 'cuda' in cmake_lower or 'cudnn' in cmake_lower or 'tensorrt' in cmake_lower:
+                c_cpp_type = "gpu-computing"
+            elif 'opencv' in cmake_lower or 'ffmpeg' in cmake_lower or 'avcodec' in cmake_lower:
+                c_cpp_type = "multimedia-library"
+            elif 'opengl' in cmake_lower or 'vulkan' in cmake_lower or 'glfw' in cmake_lower:
+                c_cpp_type = "graphics-engine"
+            elif 'boost.asio' in cmake_lower or 'libevent' in cmake_lower or 'nginx' in cmake_lower:
+                c_cpp_type = "network-server"
+            else:
+                c_cpp_type = "cmake-project"
         except Exception:
             pass
 
