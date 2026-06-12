@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.3.1"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -402,6 +402,43 @@ GENERATED_FILE_PATTERNS = frozenset({
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative file path looks like a bundled/compiled output file.
+
+    Detects files that are build artifacts rather than source code:
+    - Files in dist/, build/, out/, .output/ directories
+    - Files with bundled extensions (.bundle.js, .chunk.js, .global.js)
+    - Minified files (.min.js, .min.css)
+    - Declaration files (.d.ts)
+
+    Args:
+        rel_path: Relative path from workspace root (e.g., 'dist/app.bundle.js')
+
+    Returns:
+        True if the file appears to be bundled/compiled output.
+    """
+    normalized = rel_path.replace('\\', '/')
+    parts = normalized.split('/')
+
+    # Check if file is in a known build output directory
+    bundled_dirs = frozenset({'dist', 'build', 'out', '.output', '.cache', 'storybook-static'})
+    if any(p in bundled_dirs for p in parts):
+        return True
+
+    # Check file extension patterns
+    lower = normalized.lower()
+    bundled_suffixes = (
+        '.bundle.js', '.chunk.js', '.global.js',
+        '.min.js', '.min.css',
+        '.d.ts', '.d.ts.map',
+        '.map',
+    )
+    if lower.endswith(bundled_suffixes):
+        return True
+
+    return False
 
 
 def is_generated_file(filename: str) -> bool:

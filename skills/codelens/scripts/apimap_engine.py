@@ -81,7 +81,8 @@ def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -322,6 +323,12 @@ def map_api_routes(
     # v5.9: Count production vs test routes
     production_count = sum(1 for r in routes if r.get("source") == "production")
     test_count = len(routes) - production_count
+
+    # Apply production_only filter if requested
+    if production_only:
+        routes = [r for r in routes if r.get("source") == "production"]
+        production_count = len(routes)
+        test_count = 0
 
     # Recommendations
     recommendations = _generate_recommendations(

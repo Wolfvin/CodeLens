@@ -5,6 +5,27 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.1] — 2026-06-12
+
+### Tested against spacedriveapp/spacedrive (2,934 files, Rust+TS+Swift Tauri monorepo)
+
+Real-world test on a massive virtual distributed filesystem Tauri desktop app (38K+ GitHub stars)
+with 16+ Rust crates (including procedural/derive macros), 1,166 Rust files, 405 TS/TSX files,
+17 Swift files, 3 Kotlin files, and complex cross-language FFI boundaries. The registry built
+13,350 backend nodes and 62,780 edges — one of the most diverse test targets to date.
+
+### Fixed
+
+- **CRITICAL: `is_bundled_file()` missing from utils.py** — The function was imported by
+  `complexity_engine.py` and `perfhint_engine.py`, but never defined in `utils.py`. This caused
+  ImportError cascade that completely disabled 4 commands: `ask`, `complexity`, `context`, and
+  `perf-hint`. Added the missing function with detection for dist/build/out directories, bundled
+  file extensions (.bundle.js, .chunk.js, .global.js), minified files, and declaration files.
+- **`api-map` crash on `production_only` kwarg** — The `api-map` command passed `production_only`
+  argument to `map_api_routes()`, but the engine function did not accept this parameter. Added
+  `production_only: bool = False` parameter to `map_api_routes()` and implemented the filter
+  that removes test-sourced routes when the flag is set.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)
