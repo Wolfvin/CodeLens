@@ -51,6 +51,13 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **analyze graceful degradation**: Skipped engines report `skipped: true` with `skip_reason` and `action` (suggests running individually). `skipped_engines` summary in output. Per-engine `elapsed_seconds` timing.
 - **Version**: 5.9.2 → 6.3.0.
 
+## What's New in v6.3.1 — Tested on Readest (1200+ TSX, 40 Rust, Tauri V2 + Next.js)
+
+- **Performance: `--max-files` on remaining heavy engines**: Commands that still timed out on repos with 1000+ files now accept `--max-files` (default: 3000). Added to: `a11y`, `side-effect`, `test-map`. Already present in: `dead-code`, `complexity`, `smell`, `debug-leak`.
+- **Performance: `--max-results` on dead-code**: New `--max-results` flag (default: 100) to cap results per category. Prevents massive JSON output on repos with thousands of dead code items.
+- **Workspace auto-detect improvement**: `resolve_workspace()` now prioritizes last-used workspace over cwd/project-marker auto-detection. This fixes the common issue where subcommands like `symbols`, `search`, `trace`, `impact`, `context`, `dependents` would resolve to the wrong workspace when the workspace argument is omitted (e.g., resolving to `/home/z/my-project` instead of the actual project).
+- **a11y truncated flag**: `a11y` engine now reports `truncated: true` when file-count limit is reached, making it clear that results are partial.
+
 ## What's New in v6.0 — The "Analyze Everything" Release
 
 - **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.

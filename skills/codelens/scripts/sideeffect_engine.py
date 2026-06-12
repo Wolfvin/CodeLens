@@ -215,7 +215,8 @@ def analyze_side_effects(
     workspace: str,
     function_name: Optional[str] = None,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Analyze functions for side effects across the workspace.
@@ -229,6 +230,7 @@ def analyze_side_effects(
         function_name: Optional specific function to analyze
         file_filter: Optional file path filter
         config: CodeLens config
+        max_files: Max files to scan (default 3000) to prevent timeout on huge repos
 
     Returns:
         Dict with function classifications (pure/impure) and side-effect details
@@ -285,7 +287,7 @@ def analyze_side_effects(
 
         for filename in filenames:
             # File limit check
-            if files_scanned >= MAX_FILES_PER_RUN:
+            if files_scanned >= max_files:
                 truncated = True
                 break
 

@@ -10,13 +10,16 @@ def add_args(parser):
     parser.add_argument("--function", dest="function_name", default=None,
                         help="Check specific function test coverage")
     parser.add_argument("--file", default=None, help="Filter by source file path")
+    parser.add_argument("--max-files", type=int, default=3000,
+                        help="Max files to scan (default: 3000)")
 
 
 def execute(args, workspace):
     return map_test_coverage(
         workspace,
         function_name=args.function_name,
-        file_filter=args.file
+        file_filter=args.file,
+        max_files=args.max_files
     )
 
 

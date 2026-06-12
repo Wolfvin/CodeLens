@@ -13,10 +13,12 @@ def add_args(parser):
                       help="Filter by a11y category")
     parser.add_argument("--severity", choices=["high", "medium", "low"], default=None,
                       help="Filter by severity")
+    parser.add_argument("--max-files", type=int, default=3000,
+                      help="Max files to scan (default: 3000)")
 
 
 def execute(args, workspace):
-    return audit_accessibility(workspace, category=args.category, severity=args.severity)
+    return audit_accessibility(workspace, category=args.category, severity=args.severity, max_files=args.max_files)
 
 
 register_command("a11y", "Detect accessibility issues", add_args, execute)
