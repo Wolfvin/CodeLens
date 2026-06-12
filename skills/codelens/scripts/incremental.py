@@ -423,7 +423,11 @@ def merge_backend_data(
 
     for node in all_nodes:
         node["ref_count"] = incoming_count.get(node["id"], 0)
-        node["status"] = "dead" if node["ref_count"] == 0 else "active"
+        # v6: Consistent with edge_resolver — exported, component, and pub symbols are NOT dead
+        if node["ref_count"] == 0 and not node.get("exported", False) and not node.get("component", False) and not node.get("pub", False):
+            node["status"] = "dead"
+        else:
+            node["status"] = "active"
 
     # ── Step 10: Recompute duplicate_define for ALL nodes ──
     # duplicate_define should only be true when the SAME function name is

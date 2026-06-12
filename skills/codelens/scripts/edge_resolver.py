@@ -234,9 +234,9 @@ def resolve_edges(
     # Update nodes with ref_count and status
     for node in all_nodes:
         node["ref_count"] = incoming_count.get(node["id"], 0)
-        # v6: Exported functions and React components are NOT dead even with 0 ref_count.
-        # Entry points, exports, and components are consumed externally (e.g., JSX <Component/>).
-        if node["ref_count"] == 0 and not node.get("exported", False) and not node.get("component", False):
+        # v6: Exported functions, public (Rust pub) functions, and React components are NOT dead
+        # even with 0 ref_count. Entry points, exports, and components are consumed externally.
+        if node["ref_count"] == 0 and not node.get("exported", False) and not node.get("component", False) and not node.get("pub", False):
             node["status"] = "dead"
         else:
             node["status"] = "active"

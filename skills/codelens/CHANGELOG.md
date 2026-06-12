@@ -5,6 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [6.1.0] — 2026-06-12
+
+### Tested against database & XHR/network repos: Redis, LevelDB, Axios, Undici, libuv
+
+Round 2 real-world testing targeting database systems (Redis C, LevelDB C++) and
+HTTP/network libraries (Axios JS, Undici JS, libuv C). Exposed critical dead-code
+accuracy gaps where exported symbols were falsely marked as "dead".
+
+### Fixed
+
+- **CRITICAL: JS/TS exported symbols falsely marked as dead** (`js_backend_parser.py`, `ts_backend_parser.py`, `fallback_js_backend.py`): The `export` keyword was never propagated to backend registry nodes. Exported classes like `AxiosError`, `EventEmitter`, and `CustomError` appeared as "dead" (0 ref_count, `exported: False`). Now all three parsers detect `export_statement` AST nodes and set `exported: True` on function/class/variable declarations. AxiosError now correctly shows `status: "active"`.
+- **CRITICAL: Incremental scan status computation ignores exported/component/pub flags** (`incremental.py`): `merge_backend_data()` used simple `ref_count == 0 -> dead` without checking `exported`, `component`, or `pub` flags. Now uses the same 3-condition check as `edge_resolver.resolve_edges()`.
+- **HIGH: Rust `pub fn` falsely marked as dead** (`edge_resolver.py`): `resolve_edges()` only checked `exported` and `component` flags, but Rust uses `"pub": True` (separate key). A `pub fn` with no internal callers was marked `"dead"`. Now also checks `node.get("pub", False)`.
+- **HIGH: Dead-code engine misses exported/component flags** (`deadcode_engine.py`): `_detect_dead_from_registry()` skipped `pub` functions but not `exported` or `component` nodes. Now checks all three flags.
+- **MEDIUM: Drupal false positive on non-PHP repos** (`framework_detect.py`): Generic indicators `modules/` and `themes/` matched Redis directory. Replaced with specific indicators `sites/default/` and `sites/all/`. Redis no longer falsely detected as Drupal.
+- **MEDIUM: HTTP/network libraries not detected** (`framework_detect.py`): Added 7 HTTP library signatures (axios, undici, got, ky, superagent, node-fetch, request), `has_http_library` flag, and `package.json` name field detection for when the repo IS the library.
+- **MEDIUM: PascalCase classes too narrow in tree-sitter JS parser** (`js_backend_parser.py`): Only React-extending classes were `component: True`. Now any PascalCase class is marked as `component: True`.
+
+### Test Repos Used
+
+| Repo | Language | Size | Theme | Key Finding |
+|------|----------|------|-------|-------------|
+| redis/redis | C | ~70MB | Database | Drupal FP (modules/ dir) |
+| axios/axios | JS | ~5MB | XHR/Network | AxiosError dead, HTTP lib detection |
+| nodejs/undici | JS/TS | ~40MB | XHR/Network | HTTP lib detection |
+
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

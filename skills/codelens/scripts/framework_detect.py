@@ -275,9 +275,18 @@ FRAMEWORK_SIGNATURES = {
     "drupal": {
         "packages": [],
         "composer_packages": ["drupal/core"],
-        "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
+        "indicators": ["sites/default/", "sites/all/"]
     },
+    # HTTP/network library signatures — these are detected both as dependency and
+    # when the repo IS the library (package.json name field match)
+    "axios": {"packages": ["axios"], "composer_packages": [], "config_files": [], "indicators": []},
+    "undici": {"packages": ["undici"], "composer_packages": [], "config_files": [], "indicators": []},
+    "got": {"packages": ["got"], "composer_packages": [], "config_files": [], "indicators": []},
+    "ky": {"packages": ["ky"], "composer_packages": [], "config_files": [], "indicators": []},
+    "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
+    "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
+    "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
 }
 
 
@@ -419,6 +428,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_express": False,
+        "has_http_library": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -525,6 +535,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_express"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
+                        detected["has_http_library"] = True
                     break
 
         # Detect CSS preprocessor
@@ -534,6 +546,29 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             detected["css_preprocessor"] = "less"
         elif "stylus" in all_deps or "styl" in all_deps:
             detected["css_preprocessor"] = "stylus"
+
+    # 1b. Check if root package.json "name" matches an HTTP library name
+    # When the repo IS the HTTP library itself, it won't list itself as a dependency.
+    _HTTP_LIBRARY_NAMES = frozenset({
+        "axios", "undici", "got", "ky", "superagent", "node-fetch",
+        "request", "needle", "bent", "make-fetch-happen", "simple-get",
+        "node-http", "phin", "wreck", "terra",
+    })
+    root_pkg_path = os.path.join(workspace, "package.json")
+    if os.path.isfile(root_pkg_path):
+        try:
+            with open(root_pkg_path, 'r', encoding='utf-8') as f:
+                root_pkg = json.load(f)
+            pkg_name = root_pkg.get("name", "")
+            # Strip @scope/ prefix for scoped packages
+            if "/" in pkg_name:
+                pkg_name = pkg_name.split("/", 1)[1]
+            if pkg_name in _HTTP_LIBRARY_NAMES:
+                if pkg_name not in detected["frameworks"]:
+                    detected["frameworks"].append(pkg_name)
+                detected["has_http_library"] = True
+        except (json.JSONDecodeError, IOError):
+            pass
 
     # 2. Check config files (root + subdirectories for monorepos)
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
