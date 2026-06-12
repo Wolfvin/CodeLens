@@ -5,6 +5,68 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
 
+## [6.0.0] — 2026-06-12
+
+### Universal Analysis — Go API Maps, Kotlin, R, Haskell, ZSH
+
+**Tested on ohmyzsh/ohmyzsh (373 shell/zsh files, 1146 nodes, 21352 edges) and syncthing/syncthing (548 Go files, 5636 nodes, 30119 edges)**
+
+This release focuses on broad repo analysis improvements: Go API route extraction, three new language parsers,
+framework detection accuracy, and shell/ZSH file recognition.
+
+#### Go API-Map Route Extraction (NEW)
+
+- **net/http**: `http.HandleFunc("/path", handler)`, `http.Handle`, `mux.HandleFunc`, `mux.Handle`
+- **Gin**: `r.GET("/path", handler)`, `r.Group("/api")` with prefix inheritance
+- **Echo**: `e.GET("/path", handler)`, `e.Group("/api")` with prefix inheritance
+- **Chi**: `r.Get("/path", handler)`, `r.Route("/path", func(r chi.Router) {...})` with recursive nesting
+- **Fiber**: `app.Get("/path", handler)`, `app.Group("/api")`
+- **httprouter**: `router.GET("/path", handler)`, `router.Handle("METHOD", "/path", handler)`
+- Go middleware extraction from route call arguments
+- Go framework detection from `go.mod` imports (gin, echo, chi, fiber, httprouter)
+- **Impact**: syncthing/syncthing had 0 detected routes → now detects all HTTP API endpoints
+
+#### New Language Parsers
+
+- **Kotlin** (`fallback_kotlin.py`): data classes, sealed classes, companion objects, object declarations,
+  extension functions (with receiver type), suspend functions, infix/operator/inline modifiers,
+  type aliases, annotations, supertype extraction (skipping constructor colons),
+  coroutines (launch, async, withContext), call edges
+- **R** (`fallback_r.py`): Functions (`<-` and `=` assignment), S3 methods, S4 classes (setClass, setGeneric,
+  setMethod, setRefClass), R6 classes with inheritance, library/require/namespace imports,
+  source() file references, pipe operators (%>%, |>), Shiny UI/server patterns,
+  reactive/render functions, input$/output$ references
+- **Haskell** (`fallback_haskell.py`): Type signatures, function definitions, data types (including GADTs),
+  newtype, type aliases, type families, type classes, instance declarations,
+  module declarations, qualified imports, deriving clauses,
+  expression-only call extraction (filters parameters/bindings)
+
+#### Framework Detection Improvements
+
+- **Fixed Drupal false positive**: Changed indicators from generic "modules/", "themes/" to Drupal-specific
+  "sites/default/settings.php", "core/lib/Drupal.php" (was matching ohmyzsh etc.)
+- **Added oh-my-zsh detection**: Detects from "oh-my-zsh.sh" and "custom/plugins/"
+- **Added Kotlin detection**: .kt files now detected as "kotlin" framework (separate from Java)
+- **Added R language detection**: .R/.r files detected as "r" framework
+- **Added Haskell detection**: .hs files detected as "haskell" framework
+- **Removed Nim and Kotlin from unsupported_langs**: Both have dedicated parsers now
+- **Fixed path-segment-aware matching**: Replaced `if ignore in root` substring matching with
+  `should_ignore_dir()` from utils.py (prevents "test-target-nim" matching "target")
+
+#### File Recognition Improvements
+
+- **.zsh-theme files**: Now recognized as shell files (143 files in ohmyzsh were previously missed)
+- **.kt files**: Now routed to dedicated Kotlin parser instead of Java fallback
+- **.R/.r files**: Recognized as R language (with false-positive filtering for .editorconfig, README)
+- **.hs/.lhs files**: Recognized as Haskell
+
+#### Engine Updates
+
+- `entrypoints_engine.py`: Added .kt, .R, .r, .hs, .lhs, .nim, .nims, .lua, .zsh to SOURCE_EXTENSIONS
+- `outline_engine.py`: Added .zsh-theme, .R, .r, .hs, .lhs, .nim, .nims to language detection
+- `utils.py`: Added .kt, .R, .r, .hs, .zsh, .lua, .cs, .c, .cpp, .nim to FILE_PATH_EXTENSIONS
+- `scan.py`: Added kotlin, r_lang, haskell file categories and parsing sections
+
 ## [5.10.0] — 2026-06-12
 
 ### Polyglot Expansion — 6 New Language Parsers

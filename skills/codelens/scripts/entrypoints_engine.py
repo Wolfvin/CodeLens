@@ -31,7 +31,8 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
     ".go",
-    ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sh", ".bash",
+    ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sh", ".bash", ".zsh",
+    ".kt", ".R", ".r", ".hs", ".lhs", ".nim", ".nims", ".lua",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────

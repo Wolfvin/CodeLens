@@ -18,6 +18,12 @@ Framework Detection & Route Extraction:
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
 14. SvelteKit — file-based routes (+page, +server, +layout, +error)
+15. Go stdlib — net/http: HandleFunc, Handle
+16. Gin      — r.GET/POST/PUT/DELETE/PATCH
+17. Echo     — e.GET/POST/PUT/DELETE/PATCH
+18. Chi      — r.Get/Post/Put/Delete, r.Route
+19. Fiber    — app.Get/Post/Put/Delete
+20. httprouter — router.GET/POST, router.Handle
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -40,6 +46,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql", ".php",
     ".rb", ".ex", ".exs",
+    ".go",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -246,6 +253,14 @@ def map_api_routes(
             elif ext in (".ex", ".exs"):
                 phoenix_routes = _extract_phoenix_routes(content, rel_path, frameworks_detected)
                 routes.extend(phoenix_routes)
+
+            # ─── Go: net/http / Gin / Echo / Chi / Fiber / httprouter ──
+            elif ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path, frameworks_detected)
+                routes.extend(go_routes)
+
+    # ─── Go framework detection from go.mod ───────────────────
+    _detect_go_frameworks(workspace, frameworks_detected)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -2374,6 +2389,527 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
                 })
 
     return routes
+
+
+# ─── Go Route Extraction ─────────────────────────────────────
+
+# Go HTTP method names as they appear in framework calls
+_GO_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+_GO_METHODS_LOWER = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+
+def _extract_go_routes(
+    content: str, rel_path: str, frameworks: Set[str]
+) -> List[Dict[str, Any]]:
+    """Extract API routes from Go source files.
+
+    Supports:
+    - net/http stdlib: http.HandleFunc, http.Handle, mux.HandleFunc, mux.Handle
+    - Gin:             r.GET/POST/PUT/DELETE/PATCH("/path", handler)
+    - Echo:            e.GET/POST/PUT/DELETE/PATCH("/path", handler)
+    - Chi:             r.Get/Post/Put/Delete("/path", handler), r.Route("/path", func...)
+    - Fiber:           app.Get/Post/Put/Delete("/path", handler)
+    - httprouter:      router.GET/POST/PUT/DELETE/PATCH("/path", handler)
+                       router.Handle("METHOD", "/path", handler)
+    """
+    routes: List[Dict[str, Any]] = []
+
+    # ─── Detect which Go frameworks are in use via imports ─────
+    is_gin = bool(re.search(r'"github\.com/gin-gonic/gin"', content))
+    is_echo = bool(re.search(r'"github\.com/labstack/echo', content))
+    is_chi = bool(re.search(r'"github\.com/go-chi/chi', content))
+    is_fiber = bool(re.search(r'"github\.com/gofiber/fiber', content))
+    is_httprouter = bool(re.search(r'"github\.com/julienschmidt/httprouter"', content))
+    is_net_http = bool(re.search(r'"net/http"', content))
+
+    # Track router variable names and their prefixes (for group/prefix support)
+    # Gin:  r := gin.Default(); g := r.Group("/api")
+    # Echo: g := e.Group("/api")
+    # Chi:  r.Route("/api", func(r chi.Router) { ... })
+    router_groups: Dict[str, str] = {}  # var_name → prefix
+
+    # ─── 1. net/http stdlib: http.HandleFunc("/path", handler) ─
+    for m in re.finditer(
+        r'(?:http|mux)\.(?:HandleFunc|Handle)\s*\(\s*"([^"]+)"\s*,\s*(\w+)',
+        content
+    ):
+        path = m.group(1)
+        handler = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "GET",  # HandleFunc defaults to GET; Handle is handler-based
+            "path": _normalize_path(path),
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "go-net-http",
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
+        })
+        frameworks.add("go-net-http")
+
+    # ─── 2. Gin: r.GET("/path", handler) ────────────────────────
+    # Also matches router.GET, g.GET, etc.
+    if is_gin:
+        # Detect Group assignments: apiGroup := r.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Parse the full argument list after the path to find handler & middleware
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            # Apply group prefix if available
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "gin",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("gin")
+
+    # ─── 3. Echo: e.GET("/path", handler) ──────────────────────
+    if is_echo:
+        # Detect Echo Group: g := e.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "echo",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("echo")
+
+    # ─── 4. Chi: r.Get("/path", handler), r.Route("/path", fn) ─
+    if is_chi:
+        # Chi uses Title-case methods: r.Get, r.Post, etc.
+        # Detect Chi Route groups
+        for rm in re.finditer(
+            r'(\w+)\s*:=?\s*\w+\.Route\s*\(\s*"([^"]+)"',
+            content
+        ):
+            router_groups[rm.group(1)] = rm.group(2)
+
+        # Collect the character ranges of r.Route(...) closure blocks
+        # so we can exclude those inner routes from the top-level scan.
+        # Ranges start after the opening { so the Route call itself is NOT excluded.
+        route_closure_ranges: List[tuple] = []
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+            content
+        ):
+            closure_start = m.end()  # just past the opening {
+            block = _extract_go_block(content, closure_start)
+            if block is not None:
+                # Range starts at m.end() so the Route call itself is NOT inside the range
+                route_closure_ranges.append((m.end(), closure_start + len(block)))
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            # Skip matches inside r.Route(...) closures — they'll be handled below
+            if any(lo <= m.start() < hi for lo, hi in route_closure_ranges):
+                continue
+
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "chi",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("chi")
+
+        # Chi r.Route("/path", func(r chi.Router) { r.Get(...), r.Post(...) })
+        # Also handles nested Route closures recursively
+        def _extract_chi_route_block(block_text: str, prefix: str, rel: str, ln: int):
+            """Recursively extract Chi routes from a Route closure block."""
+            # Collect nested Route closure ranges to skip from top-level scan
+            nested_ranges: List[tuple] = []
+            for nm in re.finditer(
+                r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+                block_text
+            ):
+                nested_prefix = nm.group(2)
+                nested_closure_start = nm.end()
+                nested_block = _extract_go_block(block_text, nested_closure_start)
+                if nested_block is not None:
+                    nested_ranges.append((nm.start(), nested_closure_start + len(nested_block)))
+                    # Recurse into nested Route
+                    _extract_chi_route_block(
+                        nested_block,
+                        _normalize_path(prefix + nested_prefix),
+                        rel, ln
+                    )
+
+            # Match method calls, skipping those inside nested Route closures
+            for im in re.finditer(
+                r'\.\s*(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*"([^"]+)"',
+                block_text
+            ):
+                if any(lo <= im.start() < hi for lo, hi in nested_ranges):
+                    continue
+                inner_method = im.group(1).upper()
+                inner_path = im.group(2)
+                inner_handler, inner_mw = _parse_go_route_args(
+                    block_text, im.end(), rel, ln
+                )
+                full_path = _normalize_path(prefix + inner_path)
+                routes.append({
+                    "method": inner_method,
+                    "path": full_path,
+                    "handler_name": inner_handler,
+                    "file": rel,
+                    "line": ln,
+                    "framework": "chi",
+                    "middleware_chain": inner_mw,
+                    "request_type": None,
+                    "response_type": None,
+                })
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+            content
+        ):
+            # Skip nested Route calls that are inside an outer Route closure
+            # (they'll be handled recursively by _extract_chi_route_block)
+            if any(lo <= m.start() < hi for lo, hi in route_closure_ranges):
+                continue
+            route_path = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+            closure_start = m.end()
+            block = _extract_go_block(content, closure_start)
+            if block:
+                _extract_chi_route_block(block, route_path, rel_path, line_num)
+
+    # ─── 5. Fiber: app.Get("/path", handler) ────────────────────
+    if is_fiber:
+        # Fiber uses Title-case methods like Chi
+        # Detect Fiber Group: g := app.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method_raw = m.group(2)
+            method = method_raw.upper() if method_raw != "All" else "ALL"
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "fiber",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("fiber")
+
+    # ─── 6. httprouter: router.GET("/path", handler) ────────────
+    if is_httprouter:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            routes.append({
+                "method": method,
+                "path": _normalize_path(path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "httprouter",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("httprouter")
+
+        # httprouter.Handle("METHOD", "/path", handler)
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Handle\s*\(\s*"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)"\s*,\s*"([^"]+)"\s*,\s*(\w+)',
+            content
+        ):
+            method = m.group(2).upper()
+            path = m.group(3)
+            handler = m.group(4)
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": method,
+                "path": _normalize_path(path),
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "httprouter",
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("httprouter")
+
+    # ─── Fallback: generic Go HTTP method calls ─────────────────
+    # If no specific framework was detected but the file uses net/http
+    # and has method calls, catch them as generic go-http routes.
+    if not is_gin and not is_echo and not is_chi and not is_fiber and not is_httprouter and is_net_http:
+        # Upper-case method calls (e.g., router.GET, r.POST)
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            # Skip if obj is a well-known non-router
+            if obj_name in ("http", "mux"):
+                continue  # already handled above
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Skip if already captured
+            if any(r["file"] == rel_path and r["line"] == line_num and r["method"] == method for r in routes):
+                continue
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "go-http",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+
+    return routes
+
+
+def _parse_go_route_args(
+    content: str, start_pos: int, rel_path: str, line_num: int
+) -> tuple:
+    """Parse Go route call arguments after the path string.
+
+    Given that the regex matched up to the closing quote of the path,
+    parse the remaining arguments to determine the final handler name
+    and any middleware in between.
+
+    Returns (handler_name, middleware_chain).
+    For example: r.GET("/path", authMiddleware(), logger(), finalHandler)
+    → ("finalHandler", [{"name": "authMiddleware", ...}, {"name": "logger", ...}])
+    """
+    # Find the opening paren of the call (search backward from current position)
+    paren_start = content.rfind('(', 0, start_pos + 1)
+    if paren_start < 0:
+        return ("anonymous", [])
+
+    # Find the matching closing paren
+    depth = 1
+    pos = paren_start + 1
+    while pos < len(content) and depth > 0:
+        if content[pos] == '(':
+            depth += 1
+        elif content[pos] == ')':
+            depth -= 1
+        pos += 1
+
+    args_section = content[paren_start + 1:pos - 1]
+    args = _split_args(args_section)
+
+    # args[0] should be the path string, remaining args are handlers/middleware
+    # The last non-path arg is the handler; args between are middleware
+    handler_name = "anonymous"
+    middleware: List[Dict[str, Any]] = []
+
+    if len(args) <= 1:
+        # Only path, no handler arg (shouldn't happen in valid Go, but be safe)
+        return (handler_name, middleware)
+
+    # Collect all non-path arguments
+    non_path_args = [a.strip() for a in args[1:] if a.strip()]
+
+    if not non_path_args:
+        return (handler_name, middleware)
+
+    # The last argument is the final handler
+    last_arg = non_path_args[-1]
+    # Extract the identifier name from the handler arg
+    m = re.match(r'(\w+)', last_arg)
+    if m:
+        handler_name = m.group(1)
+
+    # Everything before the last arg is middleware
+    for arg in non_path_args[:-1]:
+        arg = arg.strip()
+        if not arg:
+            continue
+        # Strip function call parens: AuthMiddleware() → AuthMiddleware
+        bare_name = re.sub(r'\(.*\)', '', arg).strip()
+        if not bare_name:
+            bare_name = arg
+        mw_type = _classify_middleware(bare_name)
+        middleware.append({
+            "name": bare_name,
+            "type": mw_type,
+            "file": rel_path,
+            "line": line_num,
+        })
+
+    return (handler_name, middleware)
+
+
+def _go_file_framework(
+    content: str,
+    is_gin: bool, is_echo: bool, is_chi: bool,
+    is_fiber: bool, is_httprouter: bool, is_net_http: bool
+) -> str:
+    """Determine the dominant Go framework for a file based on imports."""
+    if is_gin:
+        return "gin"
+    if is_echo:
+        return "echo"
+    if is_chi:
+        return "chi"
+    if is_fiber:
+        return "fiber"
+    if is_httprouter:
+        return "httprouter"
+    if is_net_http:
+        return "go-net-http"
+    return "go"
+
+
+def _extract_go_block(content: str, start: int) -> Optional[str]:
+    """Extract a balanced curly-brace block starting at `start` (which should be
+    just past the opening brace). Returns the block content without outer braces,
+    or None if the block can't be found."""
+    if start >= len(content):
+        return None
+    depth = 1
+    pos = start
+    while pos < len(content) and depth > 0:
+        if content[pos] == '{':
+            depth += 1
+        elif content[pos] == '}':
+            depth -= 1
+        pos += 1
+    if depth == 0:
+        return content[start:pos - 1]
+    return None
+
+
+def _detect_go_frameworks(workspace: str, frameworks: Set[str]) -> None:
+    """Detect Go web frameworks from go.mod dependency declarations."""
+    go_mod_path = os.path.join(workspace, "go.mod")
+    if not os.path.isfile(go_mod_path):
+        return
+
+    try:
+        with open(go_mod_path, 'r', encoding='utf-8', errors='ignore') as f:
+            go_mod = f.read()
+    except IOError:
+        return
+
+    # Map of import path substrings → framework names
+    go_fw_map = {
+        "github.com/gin-gonic/gin": "gin",
+        "github.com/labstack/echo": "echo",
+        "github.com/go-chi/chi": "chi",
+        "github.com/go-chi/chi/v5": "chi",
+        "github.com/gofiber/fiber": "fiber",
+        "github.com/julienschmidt/httprouter": "httprouter",
+    }
+
+    for import_path, fw_name in go_fw_map.items():
+        if import_path in go_mod:
+            frameworks.add(fw_name)
+
+    # If go.mod exists but no specific framework, note standard library
+    if not any(fw in frameworks for fw in ("gin", "echo", "chi", "fiber", "httprouter")):
+        frameworks.add("go-net-http")
 
 
 # ─── PHP / Laravel Route Extraction ──────────────────────────

@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.10.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.10.0: Polyglot expansion — 6 new language parsers (Ruby, Elixir, Dart, Swift, Scala, Shell/Bash) with regex-based extraction of classes, modules, functions, routes, associations, and call edges. Framework detection for Rails, Phoenix, Flutter, SwiftUI, Vapor, Spark, Akka, Play. Outline support for all 6 new languages. API map route extraction for Rails (routes.rb) and Phoenix (router.ex). Removed Ruby/Elixir/Dart/Swift/Scala/Shell/Go/Java from unsupported_langs (now parsed). Tested on polyglot monorepo with 7 languages (Ruby, Elixir, Kotlin, Swift, Dart, Scala, Shell).",  "author": "codelens",
+  "version": "6.0.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v6.0.0: Universal Analysis — Go API-map route extraction (net/http, Gin, Echo, Chi, Fiber, httprouter). Kotlin dedicated parser (data classes, coroutines, extension functions, companion objects). R language parser (S3/S4/R6 classes, Shiny, pipes). Haskell parser (typeclasses, GADTs, type families). ZSH/Zsh-theme file support. Fixed Drupal framework false positive. Fixed path-segment-aware framework matching. Added oh-my-zsh, Kotlin, R, Haskell framework detection. Removed Nim/Kotlin from unsupported. Tested on ohmyzsh/ohmyzsh (373 shell files) and syncthing/syncthing (548 Go files).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -176,5 +176,20 @@
     "dockerfile",
     "polyglot",
     "monorepo",
-    "multi-language"
+    "multi-language",
+    "kotlin",
+    "coroutines",
+    "r-language",
+    "shiny",
+    "tidyverse",
+    "haskell",
+    "typeclass",
+    "zsh",
+    "oh-my-zsh",
+    "go-api-map",
+    "gin",
+    "echo",
+    "chi",
+    "fiber",
+    "httprouter"
   ]}

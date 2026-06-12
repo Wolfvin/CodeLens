@@ -10,7 +10,7 @@ import re
 from typing import Dict, List, Any, Optional
 import logging
 _logger = logging.getLogger("codelens.framework_detect")
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir
 
 
 # Known framework signatures
@@ -236,7 +236,12 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "indicators": ["sites/default/settings.php", "core/lib/Drupal.php", "core/includes/"]
+    },
+    "oh-my-zsh": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["oh-my-zsh.sh", "custom/plugins/"]
     },
     # Ruby frameworks
     "rails": {
@@ -631,12 +636,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
+            rel_root = os.path.relpath(root, workspace)
+            if should_ignore_dir(rel_root):
                 continue
             for f in files:
                 if f in tauri_markers:
@@ -650,12 +651,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Also check for src-tauri directory
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
-                skip = False
-                for ignore in DEFAULT_IGNORE_DIRS:
-                    if ignore in root:
-                        skip = True
-                        break
-                if skip or '.codelens' in root:
+                rel_root = os.path.relpath(root, workspace)
+                if should_ignore_dir(rel_root):
                     continue
                 if 'src-tauri' in dirs:
                     if "tauri" not in detected["frameworks"]:
@@ -666,12 +663,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip:
+        rel_root = os.path.relpath(root, workspace)
+        if should_ignore_dir(rel_root):
             continue
 
         for f in files:
@@ -706,6 +699,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             elif f.endswith(('.sh', '.bash')):
                 if "shell" not in detected["frameworks"]:
                     detected["frameworks"].append("shell")
+            elif f.endswith(('.zsh', '.zsh-theme')):
+                if "zsh" not in detected["frameworks"]:
+                    detected["frameworks"].append("zsh")
+            elif f.endswith('.kt'):
+                if "kotlin" not in detected["frameworks"]:
+                    detected["frameworks"].append("kotlin")
+            elif f.endswith(('.R', '.r')):
+                if "r" not in detected["frameworks"]:
+                    detected["frameworks"].append("r")
+            elif f.endswith('.hs'):
+                if "haskell" not in detected["frameworks"]:
+                    detected["frameworks"].append("haskell")
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -749,12 +754,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip:
+            rel_root = os.path.relpath(root, workspace)
+            if should_ignore_dir(rel_root):
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
@@ -804,18 +805,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # Languages with fallback parsers are NOT listed as unsupported.
     # Only truly unsupported languages (no parser at all) are listed here.
     UNSUPPORTED_MARKERS = {
-        "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
         "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
-        "r": ["DESCRIPTION", ".Rprofile"],
-        "haskell": ["stack.yaml", "*.cabal"],
         "perl": ["cpanfile", "Makefile.PL"],
         "clojure": ["project.clj", "deps.edn"],
         "fsharp": [".fsproj"],
         "ocaml": ["dune", "dune-project"],
         "zig": ["build.zig"],
-        "nim": ["nimble", "*.nimble"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
