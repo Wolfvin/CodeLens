@@ -339,6 +339,12 @@ def map_api_routes(
     production_count = sum(1 for r in routes if r.get("source") == "production")
     test_count = len(routes) - production_count
 
+    # Apply production_only filter if requested
+    if production_only:
+        routes = [r for r in routes if r.get("source") == "production"]
+        production_count = len(routes)
+        test_count = 0
+
     # Recommendations
     recommendations = _generate_recommendations(
         routes, frameworks_detected, auth_protected_routes
