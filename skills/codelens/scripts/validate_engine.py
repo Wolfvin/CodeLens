@@ -71,11 +71,12 @@ def validate_registry(workspace: str) -> Dict[str, Any]:
             })
 
     # ─── Check 2: Unregistered files ───────────────────
+    # Only check source extensions that are parseable by CodeLens.
+    # Non-symbol files (JSON, YAML, TOML, etc.) are expected to not be in the registry.
     source_extensions = {
         '.html', '.htm', '.css', '.scss', '.less', '.sass',
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
         '.rs', '.py', '.go', '.vue', '.svelte',
-        '.json', '.toml', '.yaml', '.yml',
     }
     ignore_dirs = {"node_modules", ".git", "dist", "build", "target",
                    "__pycache__", ".codelens", ".next", ".cache", "vendor"}

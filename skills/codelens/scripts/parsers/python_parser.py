@@ -24,25 +24,27 @@ from typing import Dict, List, Any, Optional
 
 try:
     from tree_sitter import Node
-    from base_parser import BaseParser
+    from base_parser import BaseParser, PYTHON_SKIP_NAMES
     HAS_TREE_SITTER = True
 except ImportError:
     HAS_TREE_SITTER = False
 
 
-# Shared Python skip names — common builtins that are not user-defined functions
-PYTHON_SKIP_NAMES = {
-    'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
-    'return', 'yield', 'raise', 'break', 'continue', 'pass', 'import', 'from',
-    'class', 'def', 'async', 'await', 'lambda', 'global', 'nonlocal',
-    'True', 'False', 'None',
-    'print', 'len', 'range', 'int', 'str', 'float', 'bool', 'list', 'dict',
-    'set', 'tuple', 'type', 'isinstance', 'super', 'property',
-    'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
-    'iter', 'next', 'abs', 'min', 'max', 'sum', 'any', 'all',
-    'self', 'cls', 'open', 'hasattr', 'getattr', 'setattr',
-    'staticmethod', 'classmethod', 'abstractmethod',
-}
+# Use shared Python skip names from base_parser (single source of truth)
+# Fallback for when base_parser is not available
+if not HAS_TREE_SITTER:
+    PYTHON_SKIP_NAMES = {
+        'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
+        'return', 'yield', 'raise', 'break', 'continue', 'pass', 'import', 'from',
+        'class', 'def', 'async', 'await', 'lambda', 'global', 'nonlocal',
+        'True', 'False', 'None',
+        'print', 'len', 'range', 'int', 'str', 'float', 'bool', 'list', 'dict',
+        'set', 'tuple', 'type', 'isinstance', 'super', 'property',
+        'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
+        'iter', 'next', 'abs', 'min', 'max', 'sum', 'any', 'all',
+        'self', 'cls', 'open', 'hasattr', 'getattr', 'setattr',
+        'staticmethod', 'classmethod', 'abstractmethod',
+    }
 
 
 class PythonParser(BaseParser if HAS_TREE_SITTER else object):

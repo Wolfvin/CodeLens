@@ -96,12 +96,19 @@ def get_file_outline(
 def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
 
     Returns a summary-level outline (not per-function detail).
+
+    Args:
+        workspace: Absolute path to workspace root
+        file_filter: Optional substring filter for file paths
+        config: Optional workspace config dict
+        max_files: Max files to outline (default 3000, prevents timeout on huge repos)
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -116,6 +123,8 @@ def get_workspace_outline(
 
     outlines = []
     errors = []
+    files_processed = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -124,6 +133,10 @@ def get_workspace_outline(
             continue
 
         for filename in filenames:
+            if files_processed >= max_files:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in source_extensions:
                 continue
@@ -143,11 +156,16 @@ def get_workspace_outline(
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
+            files_processed += 1
+
+        if truncated:
+            break
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
+        "truncated": truncated,
         "outlines": outlines,
         "errors": errors if errors else None
     }

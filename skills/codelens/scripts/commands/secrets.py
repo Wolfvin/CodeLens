@@ -9,15 +9,19 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
                         help="Filter by severity")
-    parser.add_argument("--max-files", type=int, default=None,
-                        help="Max files to scan (default: 3000)")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Max files to scan (default: 5000)")
+    parser.add_argument("--max-findings", type=int, default=200,
+                        help="Max findings to return (default: 200)")
 
 
 def execute(args, workspace):
-    kwargs = {"severity": args.severity}
-    if args.max_files is not None:
-        kwargs["max_files"] = args.max_files
-    return detect_secrets(workspace, **kwargs)
+    return detect_secrets(
+        workspace,
+        severity=args.severity,
+        max_files=args.max_files,
+        max_findings=args.max_findings
+    )
 
 
 register_command("secrets", "Detect hardcoded secrets and API keys", add_args, execute)

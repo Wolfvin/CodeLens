@@ -242,7 +242,9 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
       classify as 'info' — these are intentional bidirectional conversions, not real cycles.
     - If the cycle is very long (>8 nodes), classify as 'info' — likely a false positive
       from name matching that creates spurious chains across unrelated modules.
-    - Short chains (2-3 nodes) with non-conversion functions are genuine: 'warning'.
+    - If the cycle goes through multiple files but the function names suggest cross-class
+      name collision (same name, different classes), classify as 'info' — not a real cycle.
+    - Short chains (2-3 nodes) with non-conversion functions in the same file are genuine: 'warning'.
     """
     fn_names = [c.get("fn", "unknown") for c in chain]
 
@@ -254,6 +256,33 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
     # Very long chains are almost always false positives from name matching
     if cycle_length > 8:
         return "info"
+
+    # Cross-class name collision detection:
+    # If the cycle contains multiple functions with the SAME name but from DIFFERENT
+    # files, this is likely a false positive from the edge resolver matching method
+    # names across classes (e.g., async_setup in 1000+ Home Assistant components).
+    files = [c.get("file", "") for c in chain]
+    unique_names = set(fn_names)
+    unique_files = set(f for f in files if f)
+
+    # If we have fewer unique function names than cycle nodes, some names are repeated
+    # across different files — this is a name collision, not a real dependency cycle.
+    if len(unique_names) < len(fn_names) and len(unique_files) > 1:
+        # Check if any repeated name appears in different files
+        name_to_files: Dict[str, set] = {}
+        for c in chain:
+            fn = c.get("fn", "unknown")
+            f = c.get("file", "")
+            if fn not in name_to_files:
+                name_to_files[fn] = set()
+            if f:
+                name_to_files[fn].add(f)
+
+        # If any function name appears in 3+ different files, it's a common method
+        # name (like async_setup, update, handle) causing false edges
+        for fn, fn_files in name_to_files.items():
+            if len(fn_files) >= 3:
+                return "info"
 
     # Short chains with non-conversion functions are genuine cycles
     return "warning"
