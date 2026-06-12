@@ -96,11 +96,29 @@ class TSBackendParser(BaseParser):
                         if decl:
                             decl["node"]["exported"] = True
                             declarations.append(decl)
+                    elif child.type == 'class_declaration':
+                        decl = self._parse_class_decl(child, source, file_path)
+                        if decl:
+                            decl["node"]["exported"] = True
+                            declarations.append(decl)
                     elif child.type == 'lexical_declaration':
                         # export const foo = () => {}
                         for subchild in child.children:
                             if subchild.type == 'variable_declarator':
                                 decl = self._parse_variable_declarator(subchild, source, file_path)
+                                if decl:
+                                    decl["node"]["exported"] = True
+                                    declarations.append(decl)
+                    elif child.type == 'default_export_clause':
+                        # export default class Name / export default function name
+                        for subchild in child.children:
+                            if subchild.type == 'class_declaration':
+                                decl = self._parse_class_decl(subchild, source, file_path)
+                                if decl:
+                                    decl["node"]["exported"] = True
+                                    declarations.append(decl)
+                            elif subchild.type in ('function_declaration', 'generator_function_declaration'):
+                                decl = self._parse_function_decl(subchild, source, file_path)
                                 if decl:
                                     decl["node"]["exported"] = True
                                     declarations.append(decl)
@@ -250,6 +268,54 @@ class TSBackendParser(BaseParser):
             "scope_start": node.start_point.row,
             "scope_end": node.end_point.row
         }
+
+    def _parse_class_decl(self, node: Node, source: bytes,
+                           file_path: str) -> Optional[Dict]:
+        """Parse a class_declaration node.
+
+        Extracts the class name and its body as a scope.
+        Handles both named classes and export default class declarations.
+        """
+        class_name = None
+        body_node = None
+        heritage = None
+
+        for child in node.children:
+            if child.type == 'identifier' or child.type == 'type_identifier':
+                class_name = self.get_text(child, source)
+            elif child.type == 'class_heritage':
+                heritage = self.get_text(child, source)
+            elif child.type == 'class_body':
+                body_node = child
+
+        if not class_name:
+            return None
+
+        line = self.get_line(node)
+        node_id = f"{file_path}:{line}"
+
+        # Any PascalCase class is marked as component to prevent false dead-code marking
+        is_component = class_name[0].isupper()
+
+        result = {
+            "node": {
+                "id": node_id,
+                "fn": class_name,
+                "file": file_path,
+                "line": line,
+                "async": False,
+                "component": is_component,
+                "node_type": "class",
+            },
+            "body_node": body_node,
+            "scope_start": node.start_point.row,
+            "scope_end": node.end_point.row
+        }
+
+        if heritage:
+            result["node"]["heritage"] = heritage
+
+        return result
 
     def _build_scope_map(self, declarations: List[Dict]) -> Dict:
         """Build a map of function scopes for call resolution."""

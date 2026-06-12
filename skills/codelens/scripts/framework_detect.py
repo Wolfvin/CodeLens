@@ -287,6 +287,10 @@ FRAMEWORK_SIGNATURES = {
     "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
     "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
     "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
+    # Bun/Edge HTTP frameworks
+    "elysia": {"packages": ["elysia"], "composer_packages": [], "config_files": [], "indicators": []},
+    "hono": {"packages": ["hono"], "composer_packages": [], "config_files": [], "indicators": []},
+    "fastify": {"packages": ["fastify"], "composer_packages": [], "config_files": [], "indicators": []},
 }
 
 
@@ -535,7 +539,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_express"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
-                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
+                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request",
+                                     "elysia", "hono", "fastify"):
                         detected["has_http_library"] = True
                     break
 
@@ -553,6 +558,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "axios", "undici", "got", "ky", "superagent", "node-fetch",
         "request", "needle", "bent", "make-fetch-happen", "simple-get",
         "node-http", "phin", "wreck", "terra",
+        "elysia", "hono", "fastify",
     })
     root_pkg_path = os.path.join(workspace, "package.json")
     if os.path.isfile(root_pkg_path):

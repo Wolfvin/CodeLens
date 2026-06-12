@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
+### Tested against polyglot & compiler repos: Svelte, Vercel AI SDK, Elysia
+
+Round 3 real-world testing targeting compiler frameworks (Svelte), AI SDK monorepos
+(Vercel AI), and Bun HTTP frameworks (Elysia). Exposed parser gaps for TypeScript
+generic functions, export default patterns, and framework detection blind spots.
+
+### Fixed
+
+- **HIGH:  files produce false positive unused exports** (`deadcode_engine.py`): TypeScript declaration files (100 false positives in Svelte) were flagged because exports in `.d.ts` are public type API consumed by type checkers, not by internal imports. Now skips `.d.ts`, `.d.mts`, and `.d.cts` files in the unused_exports analysis.
+- **HIGH: `export default class` not detected** (`ts_backend_parser.py`, `js_backend_parser.py`, `fallback_js_backend.py`): The `export default class Name` pattern was not handled by any parser. Elysia's main class `export default class Elysia<...>` was completely invisible. Now all three parsers detect `default_export_clause` and generic class declarations.
+- **HIGH: TypeScript generic functions not parsed by fallback** (`fallback_js_backend.py`): Functions like `export async function generateText<TOOLS>(` were missed because the regex required `\(` immediately after the function name, but TypeScript generics insert `<...>` in between. Added multiline generic function detection via `re.DOTALL` pattern matching.
+- **HIGH: TypeScript generic class declarations not matched** (`fallback_js_backend.py`): Regex `class\s+([a-zA-Z_]\w*)\s` failed on `class Name<Generic>` because `<` follows the name instead of whitespace. Updated to `class\s+([a-zA-Z_]\w*)\s*[{<(]` and added heritage extraction with optional generic clause.
+- **MEDIUM: Elysia/Bun HTTP frameworks not detected** (`framework_detect.py`): Elysia, Hono, and Fastify were missing from FRAMEWORK_SIGNATURES and HTTP_LIBRARY_NAMES. Added 3 new signatures and updated `has_http_library` detection. Elysia now correctly detected as `has_http_library: true`.
+- **MEDIUM: TS parser missing `_parse_class_decl`** (`ts_backend_parser.py`): The TS parser had no class declaration parser — classes in TS files were only detected by the fallback parser. Added full `_parse_class_decl` with heritage extraction, component detection, and export support.
+
+### Test Repos Used
+
+| Repo | Language | Size | Theme | Key Finding |
+|------|----------|------|-------|-------------|
+| sveltejs/svelte | JS/TS | ~30MB | Compiler | 100 .d.ts false positives |
+| vercel/ai | JS/TS | ~100MB | AI SDK monorepo | generateText not parsed (TS generics) |
+| elysiajs/elysia | TS | ~5MB | Bun HTTP framework | export default class not detected |
+
+
+## [6.4.0] — 2026-06-12
+
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 
 Real-world test on a pure Python project with no web frameworks — exposed multiple blind spots
