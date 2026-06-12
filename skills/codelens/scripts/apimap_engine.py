@@ -39,6 +39,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql", ".php",
+    ".rb", ".ex", ".exs",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -235,6 +236,16 @@ def map_api_routes(
                         fw = r.get("framework", "")
                         if fw:
                             frameworks_detected.add(fw)
+
+            # ─── Ruby: Rails routes ─────────────────────────────
+            elif ext == ".rb":
+                rails_routes = _extract_rails_routes(content, rel_path, frameworks_detected)
+                routes.extend(rails_routes)
+
+            # ─── Elixir: Phoenix routes ─────────────────────────
+            elif ext in (".ex", ".exs"):
+                phoenix_routes = _extract_phoenix_routes(content, rel_path, frameworks_detected)
+                routes.extend(phoenix_routes)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -2618,3 +2629,176 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
         })
 
     return middleware
+
+
+# ─── Ruby: Rails route extraction ─────────────────────────────────
+
+def _extract_rails_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract routes from Rails routes.rb files."""
+    routes = []
+    is_routes_file = 'routes.rb' in rel_path or 'config/routes' in rel_path
+    if not is_routes_file:
+        return routes
+
+    frameworks_detected.add("rails")
+
+    current_namespace = ""
+
+    for i, line in enumerate(content.split('\n'), 1):
+        stripped = line.strip()
+
+        ns_match = re.match(r'\s*namespace\s+:(\w+)\s+do', line)
+        if ns_match:
+            current_namespace = ns_match.group(1)
+            continue
+
+        if stripped == 'end' and current_namespace:
+            current_namespace = ""
+            continue
+
+        http_match = re.match(
+            r"\s*(get|post|put|patch|delete)\s+['\"]([^'\"]+)['\"]" +
+            r"(?:\s*,\s*to:\s*['\"]([^'\"]+)['\"])?",
+            line
+        )
+        if http_match:
+            method = http_match.group(1).upper()
+            path = http_match.group(2)
+            handler = http_match.group(3) or ""
+            if current_namespace:
+                path = f"/{current_namespace}{path}"
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler": handler,
+                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
+                "file": rel_path,
+                "line": i,
+                "framework": "rails",
+                "group": current_namespace or "default",
+                "auth_required": False,
+            })
+            continue
+
+        res_match = re.match(r"\s*resources\s+:(\w+)", line)
+        if res_match:
+            resource_name = res_match.group(1)
+            base_path = f"/{resource_name}"
+            if current_namespace:
+                base_path = f"/{current_namespace}{base_path}"
+            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                action_map = {"GET": "index", "POST": "create", "PUT": "update",
+                              "PATCH": "update", "DELETE": "destroy"}
+                action = action_map.get(m, "show")
+                routes.append({
+                    "method": m,
+                    "path": base_path,
+                    "handler": f"{resource_name}#{action}",
+                    "handler_name": action,
+                    "file": rel_path,
+                    "line": i,
+                    "framework": "rails",
+                    "group": current_namespace or "default",
+                    "auth_required": False,
+                    "resource": resource_name,
+                })
+            continue
+
+        root_match = re.match(r"\s*root\s+['\"]([^'\"]+)['\"]", line)
+        if root_match:
+            handler = root_match.group(1)
+            routes.append({
+                "method": "GET",
+                "path": "/",
+                "handler": handler,
+                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
+                "file": rel_path,
+                "line": i,
+                "framework": "rails",
+                "group": "default",
+                "auth_required": False,
+            })
+
+    return routes
+
+
+# ─── Elixir: Phoenix route extraction ──────────────────────────────
+
+def _extract_phoenix_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract routes from Phoenix router.ex files."""
+    routes = []
+    is_router = 'router.ex' in rel_path or 'router.exs' in rel_path
+    if not is_router:
+        return routes
+
+    frameworks_detected.add("phoenix")
+
+    current_scope = ""
+    current_pipe = ""
+
+    for i, line in enumerate(content.split('\n'), 1):
+        stripped = line.strip()
+
+        scope_match = re.match(r'\s*scope\s+"([^"]+)"', line)
+        if scope_match:
+            current_scope = scope_match.group(1)
+            continue
+
+        pipe_match = re.match(r'\s*pipe_through\s+:([\w]+)', line)
+        if pipe_match:
+            current_pipe = pipe_match.group(1)
+            continue
+
+        http_match = re.match(
+            r'\s*(get|post|put|patch|delete)\s+"([^"]+)"\s*,\s*([\w.]+)\s*,\s*:(\w+)',
+            line
+        )
+        if http_match:
+            method = http_match.group(1).upper()
+            path = http_match.group(2)
+            controller = http_match.group(3)
+            action = http_match.group(4)
+            if current_scope:
+                path = f"{current_scope}{path}"
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler": f"{controller}.{action}",
+                "handler_name": action,
+                "file": rel_path,
+                "line": i,
+                "framework": "phoenix",
+                "group": current_scope or "default",
+                "middleware": [current_pipe] if current_pipe else [],
+                "auth_required": current_pipe in ("authenticate", "auth", "require_login"),
+            })
+            continue
+
+        res_match = re.match(r'\s*resources\s+"([^"]+)"\s*,\s*([\w.]+)', line)
+        if res_match:
+            path = res_match.group(1)
+            controller = res_match.group(2)
+            if current_scope:
+                path = f"{current_scope}{path}"
+            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                action = {"GET": "index", "POST": "create", "PUT": "update",
+                          "PATCH": "update", "DELETE": "delete"}.get(m, "show")
+                routes.append({
+                    "method": m,
+                    "path": path,
+                    "handler": f"{controller}.{action}",
+                    "handler_name": action,
+                    "file": rel_path,
+                    "line": i,
+                    "framework": "phoenix",
+                    "group": current_scope or "default",
+                    "middleware": [current_pipe] if current_pipe else [],
+                    "auth_required": False,
+                    "resource": True,
+                })
+
+        if stripped == 'end' and current_scope:
+            current_scope = ""
+            current_pipe = ""
+
+    return routes

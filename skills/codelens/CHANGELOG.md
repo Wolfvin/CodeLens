@@ -3,7 +3,73 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
+
+## [5.10.0] — 2026-06-12
+
+### Polyglot Expansion — 6 New Language Parsers
+
+**Tested against a polyglot monorepo with 7 languages (Ruby, Elixir, Kotlin, Swift, Dart, Scala, Shell)**
+
+Real-world test on a multi-language project with 56 source files across 7 languages.
+Results: 609 backend nodes, 1,090 edges, 129 active nodes, 94 API routes.
+Before: Only 8 Kotlin files parsed (103 nodes, 0 edges, 0 routes).
+
+#### New Language Parsers (regex-based fallback)
+
+- **Ruby** (`fallback_ruby.py`): Classes, modules, methods (instance & class), attr_accessor/reader/writer,
+  Rails patterns (before_action, has_many, belongs_to, validates, scope), require/require_relative,
+  include/extend, method call edges
+- **Elixir** (`fallback_elixir.py`): defmodule, def/defp, defmacro/defmacrop, use/import/alias/require,
+  Phoenix routes (get/post/put/patch/delete), scope, pipe_through, Ecto schemas (field, has_many, belongs_to),
+  GenServer patterns, pipe operator call chains (|>)
+- **Dart** (`fallback_dart_extra.py`): Classes, abstract classes, mixins, extensions, enums, typedef,
+  factory constructors, Flutter widget detection (StatefulWidget/StatelessWidget),
+  import/export/part, method call edges
+- **Swift** (`fallback_swift.py`): Classes, structs, protocols, extensions, enums, actors,
+  SwiftUI View detection, ObservableObject, async/await patterns, import dependencies,
+  inheritance tracking
+- **Scala** (`fallback_scala.py`): Classes, case classes, objects, traits, sealed traits/classes,
+  implicit functions, Spark patterns, SBT build detection, package/import dependencies,
+  extension method calls
+- **Shell/Bash** (`fallback_shell.py`): Function definitions, export variables,
+  source/. dependencies, Dockerfile patterns (FROM, RUN, ENTRYPOINT, CMD),
+  function call edges
+
+#### New Framework Detection
+
+- **Rails**: Gemfile, config/routes.rb, app/controllers/, app/models/ directory indicators
+- **Phoenix**: mix.exs, config/config.exs, lib/*_web/endpoint.ex indicators
+- **Flutter**: pubspec.yaml, lib/main.dart directory indicators
+- **SwiftUI**: Package.swift, import SwiftUI indicators
+- **Vapor**: Package.swift, import Vapor indicators
+- **Spark**: build.sbt, import org.apache.spark indicators
+- **Akka**: build.sbt, import akka indicators
+- **Play Framework**: build.sbt, conf/application.conf indicators
+
+#### New API Route Extraction
+
+- **Rails** (`routes.rb`): get/post/put/patch/delete, resources, namespace, root
+- **Phoenix** (`router.ex`): get/post/put/patch/delete, resources, scope, pipe_through
+
+#### New Outline Support
+
+- Ruby: modules, classes, methods (instance & class), require
+- Elixir: defmodule, def/defp/defmacro, use/import/alias/require
+- Dart: classes, mixins, enums, extensions, functions, imports
+- Swift: classes, structs, protocols, extensions, enums, functions, imports
+- Scala: case classes, classes, traits, objects, enums, functions, imports
+- Shell: functions, exports, Dockerfile FROM patterns
+
+#### Other Changes
+
+- Updated `unsupported_langs` to remove Ruby, Elixir, Dart, Swift, Scala, Shell (now parsed)
+- Added Kotlin to detected-but-not-unsupported (Java fallback parses .kt files)
+- Extended `_detect_language()` mapping with 14 new extensions
+- Extended `_FILE_PATH_EXTENSIONS` with new language extensions
+- Updated `lang_note` supported set and language name mapping
+- Added framework-specific path configurations for Rails, Phoenix, Flutter, SwiftUI, Vapor, Spark, Akka, Play
+- File discovery: .rb, .ex, .exs, .dart, .swift, .scala, .sh, .bash, .zsh, .rake, Dockerfile, Rakefile, Gemfile, mix.exs
 
 ## [5.8.1] — 2026-06-12
 

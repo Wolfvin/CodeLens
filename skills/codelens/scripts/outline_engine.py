@@ -79,6 +79,18 @@ def get_file_outline(
         outline = _outline_go(content, detail_level)
     elif ext == '.php':
         outline = _outline_php(content, detail_level)
+    elif ext == '.rb':
+        outline = _outline_ruby(content, detail_level)
+    elif ext in ('.ex', '.exs'):
+        outline = _outline_elixir(content, detail_level)
+    elif ext == '.dart':
+        outline = _outline_dart(content, detail_level)
+    elif ext == '.swift':
+        outline = _outline_swift(content, detail_level)
+    elif ext in ('.scala', '.sc'):
+        outline = _outline_scala(content, detail_level)
+    elif ext in ('.sh', '.bash', '.zsh'):
+        outline = _outline_shell(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -1001,6 +1013,193 @@ def _find_child_text(node, child_type, source, parser):
     return None
 
 
+# ─── Regex-based outline helpers for new languages ────────────────
+
+import re as _re
+
+def _outline_ruby(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Ruby source: classes, modules, methods."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*module\s+([\w:]+)', line)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": i, "type": "module"})
+            continue
+        m = _re.match(r'\s*class\s+([\w:]+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "class"})
+            continue
+        m = _re.match(r'\s*def\s+self\.([\w?!]+)', line)
+        if m:
+            outline["functions"].append({"name": f"self.{m.group(1)}", "line": i, "type": "class_method"})
+            continue
+        m = _re.match(r'\s*def\s+([\w?!]+)', line)
+        if m and m.group(1) not in ('if', 'unless', 'while', 'until', 'for', 'case', 'begin'):
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "method"})
+            continue
+        m = _re.match(r'\s*require\s+[\'"]([^\'"]+)[\'"]', line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i})
+    return outline
+
+
+def _outline_elixir(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Elixir source: modules, functions, macros."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*defmodule\s+([\w.]+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "module"})
+            continue
+        m = _re.match(r'\s*defmacro\s+([\w!?]+)', line)
+        if m:
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "macro"})
+            continue
+        m = _re.match(r'\s*defp?\s+([\w!?]+)', line)
+        if m:
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r'\s*(?:use|import|alias|require)\s+([\w.]+)', line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i})
+    return outline
+
+
+def _outline_dart(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Dart source: classes, functions, enums."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*class\s+(\w+)', line)
+        if m:
+            t = "class"
+            if 'StatefulWidget' in line:
+                t = "stateful_widget"
+            elif 'StatelessWidget' in line:
+                t = "stateless_widget"
+            outline["classes"].append({"name": m.group(1), "line": i, "type": t})
+            continue
+        m = _re.match(r'\s*mixin\s+(\w+)', line)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": i, "type": "mixin"})
+            continue
+        m = _re.match(r'\s*enum\s+(\w+)', line)
+        if m:
+            outline["types"].append({"name": m.group(1), "line": i, "type": "enum"})
+            continue
+        m = _re.match(r'\s*extension\s+(\w+)', line)
+        if m:
+            outline["types"].append({"name": m.group(1), "line": i, "type": "extension"})
+            continue
+        m = _re.match(r'\s*(?:static\s+)?(?:async\s+)?(?:[\w<>\[\]?]+\s+)?(\w+)\s*\(', line)
+        if m and m.group(1) not in ('if', 'else', 'while', 'for', 'switch', 'return',
+                                     'class', 'abstract', 'mixin', 'extension', 'enum',
+                                     'import', 'export', 'part', 'void', 'var', 'final', 'const'):
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r"\s*import\s+['\"]([^'\"]+)['\"]", line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i})
+    return outline
+
+
+def _outline_swift(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Swift source: classes, structs, protocols, functions."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*(?:final\s+|open\s+|public\s+)*class\s+(\w+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "class"})
+            continue
+        m = _re.match(r'\s*(?:public\s+)*struct\s+(\w+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "struct"})
+            continue
+        m = _re.match(r'\s*(?:public\s+)*protocol\s+(\w+)', line)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": i, "type": "protocol"})
+            continue
+        m = _re.match(r'\s*extension\s+(\w+)', line)
+        if m:
+            outline["types"].append({"name": m.group(1), "line": i, "type": "extension"})
+            continue
+        m = _re.match(r'\s*enum\s+(\w+)', line)
+        if m:
+            outline["types"].append({"name": m.group(1), "line": i, "type": "enum"})
+            continue
+        m = _re.match(r'\s*(?:static\s+|class\s+|override\s+|public\s+|private\s+)*(?:func)\s+(\w+)', line)
+        if m:
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r'\s*import\s+(\w+)', line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i})
+    return outline
+
+
+def _outline_scala(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Scala source: classes, objects, traits, functions."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*case\s+class\s+(\w+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "case_class"})
+            continue
+        m = _re.match(r'\s*(?:abstract\s+)?class\s+(\w+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "class"})
+            continue
+        m = _re.match(r'\s*(?:sealed\s+)?trait\s+(\w+)', line)
+        if m:
+            outline["interfaces"].append({"name": m.group(1), "line": i, "type": "trait"})
+            continue
+        m = _re.match(r'\s*object\s+(\w+)', line)
+        if m:
+            outline["classes"].append({"name": m.group(1), "line": i, "type": "object"})
+            continue
+        m = _re.match(r'\s*enum\s+(\w+)', line)
+        if m:
+            outline["types"].append({"name": m.group(1), "line": i, "type": "enum"})
+            continue
+        m = _re.match(r'\s*(?:private\s+|protected\s+|override\s+|implicit\s+)*def\s+(\w+)', line)
+        if m:
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r'\s*import\s+([\w.{*}]+)', line)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i})
+    return outline
+
+
+def _outline_shell(content: str, detail_level: str) -> Dict[str, Any]:
+    """Outline Shell/Bash source: functions, exports, Dockerfile patterns."""
+    outline = {"functions": [], "classes": [], "interfaces": [], "types": [],
+               "exports": [], "components": [], "imports": []}
+    for i, line in enumerate(content.split('\n'), 1):
+        m = _re.match(r'\s*function\s+(\w+)\s*\(?', line)
+        if m:
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r'\s*(\w+)\s*\(\)\s*\{?', line)
+        if m and m.group(1) not in ('if', 'then', 'else', 'elif', 'fi', 'for', 'while',
+                                     'until', 'do', 'done', 'case', 'esac', 'in', 'function',
+                                     'return', 'exit', 'echo', 'printf'):
+            outline["functions"].append({"name": m.group(1), "line": i, "type": "function"})
+            continue
+        m = _re.match(r'\s*export\s+([\w_]+)', line)
+        if m:
+            outline["exports"].append({"name": m.group(1), "line": i})
+            continue
+        m = _re.match(r'\s*FROM\s+([\w:./-]+)', line, _re.IGNORECASE)
+        if m:
+            outline["imports"].append({"name": m.group(1), "line": i, "type": "docker_from"})
+    return outline
+
+
 def _detect_language(ext: str) -> str:
     """Detect language from file extension."""
     mapping = {
@@ -1009,6 +1208,13 @@ def _detect_language(ext: str) -> str:
         '.rs': 'rust', '.py': 'python', '.go': 'go', '.php': 'php',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
-        '.vue': 'vue', '.svelte': 'svelte'
+        '.vue': 'vue', '.svelte': 'svelte',
+        '.rb': 'ruby', '.ex': 'elixir', '.exs': 'elixir',
+        '.dart': 'dart', '.swift': 'swift',
+        '.scala': 'scala', '.sc': 'scala',
+        '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell',
+        '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin',
+        '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+        '.cs': 'csharp', '.lua': 'lua',
     }
     return mapping.get(ext, 'unknown')
