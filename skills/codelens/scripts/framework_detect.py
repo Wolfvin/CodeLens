@@ -189,6 +189,55 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework", "illuminate/support"],
+        "config_files": ["artisan"],
+        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle", "symfony/flex"],
+        "config_files": ["symfony.lock"],
+        "indicators": ["config/bundles.php", "src/Kernel.php"]
+    },
+    "lumen": {
+        "packages": [],
+        "composer_packages": ["laravel/lumen-framework"],
+        "config_files": [],
+        "indicators": ["bootstrap/app.php"]
+    },
+    "slim": {
+        "packages": [],
+        "composer_packages": ["slim/slim", "slim/framework"],
+        "config_files": [],
+        "indicators": []
+    },
+    "codeigniter": {
+        "packages": [],
+        "composer_packages": ["codeigniter4/framework", "codeigniter/framework"],
+        "config_files": [],
+        "indicators": ["application/config/", "app/Config/"]
+    },
+    "yii": {
+        "packages": [],
+        "composer_packages": ["yiisoft/yii2"],
+        "config_files": [],
+        "indicators": []
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": [],
+        "config_files": ["wp-config.php"],
+        "indicators": ["wp-content/", "wp-includes/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core"],
+        "config_files": [],
+        "indicators": ["sites/default/", "modules/", "themes/"]
+    },
 }
 
 
@@ -241,6 +290,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_laravel": False,
+        "has_symfony": False,
+        "has_php": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -320,6 +372,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -394,6 +450,37 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 elif fw_name == "django":
                     detected["has_django"] = True
                 break
+
+    # 3d. Check PHP/composer.json for framework detection
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        detected["has_php"] = True
+        if "php" not in detected["frameworks"]:
+            detected["frameworks"].append("php")
+
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            # Collect require and require-dev packages
+            composer_deps.update(composer.get("require", {}).keys())
+            composer_deps.update(composer.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            pass
+
+        # Match composer deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name in composer_deps:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    elif fw_name == "symfony":
+                        detected["has_symfony"] = True
+                    break
 
     # 4. Check Rust/Cargo.toml for framework detection
     cargo_deps = set()
@@ -520,6 +607,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "svelte" not in detected["frameworks"]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
+            elif f.endswith('.php') and not detected["has_php"]:
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -537,6 +628,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_fastapi"] = True
                 elif fw_name == "flask":
                     detected["has_flask"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                elif fw_name == "symfony":
+                    detected["has_symfony"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -605,7 +700,7 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "frontend_paths": ["src/client/", "public/", "frontend/", "static/", "templates/"],
         "backend_paths": ["src/server/", "src/api/", "src/"],
         "watch": True,
-        "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
+        "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/", "vendor/"],
         "frameworks": fw["frameworks"],
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
@@ -669,6 +764,19 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                             config["backend_paths"].append(rel + "/")
                 except OSError:
                     pass
+
+    # Laravel/PHP: add PHP-specific paths
+    if fw.get("has_laravel") or fw.get("has_php"):
+        config["backend_paths"].extend(["app/", "routes/", "database/", "config/"])
+        config["frontend_paths"].extend(["resources/views/", "resources/js/", "resources/css/", "public/"])
+        if fw.get("has_laravel"):
+            config["backend_paths"].extend(["app/Http/Controllers/", "app/Http/Middleware/", "app/Models/"])
+            config["frontend_paths"].extend(["resources/views/"])
+
+    # Symfony: add Symfony-specific paths
+    if fw.get("has_symfony"):
+        config["backend_paths"].extend(["src/", "config/", "migrations/"])
+        config["frontend_paths"].extend(["templates/", "assets/"])
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

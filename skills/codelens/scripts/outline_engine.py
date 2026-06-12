@@ -77,6 +77,8 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
+    elif ext == '.php':
+        outline = _outline_php(content, detail_level)
     else:
         outline = _outline_generic(content, detail_level)
 
@@ -111,7 +113,7 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.php'
     }
 
     outlines = []
@@ -497,6 +499,107 @@ def _outline_go(content: str, detail: str) -> Dict:
             outline["variables"].append({"name": const_name, "line": line_num, "const": True})
             if is_exported:
                 outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
+
+    return outline
+
+
+def _outline_php(content: str, detail: str) -> Dict:
+    """Outline for PHP source files."""
+    import re
+    outline = {
+        "functions": [],
+        "classes": [],
+        "interfaces": [],
+        "traits": [],
+        "enums": [],
+        "imports": [],
+        "variables": [],
+        "constants": [],
+    }
+
+    # Namespace detection
+    ns_match = re.search(r'namespace\s+([\w\\]+)\s*;', content)
+    if ns_match:
+        outline["namespace"] = ns_match.group(1).strip('\\')
+
+    # Use statements (imports)
+    for m in re.finditer(r'use\s+(?:function\s+|const\s+)?([\w\\]+)(?:\s+as\s+(\w+))?\s*;', content):
+        import_path = m.group(1)
+        alias = m.group(2) or import_path.rsplit('\\', 1)[-1]
+        outline["imports"].append({"text": import_path, "alias": alias})
+
+    # Group use statements (PHP 7+)
+    for m in re.finditer(r'use\s+([\w\\]+)\\{([^}]+)}\s*;', content):
+        base_ns = m.group(1)
+        for item in re.finditer(r'([\w\\]+)(?:\s+as\s+(\w+))?', m.group(2)):
+            import_path = base_ns + '\\' + item.group(1)
+            alias = item.group(2) or item.group(1).rsplit('\\', 1)[-1]
+            outline["imports"].append({"text": import_path, "alias": alias})
+
+    lines = content.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Class declarations
+        m = re.match(r'(?:abstract\s+|final\s+)*class\s+(\w+)', stripped)
+        if m:
+            class_name = m.group(1)
+            entry = {"name": class_name, "line": line_num}
+            # Detect class modifiers
+            prefix = stripped[:stripped.index('class')].strip()
+            if 'abstract' in prefix:
+                entry["abstract"] = True
+            if 'final' in prefix:
+                entry["final"] = True
+            # Detect extends/implements on same line
+            ext_match = re.search(r'extends\s+([\w\\]+)', stripped)
+            if ext_match:
+                entry["extends"] = ext_match.group(1).strip('\\')
+            impl_match = re.search(r'implements\s+([\w\\,\s]+)', stripped)
+            if impl_match:
+                entry["implements"] = [i.strip().strip('\\') for i in impl_match.group(1).split(',')]
+            outline["classes"].append(entry)
+            continue
+
+        # Interface declarations
+        m = re.match(r'interface\s+(\w+)', stripped)
+        if m:
+            iface_name = m.group(1)
+            entry = {"name": iface_name, "line": line_num}
+            ext_match = re.search(r'extends\s+([\w\\,\s]+)', stripped)
+            if ext_match:
+                entry["extends"] = [i.strip().strip('\\') for i in ext_match.group(1).split(',')]
+            outline["interfaces"].append(entry)
+            continue
+
+        # Trait declarations
+        m = re.match(r'trait\s+(\w+)', stripped)
+        if m:
+            outline["traits"].append({"name": m.group(1), "line": line_num})
+            continue
+
+        # Enum declarations (PHP 8.1+)
+        m = re.match(r'enum\s+(\w+)(?::\s*(\w+))?', stripped)
+        if m:
+            entry = {"name": m.group(1), "line": line_num}
+            if m.group(2):
+                entry["backing_type"] = m.group(2)
+            outline["enums"].append(entry)
+            continue
+
+        # Standalone functions (not methods — methods are inside class bodies)
+        m = re.match(r'function\s+(\w+)\s*\(', stripped)
+        if m:
+            # Skip if indented (likely a method inside a class)
+            indent = len(line) - len(line.lstrip())
+            if indent == 0:
+                outline["functions"].append({"name": m.group(1), "line": line_num})
+                continue
+
+        # Class constants
+        m = re.match(r'const\s+(\w+)\s*=', stripped)
+        if m:
+            outline["constants"].append({"name": m.group(1), "line": line_num})
 
     return outline
 
@@ -888,7 +991,7 @@ def _detect_language(ext: str) -> str:
     mapping = {
         '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
         '.ts': 'typescript', '.tsx': 'tsx', '.jsx': 'tsx',
-        '.rs': 'rust', '.py': 'python', '.go': 'go',
+        '.rs': 'rust', '.py': 'python', '.go': 'go', '.php': 'php',
         '.html': 'html', '.htm': 'html',
         '.css': 'css', '.scss': 'scss', '.less': 'less',
         '.vue': 'vue', '.svelte': 'svelte'

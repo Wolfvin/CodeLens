@@ -29,6 +29,8 @@ from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
+from parsers.fallback_php import parse_php_fallback
+from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
 
@@ -346,6 +348,28 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Svelte file: {path}")
 
+    # Parse Blade templates (Laravel .blade.php files)
+    # Blade templates contain HTML classes/IDs that belong in the frontend registry
+    blade_data = []
+    if files["blade"]:
+        for path in files["blade"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_blade_template(content, os.path.relpath(path, workspace))
+                # Merge Blade frontend data into html_data format
+                fe = refs.get("frontend", {})
+                if fe.get("classes") or fe.get("ids"):
+                    blade_data.append({
+                        "path": os.path.relpath(path, workspace),
+                        "classes": fe.get("classes", []),
+                        "ids": fe.get("ids", [])
+                    })
+            except IOError:
+                logger.debug(f"Failed to read Blade file: {path}")
+
     # Tailwind analysis
     # In incremental mode, skip tailwind re-analysis since we only have
     # classes from changed files — the merge will preserve existing tailwind info
@@ -369,18 +393,21 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 logger.debug("Tailwind analysis failed", exc_info=True)
 
     # Build frontend registry
+    # Merge Blade template data into html_data (same format: path, classes, ids)
+    html_data_with_blade = html_data + blade_data
+
     if incremental and changed_files:
         # Incremental: merge new parsed data into existing registry
         existing_frontend = load_frontend_registry(workspace)
         frontend_registry = merge_frontend_data(
-            existing_frontend, html_data, css_data, js_frontend_data,
+            existing_frontend, html_data_with_blade, css_data, js_frontend_data,
             tsx_data, vue_data, svelte_data, tailwind_info,
             changed_files, workspace, config.get("frameworks", [])
         )
     else:
         # Full scan: build from scratch
         frontend_registry = build_frontend_registry(
-            workspace, html_data, css_data, js_frontend_data,
+            workspace, html_data_with_blade, css_data, js_frontend_data,
             tsx_data, vue_data, svelte_data,
             tailwind_info, config.get("frameworks", [])
         )
@@ -571,8 +598,27 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read C# file: {path}")
 
+    # Parse PHP files
+    php_data = []
+    if files["php"]:
+        for path in files["php"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_php_fallback(content, os.path.relpath(path, workspace))
+                php_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read PHP file: {path}")
+
+
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -662,6 +708,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "go": len(files["go"]),
             "lua": len(files["lua"]),
             "csharp": len(files["csharp"]),
+            "php": len(files["php"]),
+            "blade": len(files["blade"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -669,6 +717,8 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
+        "php_parsed": len(php_data),
+        "blade_parsed": len(blade_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -690,7 +740,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte"}
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -725,6 +775,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "go": [],
         "lua": [],
         "csharp": [],
+        "php": [],
+        "blade": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -788,6 +840,11 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["lua"].append(file_path)
             elif ext in ('.cs',):
                 files["csharp"].append(file_path)
+            elif ext == '.php':
+                if filename.endswith('.blade.php'):
+                    files["blade"].append(file_path)
+                else:
+                    files["php"].append(file_path)
 
     return files
 

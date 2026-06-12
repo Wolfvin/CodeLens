@@ -28,7 +28,7 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
+    ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
     ".go",
 }
@@ -100,6 +100,30 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "go_main_fn",
+            },
+            # PHP — artisan command signatures
+            {
+                "regex": r'protected\s+\$signature\s*=\s*[\'"]([^\'"]+)[\'"]',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_artisan_command",
+            },
+            # PHP — Laravel service provider register/boot
+            {
+                "regex": r'class\s+(\w+ServiceProvider)\s+extends\s+ServiceProvider',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_service_provider",
+            },
+            # PHP — console kernel / http kernel
+            {
+                "regex": r'class\s+(\w+Kernel)\s+extends\s+\w+Kernel',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_kernel",
             },
             # index.ts / index.js as entry (detected by filename)
             {
@@ -238,6 +262,23 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler_only",
                 "handler_group": 0,
                 "label": "nitro_event_handler",
+            },
+            # Laravel Route::get/post/etc
+            {
+                "regex": r'Route::(get|post|put|patch|delete|options|any)\s*\(\s*[\'"]([^\'"]+)[\'"]',
+                "language": {".php"},
+                "extract": "http_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "laravel_route",
+            },
+            # Laravel controller action methods
+            {
+                "regex": r'public\s+function\s+(\w+)\s*\([^)]*Request',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "laravel_controller_method",
             },
             # tRPC routers
             {
