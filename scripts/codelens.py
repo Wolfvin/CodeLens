@@ -805,16 +805,11 @@ def main():
         if "lite" not in existing_dests:
             sub.add_argument("--lite", action="store_true", default=False,
                              help="Minimal output mode for AI decision-making")
+
+        # Add --deep flag for LSP-enhanced hybrid analysis (skip if command already defines --deep)
         if "deep" not in existing_dests:
             sub.add_argument("--deep", action="store_true", default=False,
                              help="Enable LSP-enhanced deep analysis (requires language server)")
-
-        # Add --deep flag to commands that support hybrid LSP analysis
-        if "deep" not in existing_dests and cmd_name in (
-            "dead-code", "query", "impact", "smell", "complexity"
-        ):
-            sub.add_argument("--deep", action="store_true", default=False,
-                             help="Use LSP-enhanced deep analysis for higher accuracy")
 
         # Add --db-path flag for persistent registry (if command doesn't define it)
         if "db_path" not in existing_dests:
