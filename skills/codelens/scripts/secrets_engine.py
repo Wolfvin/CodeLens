@@ -320,6 +320,11 @@ ENV_REFERENCE_LINE_PATTERNS = [
     re.compile(r'process\.env\.SECRET'),
     re.compile(r'process\.env\.TOKEN'),
     re.compile(r'process\.env\.KEY'),
+    # PHP / Laravel environment reference patterns
+    re.compile(r'\benv\s*\('),                    # Laravel env() helper
+    re.compile(r'\bgetenv\s*\('),                 # PHP getenv()
+    re.compile(r'\$_ENV\b'),                      # PHP superglobal
+    re.compile(r'\bconfig\s*\('),                 # Laravel config() helper (reads from env)
 ]
 
 # ─── Line-level Exclusion Patterns ────────────────────────────
@@ -364,6 +369,8 @@ TEST_FILE_PATTERNS = [
     'test/', 'tests/', 'spec/', 'specs/',
     '/__mocks__/', '.mock.', '/mock/', '/mocks/',
     '.stories.', '.story.',
+    # PHP / PHPUnit conventions
+    'Test.php', 'TestCase.php',
 ]
 
 # ─── Credential Template Path Patterns ──────────────────────────
@@ -585,6 +592,17 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     severity = definition["severity"]
                     if is_test:
                         severity = _reduce_severity(severity)
+
+                    # PHP variable reference check: if a "password" finding line contains
+                    # a PHP variable ($var) after the password assignment/key, it's likely
+                    # just passing through a variable reference (e.g., 'password' => '--password='.$connection['password'])
+                    # rather than hardcoding an actual secret. Downgrade severity.
+                    if category in ("password", "connection_string") and severity == "critical":
+                        # Check if the line contains a PHP variable reference after the password pattern
+                        # This handles cases like: 'password' => $var, password: $obj->pass, etc.
+                        if ext == ".php" and re.search(r'\$\w+', line_text):
+                            # The "password" value is derived from a variable, not hardcoded
+                            severity = _reduce_severity(severity)
 
                     finding = {
                         "type": "pattern_match",

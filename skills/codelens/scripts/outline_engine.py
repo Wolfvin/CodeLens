@@ -741,14 +741,23 @@ def _outline_php(content: str, detail: str) -> Dict:
             outline["imports"].append({"text": import_path, "alias": alias})
 
     lines = content.split('\n')
+    brace_depth = 0
+    current_class = None        # reference to the class/interface/trait/enum entry
+    current_class_depth = 0     # brace depth *before* the class opening brace
+
     for line_num, line in enumerate(lines, 1):
         stripped = line.strip()
+        # Save depth before this line's braces are counted
+        depth_before = brace_depth
+
+        # Track brace depth (simple line-level counting; good enough for most PHP)
+        brace_depth += stripped.count('{') - stripped.count('}')
 
         # Class declarations
         m = re.match(r'(?:abstract\s+|final\s+)*class\s+(\w+)', stripped)
         if m:
             class_name = m.group(1)
-            entry = {"name": class_name, "line": line_num}
+            entry = {"name": class_name, "line": line_num, "methods": []}
             # Detect class modifiers
             prefix = stripped[:stripped.index('class')].strip()
             if 'abstract' in prefix:
@@ -763,33 +772,70 @@ def _outline_php(content: str, detail: str) -> Dict:
             if impl_match:
                 entry["implements"] = [i.strip().strip('\\') for i in impl_match.group(1).split(',')]
             outline["classes"].append(entry)
+            current_class = entry
+            current_class_depth = depth_before
             continue
 
         # Interface declarations
         m = re.match(r'interface\s+(\w+)', stripped)
         if m:
             iface_name = m.group(1)
-            entry = {"name": iface_name, "line": line_num}
+            entry = {"name": iface_name, "line": line_num, "methods": []}
             ext_match = re.search(r'extends\s+([\w\\,\s]+)', stripped)
             if ext_match:
                 entry["extends"] = [i.strip().strip('\\') for i in ext_match.group(1).split(',')]
             outline["interfaces"].append(entry)
+            current_class = entry
+            current_class_depth = depth_before
             continue
 
         # Trait declarations
         m = re.match(r'trait\s+(\w+)', stripped)
         if m:
-            outline["traits"].append({"name": m.group(1), "line": line_num})
+            entry = {"name": m.group(1), "line": line_num, "methods": []}
+            outline["traits"].append(entry)
+            current_class = entry
+            current_class_depth = depth_before
             continue
 
         # Enum declarations (PHP 8.1+)
         m = re.match(r'enum\s+(\w+)(?::\s*(\w+))?', stripped)
         if m:
-            entry = {"name": m.group(1), "line": line_num}
+            entry = {"name": m.group(1), "line": line_num, "methods": []}
             if m.group(2):
                 entry["backing_type"] = m.group(2)
             outline["enums"].append(entry)
+            current_class = entry
+            current_class_depth = depth_before
             continue
+
+        # If inside a class/interface/trait/enum, look for methods
+        if current_class and brace_depth > current_class_depth:
+            method_match = re.match(
+                r'\s+(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+(\w+)\s*\(',
+                line
+            )
+            if method_match:
+                method_entry = {
+                    "name": method_match.group(1),
+                    "line": line_num,
+                }
+                # Extract visibility and modifiers from the keywords before 'function'
+                prefix_part = line[:line.index('function')].strip()
+                method_entry["visibility"] = "public"  # default in PHP
+                if 'private' in prefix_part:
+                    method_entry["visibility"] = "private"
+                elif 'protected' in prefix_part:
+                    method_entry["visibility"] = "protected"
+                method_entry["static"] = 'static' in prefix_part
+                method_entry["abstract"] = 'abstract' in prefix_part
+                current_class["methods"].append(method_entry)
+                continue
+
+        # When brace depth drops back to (or below) the class level, we've left the class
+        if current_class and brace_depth <= current_class_depth:
+            current_class = None
+            current_class_depth = 0
 
         # Standalone functions (not methods — methods are inside class bodies)
         m = re.match(r'function\s+(\w+)\s*\(', stripped)

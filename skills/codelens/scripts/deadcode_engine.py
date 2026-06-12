@@ -32,6 +32,7 @@ SOURCE_EXTENSIONS = {
 # Performance limits for large codebases
 MAX_FILES_PER_CATEGORY = 5000    # Max files to scan per category
 MAX_RESULTS_PER_CATEGORY = 200   # Max results to return per category
+DEADCODE_TIMEOUT_SEC = 120       # Hard timeout for dead code detection
 
 
 def detect_dead_code(
@@ -70,7 +71,7 @@ def detect_dead_code(
     results: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     truncated = False
-    TIMEOUT_BUDGET = 90  # seconds — prevent hanging on huge repos
+    TIMEOUT_BUDGET = DEADCODE_TIMEOUT_SEC  # seconds — prevent hanging on huge repos
 
     start_time = time.time()
     timed_out = False

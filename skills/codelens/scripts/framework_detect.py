@@ -234,11 +234,11 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["laravel/framework", "illuminate/support"],
         "config_files": ["artisan"],
-        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php"]
+        "indicators": ["app/Http/Kernel.php", "app/Console/Kernel.php", "src/Illuminate/"]
     },
     "symfony": {
         "packages": [],
-        "composer_packages": ["symfony/framework-bundle", "symfony/flex"],
+        "composer_packages": ["symfony/framework-bundle", "symfony/flex", "symfony/symfony"],
         "config_files": ["symfony.lock"],
         "indicators": ["config/bundles.php", "src/Kernel.php"]
     },
@@ -671,6 +671,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 3d. Check PHP/composer.json for framework detection
     composer_deps = set()
+    composer = {}
     composer_path = os.path.join(workspace, "composer.json")
     if os.path.exists(composer_path):
         detected["has_php"] = True
@@ -698,6 +699,39 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_laravel"] = True
                     elif fw_name == "symfony":
                         detected["has_symfony"] = True
+                    break
+
+        # Check composer.json name field (when the repo IS the framework)
+        composer_name = composer.get("name", "")
+        if composer_name:
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                composer_pkgs = sig.get("composer_packages", [])
+                if composer_name in composer_pkgs:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    elif fw_name == "symfony":
+                        detected["has_symfony"] = True
+                    break
+
+        # Check composer.json replace section (common in framework monorepos)
+        composer_replace = composer.get("replace", {})
+        if composer_replace:
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                composer_pkgs = sig.get("composer_packages", [])
+                for pkg_name in composer_pkgs:
+                    if pkg_name in composer_replace:
+                        detected["frameworks"].append(fw_name)
+                        if fw_name == "laravel":
+                            detected["has_laravel"] = True
+                        elif fw_name == "symfony":
+                            detected["has_symfony"] = True
+                        break
+                if fw_name in detected["frameworks"]:
                     break
 
     # 4. Check Rust/Cargo.toml for framework detection

@@ -4,6 +4,23 @@ All notable changes to CodeLens are documented here.
 
 ## [7.2.0] — 2026-06-12
 
+### CodeLens v7.2.0 — Tested against laravel/framework (2,801 PHP files)
+
+Full PHP/Laravel engine support added across 10+ engines. Critical fixes for engines that completely skipped PHP files.
+
+- **CRITICAL**: `outline_engine.py` — PHP class methods now extracted (was `total_functions: 11` → `27,949`)
+- **CRITICAL**: `statemap_engine.py` — Added `.php` + Laravel state detection (0 → 173 stores)
+- **CRITICAL**: `dataflow_engine.py` — Added PHP taint analysis (1 → 1,155 sources, 18 violations)
+- **CRITICAL**: `sideeffect_engine.py` — Added PHP side-effects (0 → 25,830 functions, 2,175 impure)
+- **Fixed**: `framework_detect.py` — `has_laravel` now detects framework source repos via composer.json name/replace
+- **Fixed**: `smell_engine.py` — PHP god-object, deep-nesting, many-params detection
+- **Fixed**: `secrets_engine.py` — PHPUnit test patterns, env() references, DbCommand FP fix
+- **Fixed**: `entrypoints_engine.py` — Laravel scheduled tasks, queue jobs, event listeners
+- **Fixed**: `handbook.py` — PHP version from git tags, correct conventions, Laravel directory descriptions
+- **Fixed**: Timeout on 5 engines (smell, dead-code, complexity, entrypoints, api-map) — added MAX_FILES/TIMEOUT limits
+
+## [7.2.0] — 2026-06-12
+
 ### CodeLens v6.4.0 — Tested against redis/redis
 
 - Fixed `is_bundled_file()` missing from utils.py (broke ask/complexity/context/perf_hint)

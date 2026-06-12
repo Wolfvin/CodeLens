@@ -67,6 +67,10 @@ PARAM_HIGH = 7
 NESTING_MODERATE = 4
 NESTING_HIGH = 6
 
+# Performance limits for large codebases
+COMPLEXITY_TIMEOUT_SEC = 120  # Hard timeout for complexity computation
+MAX_FILES_COMPLEXITY = 5000   # Max files to scan for complexity
+
 
 # ─── Main Entry Point ──────────────────────────────────────────
 
@@ -101,7 +105,7 @@ def compute_complexity(
     function_results: List[Dict] = []
     files_scanned = 0
     MAX_FUNCTIONS = 8000  # Cap total functions to analyze
-    TIMEOUT_BUDGET = 90   # seconds — bail out before hanging on huge repos
+    TIMEOUT_BUDGET = COMPLEXITY_TIMEOUT_SEC   # seconds — bail out before hanging on huge repos
 
     start_time = time.time()
     timed_out = False
@@ -114,6 +118,10 @@ def compute_complexity(
 
         for filename in filenames:
             if files_scanned >= max_files:
+                break
+
+            if files_scanned >= MAX_FILES_COMPLEXITY:
+                logger.warning(f"Max files limit ({MAX_FILES_COMPLEXITY}) reached for complexity, truncating results")
                 break
 
             ext = os.path.splitext(filename)[1].lower()
