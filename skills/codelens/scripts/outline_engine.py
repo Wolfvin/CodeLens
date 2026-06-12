@@ -145,6 +145,7 @@ def get_workspace_outline(
         '.scala', '.sc', '.sh', '.bash', '.zsh',
         '.java', '.cs',
         '.R', '.r', '.hs', '.lhs', '.nim', '.nims',
+        '.zig',
     }
 
     outlines = []

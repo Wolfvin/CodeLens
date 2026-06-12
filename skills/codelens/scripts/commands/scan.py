@@ -39,7 +39,7 @@ from parsers.fallback_scala import parse_scala_fallback
 from parsers.fallback_shell import parse_shell_fallback
 from parsers.fallback_gdscript import parse_gdscript_fallback
 from parsers.fallback_kotlin import parse_kotlin_fallback
-from parsers.fallback_nim import parse_nim_fallback
+from parsers.fallback_zig import parse_zig_fallback
 
 from commands import register_command
 
@@ -50,23 +50,28 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--max-files", type=int, default=0,
+                        help="Maximum number of files to scan (0=unlimited). "
+                             "Prevents timeout on very large repos.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    max_files = getattr(args, 'max_files', 0)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, max_files=max_files)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, max_files: int = 0) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    If max_files>0, limit the number of files scanned per category.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -82,7 +87,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         save_config(workspace, config)
 
     # Discover files
-    files = discover_files(workspace, config)
+    files = discover_files(workspace, config, max_files=max_files)
 
     # Check if incremental scan is possible
     changed_files = None
@@ -769,27 +774,27 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read GDScript file: {path}")
 
-
-    # Parse Nim files
-    nim_data = []
-    if files["nim"]:
-        for path in files["nim"]:
+    # Parse Zig files
+    zig_data = []
+    if files["zig"]:
+        for path in files["zig"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_nim_fallback(content, os.path.relpath(path, workspace))
-                nim_data.append({
+                refs = parse_zig_fallback(content, os.path.relpath(path, workspace))
+                zig_data.append({
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                logger.debug(f"Failed to read Nim file: {path}")
+                logger.debug(f"Failed to read Zig file: {path}")
+
 
     # All new language data combined
-    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data + nim_data
+    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data + zig_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -889,7 +894,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "scala": len(files["scala"]),
             "shell": len(files["shell"]),
             "gdscript": len(files["gdscript"]),
-            "nim": len(files["nim"]),
+            "zig": len(files["zig"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -907,7 +912,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "scala_parsed": len(scala_data),
         "shell_parsed": len(shell_data),
         "gdscript_parsed": len(gdscript_data),
-        "nim_parsed": len(nim_data),
+        "zig_parsed": len(zig_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -955,13 +960,14 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "gdscript": "GDScript",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages use regex-based fallback extraction. Analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS/Nim)."
+    return f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
 
 
-def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
+def discover_files(workspace: str, config: Dict, max_files: int = 0) -> Dict[str, List[str]]:
     """
     Discover all relevant source files in the workspace.
     Returns categorized file lists.
+    If max_files > 0, limit total files across all categories to this number.
     """
     files = {
         "html": [],
@@ -988,7 +994,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "scala": [],
         "shell": [],
         "gdscript": [],
-        "nim": [],
+        "zig": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -1071,10 +1077,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["gdscript"].append(file_path)
             elif ext in ('.scala', '.sc'):
                 files["scala"].append(file_path)
-            elif ext in ('.nim',):
-                files["nim"].append(file_path)
-            elif ext in ('.nims',):
-                files["nim"].append(file_path)
+            elif ext == '.zig':
+                files["zig"].append(file_path)
             elif ext in ('.sh', '.bash', '.zsh'):
                 files["shell"].append(file_path)
             elif filename == 'Dockerfile' or filename.endswith('.Dockerfile'):
@@ -1085,6 +1089,19 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["ruby"].append(file_path)
             elif filename == 'mix.exs':
                 files["elixir"].append(file_path)
+
+    # Apply max_files limit if specified
+    if max_files > 0:
+        total = sum(len(v) for v in files.values())
+        if total > max_files:
+            # Proportionally truncate each category to fit within max_files
+            # Priority: keep backend languages (rust, python, js_backend) over others
+            total = sum(len(v) for v in files.values())
+            ratio = max_files / total if total > 0 else 1.0
+            for key in files:
+                cap = max(1, int(len(files[key]) * ratio))
+                if len(files[key]) > cap:
+                    files[key] = files[key][:cap]
 
     return files
 

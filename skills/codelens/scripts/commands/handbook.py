@@ -29,18 +29,18 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
-    parser.add_argument("--timeout", type=int, default=180,
-                        help="Total time budget in seconds for handbook generation (default: 180). "
+    parser.add_argument("--timeout", type=int, default=300,
+                        help="Total time budget in seconds for handbook generation (default: 300). "
                              "Remaining engines are skipped when budget is nearly exhausted.")
 
 
 def execute(args, workspace):
     max_files = getattr(args, 'max_files', 5000)
-    timeout = getattr(args, 'timeout', 180)
+    timeout = getattr(args, 'timeout', 120)
     return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 300) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
@@ -62,11 +62,11 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) 
 
     def _should_skip(engine_name: str) -> bool:
         """Check if we should skip an engine due to time budget."""
-        remaining = time_budget - (time.monotonic() - start_time)
-        if remaining < 30:  # Need at least 30s remaining to start an engine
+        min_remaining = max(15, time_budget * 0.1)  # 10% of budget or 15s, whichever is larger
+        if _remaining() < min_remaining:
             engines_skipped.append(engine_name)
             logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
-                           f"({remaining:.1f}s remaining)")
+                           f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
             return True
         return False
 
@@ -125,7 +125,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) 
         pass
     else:
         try:
-            smell_result = detect_smells(workspace, max_files=max_files)
+            smell_result = detect_smells(workspace)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -141,7 +141,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) 
         pass
     else:
         try:
-            ep_result = map_entrypoints(workspace, exclude_tests=True, max_files=max_files)
+            ep_result = map_entrypoints(workspace, exclude_tests=True)
             entrypoints = [
                 {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
                 for e in ep_result.get("entrypoints", [])[:30]
@@ -155,7 +155,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) 
         pass
     else:
         try:
-            api_result = map_api_routes(workspace)
+            api_result = map_api_routes(workspace, production_only=True)
             api_routes = [
                 {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
                 for r in api_result.get("routes", [])[:50]
@@ -218,9 +218,21 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 180) 
     summary = {}
     if not _should_skip('summary'):
         try:
-            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+            summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=max_files), scan_result)
         except Exception:
             logger.warning("Summary computation failed", exc_info=True)
+
+    # Fallback: if summary is empty, try loading from previously saved .codelens/summary.json
+    if not summary or not summary.get('files'):
+        try:
+            summary_path = os.path.join(workspace, '.codelens', 'summary.json')
+            if os.path.exists(summary_path):
+                with open(summary_path, 'r', encoding='utf-8') as sf:
+                    saved = json.load(sf)
+                    if saved and saved.get('files'):
+                        summary = saved
+        except Exception:
+            pass
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -485,9 +497,17 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 content = f.read()
             name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
             ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            # Handle version.workspace = true by looking for [workspace.package] version
+            if not ver_match:
+                ws_ver_match = re.search(r'version\.workspace\s*=\s*true', content)
+                if ws_ver_match:
+                    ws_pkg_ver = re.search(r'\[workspace\.package\][^\[]*?version\s*=\s*["\']([^"\']+)["\']', content, re.DOTALL)
+                    if ws_pkg_ver:
+                        ver_match = ws_pkg_ver
             if name_match:
                 identity["name"] = name_match.group(1)
-            if ver_match:
+            # Only overwrite version if we found a non-empty, non-placeholder version
+            if ver_match and ver_match.group(1) not in ('', '0.0.0'):
                 identity["version"] = ver_match.group(1)
             rust_type = "rust-project"
         except Exception:
@@ -642,57 +662,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         else:
             lua_type = "lua-project"
 
-    # v6.5: Detect Elixir projects from mix.exs
-    elixir_type = None
-    mix_exs_path = os.path.join(workspace, 'mix.exs')
-    has_mix_exs = os.path.isfile(mix_exs_path)
-    if has_mix_exs:
-        try:
-            with open(mix_exs_path, 'r', encoding='utf-8') as f:
-                mix_content = f.read()
-            # Extract app name and version from project function
-            # Pattern: app: :atom_name
-            app_match = re.search(r'app:\s*:(\w+)', mix_content)
-            # Pattern: @version "x.y.z" or version: @version or version: "x.y.z"
-            ver_match = re.search(r'@version\s+["\']([^"\']+)["\']', mix_content)
-            if not ver_match:
-                ver_match = re.search(r'version:\s*["\']([^"\']+)["\']', mix_content)
-            # Pattern: description: "..."
-            desc_match = re.search(r'description:\s*["\']([^"\']+)["\']', mix_content)
-            if app_match:
-                identity["name"] = app_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            if desc_match:
-                identity["description"] = desc_match.group(1)
-            # Detect Elixir framework type from deps
-            hex_deps = set()
-            for m_dep in re.finditer(r'\{:([\w_]+)\s*,', mix_content):
-                hex_deps.add(m_dep.group(1).lower())
-            if 'phoenix' in hex_deps or 'phoenix_pubsub' in hex_deps:
-                elixir_type = "phoenix-web-framework"
-            elif 'ecto' in hex_deps or 'ecto_sql' in hex_deps:
-                elixir_type = "elixir-data-app"
-            elif 'oban' in hex_deps:
-                elixir_type = "elixir-worker-app"
-            elif 'nerves' in hex_deps:
-                elixir_type = "elixir-embedded-app"
-            elif 'plug' in hex_deps:
-                elixir_type = "elixir-web-app"
-            else:
-                # Check if this IS the Phoenix framework source itself
-                if os.path.isfile(os.path.join(workspace, 'lib', 'phoenix.ex')):
-                    elixir_type = "phoenix-web-framework"
-                elif re.search(r'defmodule\s+Phoenix\.', mix_content):
-                    elixir_type = "phoenix-web-framework"
-                else:
-                    elixir_type = "elixir-project"
-        except Exception:
-            logger.warning("mix.exs parsing failed", exc_info=True)
-            elixir_type = "elixir-project"
-
     # v6.4: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type, elixir_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -711,8 +682,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
-        if elixir_type:
-            type_parts.append("elixir")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -720,31 +689,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         if identity["is_monorepo"]:
             identity["type"] = active_types[0] + "-monorepo"
     # If no type detected, remains "unknown"
-
-    # v6.5: Priority fix — if Elixir type was detected AND Elixir files outnumber JS files,
-    # the Elixir type should take precedence over a JS type derived from a minor package.json
-    # (e.g., Phoenix has a package.json for its JS client, but it's primarily an Elixir project)
-    if elixir_type and js_type:
-        ex_count = 0
-        js_count = 0
-        try:
-            for root, dirs, filenames in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                if '.codelens' in root:
-                    dirs.clear()
-                    continue
-                for fn in filenames:
-                    if fn.endswith(('.ex', '.exs')):
-                        ex_count += 1
-                    elif fn.endswith(('.js', '.ts', '.tsx', '.jsx', '.mjs', '.cjs')):
-                        js_count += 1
-        except Exception:
-            pass
-        if ex_count > js_count:
-            # Elixir is the primary language — override the type
-            identity["type"] = elixir_type
-            if identity["is_monorepo"] and not identity["type"].endswith("-monorepo"):
-                identity["type"] += "-monorepo"
 
     # v6: When frameworks are found in subdirectory package.json files,
     #     update the identity type if it's still generic

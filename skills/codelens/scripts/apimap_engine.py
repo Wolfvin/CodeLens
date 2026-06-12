@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql", ".php", ".go", ".ex", ".exs",
+    ".graphql", ".gql", ".php", ".go", ".zig",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -125,11 +125,12 @@ def map_api_routes(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # v5.9: Detect if this file is a test/example file for route source tagging
+            # v5.9: Detect if this file is a test/example/vendor file for route source tagging
             is_test_file = any(x in rel_path for x in [
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/third_party/', '/vendor/', '/fixtures/',
             ])
 
             try:
@@ -260,13 +261,6 @@ def map_api_routes(
                         fw = r.get("framework", "")
                         if fw:
                             frameworks_detected.add(fw)
-
-            # ─── Elixir/Phoenix routes ─────────────────────────
-            if ext in {".ex", ".exs"}:
-                phoenix_routes = _extract_phoenix_routes(content, rel_path)
-                if phoenix_routes:
-                    frameworks_detected.add("phoenix")
-                    routes.extend(phoenix_routes)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -3039,182 +3033,5 @@ def _extract_go_http_routes(content: str, rel_path: str) -> List[Dict[str, Any]]
                     "middleware": [],
                     "route_type": "fiber_route",
                 })
-
-    return routes
-
-
-# ─── Elixir/Phoenix Route Extraction ────────────────────────────
-
-def _extract_phoenix_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract HTTP routes from Elixir/Phoenix router files.
-
-    Detects:
-    - Phoenix verb macros: get/put/post/patch/delete/options/head
-      Patterns: get "/path", Controller, :action
-                get "/path", Controller, :action, private: ...
-    - Phoenix scope blocks: scope "/api", MyAppWeb do ... end
-    - Phoenix resources: resources "/path", Controller
-    - Phoenix LiveView routes: live "/path", LiveViewComponent
-    - pipe_through :pipeline (middleware)
-    """
-    routes: List[Dict[str, Any]] = []
-    lines = content.split('\n')
-
-    # Track current scope prefix and pipe_through middleware
-    scope_stack: List[Dict[str, Any]] = [{"prefix": "", "pipes": []}]
-    scope_depth = 0
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        # Track scope blocks — scope "prefix", Module do
-        scope_match = re.match(
-            r'\s*scope\s+"([^"]+)"(?:\s*,\s*([\w.]+))?\s*(?:,?\s*alias:\s*([\w.]+))?\s*do\s*$',
-            line
-        )
-        if scope_match:
-            scope_prefix = scope_match.group(1)
-            scope_module = scope_match.group(2) or scope_match.group(3) or ""
-            parent = scope_stack[-1]
-            # Build full prefix — avoid double slashes
-            parent_prefix = parent["prefix"]
-            if parent_prefix.endswith('/') and scope_prefix.startswith('/'):
-                full_prefix = parent_prefix + scope_prefix[1:]
-            elif parent_prefix and not parent_prefix.endswith('/') and scope_prefix and not scope_prefix.startswith('/'):
-                full_prefix = parent_prefix + '/' + scope_prefix
-            else:
-                full_prefix = parent_prefix + scope_prefix
-            scope_stack.append({
-                "prefix": full_prefix,
-                "module": scope_module,
-                "pipes": list(parent.get("pipes", [])),
-            })
-            scope_depth += 1
-            continue
-
-        # Track end of scope
-        if re.match(r'\s*end\s*$', line) and scope_depth > 0:
-            if len(scope_stack) > 1:
-                scope_stack.pop()
-            scope_depth -= 1
-            continue
-
-        # Track pipe_through (middleware)
-        pipe_match = re.match(r'\s*pipe_through\s+:([()\w]+)', line)
-        if pipe_match:
-            pipe_name = pipe_match.group(1)
-            if scope_stack:
-                scope_stack[-1].setdefault("pipes", []).append(pipe_name)
-            continue
-
-        # Phoenix HTTP verb routes: get "/path", Controller, :action
-        current_scope = scope_stack[-1] if scope_stack else {"prefix": "", "pipes": []}
-        verb_match = re.match(
-            r'\s*(get|post|put|patch|delete|options|head)\s+"([^"]+)"\s*,\s*([\w.]+)\s*,\s*:(\w+)',
-            line
-        )
-        if verb_match:
-            method = verb_match.group(1).upper()
-            raw_path = current_scope.get("prefix", "") + verb_match.group(2)
-            # Normalize: avoid double slashes
-            path = raw_path.replace('//', '/')
-            controller = verb_match.group(3)
-            action = verb_match.group(4)
-            # Resolve scope module
-            scope_module = current_scope.get("module", "")
-            if scope_module and '.' not in controller:
-                controller = f"{scope_module}.{controller}"
-            routes.append({
-                "method": method,
-                "path": path,
-                "handler_name": f"{controller}.{action}",
-                "file": rel_path,
-                "line": i + 1,
-                "framework": "phoenix",
-                "auth": any(p in current_scope.get("pipes", []) for p in
-                           ["authenticate", "auth", "require_auth", "auth_pipeline"]),
-                "middleware": [{"name": p, "type": "phoenix_pipeline"} for p in current_scope.get("pipes", [])],
-                "route_type": "phoenix_route",
-                "controller": controller,
-                "action": action,
-            })
-            continue
-
-        # Phoenix LiveView routes: live "/path", LiveViewComponent
-        live_match = re.match(
-            r'\s*live\s+"([^"]+)"\s*,\s*([\w.]+)(?:\s*,\s*:(\w+))?',
-            line
-        )
-        if live_match:
-            raw_path = current_scope.get("prefix", "") + live_match.group(1)
-            path = raw_path.replace('//', '/')
-            live_view = live_match.group(2)
-            action = live_match.group(3) or "index"
-            scope_module = current_scope.get("module", "")
-            if scope_module and '.' not in live_view:
-                live_view = f"{scope_module}.{live_view}"
-            routes.append({
-                "method": "GET",
-                "path": path,
-                "handler_name": f"{live_view}.{action}",
-                "file": rel_path,
-                "line": i + 1,
-                "framework": "phoenix",
-                "auth": any(p in current_scope.get("pipes", []) for p in
-                           ["authenticate", "auth", "require_auth", "auth_pipeline"]),
-                "middleware": [{"name": p, "type": "phoenix_pipeline"} for p in current_scope.get("pipes", [])],
-                "route_type": "phoenix_live",
-                "controller": live_view,
-                "action": action,
-            })
-            continue
-
-        # Phoenix resources: resources "/path", Controller
-        resources_match = re.match(
-            r'\s*resources\s+"([^"]+)"\s*,\s*([\w.]+)(?:\s*,\s*(?:only:\s*\[([^\]]+)\]|except:\s*\[([^\]]+)\]))?',
-            line
-        )
-        if resources_match:
-            raw_path_prefix = current_scope.get("prefix", "") + resources_match.group(1)
-            path_prefix = raw_path_prefix.replace('//', '/')
-            controller = resources_match.group(2)
-            scope_module = current_scope.get("module", "")
-            if scope_module and '.' not in controller:
-                controller = f"{scope_module}.{controller}"
-            only_str = resources_match.group(3)
-            except_str = resources_match.group(4)
-            # Default RESTful actions
-            all_actions = [
-                ("GET", "", "index"),
-                ("GET", "/:id", "show"),
-                ("GET", "/new", "new"),
-                ("POST", "", "create"),
-                ("GET", "/:id/edit", "edit"),
-                ("PATCH", "/:id", "update"),
-                ("PUT", "/:id", "update"),
-                ("DELETE", "/:id", "delete"),
-            ]
-            if only_str:
-                allowed = set(a.strip().strip(':') for a in only_str.split(','))
-                all_actions = [a for a in all_actions if a[2] in allowed]
-            elif except_str:
-                excluded = set(a.strip().strip(':') for a in except_str.split(','))
-                all_actions = [a for a in all_actions if a[2] not in excluded]
-            for method, suffix, action in all_actions:
-                routes.append({
-                    "method": method,
-                    "path": path_prefix + suffix,
-                    "handler_name": f"{controller}.{action}",
-                    "file": rel_path,
-                    "line": i + 1,
-                    "framework": "phoenix",
-                    "auth": any(p in current_scope.get("pipes", []) for p in
-                               ["authenticate", "auth", "require_auth", "auth_pipeline"]),
-                    "middleware": [{"name": p, "type": "phoenix_pipeline"} for p in current_scope.get("pipes", [])],
-                    "route_type": "phoenix_resource",
-                    "controller": controller,
-                    "action": action,
-                })
-            continue
 
     return routes

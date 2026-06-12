@@ -287,30 +287,6 @@ FRAMEWORK_SIGNATURES = {
     "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
     "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
     "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
-    # Elixir frameworks
-    "phoenix": {
-        "packages": [],
-        "hex_packages": ["phoenix"],
-        "config_files": ["mix.exs"],
-        "indicators": [".ex", ".exs", "lib/phoenix.ex"]
-    },
-    "ecto": {
-        "packages": [],
-        "hex_packages": ["ecto", "ecto_sql"],
-        "config_files": [],
-        "indicators": []
-    },
-    "oban": {
-        "packages": [],
-        "hex_packages": ["oban"],
-        "config_files": [],
-        "indicators": []
-    },
-    "elixir": {
-        "packages": [],
-        "config_files": ["mix.exs"],
-        "indicators": [".ex", ".exs"]
-    },
 }
 
 
@@ -453,10 +429,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
-        "has_elixir": False,
-        "has_phoenix": False,
-        "has_ecto": False,
-        "has_oban": False,
+        "has_zig": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -803,6 +776,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         if detected["has_tauri"] or detected["has_rust"]:
             detected["has_rust_backend"] = True
 
+    # 4a. Check Zig (build.zig)
+    build_zig_path = os.path.join(workspace, "build.zig")
+    build_zig_zon_path = os.path.join(workspace, "build.zig.zon")
+    if os.path.exists(build_zig_path) or os.path.exists(build_zig_zon_path):
+        if "zig" not in detected["frameworks"]:
+            detected["frameworks"].append("zig")
+        detected["has_zig"] = True
+
     # 4b. Detect monorepo structure
     _detect_monorepo(workspace, detected)
 
@@ -952,115 +933,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 6c. Detect Elixir/Phoenix from mix.exs and mix.lock
-    mix_exs_path = os.path.join(workspace, "mix.exs")
-    mix_lock_path = os.path.join(workspace, "mix.lock")
-    has_mix_exs = os.path.isfile(mix_exs_path)
-
-    if has_mix_exs:
-        detected["has_elixir"] = True
-        if "elixir" not in detected["frameworks"]:
-            detected["frameworks"].append("elixir")
-
-        # Parse mix.exs for Phoenix/Ecto/Oban deps
-        hex_deps = set()
-        try:
-            with open(mix_exs_path, 'r', encoding='utf-8') as f:
-                mix_content = f.read()
-            # Extract hex package names from deps function
-            # Pattern: {:package_name, "~> version"} or {:package_name, github: ...}
-            for m in re.finditer(r'\{:([\w_]+)\s*,', mix_content):
-                dep_name = m.group(1)
-                hex_deps.add(dep_name.lower())
-        except IOError:
-            pass
-
-        # Also check mix.lock for resolved deps (more reliable)
-        if os.path.isfile(mix_lock_path):
-            try:
-                with open(mix_lock_path, 'r', encoding='utf-8') as f:
-                    lock_content = f.read()
-                for m in re.finditer(r'"([\w_]+)"\s*:', lock_content):
-                    dep_name = m.group(1).lower()
-                    hex_deps.add(dep_name)
-            except IOError:
-                pass
-
-        # Match hex deps against framework signatures
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            hex_pkgs = sig.get("hex_packages", [])
-            for pkg_name in hex_pkgs:
-                if pkg_name.lower() in hex_deps:
-                    detected["frameworks"].append(fw_name)
-                    if fw_name == "phoenix":
-                        detected["has_phoenix"] = True
-                    elif fw_name == "ecto":
-                        detected["has_ecto"] = True
-                    elif fw_name == "oban":
-                        detected["has_oban"] = True
-                    break
-
-        # Fallback: detect Phoenix from source code patterns if deps weren't found
-        if not detected["has_phoenix"]:
-            # Check for Phoenix-specific modules in lib/ directory
-            phoenix_indicators = [
-                "lib/phoenix.ex",
-                "lib/phoenix/router.ex",
-                "lib/phoenix/endpoint.ex",
-                "lib/phoenix/controller.ex",
-                "lib/phoenix/channel.ex",
-            ]
-            for indicator in phoenix_indicators:
-                if os.path.isfile(os.path.join(workspace, indicator)):
-                    detected["has_phoenix"] = True
-                    if "phoenix" not in detected["frameworks"]:
-                        detected["frameworks"].append("phoenix")
-                    break
-
-            # Also scan for "use Phoenix" or "use Phoenix.Web" patterns in .ex files
-            if not detected["has_phoenix"]:
-                phoenix_code_indicators = [
-                    "use Phoenix",
-                    "use Phoenix.Router",
-                    "use Phoenix.Controller",
-                    "use Phoenix.Endpoint",
-                    "defmodule Phoenix.",
-                ]
-                # Quick scan up to 20 .ex files
-                ex_count = 0
-                for root, dirs, filenames in os.walk(workspace):
-                    dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                    if '.codelens' in root:
-                        dirs.clear()
-                        continue
-                    for fn in filenames:
-                        if fn.endswith(('.ex', '.exs')):
-                            ex_count += 1
-                            if ex_count > 20:
-                                break
-                            try:
-                                fpath = os.path.join(root, fn)
-                                with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
-                                    content = fh.read(8192)
-                                    for indicator in phoenix_code_indicators:
-                                        if indicator in content:
-                                            detected["has_phoenix"] = True
-                                            if "phoenix" not in detected["frameworks"]:
-                                                detected["frameworks"].append("phoenix")
-                                            break
-                                if detected["has_phoenix"]:
-                                    break
-                            except IOError:
-                                pass
-                    if detected["has_phoenix"] or ex_count > 20:
-                        break
-
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
-    # Note: Elixir also has fallback parser support and is no longer unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
@@ -1184,15 +1059,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
-
-    # Elixir/Phoenix: add Elixir-specific paths
-    if fw.get("has_elixir"):
-        config["backend_paths"].extend(["lib/", "lib/phoenix/", "lib/app/"])
-        config["frontend_paths"].extend(["priv/static/", "assets/"])
-        if fw.get("has_phoenix"):
-            config["backend_paths"].extend(["lib/app_web/", "lib/app_web/controllers/",
-                                            "lib/app_web/channels/", "lib/app_web/router.ex"])
-            config["frontend_paths"].extend(["priv/static/assets/"])
 
     # Monorepo: add sub-directory paths
     if fw.get("is_monorepo"):
