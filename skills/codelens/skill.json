@@ -1,8 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 43 commands. v5.8: Rust framework detection (Cargo.toml, tokio, actix-web, axum, warp, rocket, deno_core), Rust HTTP route extraction, Cargo workspace monorepo detection, is_generated_file utility, state-map __dunder runtime helper filtering, smell health_score at top-level. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions (8+ detectors), AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect. Tested on denoland/deno (5400+ files Rust+TS polyglot) and elizaOS/eliza (5300+ files AI agent framework).",
-  "author": "codelens",
+  "version": "5.8.1",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -147,10 +146,12 @@
     "rocket",
     "deno-core",
     "cargo-workspace",
-    "php",
-    "laravel",
-    "symfony",
-    "composer",
-    "go-call-graph",
-    "php-parser"  ]
-}
+    "go-mod",
+    "go-frameworks",
+    "gin",
+    "echo",
+    "chi",
+    "fiber",
+    "grpc",
+    "protobuf",
+    "go-database"  ]}

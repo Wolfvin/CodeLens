@@ -78,7 +78,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
 
     # 3. Generate output files (outline.json, summary.json)
     try:
-        write_output_files(workspace, scan_result, max_files=max_files)
+        write_output_files(workspace, scan_result)
     except Exception:
         logger.warning("Failed to write output files", exc_info=True)
 
@@ -171,7 +171,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
 
     # 11. Quick reference from summary
     try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=max_files), scan_result)
+        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
     except Exception:
         logger.warning("Summary computation failed", exc_info=True)
         summary = {}
@@ -244,11 +244,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
     has_package_json = False
     has_cargo_toml = False
     has_pyproject = False
-    has_composer_json = False
     js_type = None  # v6: track JS-derived type separately for polyglot detection
     python_type = None  # v6: track Python-derived type separately
     rust_type = None  # v6: track Rust-derived type separately
-    php_type = None  # v6: track PHP-derived type separately
 
     # v6: Check monorepo indicators first
     _MONOREPO_INDICATORS = {
@@ -400,49 +398,55 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("Cargo.toml parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    # Try composer.json (PHP/Laravel/Symfony)
-    composer_path = os.path.join(workspace, 'composer.json')
-    if os.path.isfile(composer_path):
-        has_composer_json = True
+    # v5.8.1: Try go.mod — detect Go projects
+    go_type = None
+    go_mod_path = os.path.join(workspace, 'go.mod')
+    if os.path.isfile(go_mod_path):
         try:
-            with open(composer_path, 'r', encoding='utf-8') as f:
-                composer_data = json.load(f)
-            identity["name"] = composer_data.get("name", identity["name"]).split("/")[-1]
-            ver_match = composer_data.get("version")
-            if ver_match:
-                identity["version"] = ver_match
-            identity["description"] = composer_data.get("description", identity.get("description", ""))
-            deps = {**composer_data.get("require", {}), **composer_data.get("require-dev", {})}
-            if "laravel/framework" in deps:
-                php_type = "laravel-project"
-            elif "symfony/framework-bundle" in deps:
-                php_type = "symfony-project"
-            elif os.path.isfile(os.path.join(workspace, "artisan")):
-                php_type = "laravel-project"
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_mod_content = f.read()
+            # Extract module name and Go version
+            module_match = re.search(r'^module\s+(\S+)', go_mod_content, re.MULTILINE)
+            go_ver_match = re.search(r'^go\s+(\S+)', go_mod_content, re.MULTILINE)
+            if module_match:
+                mod_name = module_match.group(1)
+                # Use last segment of module path as project name
+                identity["name"] = mod_name.split('/')[-1]
+            if go_ver_match:
+                identity["version"] = go_ver_match.group(1)
+            # Classify Go project type based on dependencies and module name
+            mod_name_lower = mod_name.lower() if module_match else ""
+            if any(kw in mod_name_lower for kw in ('cockroachdb', 'postgres', 'mysql', 'sqlite', 'mongodb', 'redis', 'etcd', 'database', 'sql', 'db/')):
+                go_type = "go-database"
+            elif 'database/sql' in go_mod_content:
+                go_type = "go-database"
+            elif 'gin-gonic' in go_mod_content or 'labstack/echo' in go_mod_content:
+                go_type = "go-web-service"
+            elif 'k8s.io/' in go_mod_content or 'kubernetes' in go_mod_content:
+                go_type = "go-infrastructure"
+            elif 'google.golang.org/grpc' in go_mod_content:
+                go_type = "go-grpc-service"
+            elif 'net/http' in go_mod_content:
+                go_type = "go-web-service"
             else:
-                php_type = "php-project"
+                go_type = "go-project"
         except Exception:
-            logger.warning("composer.json parsing failed", exc_info=True)
-    elif os.path.isfile(os.path.join(workspace, "artisan")):
-        has_composer_json = True
-        php_type = "laravel-project"
-    elif any(f.endswith('.php') for f in os.listdir(workspace) if os.path.isfile(os.path.join(workspace, f))):
-        php_type = "php-project"
+            logger.warning("go.mod parsing failed", exc_info=True)
 
-    active_types = [t for t in [js_type, python_type, rust_type, php_type] if t is not None]
+    # v6: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
         if rust_type:
             type_parts.append("rust")
+        if go_type:
+            type_parts.append("go")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
-        if php_type:
-            type_parts.append("php")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

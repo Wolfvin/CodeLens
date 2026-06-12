@@ -36,26 +36,21 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6.1
+# CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.1 — Tested on 5 diverse repos: ripgrep (Rust), Flask (Python), gin-gonic/gin (Go), rails (Ruby), lua (C+Lua)
+## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 
-- **Go HTTP route extraction**: `api-map` now detects routes from Go web frameworks: Gin (`r.GET`/`r.POST`), Echo (`e.GET`/`e.POST`), Chi (`r.Get`/`r.Post`), Gorilla Mux (`r.HandleFunc`), net/http stdlib (`http.HandleFunc`). Tested on gin-gonic/gin: 0 → 93 routes detected.
-- **Go framework detection fix**: `detect_frameworks()` no longer falsely detects "gin" and "echo" for ALL Go projects. Now parses `go.mod` content for actual framework dependencies (e.g., `gin-gonic/gin`, `labstack/echo`). Uses new `go_mod_dep` signature field.
-- **Go project identity**: `handbook` now parses `go.mod` for module name, Go version, and project type (`go-web-api`, `go-kubernetes`, `go-grpc-service`, `go-project`). No longer returns `type: "unknown"` for Go projects. Tested on gin: `unknown` → `go-web-api`.
-- **Go complexity scoring**: `complexity` now analyzes Go functions with cyclomatic and cognitive complexity. Tested on gin: 0 → 1,318 functions scored.
-- **Go side-effect analysis**: `side-effect` now extracts Go functions (`func` declarations including methods) and detects Go-specific side effects (net/http, os, fmt, log, sql, goroutine launches). Tested on gin: purity_ratio = 0.85.
-- **Go config-drift detection**: `config-drift` now supports Go projects: parses `go.mod` `require` blocks for declared dependencies and scans Go `import` statements for actual imports.
-- **C/C++ complexity scoring**: `complexity` now analyzes C/C++ functions with cyclomatic and cognitive complexity, including preprocessor `#if`/`#elif` branches. Tested on lua/lua: 0 → 1,238 functions scored.
-- **C/C++ and Go smell detection**: `smell` now includes `.go`, `.c`, `.cpp`, `.h`, `.hpp` in source extensions. Dead code, unreachable code, and unused variable analysis also enabled for these languages.
-- **Handbook dead code fix**: Fixed `total_dead` key mismatch — handbook was reading `"total_dead"` but deadcode_engine returns `"total_dead_code"`. Dead code count was always 0 in handbook reports.
-- **Scan output file fix**: Fixed `get_workspace_outline()` missing `max_files` parameter — caused `write_output_files()` to crash on every scan with `TypeError: got an unexpected keyword argument 'max_files'`. Outline and summary JSON files now generate correctly.
-- **Outline engine expansion**: `get_workspace_outline()` now includes `.c`, `.cpp`, `.h`, `.hpp`, `.lua`, `.rb` extensions and supports `max_files` parameter with truncation.
-- **Side-effect Go patterns**: Added Go-specific patterns for network (`http.Get`, `net/http`), IO (`os.Create`, `fmt.Printf`, `exec.Command`), random (`math/rand`, `crypto/rand`), and external (`go func()`, `sql.Open`, `grpc`) side effects.
+- **Go project type detection**: `handbook` parses `go.mod` for module name, Go version, and classifies projects as `go-database`, `go-web-service`, `go-grpc-service`, `go-infrastructure`, or `go-project`.
+- **Go framework content-based detection**: `detect_frameworks()` reads go.mod content (not just file existence). Detects gin/echo/fiber/chi/mux/grpc/protobuf only when dependency actually appears. No more false positives on non-web Go projects.
+- **Go removed from unsupported_langs**: Go has fallback parser support and is actively scanned, so it's no longer listed as "unsupported".
+- **Go debug-leak commented_code false positive reduction**: 22,433 → 6,734 findings (70% reduction) via Go-specific code indicators, higher block length threshold (5 vs 3), higher score threshold (3 vs 2), and license block skip.
+- **Bugfix: `get_workspace_outline()` TypeError**: Removed invalid `max_files` kwarg.
+- **Bugfix: `perf-hint` TypeError crash**: Removed invalid `max_files` kwarg from `detect_perf_hints()` call.
+- **Bugfix: Handbook `type: unknown` and `version: 0.0.0`** for Go projects: Now extracts identity from go.mod.
 
-## What's New in v5.8 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
+## What's New in v5.8.0 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
 
 - **Rust framework detection**: `detect_frameworks()` now parses `Cargo.toml` for dependencies and detects `rust`, `tokio`, `actix-web`, `axum`, `warp`, `rocket`, `deno_core`. Also scans workspace members' `Cargo.toml` in `crates/`, `ext/`, `libs/`, `packages/`.
 - **Rust HTTP route extraction**: `api-map` now detects routes from Rust web frameworks: actix-web (`#[get]`/`#[post]` attributes, `web::resource()`), axum (`.route("/path", get(handler))`), warp (`warp::path("segment")`), rocket (`#[get]`/`#[post]` attributes).
@@ -1513,10 +1508,6 @@ When a CodeLens command fails, follow these recovery procedures:
 | JavaScript | tree-sitter-javascript | DOM selectors, function calls |
 | TypeScript/TSX | tree-sitter-typescript | className, function calls, components |
 | Rust | tree-sitter-rust | fn declarations, calls, impl blocks |
-| Python | tree-sitter-python | def declarations, imports, calls |
-| Go | regex fallback | func declarations, routes, imports |
-| C/C++ | regex fallback | function definitions, preprocessor |
-| Lua | regex fallback | function definitions, module calls |
 | Vue SFC | regex | :class, class, id, scoped styles |
 | Svelte | regex | class:, class, id, scoped styles |
 | Tailwind CSS | pattern detection | utility classes, @apply, dynamic patterns |

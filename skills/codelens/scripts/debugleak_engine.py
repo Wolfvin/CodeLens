@@ -19,10 +19,9 @@ Each finding includes: category, file, line, match, severity, should_remove flag
 
 import os
 import re
-import time
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, MAX_FILE_SIZE, logger
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -146,8 +145,7 @@ def detect_debug_leaks(
     workspace: str,
     category: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = MAX_FILES_PER_RUN,
-    timeout_sec: float = 60.0
+    max_files: int = MAX_FILES_PER_RUN
 ) -> Dict[str, Any]:
     """
     Detect leftover debug code that shouldn't be in production.
@@ -158,15 +156,11 @@ def detect_debug_leaks(
                   console_log, print_statement, debugger, todo_fixme,
                   commented_code, test_skip, mock_data, dev_only
         config: CodeLens configuration dict
-        max_files: Maximum number of files to scan (default 5000)
-        timeout_sec: Maximum seconds for the scan (default 60)
 
     Returns:
         Dict with status, stats, leaks list, cleanup priority, and recommendations
     """
     workspace = os.path.abspath(workspace)
-    start_time = time.time()
-    timed_out = False
 
     valid_categories = {
         "console_log", "print_statement", "debugger", "todo_fixme",
@@ -194,11 +188,6 @@ def detect_debug_leaks(
             continue
 
         for filename in filenames:
-            # Check time budget
-            if time.time() - start_time > timeout_sec:
-                timed_out = True
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -210,13 +199,6 @@ def detect_debug_leaks(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
-
-            # Skip large files
-            try:
-                if os.path.getsize(file_path) > MAX_FILE_SIZE:
-                    continue
-            except OSError:
-                continue
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -288,8 +270,7 @@ def detect_debug_leaks(
             "files_scanned": files_scanned,
             "by_category": dict(by_category),
             "by_severity": dict(by_severity),
-            "truncated": truncated,
-            "timed_out": timed_out
+            "truncated": truncated
         },
         "leaks": leaks,
         "cleanup_priority": cleanup_priority[:50],
@@ -529,9 +510,6 @@ def _detect_commented_code(
     if not comment_prefix:
         return
 
-    # Rust doc comments (/// and //!) are legitimate documentation, not commented-out code
-    is_rust = ext == ".rs"
-
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
@@ -541,27 +519,15 @@ def _detect_commented_code(
             i += 1
             continue
 
-        # Skip Rust doc comments (/// and //!) — they are legitimate documentation
-        if is_rust and (stripped.startswith('///') or stripped.startswith('//!')):
-            i += 1
-            continue
-
-        # Count consecutive commented lines (excluding Rust doc comments)
+        # Count consecutive commented lines
         block_start = i
-        non_doc_count = 0
-        while i < len(lines):
-            s = lines[i].strip()
-            if not s.startswith(comment_prefix):
-                break
-            # Skip Rust doc comments — they break the consecutive block
-            if is_rust and (s.startswith('///') or s.startswith('//!')):
-                break
-            non_doc_count += 1
+        while i < len(lines) and lines[i].strip().startswith(comment_prefix):
             i += 1
         block_end = i
 
-        # Need at least 3 consecutive non-doc commented lines
-        if non_doc_count < 3:
+        # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
+        min_initial = 5 if ext == ".go" else 3
+        if block_end - block_start < min_initial:
             continue
 
         # Check if the block looks like code
@@ -572,7 +538,11 @@ def _detect_commented_code(
 
         code_score = _score_commented_code_likelihood(comment_lines, ext)
 
-        if code_score >= 2:
+        # v5.8.1: Go projects use multi-line comments heavily for godoc,
+        # so require a higher threshold (3 instead of 2) to avoid false positives.
+        threshold = 3 if ext == ".go" else 2
+
+        if code_score >= threshold:
             severity = "low"
             should_remove = True
 
@@ -784,6 +754,13 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         r'::',
         r'\w+\.\w+\(',
     ]
+    code_indicators_go = [
+        r'(?:func|var|const|type|struct|interface|return|if|else|for|range|switch|case|go|defer|select|chan|map)\s',
+        r'[{}();]',
+        r':=',
+        r'\w+\.\w+\(',
+        r'\w+\s*,\s*\w+\s*:=',
+    ]
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
         indicators = code_indicators_js
@@ -791,8 +768,20 @@ def _score_commented_code_likelihood(comment_lines: List[str], ext: str) -> int:
         indicators = code_indicators_py
     elif ext == ".rs":
         indicators = code_indicators_rs
+    elif ext == ".go":
+        indicators = code_indicators_go
     else:
         indicators = code_indicators_js  # Default to JS-like
+
+    # v5.8.1: Skip copyright/license/header blocks — these are legitimate
+    # multi-line comments, NOT commented-out code.
+    first_line = comment_lines[0].strip().lower() if comment_lines else ""
+    _LICENSE_KEYWORDS = ('copyright', 'license', 'licensed', 'spdx', 'authors',
+                         'copyrights', 'all rights reserved', 'permission is hereby',
+                         'redistribution', 'mozilla public license', 'gpl', 'lgpl',
+                         'apache license', 'bsd', 'mit license', 'isc license')
+    if any(kw in first_line for kw in _LICENSE_KEYWORDS):
+        return 0
 
     for line in comment_lines:
         if not line:

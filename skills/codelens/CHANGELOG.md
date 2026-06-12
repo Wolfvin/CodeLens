@@ -5,24 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.0] — 2026-06-12
+## [5.8.1] — 2026-06-12
 
-### Tested against BurntSushi/ripgrep (100 Rust source files, pure Rust CLI monorepo, 3,749 backend nodes, 9,449 edges)
+### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
 
-Real-world test on a pure Rust Cargo workspace monorepo with 10 sub-crates (cli, core, globset, grep, ignore, matcher, pcre2, printer, regex, searcher).
-Confirmed: 842 smells (health score 60), 200 dead items, 215 circular deps, 2,185 functions analyzed, 259 debug leaks, 868 entrypoints, 4 dataflow violations, 5 env vars, 1 perf hint.
+Real-world test on a pure Go distributed SQL database with 116,033 backend nodes and 113,338 edges.
+Confirmed: 2,287 smells (health score 70), 200 dead items, 106 circular deps, 11,291 debug leaks,
+1,716 entrypoints, 13 secrets, 4 CVEs, 32 API routes, 15 state stores.
+
+### Added
+
+- **Go project type detection in handbook**: `handbook` now parses `go.mod` to extract module name, Go version, and classify Go projects into types: `go-database`, `go-web-service`, `go-grpc-service`, `go-infrastructure`, `go-project`. Module name extraction (e.g., `github.com/cockroachdb/cockroach` → name: `cockroach`, version from `go` directive).
+- **Go framework content-based detection**: `detect_frameworks()` now reads `go.mod` content instead of just checking file existence. Detects `gin`, `echo`, `fiber`, `chi`, `mux`, `grpc`, `protobuf` only when the dependency string actually appears in go.mod. Prevents false positives where every Go project was classified as gin/echo.
+- **Go-specific code indicators for debug-leak**: Added `code_indicators_go` with Go-specific patterns (`func`, `var`, `const`, `type`, `:=`, `chan`, `select`, `defer`, `range`). Previously defaulted to JS indicators which caused massive over-detection.
+- **License block detection in debug-leak**: `_score_commented_code_likelihood()` now returns 0 for comment blocks that start with copyright/license keywords (copyright, SPDX, Apache License, BSD, MIT, GPL, etc.). Eliminates thousands of false positives from license headers.
 
 ### Fixed
 
-- **Critical: `scan` and `handbook` crash on `write_output_files()`**: `get_workspace_outline()` does not accept `max_files` keyword argument. Removed the invalid parameter. These commands now work without crashing.
-- **Critical: `perf-hint` crash on `detect_perf_hints()`**: The command passed `max_files` parameter to `detect_perf_hints()` which didn't accept it. Added `max_files` parameter to the engine function with proper file-count limiting in the scan loop.
-- **Critical: Rust unreachable code false positives (96.5% reduction)**: Two root causes fixed:
-  1. Multi-line `return` statements (e.g., `return SomeStruct { field, ... }`) were flagged as unreachable because only the first line was checked. Now requires return statements to end with `;`, `}`, `)`, or `]` before marking as terminal.
-  2. `return` inside `if`/`if let` blocks incorrectly marked subsequent code as unreachable. Now tracks the brace depth where the terminal statement was found and resets the terminal flag when exiting that scope. Result: 200 false positives → 0.
-- **Rust god object over-counting**: `_detect_god_objects()` counted ALL `fn` in a file as methods of a single `impl` block. Now uses brace-depth tracking to only count `fn` inside `impl` blocks. Each `impl` block is counted separately. Example: "DirEntry has 145 methods" → "WalkBuilder has 29 methods" (real god objects still detected, false positives eliminated). Critical smells dropped from 54 to 35.
-- **Rust doc comment false positives in `debug-leak`**: `///` and `//!` comments (Rust documentation) were counted as "commented-out code" in the `commented_code` category. Now skipped entirely. Result: 753 commented_code items → 158 (79% reduction).
-- **`is_monorepo` inconsistency between `summary` and `handbook`**: `summary` command read `is_monorepo` from `framework_detect` (which never sets it), while `handbook` correctly detected it from `_extract_project_identity`. Now both use `_extract_project_identity`.
-- **Markdown summary: empty dataflow violation labels**: `_md_summary()` couldn't extract source/sink info from dataflow violation dicts (nested structure). Now properly renders `source_file:line → sink_file:line` format with match snippets.
+- **`get_workspace_outline()` TypeError**: `write_output_files()` in `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`. Removed invalid keyword argument.
+- **`perf-hint` TypeError crash**: `perf_hint.py` called `detect_perf_hints(workspace, ..., max_files=5000)` but the function doesn't accept `max_files`. Removed invalid keyword argument.
+- **gin/echo false positive for Go projects**: Every Go project with a `go.mod` was incorrectly classified as using gin and echo frameworks because both had `"config_files": ["go.mod"]`. Changed to `config_files: []` and use content-based detection instead.
+- **Go listed as "unsupported language"**: Go has a fallback parser (`fallback_go.py`) and is actively parsed during scan, but was still listed in `unsupported_langs` with the message "not yet supported by tree-sitter parsers". Removed Go from the unsupported markers list.
+- **Handbook `type: unknown` and `version: 0.0.0` for Go projects**: Go projects without package.json or Cargo.toml had no identity detection. Added `go.mod` parsing to extract name, version, and type classification.
+- **Debug-leak Go commented_code false positives**: Go projects use multi-line `//` comments heavily for godoc, generating 22,433 false "commented code" findings on cockroachdb. Fixed by: (1) requiring 5+ consecutive lines for Go (vs 3 for other languages), (2) requiring score ≥ 3 for Go (vs 2), (3) adding Go-specific code indicators, (4) skipping license/copyright blocks. Result: 22,433 → 6,734 (70% reduction).
+
+### Changed
+
+- **Go project classification priority**: Module name patterns (cockroachdb, postgres, mysql, etc.) now take priority over dependency-based classification for more accurate type detection.
+- **Version bump**: 5.8.0 → 5.8.1
 
 ## [5.8.0] — 2026-06-12
 

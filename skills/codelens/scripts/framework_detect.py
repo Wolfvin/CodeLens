@@ -119,7 +119,7 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["electron-builder.yml", "electron-builder.json"],
         "indicators": ["main.js", "BrowserWindow"]
     },
-    # Go frameworks (detected by config files / source presence)
+    # Go frameworks (detected by go.mod content, NOT just go.mod existence)
     "golang": {
         "packages": [],
         "config_files": ["go.mod"],
@@ -127,12 +127,12 @@ FRAMEWORK_SIGNATURES = {
     },
     "gin": {
         "packages": [],
-        "config_files": ["go.mod"],
+        "config_files": [],
         "indicators": ["gin-gonic/gin"]
     },
     "echo": {
         "packages": [],
-        "config_files": ["go.mod"],
+        "config_files": [],
         "indicators": ["labstack/echo"]
     },
     # Java/Kotlin frameworks
@@ -664,10 +664,35 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if detected["has_tailwind"]:
                 break
 
-    # 7. Detect unsupported languages (Go, Java, C/C++, etc.)
-    # These languages are detected but not parsed by tree-sitter.
+    # 6b. Detect Go web frameworks from go.mod content
+    # Only flag gin/echo/etc if the dependency actually appears in go.mod,
+    # NOT just because go.mod exists (every Go project has go.mod).
+    go_mod_path = os.path.join(workspace, "go.mod")
+    if os.path.isfile(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_mod_content = f.read()
+            _GO_FRAMEWORK_INDICATORS = {
+                "gin": "gin-gonic/gin",
+                "echo": "labstack/echo",
+                "fiber": "gofiber/fiber",
+                "chi": "go-chi/chi",
+                "mux": "gorilla/mux",
+                "grpc": "google.golang.org/grpc",
+                "protobuf": "google.golang.org/protobuf",
+            }
+            for fw_name, dep_string in _GO_FRAMEWORK_INDICATORS.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                if dep_string in go_mod_content:
+                    detected["frameworks"].append(fw_name)
+        except IOError:
+            pass
+
+    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # Note: Go was previously listed here but now has fallback parser support.
+    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
-        "go": ["go.mod", "go.sum"],
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
@@ -681,9 +706,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if os.path.exists(os.path.join(workspace, marker)):
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
-                if lang == "go" and "golang" not in detected["frameworks"]:
-                    detected["frameworks"].append("golang")
-                    detected["has_golang"] = True
                 break
 
     return detected
