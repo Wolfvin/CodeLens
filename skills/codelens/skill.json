@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "6.4.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v6.4: Rust debug-leak false positive fix (log::debug! -> debug_log, not debugger), Rust dead code false positive fix (trait impls, build.rs, cfg(test) excluded), 19 new Rust crate detections (clap/serde/reqwest/sqlx/tonic/tracing etc.), Rust entrypoint improvements (tokio::main, actix::main, build.rs, Actix/Axum/Rocket/Warp HTTP routes), XXX in string literal fix, cfg(debug_assertions) detection. Tested on starship/starship (248 files Rust CLI), cockroachdb/cockroach (10K files Go), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -154,4 +154,21 @@
     "fiber",
     "grpc",
     "protobuf",
-    "go-database"  ]}
+    "go-database",
+    "clap",
+    "serde",
+    "reqwest",
+    "sqlx",
+    "diesel",
+    "tonic",
+    "prost",
+    "tracing",
+    "rust-http-routes",
+    "actix-web-routes",
+    "axum-routes",
+    "rocket-routes",
+    "warp-filters",
+    "rust-trait-impl",
+    "debug-log",
+    "structured-logging"
+  ]}

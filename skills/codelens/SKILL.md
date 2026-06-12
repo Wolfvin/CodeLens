@@ -70,6 +70,16 @@ Before an AI writes a new class/id/function, CodeLens must be checked. This is n
 - **Debug leak output improvement**: Each leak item now includes `pattern` (the detected pattern name), `message` (human-readable description), and `content` (the matched line content). Markdown formatter shows descriptive messages like "Debug console statement: console.log()" instead of raw category names.
 - **Python global state filtering**: Skips ALL_CAPS constants, dunder attributes (__name__, __file__, __all__), and path/env references (os.path, Path, os.getenv). Reduces false positives in Python projects.
 
+## What's New in v6.4 — Real-World Tested on starship/starship (248 files, Rust CLI)
+
+- **Rust debug-leak false positive fix**: `log::debug!()`, `log::info!()`, `log::warn!()`, `log::error!()`, `log::trace!()`, and `tracing::*!()` macros from the `log`/`tracing` crates are now classified as low-severity `debug_log` instead of high-severity `debugger`. Only `dbg!()` remains flagged as a true debugger statement. Reduced high-severity false positives from 40 → 0 on Rust projects.
+- **Rust dead code false positive fix**: Trait implementation methods (Default::default, From::from, Display::fmt, Clone::clone, etc.) are no longer flagged as dead code. Standard library trait impls with `ref_count == 0` are correctly excluded. `#[cfg(test)]` function patterns and `build.rs` functions also excluded. Known trait methods matched by name even without `impl_for` metadata.
+- **Rust framework detection expansion**: 19 new Rust crates detected from Cargo.toml: `clap`, `structopt`, `serde`, `reqwest`, `hyper`, `sqlx`, `diesel`, `sea-orm`, `tonic`, `prost`, `tracing`, `log`, `slog`, `bevy`, `egui`, `iced`, `tauri`, `rayon`, `gix`, `shadow-rs`. Each has a `category` field (cli, database, grpc, logging, etc.).
+- **Rust entrypoint improvements**: Added `#[tokio::main]` and `#[actix::main]` async main detection. Added `build.rs` as a build script entry point (filtered by filename). Added Rust HTTP route detection: Actix-web (`#[get("/path")]`), Axum (`.route("/path", get(handler))`), Rocket (`#[get = "/path"]`), Warp (`warp::path("segment")`).
+- **XXX in string literal fix**: `XXX` patterns inside string literals (e.g., test paths like `"a/xxx/yyy"`) are no longer flagged as code markers.
+- **Rust `#[cfg(debug_assertions)]` detection**: Added to `dev_only` category in debug-leak engine.
+- **New `debug_log` category**: Separate from `debugger`, captures structured logging statements (Rust `log::debug!()`, `tracing::info!()`, Go `log.Debug()`) that are NOT debugger statements but may indicate debug-level logging in production code.
+
 ## What's New in v6 — Real-World Tested on Vercel Turborepo (1769 files, Rust+TS monorepo)
 
 - **Monorepo-aware framework detection**: Detects turborepo, pnpm-workspace, lerna, nx. Walks sub-directory package.json (apps/*, packages/*) to find Next.js, React, etc. in workspace packages, not just root. Detects Rust/Cargo workspaces. Build tool detection (Vite, webpack, esbuild).

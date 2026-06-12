@@ -78,6 +78,21 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "rust_main_fn",
             },
+            # v6.4: Rust async main entry points — #[tokio::main], #[actix::main]
+            {
+                "regex": r'#\[tokio::main\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?async\s+fn\s+main\s*\(',
+                "language": {".rs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "rust_tokio_main",
+            },
+            {
+                "regex": r'#\[actix::main\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?async\s+fn\s+main\s*\(',
+                "language": {".rs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "rust_actix_main",
+            },
             # C / C++
             {
                 "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
@@ -333,6 +348,49 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
+            },
+            # v6.4: Rust Actix-web route handlers — #[get("/path")], #[post("/path")]
+            {
+                "regex": r'#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"\s*\)',
+                "language": {".rs"},
+                "extract": "http_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "actix_web_route",
+            },
+            # v6.4: Rust Actix-web resource routes — web::resource("/path").to(handler)
+            {
+                "regex": r'web::resource\s*\(\s*"([^"]+)"\s*\)',
+                "language": {".rs"},
+                "extract": "rust_resource_route",
+                "path_group": 1,
+                "label": "actix_web_resource",
+            },
+            # v6.4: Rust Axum route handlers — .route("/path", get(handler))
+            {
+                "regex": r'\.route\s*\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options|any)\s*\(',
+                "language": {".rs"},
+                "extract": "http_route_reverse",
+                "method_group": 2,
+                "path_group": 1,
+                "label": "axum_route",
+            },
+            # v6.4: Rust Rocket route handlers — #[get("/path")]
+            {
+                "regex": r'#\[(get|post|put|delete|head|options|patch)\s*=\s*"([^"]+)"',
+                "language": {".rs"},
+                "extract": "http_route",
+                "method_group": 1,
+                "path_group": 2,
+                "label": "rocket_route",
+            },
+            # v6.4: Rust Warp filter routes — warp::path("segment")
+            {
+                "regex": r'warp::path\s*\(\s*"([^"]+)"\s*\)',
+                "language": {".rs"},
+                "extract": "rust_warp_route",
+                "path_group": 1,
+                "label": "warp_filter",
             },
         ],
     },
@@ -710,6 +768,15 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 1,
                 "label": "rust_pub_fn",
             },
+            # v6.4: Rust build.rs entry point — Cargo build script
+            {
+                "regex": r'fn\s+main\s*\(',
+                "language": {".rs"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "rust_build_rs",
+                "filename_filter": ["build.rs"],
+            },
             # Python __all__ export list
             {
                 "regex": r'__all__\s*=\s*\[([^\]]+)\]',
@@ -996,6 +1063,18 @@ def _extract_entrypoints(
                 path_group = pattern_def.get("path_group")
                 entrypoint["method"] = _method_from_spring_label(pattern_def.get("label", ""))
                 entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
+
+            elif extract_type == "rust_resource_route":
+                path_group = pattern_def.get("path_group")
+                entrypoint["method"] = "ANY"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
+                entrypoint["handler"] = _find_handler_name(content, line_num, ext)
+
+            elif extract_type == "rust_warp_route":
+                path_group = pattern_def.get("path_group")
+                entrypoint["method"] = "ANY"
+                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
+                entrypoint["handler"] = _find_handler_name(content, line_num, ext)
 
             elif extract_type == "event_name":
                 event_group = pattern_def.get("event_group")

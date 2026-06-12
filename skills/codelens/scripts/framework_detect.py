@@ -189,6 +189,147 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # v6.4: Additional Rust framework / library detection
+    "clap": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["clap"],
+        "indicators": [],
+        "category": "cli"
+    },
+    "structopt": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["structopt"],
+        "indicators": [],
+        "category": "cli"
+    },
+    "serde": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["serde"],
+        "indicators": [],
+        "category": "serialization"
+    },
+    "reqwest": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["reqwest"],
+        "indicators": [],
+        "category": "http_client"
+    },
+    "hyper": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["hyper"],
+        "indicators": [],
+        "category": "http"
+    },
+    "sqlx": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["sqlx"],
+        "indicators": [],
+        "category": "database"
+    },
+    "diesel": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["diesel"],
+        "indicators": [],
+        "category": "database"
+    },
+    "sea-orm": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["sea-orm", "sea_orm"],
+        "indicators": [],
+        "category": "database"
+    },
+    "tonic": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["tonic"],
+        "indicators": [],
+        "category": "grpc"
+    },
+    "prost": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["prost"],
+        "indicators": [],
+        "category": "grpc"
+    },
+    "tracing": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["tracing"],
+        "indicators": [],
+        "category": "logging"
+    },
+    "log": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["log"],
+        "indicators": [],
+        "category": "logging"
+    },
+    "slog": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["slog"],
+        "indicators": [],
+        "category": "logging"
+    },
+    "bevy": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["bevy"],
+        "indicators": [],
+        "category": "game_engine"
+    },
+    "egui": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["egui"],
+        "indicators": [],
+        "category": "gui"
+    },
+    "iced": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["iced"],
+        "indicators": [],
+        "category": "gui"
+    },
+    "tauri": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["tauri"],
+        "indicators": ["src-tauri/tauri.conf.json"],
+        "category": "desktop"
+    },
+    "rayon": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["rayon"],
+        "indicators": [],
+        "category": "parallelism"
+    },
+    "gix": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["gix"],
+        "indicators": [],
+        "category": "vcs"
+    },
+    "shadow-rs": {
+        "packages": [],
+        "config_files": [],
+        "cargo_crates": ["shadow-rs", "shadow_rs"],
+        "indicators": [],
+        "category": "build"
+    },
     # PHP frameworks
     "laravel": {
         "packages": [],

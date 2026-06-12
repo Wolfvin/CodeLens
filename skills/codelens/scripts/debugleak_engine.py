@@ -71,11 +71,31 @@ DEBUGGER_PATTERNS = [
     (r'\bpdb\.set_trace\s*\(\s*\)', "pdb.set_trace()"),
     (r'\bpdb\s*\(\s*\)', "pdb()"),
     (r'\bipdb\s*\(\s*\)', "ipdb()"),
-    (r'\bdebug!\s*\(', "debug!()"),
     (r'\bdbg!\s*\(', "dbg!()"),
     (r'\btrap\s*\(\s*\)', "trap()"),        # Delphi / old JS
     (r'\bdebugger;\s*//', "debugger with comment"),
     (r'\bnode\s+--inspect\b', "node --inspect"),
+]
+
+# Rust logging macros from the `log` crate — these are NOT debugger statements.
+# They are proper structured logging and should not be flagged as debug leaks.
+# Only `dbg!()` is a true debugger statement (it prints and returns a value for debugging).
+RUST_LOG_MACROS = [
+    (r'\blog::debug!\s*\(', "log::debug!()"),
+    (r'\blog::info!\s*\(', "log::info!()"),
+    (r'\blog::warn!\s*\(', "log::warn!()"),
+    (r'\blog::error!\s*\(', "log::error!()"),
+    (r'\blog::trace!\s*\(', "log::trace!()"),
+    (r'\bdebug!\s*\(', "debug!()"),
+    (r'\binfo!\s*\(', "info!()"),
+    (r'\bwarn!\s*\(', "warn!()"),
+    (r'\berror!\s*\(', "error!()"),
+    (r'\btrace!\s*\(', "trace!()"),
+    (r'\btracing::debug!\s*\(', "tracing::debug!()"),
+    (r'\btracing::info!\s*\(', "tracing::info!()"),
+    (r'\btracing::warn!\s*\(', "tracing::warn!()"),
+    (r'\btracing::error!\s*\(', "tracing::error!()"),
+    (r'\btracing::trace!\s*\(', "tracing::trace!()"),
 ]
 
 TODO_FIXME_PATTERNS = [
@@ -136,6 +156,9 @@ DEV_ONLY_PATTERNS = [
     (r'\bcfg\.Debug\b', "cfg.Debug"),
     (r'\bdebug_mode\b', "debug_mode"),
     (r'\bDEV_MODE\b', "DEV_MODE"),
+    # Rust debug-only guards
+    (r'#\[cfg\(debug_assertions\)\]', "#[cfg(debug_assertions)]"),
+    (r'#\[cfg\(debug_assertions\)\]', "cfg(debug_assertions)"),
 ]
 
 
@@ -406,15 +429,22 @@ def _detect_print_statements(
 def _detect_debugger_statements(
     lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
 ) -> None:
-    """Detect debugger; breakpoint(); pdb.set_trace(); debug! macro."""
+    """Detect debugger; breakpoint(); pdb.set_trace(); dbg! macro.
+
+    Rust `log::debug!()`, `debug!()`, `info!()`, `warn!()`, `error!()`, `trace!()`
+    are structured logging macros from the `log` crate — NOT debugger statements.
+    They are flagged as low-severity `debug_log` instead of high-severity `debugger`.
+    Only `dbg!()` is a true debugger statement (prints value + source location for debugging).
+    """
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):
             continue
 
+        # First check for true debugger statements
         for pattern, label in DEBUGGER_PATTERNS:
             # Language filter
-            if label in ("debug!()", "dbg!()") and ext not in {".rs"}:
+            if label == "dbg!()" and ext not in {".rs"}:
                 continue
             if label in ("pdb.set_trace()", "pdb()", "ipdb()", "breakpoint()") and ext not in {".py"}:
                 continue
@@ -440,6 +470,38 @@ def _detect_debugger_statements(
                 "should_remove": should_remove,
             })
             break
+
+        # Then check for Rust logging macros (not debugger statements, but debug logging)
+        # These are from the `log` crate or `tracing` crate and are proper structured logging.
+        # We flag them as low-severity debug_log entries, not high-severity debugger statements.
+        if ext == ".rs":
+            for pattern, label in RUST_LOG_MACROS:
+                m = re.search(pattern, stripped)
+                if not m:
+                    continue
+
+                # Downgrade severity in test files — logging in tests is expected
+                if is_test_file:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging in test: {label}"
+                else:
+                    severity = "low"
+                    should_remove = False
+                    message = f"Debug logging statement: {label} (structured logging, not a debugger)"
+
+                leaks.append({
+                    "category": "debug_log",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": label,
+                    "message": message,
+                    "content": stripped[:120],
+                    "match": label,
+                    "severity": severity,
+                    "should_remove": should_remove,
+                })
+                break
 
 
 def _detect_todo_fixme(
@@ -469,6 +531,17 @@ def _detect_todo_fixme(
                 # Also check if the line itself is a comment (shebang, docstring)
                 if not (stripped.startswith('"""') or stripped.startswith("'''")):
                     continue
+
+            # Skip XXX/BODGE/TEMP when they appear inside string literals
+            # (e.g., test paths like "a/xxx/yyy" or variable names like testData)
+            if label in ("XXX", "TEMP") and not is_comment:
+                match_pos = stripped.upper().find(label)
+                # Check if the match is inside a quoted string
+                before = stripped[:match_pos]
+                single_quotes = before.count("'") - before.count("\\'")
+                double_quotes = before.count('"') - before.count('\\"')
+                if single_quotes % 2 == 1 or double_quotes % 2 == 1:
+                    continue  # Inside a string literal, skip
 
             # Severity varies by marker
             severity_map = {
