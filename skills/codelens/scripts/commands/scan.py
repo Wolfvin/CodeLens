@@ -30,6 +30,7 @@ from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
 from parsers.fallback_php import parse_php_fallback
+from parsers.fallback_elixir import parse_elixir_fallback
 from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
@@ -616,9 +617,27 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read PHP file: {path}")
 
+    # Parse Elixir files
+    elixir_data = []
+    if files["elixir"]:
+        for path in files["elixir"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_elixir_fallback(content, os.path.relpath(path, workspace))
+                elixir_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Elixir file: {path}")
+
 
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + elixir_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -710,6 +729,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "csharp": len(files["csharp"]),
             "php": len(files["php"]),
             "blade": len(files["blade"]),
+            "elixir": len(files["elixir"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
@@ -718,6 +738,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
         "php_parsed": len(php_data),
+        "elixir_parsed": len(elixir_data),
         "blade_parsed": len(blade_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
@@ -748,6 +769,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "c": "C",
         "cpp": "C++",
         "csharp": "C#",
+        "elixir": "Elixir",
         "swift": "Swift",
         "ruby": "Ruby",
     }
@@ -777,6 +799,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "csharp": [],
         "php": [],
         "blade": [],
+        "elixir": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -845,6 +868,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                     files["blade"].append(file_path)
                 else:
                     files["php"].append(file_path)
+            elif ext in ('.ex', '.exs'):
+                files["elixir"].append(file_path)
 
     return files
 

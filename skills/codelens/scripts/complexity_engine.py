@@ -34,7 +34,9 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".go",
-    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
+    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+    ".lua", ".php", ".java", ".cs",
+    ".ex", ".exs",
 }
 
 # Cyclomatic complexity thresholds
@@ -276,8 +278,14 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_rs_functions(lines, content)
     elif ext == ".go":
         functions = _extract_go_functions(lines, content)
-    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
         functions = _extract_c_cpp_functions(lines, content, ext)
+    elif ext == ".lua":
+        functions = _extract_lua_functions(lines, content)
+    elif ext == ".php":
+        functions = _extract_php_functions(lines, content)
+    elif ext in {".ex", ".exs"}:
+        functions = _extract_elixir_functions(lines, content)
 
     return functions
 
@@ -437,6 +445,72 @@ def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[D
     return functions
 
 
+def _extract_lua_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract Lua function definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: function name(...) or local function name(...) or function obj:method(...)
+        m = re.match(r'(?:local\s+)?function\s+([\w:.]+)\s*\(([^)]*)\)', stripped)
+        if m:
+            fn_name = m.group(1)
+            functions.append({
+                "name": fn_name,
+                "line": i + 1,
+                "type": "function",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_php_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract PHP function/method definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: function name(...) or public function name(...) etc.
+        m = re.match(r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+(\w+)\s*\(([^)]*)\)', stripped)
+        if m:
+            fn_name = m.group(1)
+            functions.append({
+                "name": fn_name,
+                "line": i + 1,
+                "type": "function",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_elixir_functions(lines: List[str], content: str) -> List[Dict]:
+    """Extract Elixir function definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Match: def name(args), defp name(args), defmacro name(args)
+        m = re.match(r'\s*(?:def|defp|defmacro|defguard|defdelegate)\s+(\w+)\s*(?:\([^)]*\))?', stripped)
+        if m:
+            fn_name = m.group(1)
+            fn_type = "def" if stripped.lstrip().startswith("def ") else \
+                      "defp" if stripped.lstrip().startswith("defp ") else \
+                      "defmacro" if stripped.lstrip().startswith("defmacro ") else "other"
+            functions.append({
+                "name": fn_name,
+                "line": i + 1,
+                "type": fn_type,
+                "params_str": "",
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
 # ─── Function Body Extraction ──────────────────────────────────
 
 def _get_function_body_and_end(
@@ -452,6 +526,10 @@ def _get_function_body_and_end(
 
     if ext == ".py":
         return _get_py_function_body(lines, start)
+    elif ext == ".lua":
+        return _get_lua_function_body(lines, start)
+    elif ext in {".ex", ".exs"}:
+        return _get_elixir_function_body(lines, start)
     else:
         return _get_brace_function_body(lines, start)
 
@@ -477,6 +555,55 @@ def _get_py_function_body(lines: List[str], start: int) -> Tuple[str, int]:
             break
 
         body_lines.append(line)
+
+    return '\n'.join(body_lines), start + len(body_lines)
+
+
+def _get_lua_function_body(lines: List[str], start: int) -> Tuple[str, int]:
+    """Extract Lua function body using end-keyword matching."""
+    depth = 0
+    body_lines = []
+
+    for i in range(start, min(start + 500, len(lines))):
+        line = lines[i]
+        stripped = line.strip()
+        body_lines.append(line)
+
+        # Count block openers
+        if re.match(r'(?:local\s+)?function\s+', stripped) or re.match(r'if\s+', stripped) or \
+           re.match(r'for\s+', stripped) or re.match(r'while\s+', stripped) or stripped == 'do':
+            depth += 1
+
+        # Count block closers
+        if stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
+            depth -= 1
+            if depth <= 0:
+                return '\n'.join(body_lines), i
+
+    return '\n'.join(body_lines), start + len(body_lines)
+
+
+def _get_elixir_function_body(lines: List[str], start: int) -> Tuple[str, int]:
+    """Extract Elixir function body using do/end keyword matching."""
+    depth = 0
+    body_lines = []
+
+    for i in range(start, min(start + 500, len(lines))):
+        line = lines[i]
+        stripped = line.strip()
+        body_lines.append(line)
+
+        # Count block openers (do, fn, if, case, cond, for, while, try, with)
+        if stripped.endswith(' do') or stripped == 'do':
+            depth += 1
+        if re.match(r'.*\bfn\b\s*$', stripped):
+            depth += 1
+
+        # Count block closers (end)
+        if stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)'):
+            depth -= 1
+            if depth <= 0:
+                return '\n'.join(body_lines), i
 
     return '\n'.join(body_lines), start + len(body_lines)
 

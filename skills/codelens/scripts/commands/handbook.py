@@ -433,8 +433,101 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # C/C++ project detection
+    c_cpp_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    makefile_path = os.path.join(workspace, 'Makefile')
+    meson_path = os.path.join(workspace, 'meson.build')
+    configure_path = os.path.join(workspace, 'configure.ac')
+    autotools_path = os.path.join(workspace, 'configure')
+    if os.path.isfile(cmake_path):
+        c_cpp_type = "cmake-project"
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            proj_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
+            ver_match = re.search(r'project\s*\(\s*\w+\s+VERSION\s+(\S+)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    elif os.path.isfile(makefile_path):
+        c_cpp_type = "makefile-project"
+    elif os.path.isfile(meson_path):
+        c_cpp_type = "meson-project"
+        try:
+            with open(meson_path, 'r', encoding='utf-8') as f:
+                meson_content = f.read()
+            proj_match = re.search(r"project\s*\(\s*['\"](\w+)['\"]", meson_content)
+            ver_match = re.search(r"version\s*:\s*['\"]([^'\"]+)['\"]", meson_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    elif os.path.isfile(configure_path) or os.path.isfile(autotools_path):
+        c_cpp_type = "autotools-project"
+
+    # If no build system found but C/C++ files exist, classify generically
+    if c_cpp_type is None:
+        c_cpp_count = 0
+        for ext_cc in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp'):
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                c_cpp_count += sum(1 for f in files if f.endswith(ext_cc))
+                if c_cpp_count > 10:
+                    break
+            if c_cpp_count > 10:
+                break
+        if c_cpp_count > 0:
+            c_cpp_type = "c-project"
+
+    # Lua project detection
+    lua_type = None
+    rockspec_files = [f for f in os.listdir(workspace) if f.endswith('.rockspec')]
+    if rockspec_files:
+        lua_type = "lua-rock-project"
+        try:
+            with open(os.path.join(workspace, rockspec_files[0]), 'r', encoding='utf-8') as f:
+                rock_content = f.read()
+            name_match = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
+            ver_match = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    else:
+        lua_count = sum(1 for f in os.listdir(workspace) if f.endswith('.lua'))
+        if lua_count > 3:
+            lua_type = "lua-project"
+
+    # PHP project detection (beyond what framework_detect already handles)
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            identity["name"] = composer.get("name", identity["name"]).split('/')[-1]
+            identity["version"] = composer.get("version", identity["version"])
+            identity["description"] = composer.get("description", "")
+            require = composer.get("require", {})
+            if "laravel/framework" in require or "illuminate/database" in require:
+                php_type = "laravel-app"
+            elif "symfony/symfony" in require:
+                php_type = "symfony-app"
+            else:
+                php_type = "php-project"
+        except Exception:
+            pass
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, c_cpp_type, lua_type, php_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -443,6 +536,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if c_cpp_type:
+            type_parts.append("c-cpp")
+        if lua_type:
+            type_parts.append("lua")
+        if php_type:
+            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

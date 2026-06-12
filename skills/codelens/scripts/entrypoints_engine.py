@@ -30,7 +30,8 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go",
+    ".go", ".lua", ".java", ".cs",
+    ".ex", ".exs",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -80,7 +81,7 @@ ENTRYPOINT_PATTERNS = {
             },
             # C / C++
             {
-                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "regex": r'(?:int|void)\s+main\s*\(\s*(?:(?:int|void)\s*(?:argc)?\s*(?:,\s*char\s*\*+\s*argv\[\])?)?\s*\)',
                 "language": {".cc", ".cpp", ".cxx", ".c"},
                 "extract": "handler",
                 "handler_group": 0,
@@ -92,6 +93,13 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "cpp_main_short",
+            },
+            {
+                "regex": r'(?:int|void)\s+w?main\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "cpp_win_main",
             },
             # Go
             {
@@ -312,7 +320,7 @@ ENTRYPOINT_PATTERNS = {
             },
             # Go Gin framework
             {
-                "regex": r'(?:r|router|engine)\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "regex": r'(\w+)\.(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|Any|Handle)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".go"},
                 "extract": "go_gin_route",
                 "path_group": 1,
@@ -781,6 +789,61 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "test_name",
                 "name_group": 1,
                 "label": "rust_test_module",
+            },
+            # Go test functions: func TestXxx(t *testing.T)
+            {
+                "regex": r'func\s+(Test\w+)\s*\(\s*\w+\s+\*?testing\.T\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_test_fn",
+            },
+            # Go benchmark functions: func BenchmarkXxx(b *testing.B)
+            {
+                "regex": r'func\s+(Benchmark\w+)\s*\(\s*\w+\s+\*?testing\.B\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_benchmark_fn",
+            },
+            # Go fuzz functions: func FuzzXxx(f *testing.F)
+            {
+                "regex": r'func\s+(Fuzz\w+)\s*\(\s*\w+\s+\*?testing\.F\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_fuzz_fn",
+            },
+            # C/C++ test functions (Google Test / Unity / CMocka)
+            {
+                "regex": r'(?:TEST|TEST_F|TEST_P|TEST_C)\s*\(\s*\w+\s*,\s*(\w+)\s*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "gtest_macro",
+            },
+            {
+                "regex": r'void\s+(test_\w+)\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "c_test_fn",
+            },
+            # Lua busted test framework: describe/it
+            {
+                "regex": r'(?:describe|it)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_test",
+            },
+            # PHP PHPUnit test methods
+            {
+                "regex": r'public\s+function\s+(test\w+)\s*\(',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "phpunit_test",
             },
         ],
     },

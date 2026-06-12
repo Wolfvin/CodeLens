@@ -118,6 +118,21 @@ def detect_dead_code(
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
 
+            elif ext == ".go":
+                _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".rs":
+                _collect_rust_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+                _collect_c_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".lua":
+                _collect_lua_exports_imports(content, rel_path, all_exports, all_imports)
+
+            elif ext == ".php":
+                _collect_php_exports_imports(content, rel_path, all_exports, all_imports)
+
         if truncated:
             break
 
@@ -262,6 +277,26 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
                 function_start_depth = brace_depth  # v6: record depth at function start
+        elif ext == ".go":
+            if re.match(r'\s*func\s+(?:\([^)]+\)\s+)?\w+\s*\(', stripped):
+                in_function = True
+                found_terminal = False
+                function_start_depth = brace_depth
+        elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+            if re.match(r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+                        r'(?:[\w:*&<>,\s]+?)\s+\w+(?:::\w+)*\s*\([^)]*\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?\{', stripped):
+                in_function = True
+                found_terminal = False
+                function_start_depth = brace_depth
+        elif ext == ".lua":
+            if re.match(r'\s*(?:local\s+)?function\s+[\w:.]+\s*\(', stripped):
+                in_function = True
+                found_terminal = False
+        elif ext == ".php":
+            if re.match(r'\s*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+\w+\s*\(', stripped):
+                in_function = True
+                found_terminal = False
+                function_start_depth = brace_depth
 
         # Detect terminal statements
         if in_function:
@@ -296,10 +331,16 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
             #     This avoids resetting on every '}' (e.g. if-blocks inside functions).
-            if ext != ".py" and brace_depth < function_start_depth:
+            if ext not in {".py", ".lua"} and brace_depth < function_start_depth:
                 in_function = False
                 found_terminal = False
                 in_match = False
+                continue
+
+            # Lua: detect function end via 'end' keyword
+            if ext == ".lua" and stripped == 'end':
+                in_function = False
+                found_terminal = False
                 continue
 
             # v7: If we've exited the scope where the terminal statement was found
@@ -435,6 +476,94 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
                     "suggestion": f"Remove or use the variable."
                 })
 
+    elif ext == ".go":
+        # Find variable declarations: var x type, x := expr
+        for m in re.finditer(r'(?:var\s+(\w+)\s+\w|(\w+)\s*:=)', clean_content):
+            var_name = m.group(1) or m.group(2)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'err', 'ok', 'ctx', 'req', 'res', 'w', 'r', 'b'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name.isupper():
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' declared but never used",
+                    "suggestion": f"Remove unused variable '{var_name}' or assign to '_'."
+                })
+
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
+        # Find variable declarations: type name = ... or type name;
+        for m in re.finditer(r'(?:int|char|float|double|long|short|unsigned|void|auto|bool|size_t|ssize_t)\s+\*?\s*(\w+)\s*(?:=|;|\))', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'i', 'j', 'k', 'n', 'ret', 'rc', 'err', 'len', 'size', 'argc', 'argv'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name.isupper():
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' declared but never used",
+                    "suggestion": f"Remove unused variable '{var_name}' or cast to (void)."
+                })
+
+    elif ext == ".lua":
+        # Find local variable declarations: local name = ...
+        for m in re.finditer(r'local\s+(\w+)\s*=', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'self', 'err', 'ok', 'msg', 'k', 'v'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name.isupper():
+                continue
+            usage_pattern = r'\b' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": var_name,
+                    "severity": "info",
+                    "message": f"Variable '{var_name}' declared but never used",
+                    "suggestion": f"Remove unused variable '{var_name}' or prefix with _."
+                })
+
+    elif ext == ".php":
+        # Find variable declarations: $name = ...
+        for m in re.finditer(r'\$(\w+)\s*=', clean_content):
+            var_name = m.group(1)
+            line_num = clean_content[:m.start()].count('\n') + 1
+            skip_names = {'_', 'this', 'e', 'err', 'request', 'response', 'app', 'router'}
+            if var_name in skip_names or var_name.startswith('_'):
+                continue
+            if var_name.isupper():
+                continue
+            usage_pattern = r'\$' + re.escape(var_name) + r'\b'
+            all_occurrences = list(re.finditer(usage_pattern, clean_content))
+            if len(all_occurrences) <= 1:
+                items.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "variable": '$' + var_name,
+                    "severity": "info",
+                    "message": f"Variable '${var_name}' declared but never used",
+                    "suggestion": f"Remove unused variable '${var_name}'."
+                })
+
     return items[:100]  # Cap to avoid noise
 
 def _collect_js_exports_imports(
@@ -509,6 +638,149 @@ def _collect_py_exports_imports(
         exports[rel_path].append({
             "name": name,
             "type": "python_definition",
+            "line": line_num
+        })
+
+def _collect_go_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Go exports (capitalized functions/types) and imports."""
+    # Go: capitalized names are exported by convention
+    for m in re.finditer(r'func\s+(?:\([^)]+\)\s+)?([A-Z]\w+)\s*\(', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "go_exported_func",
+            "line": line_num
+        })
+
+    # Go: exported types (capitalized)
+    for m in re.finditer(r'type\s+([A-Z]\w+)\s+(?:struct|interface)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "go_exported_type",
+            "line": line_num
+        })
+
+    # Go imports
+    for m in re.finditer(r'import\s+(?:\([^)]+\)|"([^"]+)")', content, re.DOTALL):
+        if m.group(1):
+            imports[rel_path].add(m.group(1).split('/')[-1])
+        else:
+            # Multi-line import block
+            block = m.group(0)
+            for imp in re.finditer(r'"([^"]+)"', block):
+                imports[rel_path].add(imp.group(1).split('/')[-1])
+
+def _collect_rust_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Rust public items and use statements."""
+    # Rust: pub fn, pub struct, pub enum, pub trait are exported
+    for m in re.finditer(r'pub\s+(?:async\s+)?fn\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "rust_pub_fn",
+            "line": line_num
+        })
+
+    for m in re.finditer(r'pub\s+(?:struct|enum|trait|type)\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "rust_pub_type",
+            "line": line_num
+        })
+
+    # Rust use statements
+    for m in re.finditer(r'use\s+([\w:]+)', content):
+        name = m.group(1).split('::')[-1]
+        imports[rel_path].add(name)
+
+def _collect_c_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect C/C++ includes and function declarations."""
+    # C/C++ #include
+    for m in re.finditer(r'#include\s+[<"]([^>"]+)[>"]', content):
+        name = m.group(1).split('/')[-1].replace('.h', '').replace('.hpp', '')
+        imports[rel_path].add(name)
+
+    # C/C++ function declarations (not definitions — skip body with {)
+    for m in re.finditer(r'(?:static\s+|inline\s+|extern\s+)*'
+                         r'(?:[\w:*&<>,\s]+?)\s+'
+                         r'(\w+(?:::\w+)*)\s*\([^)]*\)\s*;', content):
+        fn_name = m.group(1)
+        skip = {'if', 'for', 'while', 'switch', 'return', 'catch', 'sizeof', 'typedef', 'class', 'struct'}
+        if fn_name in skip:
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": fn_name,
+            "type": "c_function_decl",
+            "line": line_num
+        })
+
+def _collect_lua_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect Lua module definitions and requires."""
+    # Lua requires
+    for m in re.finditer(r'(?:local\s+)?(?:\w+)\s*=\s*require\s*[("\']([^"\']+)["\')]', content):
+        name = m.group(1).split('/')[-1]
+        imports[rel_path].add(name)
+
+    for m in re.finditer(r'require\s*[("\']([^"\']+)["\')]', content):
+        name = m.group(1).split('/')[-1]
+        imports[rel_path].add(name)
+
+    # Lua module functions as exports
+    for m in re.finditer(r'function\s+([\w:.]+)\s*\(', content):
+        name = m.group(1).split(':')[-1].split('.')[-1]
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "lua_function",
+            "line": line_num
+        })
+
+def _collect_php_exports_imports(
+    content: str, rel_path: str,
+    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
+):
+    """Collect PHP class/function definitions and use statements."""
+    # PHP use statements
+    for m in re.finditer(r'use\s+([\w\\]+)', content):
+        name = m.group(1).split('\\')[-1]
+        imports[rel_path].add(name)
+
+    # PHP public functions
+    for m in re.finditer(r'public\s+(?:static\s+)?function\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "php_public_method",
+            "line": line_num
+        })
+
+    # PHP class definitions
+    for m in re.finditer(r'(?:abstract\s+|final\s+)?class\s+(\w+)', content):
+        name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        exports[rel_path].append({
+            "name": name,
+            "type": "php_class",
             "line": line_num
         })
 
