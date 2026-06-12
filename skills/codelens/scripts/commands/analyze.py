@@ -413,29 +413,54 @@ def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
     violations = df.get("stats", {}).get("violations", 0)
     if violations == 0:
         return None
+    # v6.4: Prioritize production violations over test file violations
+    all_violations = df.get("violations", [])
+    production_violations = [v for v in all_violations if not v.get("in_test_file", False)]
+    test_violations = [v for v in all_violations if v.get("in_test_file", False)]
+    # Show production violations first, then test violations
+    prioritized = production_violations + test_violations
     return {
         "category": "dataflow_violations",
         "label": "Unsafe Data Flows",
         "total": violations,
+        "production_total": len(production_violations),
+        "test_total": len(test_violations),
         "severity": "high",
-        "top_items": df.get("violations", [])[:max_items],
+        "top_items": prioritized[:max_items],
         "action": "Add input sanitization and output encoding at every source→sink boundary",
         "impact": "Untainted data flows can lead to SQL injection, XSS, and command injection attacks",
     }
 
 
 def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
-    from envcheck_engine import audit_environment
-    env = audit_environment(workspace)
-    issues = env.get("stats", {}).get("total_issues", 0)
+    from envcheck_engine import check_env_vars
+    env = check_env_vars(workspace)
+    stats = env.get("stats", {})
+    # Compute total issues: undocumented vars + missing from example + required without fallback
+    required_no_fallback = env.get("required_without_fallback", [])
+    missing_from_example = env.get("missing_from_example", [])
+    naming_issues = env.get("naming_inconsistencies", [])
+    undocumented = stats.get("undocumented", 0)
+    issues = undocumented + len(required_no_fallback) + len(missing_from_example) + len(naming_issues)
     if issues == 0:
         return None
+    # Build top items from the most important categories
+    top_items = []
+    for req in required_no_fallback[:max_items]:
+        top_items.append({"name": req if isinstance(req, str) else req.get("name", str(req)),
+                          "type": "required_no_fallback", "severity": "high"})
+    for missing in missing_from_example[:max_items]:
+        top_items.append({"name": missing if isinstance(missing, str) else missing.get("name", str(missing)),
+                          "type": "missing_from_example", "severity": "medium"})
+    for naming in naming_issues[:max_items]:
+        top_items.append({"name": naming if isinstance(naming, str) else str(naming),
+                          "type": "naming_inconsistency", "severity": "low"})
     return {
         "category": "env_issues",
         "label": "Environment Issues",
         "total": issues,
         "severity": "medium",
-        "top_items": env.get("issues", [])[:max_items],
+        "top_items": top_items[:max_items],
         "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
         "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
     }

@@ -440,6 +440,80 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         if "yarn-workspace" not in identity["monorepo_tools"]:
             identity["monorepo_tools"].append("yarn-workspace")
 
+    # v6.4: Monorepo main package identity — for monorepos, the root package.json
+    # often has a placeholder name/version. Try to find the "main" sub-package
+    # that matches the repo name or has the most significant content.
+    if identity["is_monorepo"]:
+        _main_pkg_found = False
+        _repo_basename = os.path.basename(os.path.abspath(workspace))
+        for subdir in _MONOREPO_SUBDIRS:
+            if _main_pkg_found:
+                break
+            subdir_path = os.path.join(workspace, subdir)
+            if not os.path.isdir(subdir_path):
+                continue
+            try:
+                for entry in sorted(os.listdir(subdir_path)):
+                    entry_pkg = os.path.join(subdir_path, entry, "package.json")
+                    if not os.path.isfile(entry_pkg):
+                        continue
+                    try:
+                        with open(entry_pkg, 'r', encoding='utf-8') as f:
+                            pkg = json.load(f)
+                        pkg_name = pkg.get("name", "")
+                        pkg_version = pkg.get("version", "")
+                        # Match: sub-package name matches repo basename,
+                        # or sub-package name contains the repo basename,
+                        # or sub-package has "main"/"module"/"exports" (it's a library)
+                        # and root has no real version
+                        is_main_pkg = (
+                            pkg_name == _repo_basename
+                            or pkg_name.endswith("/" + _repo_basename)
+                            or (pkg_name.replace("@", "").split("/")[-1] == _repo_basename)
+                            or (entry == _repo_basename and ("main" in pkg or "module" in pkg or "exports" in pkg))
+                        )
+                        if is_main_pkg and pkg_version and pkg_version != "0.0.0":
+                            identity["name"] = pkg_name
+                            identity["version"] = pkg_version
+                            identity["description"] = pkg.get("description", identity.get("description", ""))
+                            _main_pkg_found = True
+                            break
+                    except Exception:
+                        pass
+            except OSError:
+                pass
+        # Fallback: if no match by name, try the largest sub-package with a version
+        if not _main_pkg_found and identity.get("version", "0.0.0") in ("0.0.0", ""):
+            for subdir in _MONOREPO_SUBDIRS:
+                if _main_pkg_found:
+                    break
+                subdir_path = os.path.join(workspace, subdir)
+                if not os.path.isdir(subdir_path):
+                    continue
+                try:
+                    for entry in sorted(os.listdir(subdir_path)):
+                        entry_pkg = os.path.join(subdir_path, entry, "package.json")
+                        if not os.path.isfile(entry_pkg):
+                            continue
+                        try:
+                            with open(entry_pkg, 'r', encoding='utf-8') as f:
+                                pkg = json.load(f)
+                            pkg_name = pkg.get("name", "")
+                            pkg_version = pkg.get("version", "")
+                            # Pick the first sub-package that has a real version
+                            # and has "main"/"module"/"exports" (it's a publishable library)
+                            if (pkg_version and pkg_version != "0.0.0"
+                                    and ("main" in pkg or "module" in pkg or "exports" in pkg)):
+                                identity["name"] = pkg_name
+                                identity["version"] = pkg_version
+                                identity["description"] = pkg.get("description", identity.get("description", ""))
+                                _main_pkg_found = True
+                                break
+                        except Exception:
+                            pass
+                except OSError:
+                    pass
+
     # v6.3: Also check root package.json for "workspaces" field (npm/yarn workspaces)
     if has_package_json and not identity["is_monorepo"]:
         try:

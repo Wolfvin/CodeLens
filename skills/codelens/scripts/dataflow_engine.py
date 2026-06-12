@@ -207,7 +207,8 @@ SINK_PATTERNS = {
         "patterns": [
             r"fs\.write(?:File|FileSync|)",
             r"writeFile\s*\(",
-            r"\.pipe\s*\(",
+            r"createWriteStream\s*\(",
+            r"\.pipe\s*\(\s*(?:fs\.createWriteStream|createWriteStream)",
             r"open\s*\([^)]*['\"]w",
             r"std::fs::write",
             r"File::create",
@@ -438,12 +439,23 @@ def trace_dataflow(
                 for pattern in sink_def["patterns"]:
                     for match in re.finditer(pattern, content):
                         line_num = content[:match.start()].count('\n') + 1
+                        match_line = lines[line_num - 1].strip() if line_num <= len(lines) else ""
+                        # v6.4: Skip safe DOM resets — innerHTML = '' / innerHTML = "" are harmless
+                        if sink_key == "html_output":
+                            # Empty string assignment to innerHTML/outerHTML is a safe DOM reset
+                            if re.match(r'.*inner(?:HTML|html)\s*=\s*[\'"][\'"]', match_line):
+                                continue
+                            if re.match(r'.*outer(?:HTML|html)\s*=\s*[\'"][\'"]', match_line):
+                                continue
+                            # textContent assignment is safe (no HTML parsing)
+                            if re.match(r'.*text(?:Content|content)\s*=', match_line):
+                                continue
                         sink_hits.append({
                             "sink_type": sink_key,
                             "label": sink_def["label"],
                             "file": rel_path,
                             "line": line_num,
-                            "match": lines[line_num - 1].strip() if line_num <= len(lines) else "",
+                            "match": match_line,
                             "severity": sink_def["severity"],
                             "description": sink_def["description"],
                             "col": match.start() - content[:match.start()].rfind('\n') - 1
