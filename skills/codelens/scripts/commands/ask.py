@@ -480,7 +480,64 @@ def _extract_symbol_name(q: str, keyword: str) -> str:
 
 
 def _execute_ask_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
-    """Execute the determined command with the given args."""
+    """Execute the determined command with the given args.
+
+    Includes a timeout mechanism for expensive commands to prevent
+    the ask router from hanging on large codebases.
+    """
+    import signal
+    import time
+
+    # Commands that can be slow on large repos — apply timeout
+    _SLOW_COMMANDS = {"dead-code", "smell", "complexity", "scan", "handbook",
+                      "outline", "test-map", "perf-hint", "css-deep", "a11y"}
+    _ASK_TIMEOUT = 30  # seconds
+
+    def _timeout_handler(signum, frame):
+        raise TimeoutError(f"ask command '{command}' timed out after {_ASK_TIMEOUT}s")
+
+    start_time = time.time()
+    timed_out = False
+
+    if command in _SLOW_COMMANDS:
+        # Try with timeout on Unix systems
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(_ASK_TIMEOUT)
+        except (AttributeError, ValueError):
+            # Windows or non-main thread — no SIGALRM, run without timeout
+            old_handler = None
+
+    try:
+        result = _dispatch_command(command, args, workspace)
+    except TimeoutError:
+        timed_out = True
+        result = {
+            "status": "timeout",
+            "message": f"Command '{command}' timed out after {_ASK_TIMEOUT}s. "
+                       f"Run it directly for full results: codelens {command}",
+            "command": command,
+        }
+    except Exception as e:
+        result = {"status": "error", "message": str(e), "command": command}
+    finally:
+        if command in _SLOW_COMMANDS:
+            try:
+                signal.alarm(0)  # Cancel alarm
+                if old_handler is not None:
+                    signal.signal(signal.SIGALRM, old_handler)
+            except (AttributeError, ValueError):
+                pass
+
+    # Add timing info
+    if isinstance(result, dict):
+        result["ask_duration_ms"] = int((time.time() - start_time) * 1000)
+
+    return result
+
+
+def _dispatch_command(command: str, args: dict, workspace: str) -> Dict[str, Any]:
+    """Dispatch to the actual command implementation."""
     if command == "context":
         return get_symbol_context(args.get("name", ""), workspace)
     elif command == "symbols":

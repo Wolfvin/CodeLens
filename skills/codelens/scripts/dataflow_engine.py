@@ -49,7 +49,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"\.value\s*",
+            r"\.value\b(?!\s*\()",  # .value but NOT .values() — Map/Array method
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],

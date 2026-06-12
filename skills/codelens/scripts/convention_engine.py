@@ -625,13 +625,14 @@ def _detect_orm_patterns(all_source_files: List[str], workspace: str) -> Dict[st
         if re.search(r'prisma\.', content):
             scores["prisma"] += 2
 
-        # SQLAlchemy
-        if re.search(r'from\s+sqlalchemy', content):
-            scores["sqlalchemy"] += 3
-        if re.search(r'Base\s*=', content):
-            scores["sqlalchemy"] += 2
-        if re.search(r'Column\s*\(', content):
-            scores["sqlalchemy"] += 2
+        # SQLAlchemy (only check .py files — Base/Column are common in TS/JS)
+        if fpath.endswith('.py'):
+            if re.search(r'from\s+sqlalchemy', content):
+                scores["sqlalchemy"] += 3
+            if re.search(r'Base\s*=\s*declarative_base', content):
+                scores["sqlalchemy"] += 2
+            if re.search(r'Column\(\s*Integer|Column\(\s*String|Column\(\s*Float|Column\(\s*Boolean|Column\(\s*DateTime|Column\(\s*Text', content):
+                scores["sqlalchemy"] += 2
 
         # TypeORM
         if re.search(r'@Entity', content):

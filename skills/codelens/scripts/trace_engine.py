@@ -134,7 +134,23 @@ def trace_symbol(
         if "file" in chain:
             affected_files.add(chain["file"])
         if "path" in chain:
-            affected_files.add(chain["path"])
+            # path can be a chain like "file:line → file:line", extract only file paths
+            path_val = chain["path"]
+            if " → " in path_val:
+                # Extract individual file paths from chain notation
+                for segment in path_val.split(" → "):
+                    # Strip line number: "packages/foo/bar.ts:123" → "packages/foo/bar.ts"
+                    if ":" in segment:
+                        file_part = segment.rsplit(":", 1)[0]
+                        affected_files.add(file_part)
+                    else:
+                        affected_files.add(segment)
+            else:
+                # Single file path, possibly with line number
+                if ":" in path_val:
+                    affected_files.add(path_val.rsplit(":", 1)[0])
+                else:
+                    affected_files.add(path_val)
 
     result = {
         "status": "ok",

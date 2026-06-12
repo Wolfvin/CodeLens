@@ -5,38 +5,36 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.4.0] — 2026-06-12
+## [6.3] — 2026-06-12
 
-### Tested against Wilfred/difftastic (Rust CLI diff tool, 30K nodes, polyglot: Rust + C + JS + PHP test fixtures)
+### Tested against excalidraw/excalidraw (702 source files: 602 TS/TSX + 85 CSS/SCSS, 89MB canvas-based drawing monorepo)
 
-Real-world test on a pure Rust CLI project with vendored tree-sitter parsers and
-sample/demo fixture directories. Identified and fixed 8 major issues caused by
-scanning non-project code (minified files, test fixtures, vendored code).
+Real-world test on a pure TypeScript/React monorepo (packages/common, packages/excalidraw, packages/element, etc.)
+with 2,025 backend nodes, 13,720 edges. Found and fixed 10 runtime bugs through practical execution testing.
 
 ### Added
 
-- **Auto-exclude minified files**: `.min.js` and `.min.css` files are now skipped during scan, entrypoints detection, and dead-code analysis. These files produce massive false positives (fake entrypoints, fake debug leaks, god objects from minified code) and contain no meaningful analysis data.
-- **Auto-exclude fixture/sample/demo directories**: `demo_files/`, `sample_files/`, `testdata/`, `test_data/`, `test-fixtures/`, `fixtures/` are now in `DEFAULT_IGNORE_DIRS`. Prevents test fixture files from polluting real codebase analysis.
-- **Auto-exclude vendored code directories**: `vendored_parsers/`, `vendored/`, `third_party/`, `thirdparty/`, `external/`, `submodules/` are now in `DEFAULT_IGNORE_DIRS`. Vendored code is not project code and should not be analyzed.
-- **File-count-weighted framework detection**: Frameworks are now validated against actual file counts. A project with only 1-2 PHP files (likely test fixtures) will no longer be classified as a "PHP project". Frameworks with <5% of total source files are pruned from detection results.
-- **Standard library method tagging**: Common Rust/Python/JS standard library methods (`.to_owned()`, `.map()`, `.clone()`, `.unwrap()`, `len()`, `str()`, `.forEach()`, etc.) are now tagged as `std_lib` instead of `unresolved` in callee analysis. This prevents agents from chasing dead ends in the standard library.
-- **Ask routing for architecture/module questions**: Natural language questions like "what are the main modules?", "architecture?", "codebase structure?", "project layout?" now route to `handbook` instead of falling through to code search.
-- **Outline shows function names**: The `outline` command in markdown format now displays actual function/class names with line numbers, not just counts. E.g., `**functions:** 10 — main (L142), diff_file (L404), ...` instead of `**functions:** 10`.
-- **Scan respects DEFAULT_IGNORE_DIRS**: The scan command's `discover_files()` now checks `DEFAULT_IGNORE_DIRS` in addition to config ignore patterns. Previously, fixture and vendored directories were excluded by engines but NOT by the scan file discovery.
+- **Monorepo detection from sub-directory structure**: Projects with 2+ package.json files in `apps/`, `packages/`, or `services/` directories are now correctly identified as monorepos, even without turbo.json or pnpm-workspace.yaml. Adds `yarn-workspace` to monorepo_tools.
+- **npm/yarn workspaces field detection**: `handbook` now checks root `package.json` for `"workspaces"` field and adds `npm-workspaces` to monorepo_tools.
+- **ESM detection heuristics**: `detect_frameworks()` now checks for `.mts`/`.mjs` files and `"exports"` field in package.json before defaulting to CJS module system. Prevents incorrect `module_system: cjs` for ESM projects.
+- **Ask command timeout protection**: `ask` now applies a 30-second timeout for slow commands (dead-code, smell, complexity, etc.) using SIGALRM. Returns a helpful timeout message instead of hanging.
+- **Ask command duration tracking**: `ask` responses now include `ask_duration_ms` field for performance monitoring.
 
 ### Fixed
 
-- **Dead-code total display**: Markdown formatter used `stats.get('total_dead', 0)` but the actual key is `total_dead_code`. This caused "Total dead: 0" even when findings were listed. Now correctly shows the total.
-- **Query name display in markdown**: Multi-match query results stored the name in `"query"` key but the markdown formatter looked for `"name"`. This caused `Query: `` (empty name)`. Now checks both `"name"` and `"query"` keys.
-- **PHP false positive in framework detection**: A single PHP test file in a fixture directory would cause the entire project to be classified as using PHP. Now requires >=3 PHP files or significant PHP file ratio.
-- **Tailwind false positive in framework detection**: Tailwind CSS detection from test fixture HTML files no longer triggers for non-web projects.
-- **Minified JS false positives**: `asciinema-player.min.js` and similar files no longer produce fake entrypoints (set_interval, dom_event_listener, jest_it), fake debug leaks, fake god objects, or fake performance hints.
+- **`binary-scan` ImportError crash**: `scan_tauri_artifacts` was imported from `utils.py` but doesn't exist. Changed to try/except import with graceful fallback — Tauri analysis is skipped when the function is unavailable.
+- **Monorepo not detected for packages/ sub-directories**: Excalidraw (packages/common, packages/excalidraw, etc.) was reported as `is_monorepo: false`. Fixed by counting sub-directory package.json files and flagging as monorepo when count >= 2.
+- **`stack-trace` workspace auto-detect break**: When called with a workspace path as first positional arg, it was parsed as function name and workspace fell through to auto-detect (picking up wrong directory). Added path detection: if `name` looks like a path, swap it to workspace.
+- **Module system always CJS**: Projects without `"type": "module"` in package.json but using .mts/.mjs files or `"exports"` field were incorrectly reported as CJS. Added ESM heuristic detection.
+- **`summary --detail minimal` not reducing output**: Minimal detail still returned all findings regardless of severity. Now properly filters by severity and skips categories with no critical items in minimal mode.
+- **Markdown formatter Python dict repr**: Convention fields like `{'convention': 'PascalCase', 'confidence': '53%'}` are now formatted as readable text instead of Python dict representation.
+- **ORM false positive for TypeScript projects**: SQLAlchemy patterns (`Base =`, `Column(`) matched React/TSX code (e.g., `const Base = ...`, UI Column components). Restricted SQLAlchemy detection to `.py` files only and made patterns more specific (`Base = declarative_base`, `Column(Integer|String|...)`).
+- **Dataflow `.values()` false positive**: `.value\s*` pattern matched `elements.values()`, `groups.values()` (Map/Array methods) as DOM input sources. Changed to `\.value\b(?!\s*\()` to exclude `.values()` calls. Reduced violations from 28 to 15 on Excalidraw.
+- **Trace `affected_file_list` included path chains**: The file list contained entries like `packages/excalidraw/renderer/staticSvgScene.ts:719 → packages/excalidraw/scene/export.ts:289`. Now extracts only actual file paths from chain notation.
 
 ### Changed
 
-- **Version bump**: 5.8.1 → 6.4.0
-- **Health score more accurate**: On difftastic, health score dropped from 60 → 40 after removing false positives from vendored/demo files. The lower score is more accurate since it reflects actual project code quality.
-- **Node count reduced**: On difftastic, backend nodes dropped from 30,022 → 606 after excluding demo_files/, sample_files/, and vendored_parsers/. All 29,416 removed nodes were from non-project code.
+- **Version bump**: 5.9.1 → 6.3
 
 ## [5.8.1] — 2026-06-12
 

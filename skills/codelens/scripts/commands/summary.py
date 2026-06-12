@@ -248,12 +248,17 @@ def generate_summary(
             df = trace_dataflow(workspace)
             violations = df.get("stats", {}).get("violations", 0)
             if violations > 0:
-                findings.append({
-                    "category": "dataflow_violations",
-                    "total": violations,
-                    "top_items": df.get("violations", [])[:max_items],
-                    "action": "Add sanitizers or validators for unsafe data flows",
-                })
+                df_items = df.get("violations", [])
+                # Filter by severity for minimal/standard detail
+                filtered_df = [v for v in df_items
+                               if v.get("severity", "medium") in severity_filter][:max_items]
+                if detail == "full" or filtered_df:
+                    findings.append({
+                        "category": "dataflow_violations",
+                        "total": violations,
+                        "top_items": filtered_df if detail != "full" else df_items[:max_items],
+                        "action": "Add sanitizers or validators for unsafe data flows",
+                    })
         except Exception:
             logger.debug("Dataflow scan failed in summary")
 
@@ -288,13 +293,18 @@ def generate_summary(
             if dl_stats.get("total_leaks", 0) > 0:
                 high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
                               if v > 0}
-                findings.append({
-                    "category": "debug_leaks",
-                    "total": dl_stats.get("total_leaks", 0),
-                    "by_category": high_leaks,
-                    "top_items": dl.get("items", [])[:max_items],
-                    "action": "Remove console.log, debugger, and TODO/FIXME before production",
-                })
+                dl_items = dl.get("items", [])
+                filtered_dl = [d for d in dl_items
+                               if d.get("severity", "low") in severity_filter][:max_items]
+                # Skip debug_leaks entirely in minimal mode if no critical items
+                if detail != "minimal" or filtered_dl:
+                    findings.append({
+                        "category": "debug_leaks",
+                        "total": dl_stats.get("total_leaks", 0),
+                        "by_category": high_leaks,
+                        "top_items": filtered_dl,
+                        "action": "Remove console.log, debugger, and TODO/FIXME before production",
+                    })
         except Exception:
             logger.debug("Debug leak scan failed in summary")
 
@@ -327,13 +337,18 @@ def generate_summary(
             dc_stats = dc.get("stats", {})
             dead_count = dc_stats.get("total_dead_code", 0)
             if dead_count > 0:
-                findings.append({
-                    "category": "dead_code",
-                    "total": dead_count,
-                    "by_category": dc_stats.get("by_category", {}),
-                    "top_items": dc.get("results", {}).get("unreachable", [])[:max_items],
-                    "action": "Remove dead code to reduce maintenance burden",
-                })
+                dc_items = dc.get("results", {}).get("unreachable", [])
+                filtered_dc = [d for d in dc_items
+                               if d.get("severity", "warning") in severity_filter][:max_items]
+                # Skip dead_code in minimal mode if no critical items
+                if detail != "minimal" or filtered_dc:
+                    findings.append({
+                        "category": "dead_code",
+                        "total": dead_count,
+                        "by_category": dc_stats.get("by_category", {}),
+                        "top_items": filtered_dc,
+                        "action": "Remove dead code to reduce maintenance burden",
+                    })
         except Exception:
             logger.debug("Dead code scan failed in summary")
 

@@ -795,7 +795,12 @@ def _md_handbook(data: Dict, lines: list) -> None:
     if naming:
         lines.append("## Conventions")
         for key, val in naming.items():
-            lines.append(f"- {key}: {val}")
+            # Format dict values as readable text instead of Python repr
+            if isinstance(val, dict):
+                parts = [f"{k}: {v}" for k, v in val.items()]
+                lines.append(f"- **{key}:** {', '.join(parts)}")
+            else:
+                lines.append(f"- **{key}:** {val}")
         lines.append("")
 
     lines.append(f"Generated: {meta.get('generated_at', 'unknown')}")
