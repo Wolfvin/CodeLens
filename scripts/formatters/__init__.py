@@ -151,6 +151,14 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     if "pagination" in data:
         metadata["pagination"] = data["pagination"]
 
+    # ─── Visualization metadata ───
+    if "dashboard_path" in data:
+        metadata["dashboard_path"] = data["dashboard_path"]
+    if "history_snapshot_saved" in data:
+        metadata["history_available"] = data.get("history_snapshot_saved", False)
+    if "history_snapshot_file" in data:
+        metadata["history_snapshot_file"] = data["history_snapshot_file"]
+
     result["metadata"] = metadata
 
     # ─── Auto-setup info ───
