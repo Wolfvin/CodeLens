@@ -43,6 +43,8 @@ Usage:
     python3 codelens.py css-deep <workspace]           # Deep CSS analysis (vars, keyframes, specificity)
     python3 codelens.py handbook <workspace>           # Generate project handbook for AI agents
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
+    python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
+    python3 codelens.py benchmark <workspace>          # Run accuracy and performance benchmarks
 
 AI-Optimized Flags (work with any command):
     --top N          Limit list/array results to top N items (smart default: 20 for list commands)

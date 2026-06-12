@@ -1,0 +1,170 @@
+secrets:
+  expected: 5
+  scope_files:
+  - config/settings.py
+  locations:
+  - file: config/settings.py
+    line: 8
+    type: aws_access_key
+    name: AWS_ACCESS_KEY_ID
+  - file: config/settings.py
+    line: 11
+    type: aws_secret_key
+    name: AWS_SECRET_ACCESS_KEY
+  - file: config/settings.py
+    line: 14
+    type: database_password
+    name: DATABASE_URL
+  - file: config/settings.py
+    line: 17
+    type: api_key
+    name: STRIPE_API_KEY
+  - file: config/settings.py
+    line: 20
+    type: jwt_secret
+    name: JWT_SECRET
+dead_code:
+  expected: 10
+  scope_files:
+  - src/dead_code_examples.py
+  locations:
+  - file: src/dead_code_examples.py
+    line: 8
+    name: json
+    category: unused_vars
+  - file: src/dead_code_examples.py
+    line: 11
+    name: UNUSED_GLOBAL_CONFIG
+    category: unused_vars
+  - file: src/dead_code_examples.py
+    line: 22
+    name: unreachable after return
+    category: unreachable
+  - file: src/dead_code_examples.py
+    line: 27
+    name: old_formatter
+    category: unused_exports
+  - file: src/dead_code_examples.py
+    line: 39
+    name: deprecated_api_call
+    category: unused_exports
+  - file: src/dead_code_examples.py
+    line: 48
+    name: OldDataProcessor
+    category: unused_exports
+  - file: src/dead_code_examples.py
+    line: 66
+    name: UNUSED_CACHE
+    category: unused_vars
+  - file: src/dead_code_examples.py
+    line: 70
+    name: unused_helper
+    category: unused_exports
+  - file: src/dead_code_examples.py
+    line: 75
+    name: OrderedDict
+    category: unused_vars
+  - file: src/dead_code_examples.py
+    line: 85
+    name: unreachable after return
+    category: unreachable
+complexity:
+  expected_high: 5
+  threshold: 15
+  scope_files:
+  - src/complex_processor.py
+  locations:
+  - file: src/complex_processor.py
+    name: process_order
+    cyclomatic_min: 20
+  - file: src/complex_processor.py
+    name: evaluate_feature_flags
+    cyclomatic_min: 15
+  - file: src/complex_processor.py
+    name: validate_registration
+    cyclomatic_min: 25
+  - file: src/complex_processor.py
+    name: handle_http_response
+    cyclomatic_min: 18
+  - file: src/complex_processor.py
+    name: transform_record
+    cyclomatic_min: 20
+debug_leaks:
+  expected: 4
+  scope_files:
+  - src/routes.py
+  locations:
+  - file: src/routes.py
+    line: 9
+    category: print_statement
+    name: print
+  - file: src/routes.py
+    line: 18
+    category: print_statement
+    name: print
+  - file: src/routes.py
+    line: 32
+    category: debugger
+    name: pdb.set_trace
+  - file: src/routes.py
+    line: 38
+    category: todo_fixme
+    name: TODO
+perf_antipatterns:
+  expected: 3
+  scope_files:
+  - src/perf_antipatterns.py
+  locations:
+  - file: src/perf_antipatterns.py
+    line: 10
+    category: n_plus_one
+    name: query inside loop
+  - file: src/perf_antipatterns.py
+    line: 28
+    category: sync_blocking
+    name: blocking urllib
+  - file: src/perf_antipatterns.py
+    line: 35
+    category: inefficient_iteration
+    name: string concat
+circular_dependencies:
+  expected: 2
+  scope_files:
+  - src/module_a.py
+  - src/module_c.py
+  locations:
+  - file: src/module_a.py
+    name: module_a <-> module_b
+    cycle:
+    - module_a
+    - module_b
+  - file: src/module_c.py
+    name: module_c <-> module_d
+    cycle:
+    - module_c
+    - module_d
+sql_injection:
+  expected: 3
+  scope_files:
+  - src/db_queries.py
+  locations:
+  - file: src/db_queries.py
+    line: 10
+    name: f-string SQL
+  - file: src/db_queries.py
+    line: 17
+    name: concat SQL
+  - file: src/db_queries.py
+    line: 24
+    name: f-string SQL
+command_injection:
+  expected: 2
+  scope_files:
+  - src/system_ops.py
+  locations:
+  - file: src/system_ops.py
+    line: 9
+    name: os.system
+  - file: src/system_ops.py
+    line: 14
+    name: shell=True
