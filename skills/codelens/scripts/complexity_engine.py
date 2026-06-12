@@ -406,13 +406,18 @@ def _extract_go_functions(lines: List[str], content: str) -> List[Dict]:
 
 
 def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[Dict]:
-    """Extract C/C++ function definitions."""
+    """Extract C/C++ function definitions.
+
+    Handles both single-line and multi-line signatures where the opening
+    brace may be on the next line (common in C projects like nginx).
+    """
     functions = []
 
     for i, line in enumerate(lines):
         # C/C++ function definition pattern:
         # type name(params) {  or  type Class::name(params) {
-        # Skip common non-function patterns
+        # Also handles: type name(params)\n{  (brace on next line)
+        # Also handles: type calling_conv\nname(params)\n{ (like int ngx_cdecl\nmain())
         m = re.match(
             r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
             r'(?:[\w:*&<>,\s]+?)\s+'
@@ -421,7 +426,6 @@ def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[D
         )
         if m:
             fn_name = m.group(1)
-            # Skip control flow keywords and common non-function names
             skip_names = {'if', 'for', 'while', 'switch', 'catch', 'return',
                          'class', 'struct', 'enum', 'union', 'namespace', 'typedef',
                          'using', 'template', 'include', 'define', 'ifdef', 'endif'}
@@ -434,6 +438,76 @@ def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[D
                 "params_str": m.group(2),
                 "start_col": len(line) - len(line.lstrip()),
             })
+            continue
+
+        # Try multi-line pattern: function signature on this line, brace on next line
+        # e.g., "ngx_int_t ngx_get_options(int argc, char *const *argv)"
+        #        "{"
+        m = re.match(
+            r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+            r'(?:[\w:*&<>,\s]+?)\s+'
+            r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?$',
+            line
+        )
+        if m:
+            fn_name = m.group(1)
+            skip_names = {'if', 'for', 'while', 'switch', 'catch', 'return',
+                         'class', 'struct', 'enum', 'union', 'namespace', 'typedef',
+                         'using', 'template', 'include', 'define', 'ifdef', 'endif',
+                         'ifdef', 'ifndef', 'endif', 'pragma', 'elif'}
+            if fn_name in skip_names:
+                continue
+            # Check if next non-empty line starts with '{'
+            next_brace = False
+            for j in range(i + 1, min(i + 3, len(lines))):
+                stripped_next = lines[j].strip()
+                if not stripped_next:
+                    continue
+                if stripped_next.startswith('{'):
+                    next_brace = True
+                break
+            if next_brace:
+                functions.append({
+                    "name": fn_name,
+                    "line": i + 1,
+                    "type": "function",
+                    "params_str": m.group(2),
+                    "start_col": len(line) - len(line.lstrip()),
+                })
+
+        # Also handle calling-convention split: "int ngx_cdecl\nmain(...)"
+        # The function name appears alone on a line with just params
+        m2 = re.match(r'^(\w+)\s*\(([^)]*)\)\s*$', line.strip())
+        if m2 and not m:  # Don't double-match
+            fn_name = m2.group(1)
+            if fn_name in ('if', 'for', 'while', 'switch', 'catch', 'return',
+                          'class', 'struct', 'enum', 'union', 'namespace',
+                          'ifdef', 'ifndef', 'endif', 'define', 'include'):
+                continue
+            # Check if previous line has a type/return type
+            if i > 0:
+                prev_stripped = lines[i - 1].strip()
+                # Previous line should look like a return type (ends without semicolon/brace)
+                if prev_stripped and not prev_stripped.endswith(';') and not prev_stripped.endswith('{') \
+                   and not prev_stripped.startswith('//') and not prev_stripped.startswith('/*') \
+                   and not prev_stripped.startswith('#'):
+                    # Check next line for opening brace
+                    next_brace = False
+                    for j in range(i + 1, min(i + 3, len(lines))):
+                        stripped_next = lines[j].strip()
+                        if not stripped_next:
+                            continue
+                        if stripped_next.startswith('{'):
+                            next_brace = True
+                        break
+                    if next_brace:
+                        functions.append({
+                            "name": fn_name,
+                            "line": i + 1,
+                            "type": "function",
+                            "params_str": m2.group(2),
+                            "start_col": len(line) - len(line.lstrip()),
+                        })
 
     return functions
 

@@ -93,6 +93,14 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "cpp_main_short",
             },
+            # C/C++ main with calling convention macro (e.g. int ngx_cdecl\nmain(...))
+            {
+                "regex": r'\n(main)\s*\([^)]*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "cpp_main_calling_conv",
+            },
             # Go
             {
                 "regex": r'func\s+main\s*\(\s*\)',
