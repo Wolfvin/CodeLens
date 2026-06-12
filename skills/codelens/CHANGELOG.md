@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.4.0] — 2026-06-12
 
+### Cross-Language Framework Detection & Project Identity — v6.4
+
+Tested against 5 diverse real-world repositories:
+- **denoland/deno** — Rust+JS runtime (46K backend nodes, 272K edges, cross-language monorepo)
+- **elixir-lang/elixir** — Elixir compiler/language (16K nodes, 312K edges, functional language)
+- **laravel/framework** — PHP framework (31K nodes, 271K edges, PHP/Blade)
+- **nim-lang/Nim** — Nim compiler (C/C++/Nim polyglot, 530 nodes)
+- **haskell/bytestring** — Haskell library (Haskell/C, 54 nodes)
+
+### Added
+
+- **Elixir framework detection**: mix.exs (root + subdirectories), Phoenix, Ecto detection
+- **Haskell framework detection**: .cabal files, cabal.project, stack.yaml detection
+- **Nim framework detection**: .nimble files, nim.cfg detection with version extraction
+- **Godot/GDScript framework detection**: project.godot detection with project name extraction
+- **Dart/Flutter framework detection**: pubspec.yaml detection with Flutter identification
+- **Ruby/Rails framework detection**: Gemfile detection with Rails identification
+- **Scala framework detection**: build.sbt detection with Play framework identification
+- **Swift framework detection**: Package.swift detection with Vapor identification
+- **Kotlin framework detection**: build.gradle.kts detection with Ktor identification
+- **R language detection**: DESCRIPTION file detection with package name/version extraction
+- **Elixir project identity**: elixir-project, phoenix-app, elixir-ecto-app types
+- **Haskell project identity**: haskell-cabal-project, haskell-stack-project types
+- **Nim project identity**: nim-project, nim-js-project, nim-c-project types
+- **Godot project identity**: godot-project type
+- **Dart project identity**: dart-project, flutter-app types
+- **Ruby project identity**: ruby-project, rails-app types
+- **Scala project identity**: scala-project, play-app types
+- **Swift project identity**: swift-project, vapor-app types
+- **R project identity**: r-package type
+- **Kotlin project identity**: kotlin-project, ktor-app, android-kotlin-project types
+- **Polyglot type detection extended**: now includes elixir, haskell, nim, godot, dart, ruby, scala, swift, r, kotlin
+- **File extension scanning**: .ex, .hs, .nim, .gd, .swift, .kt, .rb, .dart, .scala, .R detection
+- **`_set_framework_flag` helper**: replaces repetitive if/elif chains for framework flag setting
+- **`_FRAMEWORK_FLAG_MAP`**: centralized mapping from framework name to has_* flag
+
+### Fixed
+
+- **Removed false `unsupported_langs` for languages with fallback parsers**: Kotlin, Ruby, Swift, Elixir, Haskell, Nim, GDScript, Scala, Dart, R are no longer listed as unsupported since they have fallback regex parsers
+- **Elixir monorepo detection**: subdirectory mix.exs files (lib/*, apps/*) now detected even without root mix.exs
+- **Project identity no longer "unknown"** for Elixir, Haskell, Nim, Godot, Dart, Ruby, Scala, Swift, R, Kotlin projects
+
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
 
 Real-world test on a pure Python project with no web frameworks — exposed multiple blind spots

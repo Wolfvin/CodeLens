@@ -287,7 +287,162 @@ FRAMEWORK_SIGNATURES = {
     "superagent": {"packages": ["superagent"], "composer_packages": [], "config_files": [], "indicators": []},
     "node-fetch": {"packages": ["node-fetch"], "composer_packages": [], "config_files": [], "indicators": []},
     "request": {"packages": ["request"], "composer_packages": [], "config_files": [], "indicators": []},
+    # Elixir/Erlang frameworks
+    "elixir": {
+        "packages": [],
+        "config_files": ["mix.exs"],
+        "indicators": [".ex", ".exs"]
+    },
+    "phoenix": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["phoenix"]
+    },
+    "ecto": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["ecto"]
+    },
+    # Haskell frameworks
+    "haskell": {
+        "packages": [],
+        "config_files": ["stack.yaml", "cabal.project"],
+        "indicators": [".hs", ".lhs"]
+    },
+    "cabal": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".cabal"]
+    },
+    # Nim frameworks
+    "nim": {
+        "packages": [],
+        "config_files": ["nim.cfg", "nims.cfg"],
+        "indicators": [".nim", ".nimble"]
+    },
+    "nimble": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".nimble"]
+    },
+    # Godot/GDScript
+    "godot": {
+        "packages": [],
+        "config_files": ["project.godot"],
+        "indicators": [".gd", ".tscn", ".tres"]
+    },
+    "gdscript": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".gd"]
+    },
+    # Scala frameworks
+    "scala": {
+        "packages": [],
+        "config_files": ["build.sbt"],
+        "indicators": [".scala"]
+    },
+    "play_framework": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["play-framework"]
+    },
+    # Swift frameworks
+    "swift": {
+        "packages": [],
+        "config_files": ["Package.swift"],
+        "indicators": [".swift"]
+    },
+    "vapor": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["vapor"]
+    },
+    # Kotlin frameworks
+    "kotlin": {
+        "packages": [],
+        "config_files": [],
+        "indicators": [".kt", ".kts"]
+    },
+    "ktor": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["ktor"]
+    },
+    # Ruby frameworks (beyond Rails)
+    "ruby": {
+        "packages": [],
+        "config_files": ["Gemfile", "Rakefile"],
+        "indicators": [".rb"]
+    },
+    "rails": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["config/routes.rb", "app/controllers/"]
+    },
+    # Dart/Flutter frameworks
+    "dart": {
+        "packages": [],
+        "config_files": ["pubspec.yaml"],
+        "indicators": [".dart"]
+    },
+    "flutter": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["lib/main.dart"]
+    },
+    # R language
+    "r_lang": {
+        "packages": [],
+        "config_files": ["DESCRIPTION"],
+        "indicators": [".R", ".Rmd"]
+    },
 }
+
+
+# v6.4: Mapping from framework name to has_* flag name — avoids repeating if/elif chains
+_FRAMEWORK_FLAG_MAP = {
+    "react": "has_react",
+    "next.js": "has_nextjs",
+    "vue": "has_vue",
+    "svelte": "has_svelte",
+    "tailwind": "has_tailwind",
+    "angular": "has_angular",
+    "fastapi": "has_fastapi",
+    "flask": "has_flask",
+    "django": "has_django",
+    "tauri": "has_tauri",
+    "electron": "has_electron",
+    "golang": "has_golang",
+    "rust": "has_rust",
+    "laravel": "has_laravel",
+    "symfony": "has_symfony",
+    "express": "has_express",
+    "elixir": "has_elixir",
+    "haskell": "has_haskell",
+    "nim": "has_nim",
+    "godot": "has_godot",
+    "swift": "has_swift",
+    "kotlin": "has_kotlin",
+    "ruby": "has_ruby",
+    "dart": "has_dart",
+    "scala": "has_scala",
+    "r_lang": "has_r_lang",
+    "gdscript": "has_godot",
+}
+
+# HTTP library framework names
+_HTTP_LIBRARY_FW_NAMES = frozenset({
+    "axios", "undici", "got", "ky", "superagent", "node-fetch", "request",
+})
+
+
+def _set_framework_flag(detected: Dict[str, Any], fw_name: str) -> None:
+    """Set the has_* flag for a detected framework. v6.4 helper to avoid if/elif chains."""
+    if fw_name in _FRAMEWORK_FLAG_MAP:
+        detected[_FRAMEWORK_FLAG_MAP[fw_name]] = True
+    elif fw_name in _HTTP_LIBRARY_FW_NAMES:
+        detected["has_http_library"] = True
 
 
 def _detect_monorepo(workspace: str, detected: Dict[str, Any]) -> None:
@@ -429,6 +584,16 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_php": False,
         "has_express": False,
         "has_http_library": False,
+        "has_elixir": False,
+        "has_haskell": False,
+        "has_nim": False,
+        "has_godot": False,
+        "has_swift": False,
+        "has_kotlin": False,
+        "has_ruby": False,
+        "has_dart": False,
+        "has_scala": False,
+        "has_r_lang": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -846,6 +1011,49 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            # v6.4: Detect Elixir, Haskell, Nim, Godot, Swift, Kotlin, Ruby, Dart, Scala, R by file extension
+            elif f.endswith('.ex') and not detected["has_elixir"]:
+                if "elixir" not in detected["frameworks"]:
+                    detected["frameworks"].append("elixir")
+                detected["has_elixir"] = True
+            elif f.endswith('.hs') and not detected["has_haskell"]:
+                if "haskell" not in detected["frameworks"]:
+                    detected["frameworks"].append("haskell")
+                detected["has_haskell"] = True
+            elif f.endswith('.nim') and not detected["has_nim"]:
+                if "nim" not in detected["frameworks"]:
+                    detected["frameworks"].append("nim")
+                detected["has_nim"] = True
+            elif f.endswith('.gd') and not detected["has_godot"]:
+                if "godot" not in detected["frameworks"]:
+                    detected["frameworks"].append("godot")
+                if "gdscript" not in detected["frameworks"]:
+                    detected["frameworks"].append("gdscript")
+                detected["has_godot"] = True
+            elif f.endswith('.swift') and not detected["has_swift"]:
+                if "swift" not in detected["frameworks"]:
+                    detected["frameworks"].append("swift")
+                detected["has_swift"] = True
+            elif f.endswith('.kt') and not detected["has_kotlin"]:
+                if "kotlin" not in detected["frameworks"]:
+                    detected["frameworks"].append("kotlin")
+                detected["has_kotlin"] = True
+            elif f.endswith('.rb') and not detected["has_ruby"]:
+                if "ruby" not in detected["frameworks"]:
+                    detected["frameworks"].append("ruby")
+                detected["has_ruby"] = True
+            elif f.endswith('.dart') and not detected["has_dart"]:
+                if "dart" not in detected["frameworks"]:
+                    detected["frameworks"].append("dart")
+                detected["has_dart"] = True
+            elif f.endswith('.scala') and not detected["has_scala"]:
+                if "scala" not in detected["frameworks"]:
+                    detected["frameworks"].append("scala")
+                detected["has_scala"] = True
+            elif f.endswith('.R') and not detected["has_r_lang"]:
+                if "r_lang" not in detected["frameworks"]:
+                    detected["frameworks"].append("r_lang")
+                detected["has_r_lang"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -926,22 +1134,139 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
 
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # Note: Elixir, Haskell, Nim, Kotlin, Ruby, Swift, Scala, Dart, GDScript, R
+    # now have fallback parser support and are no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
         "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        "objective-c": ["Podfile", ".xcodeproj"],
+    }
+    # v6.4: Only mark as unsupported if the language was NOT detected by our parsers
+    # If a language has a fallback parser, it's supported (not unsupported)
+    _SUPPORTED_BY_FALLBACK = {
+        "kotlin", "swift", "ruby", "elixir", "haskell", "nim",
+        "gdscript", "scala", "dart", "r",
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
+        if lang in _SUPPORTED_BY_FALLBACK:
+            continue
         for marker in markers:
             if os.path.exists(os.path.join(workspace, marker)):
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 7b. v6.4: Detect Elixir/Mix project from mix.exs (with Phoenix/Ecto)
+    mix_path = os.path.join(workspace, "mix.exs")
+    # Also check subdirectories for Elixir monorepo pattern (e.g., elixir-lang/elixir has lib/*/mix.exs)
+    if not os.path.isfile(mix_path):
+        for subdir in ('lib', 'apps', 'packages'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                try:
+                    for entry in os.listdir(subdir_path):
+                        sub_mix = os.path.join(subdir_path, entry, "mix.exs")
+                        if os.path.isfile(sub_mix):
+                            mix_path = sub_mix
+                            break
+                except OSError:
+                    pass
+            if os.path.isfile(mix_path):
+                break
+    if os.path.isfile(mix_path):
+        if "elixir" not in detected["frameworks"]:
+            detected["frameworks"].append("elixir")
+        detected["has_elixir"] = True
+        try:
+            with open(mix_path, 'r', encoding='utf-8') as f:
+                mix_content = f.read()
+            if 'phoenix' in mix_content.lower():
+                if "phoenix" not in detected["frameworks"]:
+                    detected["frameworks"].append("phoenix")
+            if 'ecto' in mix_content.lower():
+                if "ecto" not in detected["frameworks"]:
+                    detected["frameworks"].append("ecto")
+        except IOError:
+            pass
+
+    # 7c. v6.4: Detect Haskell project from .cabal files
+    for cabal_file in os.listdir(workspace):
+        if cabal_file.endswith('.cabal'):
+            if "haskell" not in detected["frameworks"]:
+                detected["frameworks"].append("haskell")
+            if "cabal" not in detected["frameworks"]:
+                detected["frameworks"].append("cabal")
+            detected["has_haskell"] = True
+            break
+
+    # 7d. v6.4: Detect Nim project from .nimble files
+    for nimble_file in os.listdir(workspace):
+        if nimble_file.endswith('.nimble'):
+            if "nim" not in detected["frameworks"]:
+                detected["frameworks"].append("nim")
+            if "nimble" not in detected["frameworks"]:
+                detected["frameworks"].append("nimble")
+            detected["has_nim"] = True
+            # Try to extract version from .nimble file
+            try:
+                with open(os.path.join(workspace, nimble_file), 'r', encoding='utf-8') as f:
+                    nimble_content = f.read()
+                ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', nimble_content)
+                if ver_match:
+                    detected["nim_version"] = ver_match.group(1)
+            except IOError:
+                pass
+            break
+
+    # 7e. v6.4: Detect Godot project from project.godot
+    godot_project_path = os.path.join(workspace, "project.godot")
+    if os.path.isfile(godot_project_path):
+        if "godot" not in detected["frameworks"]:
+            detected["frameworks"].append("godot")
+        if "gdscript" not in detected["frameworks"]:
+            detected["frameworks"].append("gdscript")
+        detected["has_godot"] = True
+        try:
+            with open(godot_project_path, 'r', encoding='utf-8') as f:
+                godot_content = f.read()
+            config_match = re.search(r'config_version\s*=\s*(\d+)', godot_content)
+            name_match = re.search(r'config/name\s*=\s*["\']([^"\']+)["\']', godot_content)
+            if name_match:
+                detected["godot_project_name"] = name_match.group(1)
+        except IOError:
+            pass
+
+    # 7f. v6.4: Detect Dart/Flutter from pubspec.yaml
+    pubspec_path = os.path.join(workspace, "pubspec.yaml")
+    if os.path.isfile(pubspec_path):
+        if "dart" not in detected["frameworks"]:
+            detected["frameworks"].append("dart")
+        detected["has_dart"] = True
+        try:
+            with open(pubspec_path, 'r', encoding='utf-8') as f:
+                pubspec_content = f.read()
+            if 'flutter' in pubspec_content.lower():
+                if "flutter" not in detected["frameworks"]:
+                    detected["frameworks"].append("flutter")
+        except IOError:
+            pass
+
+    # 7g. v6.4: Detect Ruby/Rails from Gemfile
+    gemfile_path = os.path.join(workspace, "Gemfile")
+    if os.path.isfile(gemfile_path):
+        if "ruby" not in detected["frameworks"]:
+            detected["frameworks"].append("ruby")
+        detected["has_ruby"] = True
+        try:
+            with open(gemfile_path, 'r', encoding='utf-8') as f:
+                gemfile_content = f.read()
+            if 'rails' in gemfile_content.lower():
+                if "rails" not in detected["frameworks"]:
+                    detected["frameworks"].append("rails")
+        except IOError:
+            pass
 
     return detected
 
