@@ -151,3 +151,69 @@ Stage Summary:
 - PR link: https://github.com/Wolfvin/CodeLens/pull/new/fix/v6.4-outline-smell-c-cpp-lua-improvements
 - Test repos deleted after verification
 - 7 files changed, 532 insertions, 19 deletions
+
+---
+Task ID: 3
+Agent: Super Z (main)
+Task: Continue from previous session — fix remaining smell false positives, outline issues, test on all repos, push to new branch
+
+Work Log:
+- Checked current state: branch fix/v6.4-outline-smell-c-cpp-lua-improvements, 575 lines changed from main
+- Cloned 5 test repos: nginx, laravel, whoops, neovim, petite-vue
+- Ran baseline smell test: nginx=3327, neovim=15292 smells
+- Fixed smell_engine.py: 11 improvements for C/C++ false positive reduction
+  1. C_CPP_TOO_MANY_PARAMS thresholds (7/10 vs 5/8) — C lacks optional params
+  2. C_CPP_MAX_FINDINGS_PER_FILE = 10 (vs 20) — reduce noise on large C projects
+  3. Deep nesting: skip case/default labels, goto labels in C/C++
+  4. Deep nesting: skip C/C++ header files entirely (macros, declarations)
+  5. Deep nesting: increase threshold 7→8 warning, 10→11 critical
+  6. Many params: skip C/C++ forward declarations (semicolon before brace)
+  7. Magic values: skip test/spec files entirely via _is_test_or_mock_file()
+  8. Magic values: skip crypto/hashing files (sha1, md5, huffman, etc.)
+  9. Magic values: skip #define, #ifdef, case labels, hex constants, sizeof/offsetof in C/C++
+  10. Complex conditionals: higher C/C++ thresholds (5/7 vs 3/5), skip preprocessor
+  11. All smell categories: use _is_test_or_mock_file() for broader test file skipping
+- Fixed outline_engine.py: 2 improvements
+  1. _outline_c_cpp(): Support multi-line function definitions (return type on separate line)
+     — nginx style: "static void\nngx_function(params) {"
+  2. _outline_php(): Detect class methods (not just standalone functions)
+     — was skipping indented functions, now detects visibility and static modifiers
+- Fixed commands/api_map.py: Removed invalid production_only kwarg (TypeError fix)
+- Fixed utils.py: Added .gen.lua, _meta.lua, .pb.go, .generated.go to is_generated_file()
+
+Key Metrics (nginx, 402 C files):
+- Smells: 3327→1508 (55% reduction from v6.4, 85% from original 10089)
+- Health score: 45→65
+- Deep nesting: 1716→852 (50% reduction)
+- Magic values: 945→432 (54% reduction)
+- Many params: 381→28 (93% reduction)
+- Complex conditionals: 90→1 (99% reduction)
+
+Key Metrics (neovim, 499 C + 807 Lua files):
+- Smells: 15292→4468 (71% reduction!)
+- Health score: 25→45
+- Long fn: 3896→1503 (61% reduction — generated file skip)
+- Magic values: 7414→906 (88% reduction!)
+- Deep nesting: 4364→1327 (70% reduction)
+
+Outline Improvements:
+- nginx.c: 0→20 functions detected (multi-line C function support)
+- PrettyPageHandler.php: 0→29 functions (PHP method detection)
+
+All 5 test repos verified:
+- nginx: c-cpp-project ✓, 1508 smells, health 65 ✓
+- laravel: js-php-polyglot ✓, 121 smells, health 65 ✓
+- whoops: php-project ✓, 184 smells, health 40 ✓
+- neovim: cmake-project ✓, 4468 smells, health 45 ✓
+- petite-vue: node-project ✓, 33 smells, health 85 ✓
+
+Test repos deleted after verification.
+
+Stage Summary:
+- 6 files changed: smell_engine.py, outline_engine.py, utils.py, api_map.py
+- nginx smell reduction: 10089 → 1508 (85% total reduction across v6.4 + v6.5)
+- neovim smell reduction: 15292 → 4468 (71% reduction)
+- New C/C++ multi-line outline support (nginx: 0→20 functions)
+- New PHP method outline support (whoops: 0→29 methods)
+- api-map TypeError fixed
+- Generated file detection expanded

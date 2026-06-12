@@ -17,8 +17,7 @@ def add_args(parser):
 
 
 def execute(args, workspace):
-    return map_api_routes(workspace, method=args.method, path_filter=args.path_filter,
-                          production_only=args.production_only)
+    return map_api_routes(workspace, method=args.method, path_filter=args.path_filter)
 
 
 register_command("api-map", "Map REST/GraphQL/gRPC routes to handlers", add_args, execute)

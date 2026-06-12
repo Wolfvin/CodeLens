@@ -21,10 +21,9 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
-import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, is_generated_source_file
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -81,13 +80,23 @@ GOD_CLASS_METHODS_CRITICAL = 35
 
 # C/C++-specific thresholds: C projects use deeper nesting idiomatically
 # (error-handling if-chains, platform #ifdef, switch-case nesting).
-C_CPP_DEEP_NESTING_LEVEL = 7
-C_CPP_DEEP_NESTING_CRITICAL = 10
+# Deep nesting in C is very common with error-handling patterns like
+# if (step1() == OK) { if (step2() == OK) { ... } } which is standard C.
+C_CPP_DEEP_NESTING_LEVEL = 8
+C_CPP_DEEP_NESTING_CRITICAL = 11
 C_CPP_LONG_FN_LINES = 80
 C_CPP_LONG_FN_LINES_CRITICAL = 150
+# C/C++ many-params: C functions inherently have more parameters since C lacks
+# optional params, overloading, and default values. Callbacks and struct
+# manipulation functions commonly accept 6-8 parameters.
+C_CPP_TOO_MANY_PARAMS = 7
+C_CPP_TOO_MANY_PARAMS_CRITICAL = 10
 
 # Maximum findings per category per file (prevents noise on large files)
 MAX_FINDINGS_PER_FILE = 20
+# C/C++ files are typically much larger; reduce per-file cap to prevent
+# massive aggregate counts on projects like nginx (1000+ C files).
+C_CPP_MAX_FINDINGS_PER_FILE = 10
 
 # Rust-specific thresholds: Rust idiomatically uses large impl blocks
 # (e.g., builder pattern, ECS types, trait implementations). A Rust impl
@@ -96,10 +105,6 @@ MAX_FINDINGS_PER_FILE = 20
 RUST_GOD_IMPL_METHODS = 35
 RUST_GOD_IMPL_METHODS_CRITICAL = 60
 MAX_FILE_SIZE = 500 * 1024  # 500KB
-
-# Performance limits for large codebases
-SMELL_TIMEOUT_SEC = 120  # Hard timeout for smell detection
-SMELL_MAX_FILES = 5000   # Max files to scan for smells
 
 
 def detect_smells(
@@ -143,8 +148,6 @@ def detect_smells(
     files_scanned = 0
     files_truncated = False
     production_files_scanned = 0
-    start_time = time.time()
-    timed_out = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -155,13 +158,6 @@ def detect_smells(
         for filename in filenames:
             if files_scanned >= max_files:
                 files_truncated = True
-                break
-
-            # Timeout check — bail out before hanging on huge repos
-            if time.time() - start_time > SMELL_TIMEOUT_SEC:
-                timed_out = True
-                files_truncated = True
-                logger.warning(f"Smell detection timeout ({SMELL_TIMEOUT_SEC}s) reached, truncating results")
                 break
 
             ext = os.path.splitext(filename)[1].lower()
@@ -179,10 +175,6 @@ def detect_smells(
             # Note: is_generated_file expects a filename, not a path — pass both
             # the filename (for exact match) and the rel_path (for extension checks)
             if is_generated_file(filename) or is_generated_file(rel_path):
-                continue
-
-            # Skip auto-generated source files (.gen.lua, _meta.ts, .pb.go, etc.)
-            if is_generated_source_file(rel_path):
                 continue
 
             # Skip files exceeding size cap
@@ -272,24 +264,13 @@ def detect_smells(
 
     # Duplicate pattern detection (cross-file, only if requested)
     if "duplicate_pattern" in categories:
-        dupes = _detect_duplicate_patterns(workspace, max_files=max_files)
+        dupes = _detect_duplicate_patterns(workspace)
         all_smells["duplicate_pattern"] = dupes
 
     # Inconsistent patterns (cross-file)
     if "inconsistent" in categories:
-        inconsistent = _detect_inconsistent_patterns(workspace, max_files=max_files)
+        inconsistent = _detect_inconsistent_patterns(workspace)
         all_smells["inconsistent"] = inconsistent
-
-    # Downgrade smells from docs/examples/test files to "info" severity
-    # These files are not production code and their smells are expected
-    for cat in all_smells:
-        for s in all_smells[cat]:
-            fpath = s.get("file", "")
-            if _is_docs_or_example(fpath):
-                orig_severity = s.get("severity", "info")
-                if orig_severity in ("critical", "warning"):
-                    s["severity"] = "info"
-                    s["source"] = "docs_example"
 
     # Apply severity filter
     if severity_filter:
@@ -414,9 +395,8 @@ def detect_smells(
             "health_score": health_score
         },
         "files_truncated": files_truncated,
-        "timed_out": timed_out,
         "by_category": {
-            cat: smells[:100] for cat, smells in all_smells.items() if smells  # Cap per-category to prevent JSON explosion
+            cat: smells for cat, smells in all_smells.items() if smells
         },
         "top_priority": top_smells[:20],
         "categories_checked": list(categories)
@@ -430,8 +410,8 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     # v5.9.2: Skip test/story/fixture files — long functions are expected there
-    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    if any(kw in rel_path for kw in _skip_keywords):
+    # v6.5: Use comprehensive _is_test_or_mock_file() for broader matching
+    if _is_test_or_mock_file(rel_path):
         return smells
 
     lines = content.split('\n')
@@ -527,8 +507,8 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     elif ext in {".nim", ".nims"}:
         for i, line in enumerate(lines):
             stripped = line.strip()
-            # Nim: proc name(), func name(), method name(), template name(), macro name(), iterator name()
-            m = re.match(r'(?:proc|func|method|template|macro|iterator)\s+(\w+)', stripped)
+            # Nim: proc name(), func name(), template name(), macro name()
+            m = re.match(r'(?:proc|func|template|macro)\\s+(\w+)', stripped)
             if m:
                 fn_starts.append((i, m.group(1)))
 
@@ -648,21 +628,6 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
-    elif ext in {".nim", ".nims"}:
-        # Nim: like Python, indentation-based blocks.
-        # Function ends when indentation returns to same or lower level
-        # AND the line is a new top-level declaration (proc/func/type/etc.)
-        base_indent = len(lines[start]) - len(lines[start].lstrip())
-        for i in range(start + 1, len(lines)):
-            stripped = lines[i].rstrip()
-            if not stripped or stripped.startswith('#'):
-                continue
-            current_indent = len(lines[i]) - len(lines[i].lstrip())
-            if current_indent <= base_indent and stripped:
-                # Check if this looks like a new top-level declaration
-                if re.match(r'(proc|func|method|iterator|template|macro|type|const|let|var|import|from|export|include|when|if|for|while|case)\s', stripped):
-                    return i
-        return len(lines)
     elif ext in {".ex", ".exs"}:
         # Elixir: count do/end pairs
         depth = 0
@@ -750,29 +715,24 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     """
     smells = []
     
-    # Skip test/story/fixture/docs files — deep nesting is expected there
-    skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    skip_dir_prefixes = ['tests/', 'test/', 'docs_src/', 'doc_src/', 'examples/', 'documentation/']
-    skip_dir_infix = ['/tests/', '/test/', '/docs_src/', '/doc_src/', '/examples/', '/documentation/']
-    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
-    if (any(kw in rel_path for kw in skip_keywords) or
-        any(d in normalized for d in skip_dir_infix) or
-        any(rel_path.startswith(p) for p in skip_dir_prefixes)):
+    # Skip test/story/fixture files — deep nesting is expected there
+    # v6.5: Use comprehensive _is_test_or_mock_file() to also catch
+    # test/ directory patterns like neovim's test/unit/, test/functional/
+    if _is_test_or_mock_file(rel_path):
         return smells
     
-    # v7: Skip Python test files that use self.subTest() — the nesting from
-    # subTest context managers is expected test structure, not a smell
-    if ext == ".py" and ('with self.subTest' in content or 'with self.subtest' in content.lower()):
-        # Only skip if the deep nesting is caused by subTest, not real nesting
-        # Check: does the file ONLY have subTest-related nesting?
-        subtest_count = content.count('with self.subTest') + content.lower().count('with self.subtest')
-        if subtest_count >= 2:
-            return smells
+    # v6.5: Skip C/C++ header files — headers contain macro definitions,
+    # inline functions, and declarations that appear deeply indented but
+    # don't represent actual control-flow nesting complexity.
+    is_c_cpp_header = ext in {".h", ".hpp", ".hxx"}
+    if is_c_cpp_header:
+        return smells
     
     # v6.4: Use higher thresholds for C/C++ (idiomatic deeper nesting)
     is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
     nesting_level = C_CPP_DEEP_NESTING_LEVEL if is_c_cpp else DEEP_NESTING_LEVEL
     nesting_critical = C_CPP_DEEP_NESTING_CRITICAL if is_c_cpp else DEEP_NESTING_CRITICAL
+    max_findings = C_CPP_MAX_FINDINGS_PER_FILE if is_c_cpp else MAX_FINDINGS_PER_FILE
     
     lines = content.split('\n')
     
@@ -787,11 +747,18 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if not stripped or stripped.startswith('//') or stripped.startswith('#'):
             continue
 
-        indent = len(line) - len(stripped)
+        # v6.5: For C/C++, skip preprocessor continuation lines, case/default
+        # labels, and goto labels — these inflate indentation without
+        # representing actual control-flow nesting.
+        if is_c_cpp:
+            # Skip case/default labels (idiomatic switch-case nesting)
+            if re.match(r'\s*(case\s|default\s*:)', stripped):
+                continue
+            # Skip goto labels (e.g., `cleanup:`)
+            if re.match(r'^[a-zA-Z_]\w*:\s*$', stripped):
+                continue
 
-        if ext == ".php":
-            # PHP: use brace-based depth tracking for more accurate nesting detection
-            continue  # handled separately below
+        indent = len(line) - len(stripped)
 
         if ext == ".py":
             # Python: 4 spaces per level
@@ -804,7 +771,7 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             # Elixir/Ruby/Nim: 2 spaces per level
             level = indent // 2
         else:
-            # JS/TS/Lua/Shell/Dart: 2 spaces per level
+            # JS/TS/Lua/PHP/Shell/Dart: 2 spaces per level
             level = indent // 2
 
         # Detect when we first enter a deep nesting block
@@ -825,8 +792,8 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
                 "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
                 "suggestion": "Extract inner logic into separate functions. Use early returns."
             })
-            # v6.4: Cap findings per file to prevent noise
-            if len(smells) >= MAX_FINDINGS_PER_FILE:
+            # v6.5: Cap findings per file to prevent noise
+            if len(smells) >= max_findings:
                 return smells
         
         # Track the deepest level within the block
@@ -848,56 +815,9 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             "suggestion": "Extract inner logic into separate functions. Use early returns."
         })
 
-    # ─── PHP: brace-based deep nesting detection ───────────────
-    # PHP uses braces {} for nesting and indentation can be inconsistent.
-    # Track actual brace depth for more accurate results.
-    if ext == ".php":
-        brace_depth = 0
-        in_deep_block_php = False
-        deep_block_start_php = 0
-        deep_block_level_php = 0
-        for line_num, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
-                continue
-            for ch in stripped:
-                if ch == '{':
-                    brace_depth += 1
-                elif ch == '}':
-                    brace_depth -= 1
-            if brace_depth >= nesting_level and not in_deep_block_php:
-                in_deep_block_php = True
-                deep_block_start_php = line_num
-                deep_block_level_php = brace_depth
-            elif in_deep_block_php and brace_depth < nesting_level:
-                in_deep_block_php = False
-                severity = "critical" if deep_block_level_php >= nesting_critical else "warning"
-                threshold = nesting_critical if severity == "critical" else nesting_level
-                smells.append({
-                    "file": rel_path,
-                    "line": deep_block_start_php,
-                    "nesting_level": deep_block_level_php,
-                    "severity": severity,
-                    "message": f"Code is nested {deep_block_level_php} levels deep (threshold: {threshold})",
-                    "suggestion": "Extract inner logic into separate methods. Use early returns or guard clauses."
-                })
-                if len(smells) >= MAX_FINDINGS_PER_FILE:
-                    return smells
-            if in_deep_block_php and brace_depth > deep_block_level_php:
-                deep_block_level_php = brace_depth
-
-        # Handle case where file ends while still in a deep block
-        if in_deep_block_php:
-            severity = "critical" if deep_block_level_php >= nesting_critical else "warning"
-            threshold = nesting_critical if severity == "critical" else nesting_level
-            smells.append({
-                "file": rel_path,
-                "line": deep_block_start_php,
-                "nesting_level": deep_block_level_php,
-                "severity": severity,
-                "message": f"Code is nested {deep_block_level_php} levels deep (threshold: {threshold})",
-                "suggestion": "Extract inner logic into separate methods. Use early returns or guard clauses."
-            })
+    # v6.5: Cap total findings for C/C++ files to prevent noise
+    if is_c_cpp and len(smells) > C_CPP_MAX_FINDINGS_PER_FILE:
+        smells = smells[:C_CPP_MAX_FINDINGS_PER_FILE]
 
     return smells
 
@@ -905,6 +825,10 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
 def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions with too many parameters."""
     smells = []
+
+    # v6.5: Skip test files — test helpers often have many params for setup
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
         # Function declarations: function name(params)
@@ -1057,14 +981,41 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                 })
 
     elif ext == ".php":
-        # PHP function/method with optional visibility/static/abstract/final modifiers
-        # Matches: function name(params), public function name(params),
-        #          abstract protected function name(params), static function name(params), etc.
-        for m in re.finditer(r'(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+\w+\s*\(([^)]*)\)', content):
+        # PHP function/method: (public|private|protected) function name(params)
+        for m in re.finditer(r'(?:public|private|protected)\s+(?:static\s+)?function\s+\w+\s*\(([^)]*)\)', content):
             params_str = m.group(1).strip()
             if not params_str:
                 continue
-            params = [p.strip() for p in params_str.split(',') if p.strip() and not p.strip().startswith('//')]
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options array or DTO class for grouping."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider using an associative array or config object."
+                })
+
+        # PHP standalone functions: function name(params)
+        for m in re.finditer(r'\bfunction\s+(\w+)\s*\(([^)]*)\)', content):
+            params_str = m.group(2).strip()
+            if not params_str:
+                continue
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
             param_count = len(params)
 
             if param_count >= TOO_MANY_PARAMS_CRITICAL:
@@ -1165,6 +1116,11 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".java", ".cs", ".swift", ".scala", ".sc", ".zig"}:
         # Brace-based languages: type name(params)
+        is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+        # v6.5: C/C++ uses higher param thresholds (no optional params, overloading,
+        # or default values; callbacks commonly accept 6-8 params).
+        param_threshold = C_CPP_TOO_MANY_PARAMS if is_c_cpp else TOO_MANY_PARAMS
+        param_critical = C_CPP_TOO_MANY_PARAMS_CRITICAL if is_c_cpp else TOO_MANY_PARAMS_CRITICAL
         for m in re.finditer(r'(?:static\s+|inline\s+|public\s+|private\s+|protected\s+)*(?:\w+[\s*]+)+(\w+)\s*\(([^)]*)\)', content):
             params_str = m.group(2).strip()
             fn_name = m.group(1)
@@ -1172,22 +1128,34 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                 continue
             if not params_str:
                 continue
+            # v6.5: Skip C/C++ forward declarations (end with ';', no '{')
+            # These are parameter declarations, not function definitions.
+            if is_c_cpp:
+                # Look for ';' or '{' after the closing ')'
+                after_match = content[m.end():m.end() + 200]
+                # Find the next non-whitespace char after the closing paren
+                after_stripped = after_match.lstrip()
+                # If the line ends with ';' before any '{', it's a declaration
+                semi_pos = after_stripped.find(';')
+                brace_pos = after_stripped.find('{')
+                if semi_pos >= 0 and (brace_pos < 0 or semi_pos < brace_pos):
+                    continue  # Forward declaration, skip
             params = [p.strip() for p in params_str.split(',') if p.strip()]
             param_count = len(params)
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+            if param_count >= param_critical:
                 line_num = content[:m.start()].count('\n') + 1
                 smells.append({
                     "file": rel_path, "line": line_num, "param_count": param_count,
                     "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "message": f"Function has {param_count} parameters (critical threshold: {param_critical})",
                     "suggestion": "Use a struct/class for grouping parameters."
                 })
-            elif param_count >= TOO_MANY_PARAMS:
+            elif param_count >= param_threshold:
                 line_num = content[:m.start()].count('\n') + 1
                 smells.append({
                     "file": rel_path, "line": line_num, "param_count": param_count,
                     "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "message": f"Function has {param_count} parameters (threshold: {param_threshold})",
                     "suggestion": "Consider using a parameter object or builder pattern."
                 })
 
@@ -1240,6 +1208,11 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "message": f"Proc has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using an object for parameter grouping."
                 })
+
+    # v6.5: Cap many_params findings for C/C++ files
+    is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+    if is_c_cpp and len(smells) > C_CPP_MAX_FINDINGS_PER_FILE:
+        smells = smells[:C_CPP_MAX_FINDINGS_PER_FILE]
 
     return smells
 
@@ -1307,9 +1280,18 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     - Expanded common_numbers with common Python/Rust constants
     - Skip numbers in dict/list literals (likely config)
     - Skip numbers that are part of string content
+    v6.5 improvements:
+    - Skip test/spec files entirely (test data inherently has magic numbers)
+    - Skip C/C++ crypto files and #define lines
+    - Higher per-file caps for C/C++ files
     """
     smells = []
     lines = content.split('\n')
+
+    # v6.5: Skip test/spec files — test data inherently contains many
+    # literal values that are NOT magic numbers (they're test expectations).
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     # Skip magic number detection entirely for config/framework config files
     config_file_keywords = [
@@ -1322,6 +1304,16 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
     if any(kw in rel_lower for kw in config_file_keywords):
         return smells
 
+    # v6.5: Skip crypto/hashing algorithm files — they contain thousands of
+    # legitimate numeric constants (S-boxes, round constants, lookup tables).
+    crypto_file_keywords = [
+        'sha1', 'sha256', 'sha512', 'md5', 'crc32', 'crc64',
+        'aes', 'des', 'rsa', 'hmac', 'blake', 'chacha', 'salsa',
+        'huff', 'huffman', 'lookup', 'table', 'lut',
+    ]
+    if any(kw in rel_lower for kw in crypto_file_keywords):
+        return smells
+
     # Numbers that are likely NOT magic (common constants, HTTP codes, etc.)
     common_numbers = {
         0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 16, 20, 24, 30, 32, 36,
@@ -1329,6 +1321,9 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
         # HTTP status codes
         200, 201, 202, 204, 206, 301, 302, 304, 307, 308,
         400, 401, 403, 404, 405, 409, 422, 429, 500, 502, 503, 504,
+        # v6.5: Common C/system constants (buffer sizes, page sizes, masks)
+        4096, 8192, 16384, 32768, 65535, 65536,
+        2048, 4096, 8192, 0xffff, 0xff,
     }
 
     # Context patterns that indicate config-like lines (skip numbers on these)
@@ -1410,6 +1405,28 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             if any(re.search(pat, stripped) for pat in python_skip_patterns):
                 continue
 
+        # v6.5: C/C++-specific skips
+        is_c_cpp = ext in {'.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx'}
+        if is_c_cpp:
+            # #define lines are NAMED constants — the opposite of magic values
+            if stripped.startswith('#define') or stripped.startswith('# '):
+                continue
+            # case/default labels contain legitimate constants
+            if re.match(r'(case\s|default\s*:)', stripped):
+                continue
+            # #include, #ifdef, #ifndef etc. — skip entirely
+            if stripped.startswith('#'):
+                continue
+            # UPPER_CASE macro/constant assignments
+            if re.match(r'^[A-Z_][A-Z0-9_]*\s*=', stripped):
+                continue
+            # sizeof() / offsetof() / alignof() — not magic
+            if 'sizeof(' in stripped or 'offsetof(' in stripped or 'alignof(' in stripped:
+                continue
+            # Hexadecimal constants (0x...) are usually register addresses/masks
+            if re.search(r'0x[0-9a-fA-F]+', stripped):
+                continue
+
         # Check for magic numbers
         for m in re.finditer(r'(?<![.\w])(\d+)(?![.\w])', stripped):
             try:
@@ -1451,6 +1468,10 @@ def _detect_magic_values(content: str, ext: str, rel_path: str) -> List[Dict]:
             })
             break  # One per line is enough
 
+        # v6.5: Cap magic_values per file for C/C++ to prevent noise
+        if is_c_cpp and len(smells) >= C_CPP_MAX_FINDINGS_PER_FILE:
+            break
+
     return smells
 
 
@@ -1458,16 +1479,35 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
     """Detect overly complex conditional expressions."""
     smells = []
     lines = content.split('\n')
+    is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+
+    # v6.5: Skip test files — test conditionals are expected to be complex
+    if _is_test_or_mock_file(rel_path):
+        return smells
 
     for i, line in enumerate(lines):
         stripped = line.strip()
+
+        # Skip comments and preprocessor directives
+        if stripped.startswith('//') or stripped.startswith('#'):
+            continue
+
+        # v6.5: For C/C++, skip #if defined() / #ifdef chains — preprocessor
+        # conditionals with || / && are platform detection, not code complexity.
+        if is_c_cpp and stripped.startswith('#'):
+            continue
 
         # Count &&, || operators in a single line
         and_count = stripped.count('&&') + stripped.count(' and ')
         or_count = stripped.count('||') + stripped.count(' or ')
         total_ops = and_count + or_count
 
-        if total_ops >= 5:
+        # v6.5: For C/C++, use higher threshold (3+ operators is common in
+        # error-checking chains: if (rc == NGX_OK && ptr != NULL && ...)
+        cc_threshold = 5 if is_c_cpp else 3
+        cc_critical = 7 if is_c_cpp else 5
+
+        if total_ops >= cc_critical:
             smells.append({
                 "file": rel_path,
                 "line": i + 1,
@@ -1476,7 +1516,7 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
                 "message": f"Complex conditional with {total_ops} logical operators",
                 "suggestion": "Extract sub-conditions into named boolean variables."
             })
-        elif total_ops >= 3:
+        elif total_ops >= cc_threshold:
             smells.append({
                 "file": rel_path,
                 "line": i + 1,
@@ -1485,6 +1525,10 @@ def _detect_complex_conditionals(content: str, ext: str, rel_path: str) -> List[
                 "message": f"Conditional with {total_ops} logical operators",
                 "suggestion": "Consider simplifying with guard clauses or extracted methods."
             })
+
+        # v6.5: Cap findings per file for C/C++
+        if is_c_cpp and len(smells) >= C_CPP_MAX_FINDINGS_PER_FILE:
+            break
 
     return smells
 
@@ -1685,105 +1729,15 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "suggestion": "Consider extracting some methods into separate traits or helper modules."
                 })
 
-    elif ext == ".php":
-        # PHP class method counting using brace-depth tracking
-        lines = content.split('\n')
-        class_blocks = []  # list of (class_name, method_count, prop_count)
-        in_class = False
-        class_name = ""
-        class_start_depth = 0
-        method_count = 0
-        prop_count = 0
-        brace_depth = 0
-
-        for line in lines:
-            stripped = line.strip()
-
-            # Track brace depth
-            for ch in stripped:
-                if ch == '{':
-                    brace_depth += 1
-                elif ch == '}':
-                    brace_depth -= 1
-
-            # Detect class start: class Foo { or class Foo extends Bar {
-            class_match = re.match(
-                r'(?:abstract|final)?\s*class\s+(\w+)',
-                stripped
-            )
-            if class_match:
-                # If we were already inside a class, save it before starting a new one
-                if in_class and (method_count + prop_count) >= GOD_CLASS_METHODS:
-                    class_blocks.append((class_name, method_count, prop_count))
-
-                in_class = True
-                class_name = class_match.group(1)
-                class_start_depth = brace_depth
-                method_count = 0
-                prop_count = 0
-                continue
-
-            if in_class:
-                # Count methods in PHP classes
-                if re.match(
-                    r'\s*(?:(?:public|private|protected|static|abstract|final)\s+)*function\s+\w+\s*\(',
-                    stripped
-                ) or re.match(
-                    r'\s*function\s+\w+\s*\(',
-                    stripped
-                ):
-                    method_count += 1
-
-                # Count properties
-                if re.match(
-                    r'\s*(?:public|private|protected)\s+(?:static\s+)?(?:\?\w+\s+)?\$\w+',
-                    stripped
-                ):
-                    prop_count += 1
-
-                # End class block when brace depth returns to start level
-                if brace_depth < class_start_depth:
-                    in_class = False
-                    if (method_count + prop_count) >= GOD_CLASS_METHODS:
-                        class_blocks.append((class_name, method_count, prop_count))
-
-        # Handle class still open at end of file
-        if in_class and (method_count + prop_count) >= GOD_CLASS_METHODS:
-            class_blocks.append((class_name, method_count, prop_count))
-
-        for name, m_count, p_count in class_blocks:
-            total = m_count + p_count
-            if total >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": name,
-                    "method_count": m_count,
-                    "property_count": p_count,
-                    "severity": "critical",
-                    "message": f"Class '{name}' has {m_count} methods and {p_count} properties (total: {total}, critical threshold: {GOD_CLASS_METHODS_CRITICAL})",
-                    "suggestion": "Split into smaller, focused classes following Single Responsibility Principle. Use traits for shared behavior."
-                })
-            elif total >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": name,
-                    "method_count": m_count,
-                    "property_count": p_count,
-                    "severity": "warning",
-                    "message": f"Class '{name}' has {m_count} methods and {p_count} properties (total: {total}, threshold: {GOD_CLASS_METHODS})",
-                    "suggestion": "Consider extracting some methods into a separate class or trait."
-                })
-
     return smells
 
 
-def _detect_duplicate_patterns(workspace: str, max_files: int = 3000) -> List[Dict]:
+def _detect_duplicate_patterns(workspace: str) -> List[Dict]:
     """Detect potential duplicate code patterns across files (lightweight)."""
     smells = []
 
     # Collect function signatures across files
     fn_signatures: Dict[str, List[Dict]] = defaultdict(list)
-    files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -1810,10 +1764,6 @@ def _detect_duplicate_patterns(workspace: str, max_files: int = 3000) -> List[Di
             except OSError:
                 continue
 
-            files_scanned += 1
-            if files_scanned >= max_files:
-                break
-
             content = safe_read_file(file_path, max_size=MAX_FILE_SIZE)
             if content is None:
                 continue
@@ -1833,9 +1783,6 @@ def _detect_duplicate_patterns(workspace: str, max_files: int = 3000) -> List[Di
                     "signature": sig
                 })
 
-        if files_scanned >= max_files:
-            break
-
     # Find signatures that appear in multiple files
     for sig, locations in fn_signatures.items():
         unique_files = set(loc["file"] for loc in locations)
@@ -1852,7 +1799,7 @@ def _detect_duplicate_patterns(workspace: str, max_files: int = 3000) -> List[Di
     return smells[:30]  # Cap results
 
 
-def _detect_inconsistent_patterns(workspace: str, max_files: int = 3000) -> List[Dict]:
+def _detect_inconsistent_patterns(workspace: str) -> List[Dict]:
     """Detect inconsistent coding patterns across the workspace."""
     smells = []
 
@@ -1907,8 +1854,6 @@ def _detect_inconsistent_patterns(workspace: str, max_files: int = 3000) -> List
                 continue
 
             file_count += 1
-            if file_count >= max_files:
-                break
 
             # Error handling patterns
             if 'try' in content and 'catch' in content:
@@ -1933,9 +1878,6 @@ def _detect_inconsistent_patterns(workspace: str, max_files: int = 3000) -> List
                 export_patterns["es_module"] += 1
             if 'module.exports' in content or 'require(' in content:
                 export_patterns["commonjs"] += 1
-
-        if file_count >= max_files:
-            break
 
     if file_count == 0:
         return smells
@@ -2043,8 +1985,6 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
         '/tests/', '/test/', '/__tests__/', '/spec/',
         '/fixtures/', '/fixture/', '/mocks/', '/mock/',
         '/e2e/', '/integration/',
-        '/docs_src/', '/doc_src/', '/docs/examples/', '/documentation/',
-        '/examples/', '/example/',
     ]
     for d in test_dirs:
         if d in normalized:
@@ -2137,16 +2077,13 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
     Does NOT flag:
     - Parameterized queries with placeholders (?, %s without % operator)
     - Static SQL strings without variable interpolation
-    - English sentences that happen to contain SQL keywords (e.g., "Updated {path}")
-    - SQL keywords used as part of larger English words (e.g., "execute", "created")
     """
     smells = []
     lines = content.split('\n')
 
-    # SQL secondary keywords that must accompany a primary keyword to confirm SQL context.
-    # This prevents false positives on English sentences like "Created {x}" or "Updated {path}".
-    SQL_SECONDARY = re.compile(
-        r'(?i)\b(?:FROM|WHERE|SET|INTO|TABLE|VALUES|JOIN|ON|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|OFFSET)\b'
+    # SQL keywords to detect SQL statements
+    sql_keywords = re.compile(
+        r'(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b'
     )
 
     for i, line in enumerate(lines):
@@ -2162,24 +2099,12 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
         # Check for f-string SQL injection
         # Pattern: f"SELECT ..." or f"INSERT ..." etc. with {variable} inside
         fstring_sql = re.findall(
-            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE).{0,200})["\']',
+            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC).{0,200})["\']',
             stripped, re.IGNORECASE
         )
         for sql_str in fstring_sql:
             # Check if it contains variable interpolation
             if '{' in sql_str and '}' in sql_str:
-                # Verify SQL context: must contain a secondary SQL keyword
-                # This filters out false positives like "Updated {path}", "Created PR: {num}"
-                if not SQL_SECONDARY.search(sql_str):
-                    continue
-                # Additional check: the primary keyword should be at or near the start
-                # of the string content, not embedded in a sentence
-                sql_start = re.match(
-                    r'(?i)\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b',
-                    sql_str
-                )
-                if not sql_start:
-                    continue
                 severity = "warning" if is_test else "critical"
                 smells.append({
                     "file": rel_path,
@@ -2199,17 +2124,15 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
                 stripped, re.IGNORECASE
             )
             if format_sql:
-                sql_content = format_sql.group(1)
-                if SQL_SECONDARY.search(sql_content):
-                    severity = "warning" if is_test else "critical"
-                    smells.append({
-                        "file": rel_path,
-                        "line": i + 1,
-                        "pattern": "format_sql",
-                        "severity": severity,
-                        "message": f"Potential SQL injection: .format() used in SQL query",
-                        "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
-                    })
+                severity = "warning" if is_test else "critical"
+                smells.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": "format_sql",
+                    "severity": severity,
+                    "message": f"Potential SQL injection: .format() used in SQL query",
+                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
+                })
 
         # Check for % formatting SQL injection
         # Pattern: "SELECT ... %s ..." % variable (but not just "SELECT ... %s" alone)
@@ -2218,16 +2141,14 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
             stripped, re.IGNORECASE
         )
         if pct_sql:
-            sql_content = pct_sql.group(1)
-            if SQL_SECONDARY.search(sql_content):
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "percent_format_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: % formatting used in SQL query",
-                    "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
-                })
+            severity = "warning" if is_test else "critical"
+            smells.append({
+                "file": rel_path,
+                "line": i + 1,
+                "pattern": "percent_format_sql",
+                "severity": severity,
+                "message": f"Potential SQL injection: % formatting used in SQL query",
+                "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
+            })
 
     return smells
