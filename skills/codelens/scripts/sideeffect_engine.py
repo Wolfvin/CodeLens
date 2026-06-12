@@ -395,6 +395,14 @@ def analyze_side_effects(
             if file_filter and file_filter not in rel_path:
                 continue
 
+            # v6.5: Detect test/benchmark/demo files for context-aware analysis.
+            # Side effects in test files (console.log, setState, etc.) are expected
+            # and not actionable. We still scan them but downgrade their severity.
+            _is_test_file = any(x in rel_path for x in
+                ['.test.', '.spec.', '_test.', '__tests__', '__mocks__',
+                 '.stories.', '.story.', '/test/', '/tests/', '/e2e/',
+                 '/benchmark/', '/bench/', '/demo/', '/fixtures/'])
+
             files_scanned += 1
 
             # Per-file time check
@@ -421,6 +429,15 @@ def analyze_side_effects(
 
                 # Analyze for side effects
                 effects = _detect_effects(fn_body, ext)
+
+                # v6.5: In test/benchmark/demo files, downgrade IO side effects.
+                # console.log, print(), etc. in test files are expected and not
+                # actionable. We keep the detection but mark severity as "test_context".
+                if _is_test_file and effects:
+                    for eff in effects:
+                        if eff["type"] == "io" and eff["severity"] == "low":
+                            eff["severity"] = "test_context"
+                            eff["note"] = "IO side effect in test file — expected, not actionable"
 
                 classification = "pure" if not effects else "impure"
 

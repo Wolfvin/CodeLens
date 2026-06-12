@@ -7,36 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [6.5.0] — 2026-06-12
 
-### Tested against nim-lang/Nim (3,707 .nim files, 15 .nimble files, self-hosting Nim compiler)
+### Tested against xtermjs/xterm.js (739 files, 339 TypeScript, terminal emulator npm-workspace monorepo)
 
-Real-world test on the Nim programming language's own compiler — a unique self-hosting, indentation-based
-language with 3,707 .nim source files and 35 .nims config files. This exposed critical gaps in Nim language
-support: the Nim parser existed but was never wired into the scan pipeline, framework detection used
-substring matching that incorrectly excluded directories containing "target", and multiple engines had
-Nim function extraction bugs.
+Real-world test on a TypeScript monorepo with npm workspaces (`addons/*`), webpack resolve
+aliases, benchmark files with non-npm imports, and large source files (156KB InputHandler.ts).
+Exposed critical false positives in config-drift and a severe performance regression in perf-hint.
 
 ### Fixed
 
-- **Nim parser not wired into scan pipeline** (CRITICAL): `fallback_nim.py` existed in `parsers/` but was never imported by `scan.py`. Added import, file category, parsing block, and stats reporting. Scan now detects 3,707 Nim files producing 30,987 nodes + 80,405 edges (previously: 529 nodes / 1,485 edges from non-Nim files only).
-- **Framework detection substring matching false positives** (CRITICAL): `framework_detect.py` used `if ignore in root` for directory exclusion, causing "target" to match "test-target-nim", silently skipping the entire workspace. Replaced with `_should_skip_dir()` using path-segment-aware matching. Now correctly detects `has_nim: True`.
-- **Smell engine Nim regex double-escaped** (BUG): `_extract_function_starts` used `\\s+` instead of `\s+`, so Nim function declarations were never matched. Fixed and added `method`/`iterator` to the pattern.
-- **Smell engine Nim function end detection missing** (BUG): `_find_function_end()` had no Nim case, falling through to brace-counting. Added indentation-based function end detection.
-- **Complexity engine Nim function extraction missing** (BUG): `_extract_functions()` found 0 Nim functions. Added `_extract_nim_functions()` and `_get_nim_function_body()`. Now finds 1,109+ functions.
-- **`echo()` false positive as debug leak in Nim** (FALSE POSITIVE): In Nim, `echo()` is standard output. Added Nim-specific filtering — only flagged with debug patterns. `debugEcho()` always flagged.
+- **`config-drift` false positives on npm workspace packages** (HIGH): In npm workspace monorepos,
+  packages like `@xterm/addon-webgl` are implicitly available as dependencies through the
+  `workspaces` field in root `package.json`. The engine reported all workspace packages as
+  "missing dependencies" (15+ false positives on xterm.js). Added `_detect_npm_workspace_packages()`
+  which resolves workspace globs (`addons/*`, `packages/*`) and also scans for nested
+  `package.json` files outside the workspace pattern (e.g., `headless/package.json`).
+  Missing deps reduced from 19 to 2 (both `info` severity).
+
+- **`config-drift` false positives on webpack resolve aliases** (HIGH): Webpack aliases like
+  `common: path.resolve('../../out/common')` create non-npm import paths. The engine reported
+  these as missing dependencies. Added `_detect_webpack_aliases()` which scans webpack.config.js
+  files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`. Also added
+  a PascalCase heuristic: single-word PascalCase imports (e.g., `SerializeAddon`,
+  `UnicodeGraphemeProvider`) are likely build aliases, not npm packages — downgraded to `info`
+  severity with appropriate messaging.
+
+- **`perf-hint` severe performance regression** (CRITICAL): The `_timed_finditer()` function used
+  Python threading for every regex call on content >5000 chars. With 40 patterns and 350+ files,
+  this created ~14,000 thread objects, adding ~2ms overhead per call. Full analysis took >120s
+  and usually timed out. Replaced threading with iterative time-checking (check `time.monotonic()`
+  every 10 matches). Also increased the direct-run threshold from 5KB to 50KB (most source files
+  are under 50KB and do not need any timeout mechanism). Performance: 350 files now completes in
+  ~29s (was >120s timeout). Added `GLOBAL_TIMEOUT_SEC=180` to the scan loop as a safety net.
+
+- **`perf-hint` wide quantifier detection incomplete** (MEDIUM): `_WIDE_QUANTIFIER_RE` only caught
+  `{0,N}`, `.*?`, and `.+?` patterns. Negated character classes with quantifiers like `[^{]*\{[^}]*`
+  (used in the nested loop detection regex) cause catastrophic backtracking on large files but
+  were not detected. Added `[^X]*` and `[^X]+` patterns to the detection regex, ensuring content
+  truncation is applied for these patterns too.
+
+- **`side-effect` test file context awareness** (LOW): IO side effects (console.log, print) in test
+  files are expected and not actionable. Added test/benchmark/demo file detection in the analysis
+  loop. IO effects in test files are now downgraded to `severity: "test_context"` with a note
+  explaining they are expected. This preserves the detection while making it clear the finding
+  is not actionable.
 
 ### Added
 
-- **Nim framework detection**: `detect_frameworks()` now detects `.nim` files and parses `.nimble` files for jester, prologue, karax, happyx, norm, nimcrypto.
-- **Nim entrypoints detection**: `entrypoints_engine.py` now detects `when isMainModule:` and `proc main()`. Found 273 Nim entrypoints (previously: 2).
-- **Nim debug leak patterns**: Added `debugEcho()` to PRINT_PATTERNS, `doAssert()`/`assert()` to DEBUGGER_PATTERNS.
-- **Nim project identity in handbook**: Parses `.nimble` files for name/version/description. Classifies as nim-compiler, nim-web-service, nim-database, nim-frontend-app, or nim-project.
-- **`.nim`/`.nims` in engine SOURCE_EXTENSIONS**: Added to 3 engines that were missing it.
-- **Nim directory hints**: Added `compiler/` and `nimble/` to handbook directory map.
+- **npm workspace package detection**: New `_detect_npm_workspace_packages()` function parses
+  root `package.json` for `workspaces` field, resolves glob patterns, and also walks for nested
+  `package.json` files with `name` fields. Returns a set of workspace package names that are
+  excluded from "missing dependency" checks and counted as "used" for unused dependency checks.
 
-### Changed
+- **Webpack/tsconfig resolve alias detection**: New `_detect_webpack_aliases()` function scans
+  webpack.config.js files for `resolve.alias` entries and tsconfig.json for `compilerOptions.paths`.
+  Detected aliases are excluded from "missing dependency" checks.
 
-- **`lang_note` message updated**: Changed to "regex-based fallback extraction", added Nim to well-supported languages.
-- **Nim no longer listed as unsupported** since it now has a dedicated fallback parser.
+- **`perf-hint` global timeout**: New `GLOBAL_TIMEOUT_SEC=180` constant and corresponding check
+  in the scan loop. Prevents runaway analysis on very large repos by stopping the scan gracefully
+  when the global time budget is exceeded.
 
 ## [6.4.0] — 2026-06-12
 

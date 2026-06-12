@@ -32,8 +32,7 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  v6.5 adds: Elixir/Phoenix framework detection and project identity from mix.exs, Phoenix API route extraction (verb, LiveView, resources, scope, pipe_through), Elixir language/debug-leak/secret detection patterns, priority type resolution for polyglot Elixir+JS projects.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Elixir/Phoenix.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
@@ -41,17 +40,13 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.5 — Tested on phoenixframework/phoenix (176 Elixir files, Phoenix web framework)
+## What's New in v6.5 — Tested on xtermjs/xterm.js (739 files, TypeScript terminal emulator npm-workspace monorepo)
 
-- **Elixir/Phoenix framework detection**: `framework_detect.py` now detects Elixir projects via `mix.exs` and `mix.lock`, Phoenix framework via hex deps or source code patterns (`use Phoenix`, `defmodule Phoenix.`), Ecto, and Oban. New `has_elixir`, `has_phoenix`, `has_ecto`, `has_oban` flags in detection output.
-- **Elixir project identity**: `_extract_project_identity()` in `handbook.py` now reads `mix.exs` for project name (`app:` atom), version (`@version` or `version:`), and description. Detects Phoenix web framework, Elixir data apps, worker apps, embedded apps. Priority fix: when Elixir files outnumber JS files, Elixir type takes precedence over JS type derived from a minor `package.json` (fixes Phoenix being misidentified as "frontend-library").
-- **Phoenix API route extraction**: `apimap_engine.py` now extracts Phoenix routes from `.ex`/`.exs` files: verb routes (`get`/`post`/`put`/`patch`/`delete`), LiveView routes (`live`), RESTful resources (`resources` with `only`/`except`), scope blocks with prefix inheritance, and `pipe_through` middleware tracking with auth detection.
-- **Elixir language detection**: `_detect_languages()` in `analyze.py` now includes `.ex`/`.exs` → "elixir" plus Swift, Scala, Kotlin, Nim, GDScript extensions.
-- **Elixir debug leak detection**: `debugleak_engine.py` adds Elixir patterns: `IO.inspect()`, `IO.puts()`, `IO.warn()`, `dbg()`, `IEx.pry()`. Proper `Logger.debug/info/warning/error` patterns are classified as structured logging (low severity), not debugger statements.
-- **Elixir secret detection**: `secrets_engine.py` adds `.ex`/`.exs` to SOURCE_EXTENSIONS and Phoenix-specific secret patterns: `secret_key_base`, `encryption_salt`, `signing_salt`, `live_view_signing_salt`.
-- **Elixir path recommendations**: `get_recommended_config()` adds `lib/`, `priv/static/`, `assets/` paths for Elixir/Phoenix projects.
-- **Path normalization fix**: Phoenix route extraction normalizes double-slash paths (e.g., `//posts` → `/posts`) when scope prefix concatenation produces them.
-- **Version**: 6.3.1 → 6.5.0.
+- **Config drift: npm workspace package detection**: Monorepos using npm workspaces (e.g., `workspaces: ["addons/*"]`) no longer produce false "missing dependency" reports for workspace-internal packages. New `_detect_npm_workspace_packages()` resolves workspace globs and nested package.json files to identify workspace members. Missing deps reduced from 19 to 2 on xterm.js.
+- **Config drift: webpack/tsconfig alias detection**: Webpack `resolve.alias` entries and tsconfig `compilerOptions.paths` are now detected and excluded from "missing dependency" checks. PascalCase single-word imports (e.g., `SerializeAddon`) are heuristically identified as build aliases with `info` severity.
+- **Perf-hint: 4x+ speed improvement**: Replaced threading-based regex timeout (`_timed_finditer`) with iterative time-checking. Threading added ~2ms overhead per regex call, creating ~14K threads on medium repos. New approach: run directly for content <50KB, check time every 10 matches for larger content. Full scan on xterm.js: 29s (was >120s timeout). Added `GLOBAL_TIMEOUT_SEC=180` safety net.
+- **Perf-hint: wider catastrophic backtracking detection**: `_WIDE_QUANTIFIER_RE` now catches `[^X]*` and `[^X]+` negated character class patterns that cause catastrophic backtracking (e.g., the nested loop detection regex on 150KB+ files).
+- **Side-effect: test file context awareness**: IO side effects in test/benchmark/demo files are downgraded to `severity: "test_context"` with an explanatory note, making it clear they are not actionable.
 
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 
