@@ -268,6 +268,14 @@ def map_state(
                     stores.extend(py_global_results["stores"])
                     state_flow.extend(py_global_results["flow"])
 
+            # ─── Rust State Management ──────────────────────────
+            if ext == ".rs":
+                rust_state_results = _extract_rust_state(content, rel_path)
+                if rust_state_results["stores"]:
+                    frameworks_detected.add("rust_state")
+                    stores.extend(rust_state_results["stores"])
+                    state_flow.extend(rust_state_results["flow"])
+
     # ─── Svelte Stores (workspace-level detection) ───────────
     if _is_svelte_workspace(workspace):
         svelte_stores, svelte_flow = _detect_svelte_stores(workspace, config)
@@ -1651,6 +1659,221 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "defined_in": rel_path,
             "line": line_num,
             "class": class_name,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── Rust State Management ──────────────────────────────────────
+
+def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Rust state management patterns.
+
+    Detects:
+    - Static/const items with interior mutability (AtomicX, Mutex, RwLock, OnceCell/Lock)
+    - actix-web Data<T> (app state shared via web::Data)
+    - Tauri State<T> (managed state)
+    - Global static instances (lazy_static!, once_cell::sync::Lazy)
+    - Arc<Mutex<T>> / Arc<RwLock<T>> shared state patterns
+    - struct fields that are state containers
+    """
+    stores = []
+    flow = []
+
+    # Skip test files (too many false positives)
+    if any(x in rel_path for x in ['/tests/', '/test_', '/benches/', '/examples/']):
+        return {"stores": [], "flow": []}
+
+    # Common Rust names to skip (false positive filter)
+    RUST_SKIP = {
+        'Ok', 'Err', 'Some', 'None', 'True', 'False',
+        'MAX', 'MIN', 'LEN', 'SIZE', 'VERSION', 'NAME',
+        'DEFAULT', 'NEW', 'INIT', 'START', 'END',
+        'BUF', 'CAP', 'LEN', 'TAG',
+    }
+
+    # ─── Static items with interior mutability ────────────────
+    # pub static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    # static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
+    for m in re.finditer(
+        r'(?:pub\s+)?static\s+(\w+)\s*:\s*([^=;]+)',
+        content
+    ):
+        var_name = m.group(1)
+        type_expr = m.group(2).strip()
+        line_num = content[:m.start()].count('\n') + 1
+
+        if var_name in RUST_SKIP or len(var_name) <= 2:
+            continue
+        if var_name == var_name.upper() and '_' not in var_name:
+            # Single-word ALL_CAPS likely just a constant
+            continue
+
+        # Check for interior mutability or shared state patterns
+        is_stateful = any(pattern in type_expr for pattern in [
+            'Atomic', 'Mutex', 'RwLock', 'OnceCell', 'OnceLock',
+            'Lazy', 'lazy_static', 'Arc', 'RefCell', 'Cell',
+            'Data<', 'State<',
+        ])
+
+        if is_stateful:
+            stores.append({
+                "name": var_name,
+                "type": "global",
+                "framework": "rust_state",
+                "defined_in": rel_path,
+                "line": line_num,
+                "rust_type": type_expr[:100],
+                "slices": [],
+                "actions": [],
+                "consumers": [],
+            })
+            # Track write access: store_name.store(...), store_name.fetch_add(...)
+            for write_m in re.finditer(
+                rf'\b{re.escape(var_name)}\s*\.\s*(store|fetch_add|fetch_sub|fetch_and|fetch_or|replace|swap|set|lock|write|get_mut)\s*\(',
+                content
+            ):
+                write_line = content[:write_m.start()].count('\n') + 1
+                flow.append({
+                    "from": rel_path,
+                    "action": f"write({var_name}.{write_m.group(1)})",
+                    "to": var_name,
+                    "file": rel_path,
+                    "line": write_line,
+                    "type": "write",
+                })
+            # Track read access: store_name.load(...), store_name.read(), store_name.get()
+            for read_m in re.finditer(
+                rf'\b{re.escape(var_name)}\s*\.\s*(load|read|get|lock)\s*\(',
+                content
+            ):
+                read_line = content[:read_m.start()].count('\n') + 1
+                flow.append({
+                    "from": rel_path,
+                    "action": f"read({var_name}.{read_m.group(1)})",
+                    "to": var_name,
+                    "file": rel_path,
+                    "line": read_line,
+                    "type": "read",
+                })
+
+    # ─── actix-web Data<T> app state ─────────────────────────
+    # Only match Data<T> in function parameter context (actual state extraction)
+    # Pattern: param: Data<Type> or param: web::Data<Type>
+    # Skip trait bounds, generic impl blocks, and type aliases
+    for m in re.finditer(
+        r'(\w+)\s*:\s*(?:web::)?Data\s*<\s*(\w+)\s*>',
+        content
+    ):
+        param_name = m.group(1)
+        type_name = m.group(2)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Skip single-letter names (generic type parameters like T, U, D)
+        if len(type_name) <= 1:
+            continue
+        # Skip common non-state types and Rust builtins
+        if type_name in RUST_SKIP or type_name in ('Box', 'Rc', 'Arc', 'Vec', 'String', 'Option', 'Result', 'From', 'Into', 'AsRef', 'AsMut', 'Sized', 'Clone', 'Copy', 'Default', 'Debug', 'Display', 'Iterator', 'ExactSizeIterator', 'Send', 'Sync', 'BoundCodec', 'Method', 'Strategy', 'Error'):
+            continue
+
+        # Only create store if we haven't seen this type yet in this file
+        already_found = any(s['name'] == type_name and s['framework'] == 'actix_web_data' for s in stores)
+        if not already_found:
+            stores.append({
+                "name": type_name,
+                "type": "store",
+                "framework": "actix_web_data",
+                "defined_in": rel_path,
+                "line": line_num,
+                "slices": [],
+                "actions": [],
+                "consumers": [],
+            })
+            # Track Data extraction: app_data: Data<Type>
+            for extract_m in re.finditer(
+                rf'(\w+)\s*:\s*(?:web::)?Data\s*<\s*{re.escape(type_name)}\s*>',
+                content
+            ):
+                handler = extract_m.group(1)
+                extract_line = content[:extract_m.start()].count('\n') + 1
+                flow.append({
+                    "from": rel_path,
+                    "action": f"extract(Data<{type_name}>)",
+                    "to": type_name,
+                    "file": rel_path,
+                    "line": extract_line,
+                    "type": "read",
+                })
+
+    # ─── Tauri State<T> managed state ────────────────────────
+    for m in re.finditer(
+        r'tauri::State\s*<\s*[\'"]?(\w+)[\'"]?\s*>',
+        content
+    ):
+        type_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Skip single-letter generic params
+        if len(type_name) <= 1 or type_name in RUST_SKIP:
+            continue
+
+        already_found = any(s['name'] == type_name and s['framework'] == 'tauri_state' for s in stores)
+        if not already_found:
+            stores.append({
+                "name": type_name,
+                "type": "store",
+                "framework": "tauri_state",
+                "defined_in": rel_path,
+                "line": line_num,
+                "slices": [],
+                "actions": [],
+                "consumers": [],
+            })
+
+    # ─── lazy_static! and once_cell::sync::Lazy ──────────────
+    # lazy_static! { static ref NAME: Type = ...; }
+    for m in re.finditer(
+        r'lazy_static!\s*\{[^}]*static\s+ref\s+(\w+)\s*:\s*([^=;]+)',
+        content,
+        re.DOTALL
+    ):
+        var_name = m.group(1)
+        type_expr = m.group(2).strip()
+        line_num = content[:m.start()].count('\n') + 1
+
+        if var_name in RUST_SKIP:
+            continue
+
+        stores.append({
+            "name": var_name,
+            "type": "global",
+            "framework": "rust_lazy_static",
+            "defined_in": rel_path,
+            "line": line_num,
+            "rust_type": type_expr[:100],
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+
+    # ─── Arc<Mutex<T>> / Arc<RwLock<T>> shared state structs ─
+    # struct AppState { db: Arc<Mutex<Database>>, cache: Arc<RwLock<Cache>> }
+    for m in re.finditer(
+        r'(?:pub\s+)?struct\s+(\w+State|\w+Ctx|\w+Context|\w+Env|\w+Config)\s*\{',
+        content
+    ):
+        struct_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        stores.append({
+            "name": struct_name,
+            "type": "store",
+            "framework": "rust_struct_state",
+            "defined_in": rel_path,
+            "line": line_num,
             "slices": [],
             "actions": [],
             "consumers": [],

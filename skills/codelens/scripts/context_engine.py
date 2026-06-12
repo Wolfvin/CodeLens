@@ -11,6 +11,29 @@ from typing import Dict, List, Any, Optional
 from utils import logger, safe_read_file
 
 
+def _safe_extract_line(node_id: str) -> int:
+    """Extract line number from a node ID, handling various formats.
+
+    Node IDs can be:
+      - 'path/to/file.rs:123'                  → 123
+      - 'path/to/file.rs:123:function:Name'     → 123
+      - 'path/to/file.rs:123:struct:Name'       → 123
+      - 'path/to/file.rs:1:mod:reqwest'         → 1
+    The line number is always the second-to-last numeric segment before
+    any type:name suffix, or the last numeric segment if no suffix exists.
+    """
+    if not node_id or ':' not in node_id:
+        return 0
+    parts = node_id.split(':')
+    # Try each part from right to left for a numeric value
+    for part in reversed(parts):
+        try:
+            return int(part)
+        except ValueError:
+            continue
+    return 0
+
+
 def get_symbol_context(
     name: str,
     workspace: str,
@@ -203,7 +226,7 @@ def get_symbol_context(
                 {
                     "id": c["from"],
                     "file": c["from"].rsplit(":", 2)[0] if ":" in c["from"] else "",
-                    "line": int(c["from"].rsplit(":", 1)[-1]) if ":" in c["from"] else 0
+                    "line": _safe_extract_line(c["from"])
                 }
                 for c in callers
             ]

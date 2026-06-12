@@ -228,6 +228,12 @@ def map_api_routes(
                         if fw:
                             frameworks_detected.add(fw)
 
+                # v6.1: Custom proc-macro route detection (routes::routes, etc.)
+                rust_macro_routes = _extract_rust_custom_macro_routes(content, rel_path)
+                if rust_macro_routes:
+                    routes.extend(rust_macro_routes)
+                    frameworks_detected.add("actix-web")
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -2253,10 +2259,11 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
     """Extract HTTP route handlers from Rust web framework code.
 
     Supports:
-    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route()
+    - actix-web: #[get("/path")], #[post("/path")], web::resource(), web::route(), web::scope()
     - axum: .route("/path", get(handler)), Router::new().route()
     - warp: warp::path("segment"), warp::get()/post()
     - rocket: #[get("/path")], #[post("/path")]
+    - Custom proc-macros: #[routes::routes(...)], #[route("/path", method = "GET")]
     """
     routes = []
 
@@ -2291,23 +2298,92 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
             "response_type": None,
         })
 
-    # ─── actix-web: web::resource().route().method() ─────────────
+    # ─── actix-web: web::resource().route(web::method().to(handler)) ─
+    # Enhanced: now extracts method and handler from .route(web::get().to(handler))
+    # First find resource path, then scan forward for .route() chains
     for m in re.finditer(
         r'\.resource\s*\(\s*"([^"]+)"\s*\)',
         content
     ):
-        path = m.group(1)
+        resource_path = m.group(1)
+        resource_line = content[:m.start()].count('\n') + 1
+
+        # Scan forward from resource declaration for .route() calls (up to 500 chars)
+        after_resource = content[m.end():m.end() + 500]
+        route_chains = list(re.finditer(
+            r'\.route\s*\(\s*web::(get|post|put|delete|patch|head|options)\s*\(\s*\)\s*\.to\s*\(\s*(?:\w+::)*(\w+)\s*\)',
+            after_resource
+        ))
+
+        if route_chains:
+            for rc in route_chains:
+                method_raw = rc.group(1).lower()
+                handler = rc.group(2)
+                route_line = resource_line + after_resource[:rc.start()].count('\n')
+                routes.append({
+                    "method": method_raw.upper(),
+                    "path": resource_path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": route_line,
+                    "framework": "actix-web",
+                    "middleware": [],
+                    "auth_required": False,
+                    "request_type": "http_handler",
+                    "response_type": None,
+                })
+        else:
+            # Fallback: resource without method resolution
+            routes.append({
+                "method": "RESOURCE",
+                "path": resource_path,
+                "handler_name": None,
+                "file": rel_path,
+                "line": resource_line,
+                "framework": "actix-web",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "resource_route",
+                "response_type": None,
+            })
+
+    # ─── actix-web: web::scope("/prefix") ─────────────
+    for m in re.finditer(
+        r'\.scope\s*\(\s*"([^"]+)"\s*\)',
+        content
+    ):
+        scope_path = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
         routes.append({
-            "method": "RESOURCE",
-            "path": path,
+            "method": "SCOPE",
+            "path": scope_path,
             "handler_name": None,
             "file": rel_path,
             "line": line_num,
             "framework": "actix-web",
             "middleware": [],
             "auth_required": False,
-            "request_type": "resource_route",
+            "request_type": "route_scope",
+            "response_type": None,
+        })
+
+    # ─── actix-web: configure(<Module as Routes>::configure) ─────
+    for m in re.finditer(
+        r'\.configure\s*\(\s*<\s*(\w+)\s+as\s+\w+\s*>\s*::\s*configure\s*\)',
+        content
+    ):
+        module_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "CONFIGURE",
+            "path": None,
+            "handler_name": module_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "actix-web",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "configure",
             "response_type": None,
         })
 
@@ -2353,5 +2429,131 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
                     "request_type": "path_filter",
                     "response_type": None,
                 })
+
+    return routes
+
+
+def _extract_rust_custom_macro_routes(content: str, rel_path: str) -> List[Dict]:
+    """Extract routes from Rust custom proc-macro attributes.
+
+    Supports:
+    - #[routes::routes(routes("/path" => get(handler), ...), tag = "...")]
+    - #[route("/path", method = "GET")]
+    - Other project-specific route macros with similar patterns
+
+    This function handles frameworks that use custom proc-macros to declare
+    routes, which is common in larger Rust projects (e.g., MeiliSearch's
+    routes::routes macro).
+    """
+    routes = []
+
+    # ─── #[routes::routes(...)] or #[routes(...)] macro ─────────────
+    # Pattern: routes( "/path" => get(handler), "/path2" => post(handler2), "/prefix" => sub(module::Api) )
+    # The macro attribute can span multiple lines, so we need a more robust parser.
+
+    # Find the #[routes::routes(...)] or #[routes(...)] attribute
+    for macro_match in re.finditer(
+        r'#\[routes(?:::routes)?\s*\(',
+        content
+    ):
+        # Find the matching closing bracket by tracking nesting depth
+        start_pos = macro_match.start()
+        paren_start = content.index('(', start_pos)
+        depth = 0
+        end_pos = paren_start
+        for i in range(paren_start, min(paren_start + 10000, len(content))):
+            if content[i] == '(':
+                depth += 1
+            elif content[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
+
+        macro_body = content[start_pos:end_pos]
+        macro_line = content[:start_pos].count('\n') + 1
+
+        # Find the struct name after the macro attribute
+        # Look for "pub struct Name;" or "pub struct Name {"
+        after_macro = content[end_pos:end_pos + 200]
+        struct_match = re.search(r'(?:pub\s+)?struct\s+(\w+)', after_macro)
+        struct_name = struct_match.group(1) if struct_match else None
+
+        # Extract route declarations from the routes(...) sub-section
+        # Pattern: "/path" => get(handler), "/path" => post(handler), "/path" => sub(module::Api)
+        for route_m in re.finditer(
+            r'"([^"]+)"\s*=>\s*(get|post|put|delete|patch|head|options)\s*\(\s*([\w:]+)\s*\)',
+            macro_body
+        ):
+            path = route_m.group(1)
+            method_raw = route_m.group(2).lower()
+            handler = route_m.group(3).split('::')[-1]  # Take last part of path
+            route_line = macro_line + macro_body[:route_m.start()].count('\n')
+
+            ACTIX_METHOD_MAP = {
+                'get': 'GET', 'post': 'POST', 'put': 'PUT', 'delete': 'DELETE',
+                'patch': 'PATCH', 'head': 'HEAD', 'options': 'OPTIONS',
+            }
+
+            routes.append({
+                "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
+                "path": path,
+                "handler_name": handler,
+                "file": rel_path,
+                "line": route_line,
+                "framework": "actix-web",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "http_handler",
+                "response_type": None,
+                "macro_source": struct_name or "routes::routes",
+            })
+
+        # Extract sub-module routes: "/prefix" => sub(module::Api)
+        for sub_m in re.finditer(
+            r'"([^"]+)"\s*=>\s*sub\s*\(\s*([\w:]+)\s*\)',
+            macro_body
+        ):
+            scope_path = sub_m.group(1)
+            sub_module = sub_m.group(2).split('::')[-1]
+            route_line = macro_line + macro_body[:sub_m.start()].count('\n')
+
+            routes.append({
+                "method": "SCOPE",
+                "path": scope_path,
+                "handler_name": sub_module,
+                "file": rel_path,
+                "line": route_line,
+                "framework": "actix-web",
+                "middleware": [],
+                "auth_required": False,
+                "request_type": "route_scope",
+                "response_type": None,
+                "macro_source": struct_name or "routes::routes",
+            })
+
+    # ─── #[route("/path", method = "GET")] generic attribute ─────
+    for m in re.finditer(
+        r'#\[route\s*\(\s*"([^"]+)"\s*,\s*method\s*=\s*"?(\w+)"?\s*\)\s*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
+        content
+    ):
+        path = m.group(1)
+        method_raw = m.group(2).lower()
+        handler = m.group(3)
+        line_num = content[:m.start()].count('\n') + 1
+
+        routes.append({
+            "method": method_raw.upper(),
+            "path": path,
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "rust-web",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "http_handler",
+            "response_type": None,
+            "macro_source": "route",
+        })
 
     return routes
