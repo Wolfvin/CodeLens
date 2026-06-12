@@ -108,3 +108,46 @@ Stage Summary:
 - New framework detection: Laravel, Symfony, WordPress, Drupal, PHP
 - Python class nodes now properly registered for querying
 - All changes ready for push to new branch
+
+---
+Task ID: 2
+Agent: Super Z (main)
+Task: Stress-test CodeLens skill against diverse repos, fix issues, push to new branch
+
+Work Log:
+- Pulled latest from main (v6.3.0, massive update with 80+ files changed)
+- Created new branch: fix/v6.4-outline-smell-c-cpp-lua-improvements
+- Cloned 5 diverse test repos: nginx (C, 562 files), laravel (PHP, 92 files), kickstart.nvim (Lua, 48 files), whoops (PHP, 107 files), petite-vue (TS, 82 files)
+- Identified and fixed 7 bugs across 7 files (532 lines changed)
+
+Bugs Fixed:
+1. utils.py: Added missing is_bundled_file() — was imported by complexity_engine and perfhint_engine but undefined (ImportError)
+2. handbook.py: Added PHP (composer.json → laravel-app, symfony-app, slim-app, etc.), C/C++ (CMake, autotools, Makefile, heuristic), and Lua (rockspec, neovim-plugin) project identity detection
+3. outline_engine.py: Added 24 missing extensions to source_extensions. Added _outline_c_cpp() and _outline_lua() outline parsers. Fixed _detect_language() mapping
+4. smell_engine.py: Fixed C/C++ header false positives — function declarations skipped. Added C/C++ specific thresholds (deep_nesting 7/10, long_fn 80/150). Added MAX_FINDINGS_PER_FILE=20 cap
+5. complexity_engine.py: Rewrote _extract_c_cpp_functions() for 4 patterns: standard, multi-line, type-on-prev-line (nginx style), calling convention macro. nginx: 2→730 functions
+6. entrypoints_engine.py: Added \nmain() pattern for C main() with calling convention macro
+7. apimap_engine.py: Added Laravel closure-based route detection (Route::get('/path', function() {...}))
+
+Key Metrics (nginx, 402 C files):
+- Smells: 10089→3327 (67% reduction)
+- Deep nesting: 3319→1716 (48% reduction)
+- Long fn: 671→61 (91% reduction)
+- Complexity functions: 2→730 (365x improvement)
+- Project type: unknown→c-cpp-project
+- Languages: {html:2}→{c:400,cpp:1,shell:1,html:2}
+- Entrypoints: 0→1 (main detected)
+- API routes: 0→1 for Laravel
+
+All 5 test repos verified:
+- nginx: c-cpp-project ✓, 730 functions ✓, main entrypoint ✓
+- laravel: js-php-polyglot ✓, 1 API route (closure) ✓
+- kickstart.nvim: neovim-plugin ✓
+- whoops: php-project ✓
+- petite-vue: node-project ✓
+
+Stage Summary:
+- Branch pushed: fix/v6.4-outline-smell-c-cpp-lua-improvements
+- PR link: https://github.com/Wolfvin/CodeLens/pull/new/fix/v6.4-outline-smell-c-cpp-lua-improvements
+- Test repos deleted after verification
+- 7 files changed, 532 insertions, 19 deletions
