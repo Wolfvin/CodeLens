@@ -5,28 +5,41 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.0] — 2026-06-12
+## [6.4.0] — 2026-06-12
 
-### Tested against gitlab-org/gitlab-vscode-extension (882 files: 763 TS + 82 JS + 18 Vue, VSCode extension with webview IPC)
+### Tested against vercel/swr (334 source files, React data-fetching library, pnpm monorepo)
 
-Real-world test on a VSCode extension with unusual hybrid architecture (TypeScript extension host + Vue 2/3 webview subprojects).
-Confirmed: 1,014 nodes, 12,102 edges, 796 smells, 58 circular deps, 44 dataflow violations, 119 VSCode API side effects.
+Real-world test on a React Hooks library for remote data fetching. 805 backend nodes,
+11,312 edges, 14 API routes (all example), 68 state stores (SWR atoms), 43 circular deps.
+Confirmed: framework detection correctly identifies `react` as runtime dep and `next.js`/`swr`
+as dev-only frameworks. Monorepo tool (pnpm) detected. Module system: dual (ESM+CJS).
+
+### Added
+
+- **Runtime vs dev dependency classification**: `detect_frameworks()` now separates `dependencies`/`peerDependencies` (runtime) from `devDependencies` (dev). Runtime frameworks go to `frameworks`, dev-only frameworks go to new `dev_frameworks` list. Prevents false positives like SWR being classified as a Next.js project when `next` is only in devDependencies.
+- **14 new framework signatures**: Express, Fastify, Koa, Hono, NestJS (backend); tRPC (API layer); SWR, React Query/TanStack Query (data fetching); Zustand, Jotai, Recoil, Pinia (state management); Vite, esbuild (build tools).
+- **Monorepo tool detection**: New `monorepo_tool` field in framework detection output. Detects pnpm (pnpm-workspace.yaml), Turborepo (turbo.json), Lerna (lerna.json), Nx (nx.json). Multiple tools joined with "+" (e.g., "pnpm+turborepo").
+- **Module system detection improvement**: Now detects "dual" module system (both ESM and CJS support) when package.json has both `"exports"` and `"main"` fields.
+- **SWR state management detection**: `state-map` now recognizes SWR as a state management framework. Detects `useSWR`/`useSWRInfinite`/`useSWRMutation` (atom consumers), `mutate()` (mutations), `SWRConfig` (context provider), and `cache` (store). Each SWR key becomes a named state slice (e.g., `swr:/api/data`).
+- **React Query state management detection**: `state-map` detects `useQuery`/`useMutation`/`useQueryClient`/`QueryClientProvider` patterns with query key as slice name.
+- **Source classification across all engines**: Every finding in smell, circular, dead-code, perf-hint, api-map, and state-map engines now includes a `source` field: "core" (main source), "test" (test files), "example" (examples/demos), or "config" (config files). Each engine also reports `by_source` stats in output.
+- **Severity downgrade for non-core findings**: Smell engine and dead-code engine automatically downgrade severity for findings in test/example files (critical→warning, warning→info). Downgraded findings include `downgraded: true` field.
+- **Test-only cycle detection**: Circular engine classifies cycles entirely in test/example files as "info" severity instead of "warning". Adds `test_involvement` field ("full" or "partial") and `source` classification per cycle.
+- **Next.js handler name extraction**: API map now extracts actual handler function names from Next.js Pages Router routes instead of generic "default_handler".
+- **Next.js auth detection**: API map detects auth patterns in Next.js routes: `getSession`/`getServerSession` (next-auth), `req.headers.authorization`, cookie-based session checks, and middleware.ts auth scanning.
+- **API map source classification**: Routes now include `source` field ("core", "example", "test", "generated") and `filter_source` parameter to filter routes by source.
+- **`_set_framework_flag()` helper**: Refactored repetitive `if/elif` flag-setting chains in framework_detect.py into a single `flag_map` lookup for maintainability.
 
 ### Fixed
 
-- **CRITICAL: JS/TS god object detection counts control flow as methods**: `smell_engine.py` regex `(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(` matched `if(`, `for(`, `while(`, `return(`, `super(`, `console.log(`, etc. — 10-30x inflation on typical files. Added negative lookahead for control flow keywords and property accesses. Method counts now match real methods only.
-- **HIGH: perf-hint large_bundle false positives for Node.js built-ins**: `import * as path from 'node:path'` and `import * as fs from 'node:fs'` flagged as "prevents tree-shaking" — these are never bundled and have zero tree-shaking implications. Now skipped for `node:*` protocol imports.
-- **HIGH: perf-hint large_bundle false positives for VSCode extension API**: `import * as vscode from 'vscode'` flagged as "prevents tree-shaking" — the module is provided at runtime by the extension host and never bundled. Now skipped.
-- **HIGH: perf-hint memory_leak false positives for process signal handlers**: `process.on('exit')` and `process.on('SIGINT')` flagged as "listener accumulates over time" — these are intentionally permanent process-level signal handlers. Now skipped for exit/SIGINT/SIGTERM/SIGHUP/uncaughtException/unhandledRejection events.
-- **HIGH: side-effect engine misses VSCode extension API calls**: `activate()` function classified as "pure" despite calling `vscode.window.createOutputChannel()`, `vscode.commands.registerCommand()`, etc. Added `vscode_api` side-effect category with patterns for `vscode.window.*`, `vscode.commands.*`, `vscode.workspace.*`, `vscode.languages.*`, `vscode.debug.*`, `acquireVsCodeApi()`, and `postMessage()` webview IPC. Now correctly classifies 119 VSCode API side effects in the GitLab extension test target.
-- **HIGH: config-drift reports `vscode` as missing dependency**: The `vscode` module is an ambient API provided at runtime by the extension host, declared as `@types/vscode` in devDependencies — standard VSCode extension practice. Added `vscode` and `electron` to builtins set. False positive count dropped from 24 to 2.
-- **HIGH: config-drift false positives in monorepo structures**: Only root `package.json` was scanned; nested `webviews/vue2/package.json`, `webviews/vue3/package.json`, etc. were invisible. Added `_merge_nested_package_jsons()` that discovers and merges dependencies from subproject package.json files (Lerna/Nx/Turborepo/VSCode webview workspaces). Validates subprojects by checking for "name" field.
-- **MEDIUM: regex-audit flags URL strings as "unescaped dot"**: Strings like `gitlab.com`, `example.org`, `www.w3.org` in CSP allowlists, test fixtures, and SVG namespaces flagged as having unescaped dots. Now skips patterns that contain no regex metacharacters (`+*?^$|\\[]{}()`) — these are plain strings, not regex patterns.
-- **MEDIUM: a11y color contrast warnings in test files**: Color contrast checks in `*.test.js` files are meaningless — tests render in jsdom for assertion purposes. Now skips color contrast checks in files matching test indicators (`.test.`, `.spec.`, `__tests__`, `__mocks__`, `.stories.`, `fixtures/`).
+- **Framework detection false positive for devDependencies**: Projects with `next` only in devDependencies no longer get `has_nextjs = True`. Instead, `next.js` appears in `dev_frameworks`.
+- **`duplicate_define` false positive across files**: Functions with common names (Page, Layout, handler) in different files were incorrectly flagged as duplicates. Now only flags as duplicate when the same function name is defined multiple times in the SAME file. Next.js convention names (Page, Layout, GET, POST, etc.) are never flagged as duplicates.
+- **Dead-code engine missing examples/ directory**: The test/example filter in `_detect_dead_from_registry` only checked `/example` but not `/examples/`. Expanded to include `/examples/`, `/e2e/`, `/__tests__/`, `/stories/`, `/storybook/`.
+- **pyproject.toml syntax error**: Line 8 had `description` and `readme` merged into one line, causing pytest to crash.
 
 ### Changed
 
-- **pyproject.toml formatting fix**: Merged `description` and `readme` fields on the same line — separated onto their own lines for valid TOML parsing.
+- **Version bump**: 5.9.1 → 6.4.0
 
 ## [5.8.1] — 2026-06-12
 

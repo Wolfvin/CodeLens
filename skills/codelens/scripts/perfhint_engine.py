@@ -582,6 +582,36 @@ def detect_perf_hints(
     stats = _compute_stats(findings, files_scanned)
     stats["truncated"] = truncated
 
+    # v6.4: Add source classification and by_source stats
+    _TEST_EXAMPLE_PATTERNS = [
+        '/test/', '/tests/', '/__test', '/__tests__/',
+        '/example/', '/examples/', '/e2e/',
+        '/fixture/', '/fixtures/', '/mock/', '/mocks/',
+        '/stories/', '/storybook/', '/snippets/',
+    ]
+    _CONFIG_PATTERNS = [
+        '.config.js', '.config.mjs', '.config.ts',
+        'webpack.config.', 'vite.config.', 'jest.config.',
+        'tsconfig.json', 'postcss.config.', 'tailwind.config.',
+    ]
+    by_source = {"core": 0, "test": 0, "config": 0}
+    for f in findings:
+        fpath = f.get('file', '')
+        normalized = '/' + fpath if not fpath.startswith('/') else fpath
+        source = 'core'
+        for p in _TEST_EXAMPLE_PATTERNS:
+            if p in normalized or normalized.startswith(p.lstrip('/')):
+                source = 'test'
+                break
+        if source == 'core':
+            for p in _CONFIG_PATTERNS:
+                if p in fpath:
+                    source = 'config'
+                    break
+        f['source'] = source
+        by_source[source] = by_source.get(source, 0) + 1
+    stats['by_source'] = by_source
+
     # ─── Compute risk ─────────────────────────────────────────
     risk = _compute_risk(findings)
 

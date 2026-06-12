@@ -24,7 +24,6 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
     ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
     ".lua", ".java", ".cs", ".php", ".zig",
-    ".nim", ".nims",
 }
 
 # Performance limits for large codebases
@@ -82,10 +81,6 @@ def detect_dead_code(
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
-                continue
-
-            # v6.4: Skip minified files
-            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             # File-count limit to prevent timeout on huge repos
@@ -154,6 +149,47 @@ def detect_dead_code(
     if registry_dead:
         results["registry_dead"] = registry_dead[:max_results]
 
+    # v6.4: Add source classification to all findings and downgrade non-core severity
+    _TEST_EXAMPLE_PATTERNS = [
+        '/test/', '/tests/', '/__test', '/__tests__/',
+        '/example/', '/examples/', '/e2e/',
+        '/fixture/', '/fixtures/', '/mock/', '/mocks/',
+        '/stories/', '/storybook/', '/snippets/',
+    ]
+    _CONFIG_PATTERNS = [
+        '.config.js', '.config.mjs', '.config.ts',
+        'webpack.config.', 'vite.config.', 'jest.config.',
+        'tsconfig.json', 'postcss.config.', 'tailwind.config.',
+        'babel.config.', 'eslint.config.',
+    ]
+
+    def _classify_source(rel: str) -> str:
+        normalized = '/' + rel if not rel.startswith('/') else rel
+        for p in _TEST_EXAMPLE_PATTERNS:
+            if p in normalized or normalized.startswith(p.lstrip('/')):
+                return 'test'
+        for p in _CONFIG_PATTERNS:
+            if p in rel:
+                return 'config'
+        return 'core'
+
+    by_source = {"core": 0, "test": 0, "config": 0}
+    for cat, items in results.items():
+        for item in items:
+            fpath = item.get('file', '')
+            source = _classify_source(fpath)
+            item['source'] = source
+            by_source[source] = by_source.get(source, 0) + 1
+            # Downgrade severity for non-core findings
+            if source in ('test', 'config'):
+                sev = item.get('severity', 'warning')
+                if sev == 'critical':
+                    item['severity'] = 'warning'
+                    item['downgraded'] = True
+                elif sev == 'warning':
+                    item['severity'] = 'info'
+                    item['downgraded'] = True
+
     # Compute totals
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
@@ -187,7 +223,8 @@ def detect_dead_code(
             "files_scanned": files_scanned,
             "total_dead_code": total,
             "by_category": by_category,
-            "truncated": truncated
+            "truncated": truncated,
+            "by_source": by_source
         },
         "results": {k: v for k, v in results.items() if v},
         "categories_checked": list(categories),
@@ -351,21 +388,8 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
         # Find const/let/var declarations (including destructuring)
         declared_vars = []
 
-        # v5.9.2: Collect all exported names to exclude from unused detection
-        # Exported variables are part of the public API — not dead code
-        exported_names = set()
-        for m in re.finditer(r'export\s+(?:const|let|var|function|type|interface|enum|class)\s+(\w+)', clean_content):
-            exported_names.add(m.group(1))
-        # Also capture re-exports: export { foo, bar }
-        for m in re.finditer(r'export\s*\{([^}]+)\}', clean_content):
-            for name_match in re.finditer(r'(\w+)', m.group(1)):
-                exported_names.add(name_match.group(1))
-        # Also capture default exports: export default function foo
-        for m in re.finditer(r'export\s+default\s+(?:function|class|const|let|var)?\s*(\w+)', clean_content):
-            exported_names.add(m.group(1))
-
         # Standard declarations: const/let/var x = ...
-        for m in re.finditer(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=', clean_content):
+        for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=', clean_content):
             declared_vars.append((m.group(1), m.start()))
 
         # Object destructuring: const { a, b, c } = ...
@@ -384,12 +408,8 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             line_num = clean_content[:start_pos].count('\n') + 1
 
             # Skip common patterns that are used indirectly
-            skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module',
-                          'result', 'data', 'value', 'options', 'args', 'params', 'callback', 'next', 'dispatch', 'action', 'payload'}
+            skip_names = {'_', 'e', 'err', 'error', 'res', 'req', 'ctx', 'props', 'state', 'ref', 'config', 'module'}
             if var_name in skip_names or var_name.startswith('_'):
-                continue
-            # v5.9.2: Skip exported names — they're part of public API
-            if var_name in exported_names:
                 continue
             # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
             #     would be more accurate. Constants like API_URL, MAX_RETRIES are
@@ -545,20 +565,6 @@ def _detect_unused_exports(
     for names in all_imports.values():
         all_imported_names.update(names)
 
-    # v6.1: Check if this is a library project — if so, exports from src/ files
-    # are likely the public API and should not be flagged as unused.
-    is_library = False
-    pkg_path = os.path.join(workspace, 'package.json')
-    if os.path.isfile(pkg_path):
-        try:
-            with open(pkg_path, 'r', encoding='utf-8') as f:
-                pkg = json.load(f)
-            if ("main" in pkg or "module" in pkg or "exports" in pkg) and \
-               ("files" in pkg or "sideEffects" in pkg or "typings" in pkg or "types" in pkg):
-                is_library = True
-        except Exception:
-            pass
-
     unused = []
     for file_path, exports in all_exports.items():
         # Skip test files and index files (they may be entry points)
@@ -567,10 +573,6 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
-        # v6.1: For library projects, exports from src/ are the public API.
-        # Downgrade severity from warning to info and add a note.
-        is_public_api = is_library and file_path.startswith('src/')
-
         for export in exports:
             name = export["name"]
 
@@ -578,32 +580,15 @@ def _detect_unused_exports(
             if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
-            # v6.1: Skip type exports (TypeScript interfaces, types) in library projects
-            # These are part of the public API type definitions.
-            if is_public_api and export.get("type") in ("type", "interface", "typeof"):
-                continue
-
-            # v6.1: Skip known TypeScript utility type exports
-            _ts_type_pattern = re.compile(r'^(I[A-Z]|T[A-Z]|[A-Z][a-z]+State|[A-Z][a-z]+Props|[A-Z][a-z]+Return|[A-Z][a-z]+Options|Async\w+|Ref\w*)$')
-            if is_public_api and _ts_type_pattern.match(name):
-                continue
-
             if name not in all_imported_names:
-                severity = "info" if is_public_api else "warning"
-                message = f"Export '{name}' is never imported by any file"
-                suggestion = f"Remove unused export '{name}' or add import where needed."
-                if is_public_api:
-                    message = f"Export '{name}' is not imported internally (may be public API)"
-                    suggestion = f"Verify '{name}' is part of the public API. If not, remove it."
-
                 unused.append({
                     "file": file_path,
                     "line": export["line"],
                     "name": name,
                     "type": export["type"],
-                    "severity": severity,
-                    "message": message,
-                    "suggestion": suggestion
+                    "severity": "warning",
+                    "message": f"Export '{name}' is never imported by any file",
+                    "suggestion": f"Remove unused export '{name}' or add import where needed."
                 })
 
     return unused[:50]
@@ -656,85 +641,14 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             if is_pub:
                 continue
             # Skip test fixtures and example files
-            # v5.9.2: Added .test. / .spec. filename patterns
-            _test_patterns = ['/test', '/tests', '/__test', '/__tests__', '/example', '/fixture', '/mock',
-                              '.test.', '.spec.', '.e2e.', '.stories.', '.story.']
-            if any(x in file_path for x in _test_patterns):
-                continue
-            # v6.1: Skip story files — Storybook story functions are called by the
-            # Storybook runtime, not by other code. They're not dead code.
-            if any(x in file_path for x in ['/stories/', '/storybook/', '.story.', '.stories.']):
-                continue
-            # v6.1: Skip common test framework helper names (setUp, tearDown, etc.)
-            # These are called by the test framework, not by other code.
-            _test_helper_names = {
-                'setUp', 'tearDown', 'setup', 'teardown',
-                'beforeAll', 'afterAll', 'beforeEach', 'afterEach',
-                'before', 'after',
-            }
-            if name in _test_helper_names:
-                continue
-            # v6.1: Skip React component names (PascalCase) in component directories
-            # These are likely exported for external consumption.
-            if name and name[0].isupper() and any(x in file_path for x in ['/component', '/Component', '/src/']):
-                # Could be a React component — check if it's an export
-                # These are likely public API for library projects
-                continue
-
-            # v6.4: Skip Rust trait implementation methods that are required by the trait.
-            # Methods like Default::default, From::from, Display::fmt, etc. are called
-            # implicitly through the trait dispatch, so ref_count == 0 is a false positive.
-            if file_path.endswith('.rs') and impl_for:
-                # Known standard library traits whose methods are called implicitly
-                _rust_std_traits = {
-                    'Default', 'From', 'Into', 'TryFrom', 'TryInto',
-                    'Display', 'Debug', 'Fmt', 'Write',
-                    'Clone', 'Copy', 'PartialEq', 'Eq', 'PartialOrd', 'Ord',
-                    'Hash', 'Iterator', 'IntoIterator', 'FromIterator',
-                    'Add', 'Sub', 'Mul', 'Div', 'Rem', 'Not', 'Neg',
-                    'Index', 'IndexMut', 'Deref', 'DerefMut', 'Drop',
-                    'Fn', 'FnMut', 'FnOnce', 'AsRef', 'AsMut',
-                    'ToString', 'ToStr', 'Borrow', 'BorrowMut',
-                    'Serialize', 'Deserialize',  # serde traits
-                    'Read', 'Write', 'Seek',  # std::io traits
-                    'Error',  # std::error::Error
-                    'Sum', 'Product',  # iterator aggregation
-                }
-                # Skip if impl_for matches a known standard trait
-                impl_trait = impl_for.split('<')[0].split('+')[0].strip()
-                if impl_trait in _rust_std_traits:
-                    continue
-                # Also skip impl blocks where the function name matches
-                # a standard trait method pattern (e.g., "default", "from", "fmt")
-                _rust_trait_methods = {
-                    'default', 'from', 'into', 'try_from', 'try_into',
-                    'fmt', 'clone', 'hash', 'next', 'iter',
-                    'deref', 'deref_mut', 'drop', 'as_ref', 'as_mut',
-                    'to_string', 'borrow', 'borrow_mut',
-                    'read', 'write', 'seek', 'description', 'source',
-                    'call', 'call_mut', 'call_once',
-                    'add', 'sub', 'mul', 'div', 'rem', 'not', 'neg',
-                    'index', 'index_mut', 'sum', 'product',
-                    'serialize', 'deserialize',
-                }
-                if bare_name in _rust_trait_methods:
-                    continue
-
-            # v6.4: Skip Rust #[cfg(test)] module functions
-            # Functions inside #[cfg(test)] blocks are only compiled in test mode
-            # and would show as "dead" in a normal scan.
-            if file_path.endswith('.rs'):
-                # Check if the function name starts with test_ or is in a test module
-                if bare_name.startswith('test_') or bare_name.startswith('it_'):
-                    continue
-                # Check if the file is a test-only file (heuristic: file name starts with test_)
-                file_basename = os.path.basename(file_path)
-                if file_basename.startswith('test_'):
-                    continue
-
-            # v6.4: Skip Rust build.rs functions
-            # Functions in build.rs are called by the Cargo build system, not by other code.
-            if file_path.endswith('build.rs'):
+            # v6.4: Expanded to catch examples/, e2e/, __tests__/, stories/
+            _test_example_patterns = [
+                '/test/', '/tests/', '/__test', '/__tests__/',
+                '/example/', '/examples/', '/e2e/',
+                '/fixture/', '/fixtures/', '/mock/', '/mocks/',
+                '/stories/', '/storybook/',
+            ]
+            if any(p in file_path for p in _test_example_patterns):
                 continue
 
             # v6.3: Skip known C/C++ entry point function patterns
@@ -834,10 +748,6 @@ def _detect_dead_listeners(workspace: str) -> List[Dict]:
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                continue
-
-            # v6.4: Skip minified files
-            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             file_path = os.path.join(root, filename)

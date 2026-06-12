@@ -426,23 +426,41 @@ def merge_backend_data(
         node["status"] = "dead" if node["ref_count"] == 0 else "active"
 
     # ── Step 10: Recompute duplicate_define for ALL nodes ──
+    # duplicate_define should only be true when the SAME function name is
+    # defined MULTIPLE TIMES in the SAME file.  Same name in different files
+    # is normal (e.g., React components Page, Layout in different routes).
 
-    fn_name_to_all_nodes: Dict[str, List[Dict]] = {}
+    _NEXTJS_CONVENTION_NAMES = {
+        # Next.js App Router page components
+        'Page', 'Layout', 'Loading', 'Error', 'NotFound', 'Template', 'Default',
+        # Next.js API route handlers
+        'handler', 'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS',
+        # Next.js middleware
+        'middleware',
+    }
+
+    # Clear existing flags
     for node in all_nodes:
-        fn_name = node.get("fn", "")
-        if fn_name not in fn_name_to_all_nodes:
-            fn_name_to_all_nodes[fn_name] = []
-        fn_name_to_all_nodes[fn_name].append(node)
+        node.pop("duplicate_define", None)
 
-    for fn_name, nodes in fn_name_to_all_nodes.items():
+    # Group by (fn_name, file) — per-file duplicate detection
+    fn_file_groups: Dict[Tuple[str, str], List[Dict]] = {}
+    for node in all_nodes:
+        key = (node.get("fn", ""), node.get("file", ""))
+        if key not in fn_file_groups:
+            fn_file_groups[key] = []
+        fn_file_groups[key].append(node)
+
+    # Flag duplicate_define only when same fn name appears 2+ times in SAME file
+    # Skip Next.js convention names entirely — they are never duplicates
+    for (fn_name, _file), nodes in fn_file_groups.items():
+        if fn_name in _NEXTJS_CONVENTION_NAMES:
+            continue
         if len(nodes) > 1:
-            for i, node in enumerate(nodes):
+            sorted_nodes = sorted(nodes, key=lambda n: n.get("line", 0))
+            for i, node in enumerate(sorted_nodes):
                 if i > 0:
                     node["duplicate_define"] = True
-                else:
-                    node.pop("duplicate_define", None)
-        else:
-            nodes[0].pop("duplicate_define", None)
 
     # ── Step 11: Build merged registry ──
 
