@@ -41,28 +41,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
     max_files caps the scan file count to prevent timeout on huge repos.
-
-    v6.3: Added time budget — expensive sub-engines are skipped when the
-    budget runs low, preventing timeout on repos with 40k+ nodes.
-    Sub-engines that already ran are cached in the registry, so subsequent
-    calls with fresh registries complete quickly.
     """
-    import time as _time
-    _HANDBOOK_BUDGET_SEC = 60  # Total budget for handbook generation
-    _start = _time.time()
-    skipped_engines = []
-
-    def _budget_remaining() -> float:
-        return _HANDBOOK_BUDGET_SEC - (_time.time() - _start)
-
-    def _can_run(engine_name: str, est_seconds: float = 10) -> bool:
-        """Check if we have enough budget to run an engine."""
-        if _budget_remaining() >= est_seconds:
-            return True
-        skipped_engines.append(engine_name)
-        logger.info(f"Skipping {engine_name} — handbook time budget low ({_budget_remaining():.1f}s remaining)")
-        return False
-
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
@@ -103,7 +82,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     except Exception:
         logger.warning("Failed to write output files", exc_info=True)
 
-    # 4. Frameworks (fast — always run)
+    # 4. Frameworks
     try:
         fw_result = detect_frameworks(workspace)
         frameworks = fw_result.get("frameworks", [])
@@ -111,99 +90,81 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Framework detection failed", exc_info=True)
         frameworks = config.get("frameworks", [])
 
-    # 5. Health (from smell engine) — can be slow on large repos
-    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
-    if _can_run("smell", est_seconds=20):
-        try:
-            smell_result = detect_smells(workspace)
-            health = {
-                "score": smell_result.get("stats", {}).get("health_score", 0),
-                "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
-                "critical": smell_result.get("stats", {}).get("critical", 0),
-                "warning": smell_result.get("stats", {}).get("warning", 0),
-            }
-        except Exception:
-            logger.warning("Health detection failed", exc_info=True)
+    # 5. Health (from smell engine)
+    try:
+        smell_result = detect_smells(workspace)
+        health = {
+            "score": smell_result.get("stats", {}).get("health_score", 0),
+            "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
+            "critical": smell_result.get("stats", {}).get("critical", 0),
+            "warning": smell_result.get("stats", {}).get("warning", 0),
+        }
+    except Exception:
+        logger.warning("Health detection failed", exc_info=True)
+        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
-    # 6. Entrypoints — can be slow
-    entrypoints = []
-    if _can_run("entrypoints", est_seconds=15):
-        try:
-            ep_result = map_entrypoints(workspace)
-            entrypoints = [
-                {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
-                for e in ep_result.get("entrypoints", [])[:30]
-            ]
-        except Exception:
-            logger.warning("Entrypoint mapping failed", exc_info=True)
+    # 6. Entrypoints
+    try:
+        ep_result = map_entrypoints(workspace)
+        entrypoints = [
+            {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
+            for e in ep_result.get("entrypoints", [])[:30]
+        ]
+    except Exception:
+        logger.warning("Entrypoint mapping failed", exc_info=True)
+        entrypoints = []
 
-    # 7. API Routes (usually fast)
-    api_routes = []
-    if _can_run("api_map", est_seconds=10):
-        try:
-            api_result = map_api_routes(workspace)
-            api_routes = [
-                {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
-                for r in api_result.get("routes", [])[:50]
-            ]
-        except Exception:
-            logger.warning("API route mapping failed", exc_info=True)
+    # 7. API Routes
+    try:
+        api_result = map_api_routes(workspace)
+        api_routes = [
+            {"method": r.get("method"), "path": r.get("path"), "handler": r.get("handler_name"), "file": r.get("file")}
+            for r in api_result.get("routes", [])[:50]
+        ]
+    except Exception:
+        logger.warning("API route mapping failed", exc_info=True)
+        api_routes = []
 
-    # 8. State management — can be slow
-    state_stores = []
-    if _can_run("state_map", est_seconds=10):
-        try:
-            state_result = map_state(workspace)
-            state_stores = [
-                {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
-                for s in state_result.get("stores", [])[:20]
-            ]
-        except Exception:
-            logger.warning("State management mapping failed", exc_info=True)
+    # 8. State management
+    try:
+        state_result = map_state(workspace)
+        state_stores = [
+            {"name": s.get("name"), "type": s.get("type"), "framework": s.get("framework"), "file": s.get("defined_in")}
+            for s in state_result.get("stores", [])[:20]
+        ]
+    except Exception:
+        logger.warning("State management mapping failed", exc_info=True)
+        state_stores = []
 
-    # 9. Risks (circular deps, dead code, secrets) — these are the slowest engines
+    # 9. Risks (circular deps, dead code, secrets)
     risks = []
-    if _can_run("circular", est_seconds=15):
-        try:
-            circ_result = detect_circular(workspace)
-            cycles = circ_result.get("cycles", {})
-            if isinstance(cycles, dict):
-                func_cycles = cycles.get("function_calls", [])
-                import_cycles = cycles.get("import_chains", [])
-                all_cycles = func_cycles[:3] + import_cycles[:2]
-            else:
-                all_cycles = circ_result.get("chains", [])[:5]
-            for chain in all_cycles:
-                chain_path = chain.get("chain", chain.get("path", []))
-                if isinstance(chain_path, list):
-                    names = [c.get("fn", c if isinstance(c, str) else str(c)) for c in chain_path]
-                    risks.append({"type": "circular_dep", "description": " → ".join(str(n) for n in names[:8])})
-        except Exception:
-            logger.warning("Circular dependency detection failed", exc_info=True)
-    if _can_run("dead_code", est_seconds=15):
-        try:
-            dead_result = detect_dead_code(workspace)
-            dead_count = dead_result.get("stats", {}).get("total_dead_code", dead_result.get("stats", {}).get("total_dead", 0))
-            if dead_count > 0:
-                risks.append({"type": "dead_code", "count": dead_count})
-        except Exception:
-            logger.warning("Dead code detection failed", exc_info=True)
-    if _can_run("secrets", est_seconds=15):
-        try:
-            secrets_result = detect_secrets(workspace)
-            secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
-            if secrets_count > 0:
-                risks.append({"type": "secrets", "count": secrets_count})
-        except Exception:
-            logger.warning("Secrets detection failed", exc_info=True)
-    if _can_run("vuln_scan", est_seconds=10):
-        try:
-            vuln_result = scan_vulnerabilities(workspace)
-            vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
-            if vuln_count > 0:
-                risks.append({"type": "vulnerabilities", "count": vuln_count})
-        except Exception:
-            logger.warning("Vulnerability scan failed", exc_info=True)
+    try:
+        circ_result = detect_circular(workspace)
+        for chain in circ_result.get("chains", [])[:5]:
+            risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
+    except Exception:
+        logger.warning("Circular dependency detection failed", exc_info=True)
+    try:
+        dead_result = detect_dead_code(workspace)
+        dead_count = dead_result.get("stats", {}).get("total_dead", 0)
+        if dead_count > 0:
+            risks.append({"type": "dead_code", "count": dead_count})
+    except Exception:
+        logger.warning("Dead code detection failed", exc_info=True)
+    try:
+        secrets_result = detect_secrets(workspace)
+        secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
+        if secrets_count > 0:
+            risks.append({"type": "secrets", "count": secrets_count})
+    except Exception:
+        logger.warning("Secrets detection failed", exc_info=True)
+    try:
+        vuln_result = scan_vulnerabilities(workspace)
+        vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
+        if vuln_count > 0:
+            risks.append({"type": "vulnerabilities", "count": vuln_count})
+    except Exception:
+        logger.warning("Vulnerability scan failed", exc_info=True)
 
     # 10. Directory map
     directory_map = _build_directory_map(workspace, config)
@@ -224,10 +185,8 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         "meta": {
             "workspace": workspace,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "codelens_version": CODELENS_VERSION,
-            "generation_time_ms": int((_time.time() - _start) * 1000),
+            "codelens_version": CODELENS_VERSION
         },
-        "skipped_engines": skipped_engines if skipped_engines else None,
         "identity": identity,
         "frameworks": frameworks,
         "structure": {
@@ -344,31 +303,10 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-            # v6.1: Detect library vs application from package.json fields
-            # Libraries have: main, module, types, files, sideEffects
-            # and typically no "scripts.start" or "scripts.dev"
-            is_library = (
-                "main" in pkg or "module" in pkg or "exports" in pkg
-            ) and (
-                "files" in pkg or "sideEffects" in pkg
-                or "typings" in pkg or "types" in pkg
-            )
-            # Also check: if there's no "start" or "dev" script, it's likely a library
-            scripts = pkg.get("scripts", {})
-            # v6.1: Consider script purpose — "start": "yarn storybook" is NOT an app script
-            start_script = scripts.get("start", "")
-            has_app_script = (
-                ("start" in scripts and "storybook" not in start_script.lower())
-                or "dev" in scripts
-                or "serve" in scripts
-            )
-
             if "next" in deps:
                 js_type = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
                 js_type = "backend-api"
-            elif is_library and not has_app_script:
-                js_type = "frontend-library"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
                 js_type = "frontend-app"
             else:
@@ -378,7 +316,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
-    _monorepo_subdir_count = 0  # track how many sub-packages found
     for subdir in _MONOREPO_SUBDIRS:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
@@ -388,7 +325,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 entry_pkg = os.path.join(subdir_path, entry, "package.json")
                 if not os.path.isfile(entry_pkg):
                     continue
-                _monorepo_subdir_count += 1
                 try:
                     with open(entry_pkg, 'r', encoding='utf-8') as f:
                         pkg = json.load(f)
@@ -423,25 +359,6 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except OSError:
             pass
 
-    # v6.3: If we found 2+ sub-packages in apps/packages/services, mark as monorepo
-    if _monorepo_subdir_count >= 2 and not identity["is_monorepo"]:
-        identity["is_monorepo"] = True
-        if "yarn-workspace" not in identity["monorepo_tools"]:
-            identity["monorepo_tools"].append("yarn-workspace")
-
-    # v6.3: Also check root package.json for "workspaces" field (npm/yarn workspaces)
-    if has_package_json and not identity["is_monorepo"]:
-        try:
-            with open(pkg_path, 'r', encoding='utf-8') as f:
-                pkg = json.load(f)
-            workspaces = pkg.get("workspaces")
-            if workspaces:
-                identity["is_monorepo"] = True
-                if "npm-workspaces" not in identity["monorepo_tools"]:
-                    identity["monorepo_tools"].append("npm-workspaces")
-        except Exception:
-            pass
-
     # Try pyproject.toml
     pyproject_path = os.path.join(workspace, 'pyproject.toml')
     if os.path.isfile(pyproject_path):
@@ -449,31 +366,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            name_match = re.search(r'\bname\s*=\s*["\']([^"\']+)["\']', content)
-            # v5.9.3: Use word boundary \b to avoid matching 'minversion', 'requires_python', etc.
-            ver_match = re.search(r'\bversion\s*=\s*["\']([^"\']+)["\']', content)
+            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-            # v5.9.3: Fallback to __init__.py __version__ when pyproject.toml has dynamic version
-            # Many Python projects use: dynamic = ["version"] with version stored in __init__.py
-            if not ver_match:
-                dynamic_ver_match = re.search(r'dynamic\s*=\s*\[[^\]]*version[^\]]*\]', content)
-                if dynamic_ver_match:
-                    pkg_name = identity.get("name", "")
-                    if pkg_name:
-                        init_path = os.path.join(workspace, pkg_name, "__init__.py")
-                        if os.path.isfile(init_path):
-                            try:
-                                with open(init_path, 'r', encoding='utf-8') as ivf:
-                                    init_content = ivf.read()
-                                dunder_ver = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_content)
-                                if dunder_ver:
-                                    identity["version"] = dunder_ver.group(1)
-                            except Exception:
-                                pass
-            # v5.9.3: Extract description from pyproject.toml (was only from package.json)
             desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', content)
             if desc_match:
                 identity["description"] = desc_match.group(1)
@@ -486,6 +384,108 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("pyproject.toml parsing failed", exc_info=True)
 
+    # Try setup.cfg for version/description (common in Python projects)
+    if identity["version"] == "0.0.0" or not identity["description"]:
+        setup_cfg_path = os.path.join(workspace, 'setup.cfg')
+        if os.path.isfile(setup_cfg_path):
+            try:
+                with open(setup_cfg_path, 'r', encoding='utf-8') as f:
+                    setup_cfg_content = f.read()
+                if identity["version"] == "0.0.0":
+                    ver_match = re.search(r'version\s*=\s*["\']?([^"\':\s]+)["\']?', setup_cfg_content)
+                    if ver_match:
+                        identity["version"] = ver_match.group(1)
+                if not identity["description"]:
+                    desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', setup_cfg_content)
+                    if desc_match:
+                        identity["description"] = desc_match.group(1)
+                    else:
+                        # Try long_description or summary from setup.cfg
+                        summary_match = re.search(r'(?:long_description|summary)\s*=\s*["\']([^"\']+)["\']', setup_cfg_content)
+                        if summary_match:
+                            identity["description"] = summary_match.group(1)
+            except Exception:
+                logger.debug("setup.cfg parsing failed")
+
+    # Try __version__.py, _version.py, or __init__.py for version (common Python patterns)
+    if identity["version"] == "0.0.0":
+        version_file_paths = [
+            os.path.join(workspace, '__version__.py'),
+            os.path.join(workspace, '_version.py'),
+        ]
+        # Scan for __version__.py and __init__.py in top-level subdirectories
+        # Many Python packages define __version__ in their package's __init__.py
+        try:
+            for entry in os.listdir(workspace):
+                subdir = os.path.join(workspace, entry)
+                if os.path.isdir(subdir) and not entry.startswith('.') and entry not in ('tests', 'docs', '.git', 'venv', '.venv', 'env', '.tox', '__pycache__'):
+                    # Check __version__.py first (explicit version file)
+                    for vf_name in ('__version__.py', '_version.py', '__init__.py'):
+                        version_file = os.path.join(subdir, vf_name)
+                        if os.path.isfile(version_file):
+                            version_file_paths.append(version_file)
+        except OSError:
+            pass
+
+        for vf_path in version_file_paths:
+            if os.path.isfile(vf_path):
+                try:
+                    with open(vf_path, 'r', encoding='utf-8') as f:
+                        vf_content = f.read(2000)  # Read first 2KB — version is usually near the top
+                    ver_match = re.search(r'(?:__version__|version)\s*=\s*["\']([^"\']+)["\']', vf_content)
+                    if ver_match:
+                        identity["version"] = ver_match.group(1)
+                        break
+                except Exception:
+                    pass
+
+    # Try setup.py for version (last resort for Python projects)
+    if identity["version"] == "0.0.0":
+        setup_py_path = os.path.join(workspace, 'setup.py')
+        if os.path.isfile(setup_py_path):
+            try:
+                with open(setup_py_path, 'r', encoding='utf-8') as f:
+                    setup_py_content = f.read()
+                # Look for version= in setup() call
+                ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', setup_py_content)
+                if ver_match:
+                    identity["version"] = ver_match.group(1)
+            except Exception:
+                logger.debug("setup.py parsing failed")
+
+    # Fallback: extract description from README
+    if not identity["description"]:
+        for readme_name in ('README.md', 'README.rst', 'README.txt', 'README'):
+            readme_path = os.path.join(workspace, readme_name)
+            if os.path.isfile(readme_path):
+                try:
+                    with open(readme_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        readme_content = f.read(2000)  # Read first 2KB
+                    # Look for first paragraph after the title
+                    lines = readme_content.split('\n')
+                    for i, line in enumerate(lines):
+                        # Skip title lines (start with # or are underlined)
+                        if line.startswith('#'):
+                            # Get next non-empty, non-heading line
+                            for j in range(i + 1, min(i + 10, len(lines))):
+                                desc_line = lines[j].strip()
+                                if desc_line and not desc_line.startswith('#') and not desc_line.startswith('..'):
+                                    identity["description"] = desc_line[:200]
+                                    break
+                            break
+                        # RST title: next line is all === or ---
+                        if i + 1 < len(lines) and re.match(r'^[=\-~^]+$', lines[i + 1].strip()):
+                            for j in range(i + 2, min(i + 12, len(lines))):
+                                desc_line = lines[j].strip()
+                                if desc_line and not desc_line.startswith('..') and not desc_line.startswith(':'):
+                                    identity["description"] = desc_line[:200]
+                                    break
+                            break
+                    if identity["description"]:
+                        break
+                except Exception:
+                    pass
+
     # v6: Try Cargo.toml — always check (removed identity["type"] == "unknown" guard)
     cargo_path = os.path.join(workspace, 'Cargo.toml')
     if os.path.isfile(cargo_path):
@@ -493,8 +493,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            name_match = re.search(r'\bname\s*=\s*["\']([^"\']+)["\']', content)
-            ver_match = re.search(r'\bversion\s*=\s*["\']([^"\']+)["\']', content)
+            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:
@@ -538,86 +538,16 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6.2: Try composer.json — detect PHP projects
-    php_type = None
-    composer_path = os.path.join(workspace, 'composer.json')
-    if os.path.isfile(composer_path):
-        try:
-            with open(composer_path, 'r', encoding='utf-8') as f:
-                composer = json.load(f)
-            composer_name = composer.get("name", "")
-            if composer_name:
-                # Take last part of vendor/package name
-                identity["name"] = composer_name.split('/')[-1]
-            composer_ver = composer.get("version", "")
-            if composer_ver:
-                identity["version"] = composer_ver
-            # Classify PHP project type
-            composer_require = composer.get("require", {})
-            all_deps = " ".join(list(composer_require.keys()))
-            if "laravel/framework" in composer_require or "illuminate/" in all_deps:
-                php_type = "php-laravel"
-            elif "symfony/symfony" in composer_require or "symfony/" in all_deps:
-                php_type = "php-symfony"
-            elif "drupal/core" in composer_require or "drupal/" in all_deps:
-                php_type = "php-drupal"
-            elif "wordpress" in all_deps.lower():
-                php_type = "php-wordpress"
-            else:
-                php_type = "php-project"
-        except Exception:
-            logger.warning("composer.json parsing failed", exc_info=True)
-
-    # v6.2: Detect C/C++ projects via Makefile/CMakeLists.txt
-    c_type = None
-    has_makefile = os.path.isfile(os.path.join(workspace, 'Makefile'))
-    has_cmake = os.path.isfile(os.path.join(workspace, 'CMakeLists.txt'))
-    if has_makefile or has_cmake:
-        # Count C vs C++ files to determine which dominates
-        c_count = 0
-        cpp_count = 0
-        try:
-            for root, dirs, filenames in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                for fn in filenames:
-                    ext = os.path.splitext(fn)[1].lower()
-                    if ext in ('.c', '.h'):
-                        c_count += 1
-                    elif ext in ('.cpp', '.cxx', '.cc', '.cxx', '.hpp', '.hxx', '.hh'):
-                        cpp_count += 1
-        except Exception:
-            pass
-        if c_count > cpp_count:
-            c_type = "c-project"
-        elif cpp_count > c_count:
-            c_type = "cpp-project"
-        else:
-            c_type = "c-cpp-project"
-        # Override name/version from Makefile if possible
-        if has_makefile and identity["version"] == "0.0.0":
-            try:
-                with open(os.path.join(workspace, 'Makefile'), 'r', encoding='utf-8', errors='ignore') as f:
-                    makefile_content = f.read()
-                ver_match = re.search(r'VERSION\s*[:?]?=\s*([0-9]+\.[0-9]+(?:\.[0-9]+)?)', makefile_content)
-                if ver_match:
-                    identity["version"] = ver_match.group(1)
-            except Exception:
-                pass
-
-    # v6.2: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_type] if t is not None]
+    # v6: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if c_type:
-            type_parts.append("c" if "c-project" == c_type else "cpp" if "cpp-project" == c_type else "c-cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
-        if php_type:
-            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

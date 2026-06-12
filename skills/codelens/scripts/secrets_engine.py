@@ -34,7 +34,6 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".php", ".env", ".yaml", ".yml",
     ".json", ".toml", ".cfg", ".ini", ".conf",
-    ".nim", ".nims",
 }
 
 # ─── Secret Pattern Definitions ────────────────────────────────
@@ -89,11 +88,7 @@ SECRET_PATTERNS = {
             # Environment variable style
             r'(?i)(?:DB_PASSWORD|DATABASE_PASSWORD|MYSQL_PASSWORD|POSTGRES_PASSWORD|PG_PASSWORD|MONGO_PASSWORD|REDIS_PASSWORD)\s*(?:=|:)\s*["\']?([^\s"\'`]{6,})["\']?',
             # URL-embedded passwords: user:pass@
-            # Exclude '/' from the password capture group to avoid false positives
-            # from URLs like http://host/path/file@2x.webp where @ is part of
-            # the path (e.g., image density descriptors), not a credential separator.
-            # Real credential URLs have format protocol://user:pass@host (no / before @).
-            r'(?i)[\w+\-\.]+:([^\s/@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
+            r'(?i)[\w+\-\.]+:([^\s@"\']{4,})@[A-Za-z0-9\-\.]+\.[A-Za-z]{2,}',
             # Config-style password
             r'(?i)["\']password["\']\s*:\s*["\']([^"\']{6,})["\']',
             # Python-style
@@ -288,15 +283,11 @@ SAFE_VALUE_PATTERNS = [
     # Regex/syntax patterns that look like secrets but aren't
     r'^[\[\(]',  # Starts with bracket (regex, array)
     r'(?i)^rfc822msgid',
-    # v5.9: Test-only key patterns — these look like secrets but are explicitly test/dev keys
-    r'(?i)^(test-secret|dev-secret|dev-key|test-key|development-only|for-testing)',
-    r'(?i)^(change-me|replace-me|update-me|default-secret|insecure)',
-    # v5.9.3: Rust/Tauri common env var names and crate names that trigger false positives
-    # These are environment variable references in code, not actual secrets
-    r'(?i)^(OTHER|OBJC|OPENSSL|APPLE|ANDROID|CARGO|RUSTC|RUSTUP|CARGO_PKG)',
-    r'(?i)^(sha2|sha256|sha512|aes|rsa|ecdsa|ed25519|hmac|blake2)$',  # Rust crate names
-    r'(?i)^(reqwest|hyper|tokio|actix|axum|warp|rocket|tide)$',       # Rust crate names
-    r'(?i)^(serde|clap|log|tracing|anyhow|thiserror|once_cell)$',      # Rust crate names
+    # Common placeholder password patterns used in example/sample configs
+    r'(?i)^(SuperSecret|MySecret|SecretKey|Password123|ChangeMe|MyPassword|AdminPassword|TestPassword|DefaultPassword)',
+    r'(?i)^(your[_-]?password|your[_-]?secret|your[_-]?key|your[_-]?token)',
+    # Angle-bracket placeholders (broader version): <YOUR_API_KEY_HERE>, <replace-me>
+    r'(?i)^<[^>]+>$',
 ]
 
 # ─── Template Expression Patterns (line-level) ──────────────────
@@ -324,20 +315,10 @@ ENV_REFERENCE_LINE_PATTERNS = [
     re.compile(r'os\.getenv\('),                   # os.getenv('SECRET')
     re.compile(r'import\.meta\.env\.[A-Za-z_]'),  # import.meta.env.KEY
     re.compile(r'deno\.env\.get\('),              # Deno: Deno.env.get('KEY')
-    re.compile(r'deno\.env\.[A-Za-z_]'),          # Deno: Deno.env.KEY (shorthand)
-    re.compile(r'std::env::var\('),               # Rust: std::env::var("KEY")
-    re.compile(r'std::env::var_os\('),            # Rust: std::env::var_os("KEY")
-    re.compile(r'env!\('),                         # Rust: env!("KEY") macro
-    re.compile(r'option_env!\('),                  # Rust: option_env!("KEY") macro
     re.compile(r'process\.env\.PASSWORD'),
     re.compile(r'process\.env\.SECRET'),
     re.compile(r'process\.env\.TOKEN'),
     re.compile(r'process\.env\.KEY'),
-    # v5.9.3: Rust std::env patterns
-    re.compile(r'std::env::var\b'),               # std::env::var("KEY")
-    re.compile(r'std::env::var_os\b'),            # std::env::var_os("KEY")
-    re.compile(r'env!\s*\('),                      # env!("KEY") macro
-    re.compile(r'option_env!\s*\('),              # option_env!("KEY") macro
 ]
 
 # ─── Line-level Exclusion Patterns ────────────────────────────
@@ -371,17 +352,6 @@ LINE_EXCLUSION_PATTERNS = [
     # Angular/React template patterns
     re.compile(r'\[\w+\]\s*='),                  # Angular property binding [prop]=value
     re.compile(r'\{\{.*\|'),                       # Angular pipe {{ value | pipe }}
-    # v5.9: Test-only / dev-only variable name patterns
-    # Variable names like SECRET_KEY_FOR_TESTING_ONLY, API_KEY_DEV, DEBUG_SECRET
-    # indicate the value is intentionally a non-production placeholder
-    re.compile(r'(?i)FOR[_-]?TESTING[_-]?ONLY'),
-    re.compile(r'(?i)FOR[_-]?DEV[ELOPMENT]*[_-]?ONLY'),
-    re.compile(r'(?i)TEST[_-]?ONLY'),
-    re.compile(r'(?i)DEV[_-]?ONLY'),
-    re.compile(r'(?i)DEBUG[_-]?(?:SECRET|KEY|TOKEN|PASSWORD)'),
-    re.compile(r'(?i)(?:SECRET|KEY|TOKEN|PASSWORD)[_-]?FOR[_-]?(?:TEST|DEV|DEBUG)'),
-    re.compile(r'(?i)LOCAL[_-]?(?:SECRET|KEY|TOKEN)'),
-    re.compile(r'(?i)INSECURE[_-]?(?:SECRET|KEY|TOKEN)'),
 ]
 
 # ─── Test File Patterns ─────────────────────────────────────────
@@ -435,22 +405,13 @@ ENTROPY_EXCLUSION_PATTERNS = [
     re.compile(r'^\{%'),                                      # Django/Jinja2 {% ... %}
     re.compile(r'^<%='),                                      # ERB <%= ... %>
     re.compile(r'^[A-Za-z0-9+/]+=*$'),                        # Pure base64 (likely encoded data, not secret)
-    # v5.9.3: Rust crate names and env var patterns that trigger false positives
-    re.compile(r'(?i)^(sha2|sha256|sha512|aes|rsa|ecdsa|hmac|blake2|ed25519)$'),
-    re.compile(r'(?i)^(reqwest|hyper|tokio|actix|axum|warp|rocket|tide)$'),
-    re.compile(r'(?i)^(serde|clap|log|tracing|anyhow|thiserror|once_cell)$'),
-    re.compile(r'(?i)^(OTHER|OBJC|OPENSSL|APPLE|ANDROID)$'),
-    re.compile(r'^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$'), # HTTP methods
-    # v5.9.3: CSP hashes (sha256-/sha384-/sha512- in Content-Security-Policy are NOT secrets)
-    re.compile(r"^sha(256|384|512)-[A-Za-z0-9+/=]+$"),
 ]
 
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = 5000,
-    max_results: int = 200
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -463,7 +424,6 @@ def detect_secrets(
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
         max_files: Maximum number of files to scan (default: 5000)
-        max_results: Maximum findings to return (default: 200, prevents runaway)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -504,14 +464,12 @@ def detect_secrets(
             # Determine if this is a test file (for severity reduction, not skipping)
             is_test = _is_test_file(rel_path)
 
-            # v5.9.3: Skip test files entirely — secrets in test fixtures are almost always
-            # false positives (test URLs like redis://localhost, mongodb://localhost, etc.)
-            # and are not actionable. This eliminates 90%+ of false positives.
-            if is_test:
-                continue
-
             # Skip documentation/example directories (contain fake credentials)
             if _is_docs_or_example_file(rel_path):
+                continue
+
+            # Skip example/sample config files (contain placeholder credentials)
+            if _is_example_config_file(rel_path):
                 continue
 
             # Skip credential template files (e.g., n8n /credentials/ with template syntax)
@@ -526,10 +484,6 @@ def detect_secrets(
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
                 entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
                 findings.extend(entropy_findings)
-
-            # Early termination: stop scanning once we have enough findings
-            if len(findings) >= max_results * 2:  # 2x buffer for dedup
-                break
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -561,7 +515,7 @@ def detect_secrets(
         "severity_filter": severity,
         "stats": stats,
         "risk": risk,
-        "findings": findings[:max_results],  # Cap to avoid explosion
+        "findings": findings[:200],  # Cap to avoid explosion
         "env_exposed": env_exposed,
         "recommendations": recommendations,
     }
@@ -602,10 +556,6 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
 
                     # Skip example/placeholder/documentation lines
                     if _is_example_or_placeholder_line(line_text):
-                        continue
-
-                    # Rust-specific false positive reduction
-                    if ext == ".rs" and _is_rust_non_secret(raw_value, line_text):
                         continue
 
                     # Mask the value for safe reporting
@@ -700,10 +650,6 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
 
             # Skip example/placeholder/documentation lines
             if _is_example_or_placeholder_line(line_text):
-                continue
-
-            # Rust-specific false positive reduction
-            if ext == ".rs" and _is_rust_non_secret(candidate, line_text):
                 continue
 
             # Determine likely category based on context
@@ -913,73 +859,6 @@ def _is_safe_value(value: str) -> bool:
 
     return False
 
-
-def _is_rust_non_secret(value: str, line_text: str) -> bool:
-    """Rust-specific false positive reduction for secrets engine.
-
-    Rust code has many patterns that look like secrets but aren't:
-    - Hash constants and test vectors (hex strings in test files)
-    - Derive macros (#[derive(...)])
-    - Type ascriptions and trait bounds
-    - Enum variant strings (e.g., "password" as a variant name)
-    - Assertion/comparison strings in tests
-    - Static string constants that are labels, not secrets
-    - Base64-encoded test data in test fixtures
-
-    Returns True if the value is likely a Rust-specific non-secret.
-    """
-    stripped = line_text.strip()
-
-    # Rust attribute lines: #[derive(...)], #[cfg(...)], #[test], etc.
-    if stripped.startswith('#['):
-        return True
-
-    # Rust assertion patterns: assert_eq!, assert!, assert_ne!
-    if re.match(r'^\s*assert(?:_eq|_ne)?!', stripped):
-        return True
-
-    # Rust match arm patterns (enum variant strings are labels, not secrets)
-    # e.g., `"password" => ...` or `TokenKind::Password => ...`
-    if re.match(r'^\s*"', stripped) and '=>' in stripped:
-        return True
-
-    # Rust doc comments: /// or //!
-    if stripped.startswith('///') or stripped.startswith('//!'):
-        return True
-
-    # Rust string literal used as a label/name in struct/enum definition
-    # e.g., const NAME: &str = "password"; (just the word, not an actual secret)
-    if re.match(r'^\s*(?:const|static)\s+\w+\s*:\s*&?str\s*=\s*"', stripped):
-        # Check if the value is just a keyword like "password", "token", "secret"
-        if value.lower() in ('password', 'passwd', 'token', 'secret', 'key',
-                              'api_key', 'apikey', 'private_key', 'auth',
-                              'credential', 'session', 'cookie'):
-            return True
-
-    # Rust test fixture patterns — hex strings and base64 in test data
-    # e.g., hex::decode("abcdef0123456789") or base64::decode("...")
-    if re.search(r'(?:hex|base64|decode|encode|from_str|from_hex)\s*\(', stripped):
-        return True
-
-    # Rust format macro strings — values embedded in format!(), println!(), etc.
-    if re.match(r'^\s*(?:format!|println!|print!|eprintln!|eprint!|write!|writeln!)\s*\(', stripped):
-        return True
-
-    # Rust string comparison in tests: == "value", != "value"
-    if re.search(r'(?:==|!=)\s*"', stripped) and 'assert' in stripped.lower():
-        return True
-
-    # Rust include_str!() — embeds file content, not a secret
-    if 'include_str!' in stripped:
-        return True
-
-    # Short hex strings (< 40 chars) — likely hash prefixes, not secrets
-    # Git hashes, SHA prefixes used in test data
-    if re.match(r'^[a-f0-9]{12,39}$', value, re.IGNORECASE):
-        return True
-
-    return False
-
 def _is_test_file(rel_path: str) -> bool:
     """Check if a file is in a test directory or has a test file extension.
 
@@ -1017,6 +896,9 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         # i18n / locale directories — contain translated UI labels, NOT real secrets
         '/locales/', '/locale/', '/i18n/', '/lang/', '/translations/',
         '/intl/', '/localization/',
+        # Example/sample config directories — contain placeholder credentials
+        '/config_examples/', '/config_samples/',
+        '/sample_configs/', '/sample_config/',
     ]
     # Also match paths that START with these directory names
     start_indicators = [
@@ -1028,17 +910,24 @@ def _is_docs_or_example_file(rel_path: str) -> bool:
         'changelog/', 'changes/', 'news/',
         'locales/', 'locale/', 'i18n/', 'lang/', 'translations/',
         'intl/', 'localization/',
-    ]
-    # Additional test fixture / expected-result directories that contain
-    # fake credentials (e.g., WPT expectations, snapshot tests, golden files)
-    test_fixture_indicators = [
-        '/expectations/', '/expected/', '/golden/', '/snapshots/',
-        '/wpt/', '/web-platform-tests/', '/testdata/', '/test_data/',
-        '/__snapshots__/', '/__fixtures__/',
+        'config_examples/', 'config_samples/',
+        'sample_configs/', 'sample_config/',
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
-            any(indicator in normalized for indicator in test_fixture_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
+
+def _is_example_config_file(rel_path: str) -> bool:
+    """Check if a file is an example/sample config file by filename pattern.
+
+    Files like config.example.json, settings.sample.yaml, etc. contain
+    placeholder credentials and are not security risks.
+    """
+    basename = os.path.basename(rel_path).lower()
+    example_indicators = [
+        '.example.', '.sample.', '.template.', '.demo.',
+        '.example', '.sample',  # file ends with these
+    ]
+    return any(indicator in basename for indicator in example_indicators)
 
 def _find_line_number(content: str, value: str) -> int:
     """Find the line number of a value in the content."""

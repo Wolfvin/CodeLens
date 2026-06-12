@@ -1,9 +1,9 @@
 {
   "name": "codelens",
-  "version": "6.1.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.1: Rust ECS pattern detection (Bevy plugins/systems/components/resources/events/states in api-map), per-engine timeout for analyze command, Rust compile-time env var filtering (CARGO_* vars excluded), Rust-specific god object thresholds (35/60 vs 20/35), Rust doc comment false positive reduction (commented_code 96% reduction), Rust circular dependency common method name filtering, WGSL shader support, lazy_static regex performance fix. Tested on bevyengine/bevy (1809 Rust files, 41K nodes, 2.8K ECS routes), cockroachdb/cockroach (10K Go), denoland/deno (5.4K Rust+TS), elizaOS/eliza (5.3K AI agent).",  "author": "codelens",
-  "tags": [    "code-analysis",    "reference-tracking",
-    "dead-code",
+  "version": "7.0.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v7.0: Major agent-analysis improvements — secrets false positive reduction (config_examples/, .example. files, common placeholder passwords), dataflow test file noise reduction (test vs production violations), entrypoints prioritization (main/http_handler first, test_entry last), project version detection from setup.cfg/__init__.py/setup.py/README, project description extraction from pyproject.toml/README, FastAPI router-level auth propagation (include_router with Depends), debug-leak CLI context awareness (print() in CLI modules not flagged). Tested on freqtrade/freqtrade (480 Python files, crypto trading bot).","author": "codelens",
+  "tags": [    "code-analysis",
+    "reference-tracking",    "dead-code",
     "duplicate-detection",    "frontend",    "backend",
     "rust",    "html",
     "css",

@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "5.9.3"
+CODELENS_VERSION = "7.0.0"
 
 
 # ─── Generated File Detection ───────────────────────────────

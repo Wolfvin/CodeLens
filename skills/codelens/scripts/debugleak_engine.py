@@ -226,7 +226,7 @@ def detect_debug_leaks(
 
             # ─── print_statement ──────────────────────────
             if "print_statement" in categories:
-                _detect_print_statements(lines, rel_path, ext, is_test_file, leaks)
+                _detect_print_statements(lines, rel_path, ext, is_test_file, leaks, content)
 
             # ─── debugger ─────────────────────────────────
             if "debugger" in categories:
@@ -345,8 +345,39 @@ def _detect_console_logs(
             break  # One match per line
 
 
+def _is_cli_module(file_path: str, content: str) -> bool:
+    """Check if a Python file is likely a CLI module where print() is legitimate output.
+
+    CLI modules use print() for user-facing output, not debugging.
+    """
+    # Check directory patterns
+    cli_dirs = ['/commands/', '/cli/', '/cmd/', '/scripts/', '/bin/']
+    for cli_dir in cli_dirs:
+        if cli_dir in file_path or file_path.startswith(cli_dir.lstrip('/')):
+            return True
+
+    # Check for CLI framework indicators in the file
+    cli_indicators = [
+        'if __name__ == "__main__"',
+        "if __name__ == '__main__'",
+        'import argparse',
+        'from argparse',
+        'import click',
+        'from click',
+        'import typer',
+        'from typer',
+        'import rich',
+        'from rich',
+        '@click.',
+        'app = typer.',
+        'argparse.ArgumentParser',
+    ]
+    return any(indicator in content for indicator in cli_indicators)
+
+
 def _detect_print_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool, leaks: List[Dict],
+    content: str = ""
 ) -> None:
     """Detect print(), pprint(), echo, fmt.Println, println! statements."""
     for i, line in enumerate(lines):
@@ -418,12 +449,20 @@ def _detect_print_statements(
 
             severity = "medium"
             should_remove = True
+            note = None
 
             if is_test_file:
                 severity = "low"
                 should_remove = False
 
-            leaks.append({
+            # Context-aware filtering: Python CLI modules use print() for
+            # legitimate user output, not debugging — downgrade severity.
+            if ext == ".py" and label in ("print()", "pprint()", "pprint.pprint()") and _is_cli_module(rel_path, content):
+                severity = "info"  # Legitimate CLI output
+                should_remove = False
+                note = "CLI module — print() may be intentional user output"
+
+            finding = {
                 "category": "print_statement",
                 "file": rel_path,
                 "line": i + 1,
@@ -433,7 +472,10 @@ def _detect_print_statements(
                 "match": label,
                 "severity": severity,
                 "should_remove": should_remove,
-            })
+            }
+            if note is not None:
+                finding["note"] = note
+            leaks.append(finding)
             break
 
 

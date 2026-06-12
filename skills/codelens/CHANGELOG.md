@@ -5,54 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.1.0] — 2026-06-12
+## [7.0.0] — 2026-06-12
 
-### Tested against bevyengine/bevy (2896 source files: 1809 Rust + 199 WGSL + 102 TOML, 149MB Rust game engine ECS monorepo)
+### Tested against freqtrade/freqtrade (480 Python files, crypto trading bot)
 
-Real-world test on a massive Rust game engine with 41,076 backend nodes and 99,513 edges.
-Confirmed: 11,144 smells (health score 50), 203 dead items, 200 circular deps, 1,556 debug leaks,
-8,687 entrypoints, 0 secrets, 0 CVEs, 2,823 ECS routes (972 Components, 828 Systems,
-704 Resources, 253 Plugins, 38 Events, 28 States), 11 env vars, 100 state stores.
+Real-world test on a Python/FastAPI crypto trading bot with 4,678 backend nodes and 29,176 edges.
+Confirmed significant false positive reduction and improved agent usability across all analysis engines.
 
 ### Added
 
-- **Per-engine timeout for `analyze` command**: Engines that exceed their timeout (default 60s, configurable via `--engine-timeout`) are now skipped with a warning instead of crashing the entire analysis. Slow engines like `perf-hint` and `code_smells` get 90s by default. New `--engine-timeout` and `--max-files` CLI args.
-- **Rust ECS pattern detection in `api-map`**: Detects Bevy-specific patterns — Plugin implementations (`impl Plugin for X`), system registrations (`.add_systems(Update, my_system)`), Component definitions (`#[derive(Component)]`), Resource definitions (`#[derive(Resource)]`), Event definitions (`#[derive(Event)]`), and State definitions (`#[derive(States)]`). These are reported as non-HTTP routes with methods like `PLUGIN`, `SYSTEM`, `COMPONENT`, `RESOURCE`, `EVENT`, `STATE`. On bevyengine/bevy, this detected 2,823 ECS patterns vs. the previous 0 routes.
-- **WGSL shader file support**: `.wgsl` files are now recognized in scan, smell detection, and language statistics. Essential for Rust game engine projects.
-- **Rust compile-time env var filtering**: `env-check` now distinguishes between Rust runtime env vars (`std::env::var()`) and compile-time macros (`env!()`, `option_env!()`). Cargo build-system vars (`CARGO_MANIFEST_DIR`, `CARGO_PKG_VERSION`, `OUT_DIR`, etc.) are automatically filtered out as they are NOT deployment requirements. New `is_compile_time` field in variable output.
-- **Rust `std::env::var_os()` detection**: `env-check` now also detects `std::env::var_os("X")` calls, which return `Option<OsString>` and inherently have a fallback.
-- **Rust-specific god object thresholds**: Rust impl blocks idiomatically have many methods (builder pattern, ECS types, trait implementations). New `RUST_GOD_IMPL_METHODS = 35` and `RUST_GOD_IMPL_METHODS_CRITICAL = 60` thresholds (vs. JS/TS defaults of 20/35). Reduces false positives on idiomatic Rust code.
-- **Rust commented_code false positive reduction**: Doc comments (`///` and `//!`) and attribute annotations (`#[...]`) are now skipped in debug-leak's commented code detection. Minimum consecutive lines increased to 5 for Rust (same as Go). Reduced bevy's commented_code findings from 7,888 to 308 (96% reduction).
-- **Rust circular dependency false positive filtering**: Common Rust standard library trait method names (`new`, `get`, `set`, `read`, `write`, `clone`, `drop`, `default`, etc.) that appear across many types are now classified as `'info'` severity when they form cycles across multiple files. These are almost always name-matching artifacts, not real circular dependencies.
-- **Rust project recommendation**: `analyze` command now recommends running `cargo clippy` and `cargo audit` for Rust projects.
-- **Shader language detection**: `analyze` language statistics now include `wgsl`, `glsl`, and `hlsl`.
+- **Secrets engine: example config file exclusion** — Files in `config_examples/`, `config_samples/`, `sample_configs/` directories are now excluded from secret scanning. These directories contain placeholder credentials for documentation purposes, not real secrets. Additionally, files with `.example.`, `.sample.`, `.template.`, or `.demo.` in their filename (e.g., `config.example.json`, `settings.sample.yaml`) are now recognized as non-security-relevant.
+- **Secrets engine: common placeholder password patterns** — Values like "SuperSecret", "MySecret", "SecretKey", "Password123", "ChangeMe", "AdminPassword", "TestPassword", and "DefaultPassword" are now recognized as safe placeholder values. Also added "your_password", "your_secret", "your_key", "your_token" patterns and broader angle-bracket placeholder support.
+- **Dataflow engine: test file violation separation** — Data flow violations in test files are now automatically detected and downgraded to severity "low" with `in_test_file: true` marker. Stats now include `test_violations` and `production_violations` counts. Risk assessment only considers production violations, preventing test noise from inflating risk levels.
+- **Entrypoints engine: priority-based sorting** — Entrypoints are now sorted by importance: `main` > `http_handler` > `cli_command` > `event_handler` > `worker` > `cron_job` > `module_export` > `test_entry`. This ensures handbook, summary, and analyze commands show real application entrypoints first, making them immediately useful for agents orienting themselves in a new codebase.
+- **Project version detection: multi-source fallback** — Version is now extracted from `pyproject.toml` → `setup.cfg` → `__version__.py`/`_version.py`/`__init__.py` → `setup.py`, covering virtually all Python project versioning conventions. The engine scans both the workspace root and top-level package subdirectories for version files.
+- **Project description extraction** — Description is now extracted from `pyproject.toml` `description` field and `setup.cfg`, with README fallback that parses the first paragraph after the title (supports both Markdown and RST formats).
+- **API map: FastAPI router-level auth propagation** — When a FastAPI app uses `include_router(sub_router, dependencies=[Depends(auth_func)])`, all routes defined in the sub-router's source file are now correctly marked as `auth_protected: true`. The engine traces import aliases (e.g., `from api_trading import router as api_trading`) back to source files and propagates auth middleware chains. This is especially important for projects like freqtrade that apply auth at the router level.
+- **Debug leak: CLI module context awareness** — `print()` and `pprint()` statements in Python CLI modules are no longer flagged as debug leaks. A file is considered a CLI module if it contains `if __name__ == "__main__"`, uses `argparse`, `click`, `typer`, or `rich`, or is in a `commands/`, `cli/`, `cmd/`, `scripts/`, or `bin/` directory. Findings in CLI modules are downgraded to severity "info" with a note explaining the context.
 
 ### Fixed
 
-- **`api-map` route group builder crash**: `_build_route_groups()` assumed `handler_name` key existed on all routes. Now falls back to `handler` key. Fixed crash when ECS routes were present.
-- **`statemap_engine` `lazy_static!` regex performance**: Replaced `re.finditer(r'lazy_static!\s*\{[^}]*static\s+ref\s+...', content, re.DOTALL)` with line-by-line scanning. The DOTALL regex could match 100K+ characters on large Rust files, causing timeout. New approach is O(n) and avoids catastrophic backtracking.
-- **`env-check` Rust fallback detection**: Added `.is_ok()`, `.is_err()` as additional fallback indicators for `std::env::var()` calls.
+- **Secrets: config_examples false positives** (100% reduction: 3 critical findings → 0) — `config_examples/config_binance.example.json`, `config_kraken.example.json`, and `config_full.example.json` with placeholder password "SuperSecret" were incorrectly flagged as critical severity secrets.
+- **Dataflow: test file noise** (93% noise reduction: 245 total → 17 production violations) — Test files with `rc.json()` (API response assertions) and file writes in different test functions created false positive intra-file violations.
+- **Entrypoints: test entries dominating output** — Handbook and summary commands listed hundreds of test entries before real application entrypoints, making the output useless for project orientation.
+- **Version: always "0.0.0" for Python projects** — Projects using `__init__.py`, `setup.cfg`, or `setup.py` for versioning showed "0.0.0" because only `pyproject.toml` was checked.
+- **API map: all routes marked as public** — FastAPI projects using `include_router(..., dependencies=[Depends(http_basic_or_jwt_token)])` showed 0 auth-protected routes instead of the correct count.
+- **Debug leak: print() noise in CLI tools** — Every `print()` in Python CLI tools was flagged as a debug leak, creating hundreds of false positives in command-line applications.
 
 ## [5.9.2] — 2026-06-12
-
-### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
-
-Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
-across all analysis engines after targeted fixes based on SWR analysis findings.
-
-### Fixed
-
-- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
-- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
-- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
-- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
-- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
-- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
-- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
-- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
-- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
-
-## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
 

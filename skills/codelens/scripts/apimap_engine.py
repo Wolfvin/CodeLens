@@ -76,6 +76,25 @@ VALIDATION_PATTERNS = {
     "zod", "yup", "celebrate", "checkSchema",
 }
 
+# FastAPI-specific auth dependency patterns (Depends / Security)
+FASTAPI_AUTH_PATTERNS = [
+    r'Depends\s*\(\s*(?:get_current|verify_|auth_|require_|check_|validate_|get_api_|api_key)',
+    r'Security\s*\(',
+    r'HTTPBearer\s*\(\s*\)',
+    r'HTTPBasic\s*\(\s*\)',
+    r'OAuth2PasswordBearer\s*\(',
+    r'APIKeyHeader\s*\(',
+    r'APIKeyQuery\s*\(',
+    r'APIKeyCookie\s*\(',
+    r'dependencies\s*=\s*\[.*Depends\s*\(',
+]
+
+# Pattern for Depends() with auth-related name in function signatures
+FASTAPI_DEPENDS_AUTH_RE = re.compile(
+    r'Depends\s*\(\s*\w*(?:auth|token|user|key|credential|session|login|verify)\w*\s*\)',
+    re.IGNORECASE,
+)
+
 
 def map_api_routes(
     workspace: str,
@@ -284,6 +303,139 @@ def map_api_routes(
                     "file": mw["file"],
                     "line": mw["line"],
                 })
+
+    # Propagate router-level auth (include_router with auth dependencies)
+    # Find all ROUTER_INCLUDE entries that carry auth, then propagate to
+    # routes defined in the included router's source file.
+    router_auth_names: Dict[str, List[Dict]] = {}  # included_router_alias -> [auth_middleware]
+    for route in list(routes):
+        if route.get("method") == "ROUTER_INCLUDE" and route.get("source") == "router_include_auth":
+            included_router = route.get("handler_name", "")
+            auth_mw = route.get("middleware_chain", [])
+            if included_router not in router_auth_names:
+                router_auth_names[included_router] = auth_mw
+
+    # Remove ROUTER_INCLUDE entries from visible routes
+    routes = [r for r in routes if r.get("method") != "ROUTER_INCLUDE"]
+
+    # Propagate auth: scan files for import aliases that map router names to source files
+    # Pattern: from some_module import router as api_trading
+    # Also:    from some_module import api_router  (direct name)
+    # Build: alias_name -> source_rel_path
+    import_alias_to_file: Dict[str, str] = {}  # alias -> rel_path of defining file
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext != '.py':
+                continue
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(10000)  # Read imports section
+                # Match: from X import router as alias_name
+                for im in re.finditer(r'from\s+[\w.]+\s+import\s+\w+\s+as\s+(\w+)', content):
+                    alias = im.group(1)
+                    import_alias_to_file[alias] = rel_path
+                # Match: from X import some_router (direct import of router variable)
+                for im in re.finditer(r'from\s+([\w.]+)\s+import\s+(\w+)(?:\s+as\s+(\w+))?', content):
+                    direct_name = im.group(2)
+                    alias = im.group(3) or direct_name
+                    # Check if the imported module is a Python file with APIRouter
+                    module_path = im.group(1).replace('.', '/')
+                    # Store both the alias and direct name
+                    import_alias_to_file[alias] = rel_path
+            except IOError:
+                continue
+
+    # Build: file -> set of APIRouter variable names
+    file_router_defs: Dict[str, Set[str]] = defaultdict(set)
+    for root, dirs, filenames in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        if '.codelens' in root:
+            dirs.clear()
+            continue
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext != '.py':
+                continue
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, workspace)
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(5000)
+                for rm in re.finditer(r'(\w+)\s*=\s*APIRouter\s*\(', content):
+                    file_router_defs[rel_path].add(rm.group(1))
+            except IOError:
+                continue
+
+    # Resolve: for each router_auth_names entry, find which file defines the router
+    # Strategy: find the import statement `from X import router as ALIAS` in the ROUTER_INCLUDE file,
+    # then find the source file that defines `router = APIRouter()`
+    # Simpler approach: for each alias in router_auth_names, find files that import it
+    # and trace back to the file that defines the router variable
+    auth_source_files: Set[str] = set()  # files whose routes should inherit auth
+    for alias, auth_mw in router_auth_names.items():
+        # Find where this alias is imported from
+        # Search all files for: from X import Y as alias (or from X import alias)
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+            if '.codelens' in root:
+                dirs.clear()
+                continue
+            for filename in filenames:
+                ext = os.path.splitext(filename)[1].lower()
+                if ext != '.py':
+                    continue
+                file_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(file_path, workspace)
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(10000)
+                    # Find: from some.module import router as <alias>
+                    import_pattern = rf'from\s+([\w.]+)\s+import\s+\w+\s+as\s+{re.escape(alias)}\b'
+                    im = re.search(import_pattern, content)
+                    if im:
+                        module_path = im.group(1)
+                        # Convert module path to file path
+                        parts = module_path.split('.')
+                        # Try to find the file
+                        for possible_path in [
+                            os.path.join(workspace, *parts) + '.py',
+                            os.path.join(workspace, *parts, '__init__.py'),
+                        ]:
+                            if os.path.isfile(possible_path):
+                                source_rel = os.path.relpath(possible_path, workspace)
+                                auth_source_files.add(source_rel)
+                                break
+                        # Also try just matching by file name pattern
+                        # e.g., from freqtrade.rpc.api_server.api_trading import router as api_trading
+                        # -> source file is freqtrade/rpc/api_server/api_trading.py
+                        last_part = parts[-1]
+                        for possible_path in [
+                            os.path.join(workspace, *parts[:-1], last_part + '.py'),
+                        ]:
+                            if os.path.isfile(possible_path):
+                                source_rel = os.path.relpath(possible_path, workspace)
+                                auth_source_files.add(source_rel)
+                except IOError:
+                    continue
+
+    # Now propagate auth to all routes from auth_source_files
+    for route in routes:
+        if route.get("auth_protected"):
+            continue
+        route_file = route.get("file", "")
+        if route_file in auth_source_files:
+            # This route's file is included via include_router with auth
+            for alias, auth_mw in router_auth_names.items():
+                for mw in auth_mw:
+                    route.setdefault("middleware_chain", []).append(mw)
+                break
 
     # Build middleware map
     for route in routes:
@@ -1250,6 +1402,16 @@ def _extract_python_routes(
                 if rm:
                     resp_type = rm.group(1)
 
+                # Detect FastAPI auth via Depends() / Security() patterns
+                has_fastapi_auth = _detect_fastapi_auth(content, m.start(), m.end())
+                if has_fastapi_auth:
+                    mw_chain.append({
+                        "name": "fastapi_depends_auth",
+                        "type": "auth",
+                        "file": rel_path,
+                        "line": line_num,
+                    })
+
                 routes.append({
                     "method": http_method,
                     "path": _normalize_path(route_path),
@@ -1260,6 +1422,43 @@ def _extract_python_routes(
                     "request_type": None,
                     "response_type": resp_type,
                     "framework": "fastapi",
+                })
+
+    # FastAPI include_router with auth dependencies
+    # e.g., router.include_router(sub_router, dependencies=[Depends(http_basic_or_jwt_token)])
+    if is_fastapi:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*include_router\s*\(\s*(\w+)[^)]*dependencies\s*=\s*\[([^\]]*)\]',
+            content
+        ):
+            parent_router = m.group(1)
+            included_router = m.group(2)
+            deps_str = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Check if the dependencies contain auth-related Depends()
+            has_auth = bool(re.search(
+                r'Depends\s*\(\s*\w*(?:auth|token|user|key|credential|session|login|verify|jwt|bearer|security)\w*\s*\)',
+                deps_str,
+                re.IGNORECASE
+            )) or bool(re.search(
+                r'Security\s*\(',
+                deps_str
+            ))
+
+            if has_auth:
+                # Store this as a route_group with auth for later propagation
+                routes.append({
+                    "method": "ROUTER_INCLUDE",
+                    "path": f"_router_auth:{parent_router}:{included_router}",
+                    "handler_name": included_router,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [{"name": "fastapi_depends_auth", "type": "auth", "file": rel_path, "line": line_num}],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "fastapi",
+                    "source": "router_include_auth",
                 })
 
     # Django URL patterns
@@ -1343,6 +1542,55 @@ def _find_next_python_function(content: str, offset: int) -> str:
     if m:
         return m.group(1)
     return "anonymous"
+
+
+def _detect_fastapi_auth(content: str, decorator_start: int, func_offset: int) -> bool:
+    """Detect FastAPI auth patterns in the decorator line and function signature.
+
+    Checks:
+    1. The full decorator line (including continuation lines) for Depends/Security patterns.
+    2. The function signature parameters for Depends(auth_...) patterns.
+
+    Returns True if auth is detected.
+    """
+    # --- Check the decorator line(s) ---
+    # Collect the decorator and any continuation lines until the function def
+    decorator_end = func_offset if func_offset > decorator_start else decorator_start + 800
+    decorator_text = content[decorator_start:decorator_end]
+
+    for pattern in FASTAPI_AUTH_PATTERNS:
+        if re.search(pattern, decorator_text, re.IGNORECASE):
+            return True
+
+    # --- Check the function signature for Depends(auth_...) ---
+    # Grab only the function signature (from 'def' to the closing ':')
+    # to avoid bleeding into subsequent route handlers.
+    func_remaining = content[func_offset:func_offset + 800]
+    # Find the end of the function signature: first line ending with ':'
+    # that is at the def-level (not inside a string or nested block).
+    sig_lines = []
+    for line in func_remaining.split('\n'):
+        sig_lines.append(line)
+        stripped = line.rstrip()
+        if stripped.endswith(':') and not stripped.startswith((' ', '\t', '#')):
+            break
+        # Also handle multi-line signatures that end with ') -> Type:' or '):'
+        if stripped.endswith('):') or re.match(r'.*\)\s*(->\s*\w+)?:\s*$', stripped):
+            break
+    sig_text = '\n'.join(sig_lines)
+
+    # Check FASTAPI_AUTH_PATTERNS against the function signature area too
+    # (catches HTTPBearer(), APIKeyHeader(), etc. inside Depends(...))
+    for pattern in FASTAPI_AUTH_PATTERNS:
+        if re.search(pattern, sig_text, re.IGNORECASE):
+            return True
+
+    # Check for Depends() with an auth-related dependency name
+    if 'Depends(' in sig_text or 'Depends (' in sig_text:
+        if FASTAPI_DEPENDS_AUTH_RE.search(sig_text):
+            return True
+
+    return False
 
 
 def _extract_python_decorator_middleware(
