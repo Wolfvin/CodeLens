@@ -13,11 +13,19 @@ def add_args(parser):
 
 
 def execute(args, workspace):
+    # Validate: if 'name' looks like a path, it was likely meant as workspace
+    name = args.name
+    if name and (os.path.isabs(name) or name.startswith('./') or name.startswith('../')):
+        # User probably omitted function name and passed workspace as first arg
+        # Swap: use name as workspace, leave function name empty
+        workspace = name
+        name = ""
     return trace_error_propagation(
-        args.name, workspace,
+        name, workspace,
         error_type=args.error_type,
         max_depth=args.depth
     )
 
 
+import os
 register_command("stack-trace", "Error propagation simulation", add_args, execute)

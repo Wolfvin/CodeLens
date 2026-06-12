@@ -316,6 +316,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
+    _monorepo_subdir_count = 0  # track how many sub-packages found
     for subdir in _MONOREPO_SUBDIRS:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
@@ -325,6 +326,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 entry_pkg = os.path.join(subdir_path, entry, "package.json")
                 if not os.path.isfile(entry_pkg):
                     continue
+                _monorepo_subdir_count += 1
                 try:
                     with open(entry_pkg, 'r', encoding='utf-8') as f:
                         pkg = json.load(f)
@@ -357,6 +359,25 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 except Exception:
                     pass
         except OSError:
+            pass
+
+    # v6.3: If we found 2+ sub-packages in apps/packages/services, mark as monorepo
+    if _monorepo_subdir_count >= 2 and not identity["is_monorepo"]:
+        identity["is_monorepo"] = True
+        if "yarn-workspace" not in identity["monorepo_tools"]:
+            identity["monorepo_tools"].append("yarn-workspace")
+
+    # v6.3: Also check root package.json for "workspaces" field (npm/yarn workspaces)
+    if has_package_json and not identity["is_monorepo"]:
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            workspaces = pkg.get("workspaces")
+            if workspaces:
+                identity["is_monorepo"] = True
+                if "npm-workspaces" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("npm-workspaces")
+        except Exception:
             pass
 
     # Try pyproject.toml

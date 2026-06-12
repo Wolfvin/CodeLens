@@ -5,6 +5,37 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3] — 2026-06-12
+
+### Tested against excalidraw/excalidraw (702 source files: 602 TS/TSX + 85 CSS/SCSS, 89MB canvas-based drawing monorepo)
+
+Real-world test on a pure TypeScript/React monorepo (packages/common, packages/excalidraw, packages/element, etc.)
+with 2,025 backend nodes, 13,720 edges. Found and fixed 10 runtime bugs through practical execution testing.
+
+### Added
+
+- **Monorepo detection from sub-directory structure**: Projects with 2+ package.json files in `apps/`, `packages/`, or `services/` directories are now correctly identified as monorepos, even without turbo.json or pnpm-workspace.yaml. Adds `yarn-workspace` to monorepo_tools.
+- **npm/yarn workspaces field detection**: `handbook` now checks root `package.json` for `"workspaces"` field and adds `npm-workspaces` to monorepo_tools.
+- **ESM detection heuristics**: `detect_frameworks()` now checks for `.mts`/`.mjs` files and `"exports"` field in package.json before defaulting to CJS module system. Prevents incorrect `module_system: cjs` for ESM projects.
+- **Ask command timeout protection**: `ask` now applies a 30-second timeout for slow commands (dead-code, smell, complexity, etc.) using SIGALRM. Returns a helpful timeout message instead of hanging.
+- **Ask command duration tracking**: `ask` responses now include `ask_duration_ms` field for performance monitoring.
+
+### Fixed
+
+- **`binary-scan` ImportError crash**: `scan_tauri_artifacts` was imported from `utils.py` but doesn't exist. Changed to try/except import with graceful fallback — Tauri analysis is skipped when the function is unavailable.
+- **Monorepo not detected for packages/ sub-directories**: Excalidraw (packages/common, packages/excalidraw, etc.) was reported as `is_monorepo: false`. Fixed by counting sub-directory package.json files and flagging as monorepo when count >= 2.
+- **`stack-trace` workspace auto-detect break**: When called with a workspace path as first positional arg, it was parsed as function name and workspace fell through to auto-detect (picking up wrong directory). Added path detection: if `name` looks like a path, swap it to workspace.
+- **Module system always CJS**: Projects without `"type": "module"` in package.json but using .mts/.mjs files or `"exports"` field were incorrectly reported as CJS. Added ESM heuristic detection.
+- **`summary --detail minimal` not reducing output**: Minimal detail still returned all findings regardless of severity. Now properly filters by severity and skips categories with no critical items in minimal mode.
+- **Markdown formatter Python dict repr**: Convention fields like `{'convention': 'PascalCase', 'confidence': '53%'}` are now formatted as readable text instead of Python dict representation.
+- **ORM false positive for TypeScript projects**: SQLAlchemy patterns (`Base =`, `Column(`) matched React/TSX code (e.g., `const Base = ...`, UI Column components). Restricted SQLAlchemy detection to `.py` files only and made patterns more specific (`Base = declarative_base`, `Column(Integer|String|...)`).
+- **Dataflow `.values()` false positive**: `.value\s*` pattern matched `elements.values()`, `groups.values()` (Map/Array methods) as DOM input sources. Changed to `\.value\b(?!\s*\()` to exclude `.values()` calls. Reduced violations from 28 to 15 on Excalidraw.
+- **Trace `affected_file_list` included path chains**: The file list contained entries like `packages/excalidraw/renderer/staticSvgScene.ts:719 → packages/excalidraw/scene/export.ts:289`. Now extracts only actual file paths from chain notation.
+
+### Changed
+
+- **Version bump**: 5.9.1 → 6.3
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

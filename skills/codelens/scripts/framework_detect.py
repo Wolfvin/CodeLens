@@ -315,7 +315,25 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "type" in pkg and pkg["type"] == "module":
                     detected["module_system"] = "esm"
                 else:
-                    detected["module_system"] = "cjs"
+                    # Heuristic: check for ESM indicators before defaulting to CJS
+                    # "exports" field in package.json strongly implies ESM
+                    # .mts/.mjs files in the project also suggest ESM
+                    has_mts_files = False
+                    try:
+                        for root_dir, _, files in os.walk(workspace):
+                            # Skip ignored dirs
+                            dirs_trim = [d for d in _ if d not in ('node_modules', '.git', 'dist', '.codelens', '__pycache__')]
+                            _.clear()
+                            _.extend(dirs_trim)
+                            if any(f.endswith('.mts') or f.endswith('.mjs') for f in files):
+                                has_mts_files = True
+                                break
+                    except Exception:
+                        pass
+                    if has_mts_files or "exports" in pkg:
+                        detected["module_system"] = "esm"
+                    else:
+                        detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
 

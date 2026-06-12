@@ -21,13 +21,18 @@ def add_args(parser):
 
 def execute(args, workspace):
     """Scan workspace for binary/compiled artifacts with RE analysis."""
-    from utils import scan_binary_artifacts, scan_tauri_artifacts
+    from utils import scan_binary_artifacts
     result = scan_binary_artifacts(workspace)
 
     # Add Tauri-specific analysis if Tauri is detected
-    tauri_result = scan_tauri_artifacts(workspace)
-    if tauri_result:
-        result["tauri_analysis"] = tauri_result
+    try:
+        from utils import scan_tauri_artifacts
+        tauri_result = scan_tauri_artifacts(workspace)
+        if tauri_result:
+            result["tauri_analysis"] = tauri_result
+    except ImportError:
+        # scan_tauri_artifacts not available — skip Tauri analysis
+        pass
 
     return result
 
