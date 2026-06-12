@@ -326,16 +326,25 @@ def _detect_console_logs(
                 # Also skip if it's in a dedicated error-handling utility
                 if re.search(r'(logError|handleError|reportError|onError)', context):
                     continue
+                # console.error is typically legitimate error logging, not a debug leak
+                # Only flag as info severity and don't suggest removal
+                severity = "info"
+                should_remove = False
 
             # console.warn in catch blocks is also somewhat legitimate
-            if label == "console.warn":
+            elif label == "console.warn":
                 context_start = max(0, i - 2)
                 context = '\n'.join(lines[context_start:i + 1])
                 if re.search(r'\bcatch\s*\(', context):
                     continue
+                # console.warn is typically legitimate warning logging, not a debug leak
+                # Only flag as info severity
+                severity = "info"
+                should_remove = False
 
-            severity = "medium"
-            should_remove = True
+            else:
+                severity = "medium"
+                should_remove = True
 
             # In test files, console.log is less severe
             if is_test_file:

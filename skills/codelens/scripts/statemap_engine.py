@@ -23,7 +23,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, logger
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -34,22 +34,6 @@ SOURCE_EXTENSIONS = {
 }
 
 STATE_TYPES = {"store", "context", "atom", "global", "machine"}
-
-# Maximum number of stores to return (performance cap)
-MAX_STORES = 200
-
-# Suffixes that indicate data shapes / types, NOT state stores
-NON_STATE_SUFFIXES = {'Dto', 'Dtos', 'Interface', 'Interfaces', 'Type', 'Types', 'Schema', 'Schemas',
-                       'Config', 'Configs', 'Options', 'Props', 'Params', 'Response', 'Request',
-                       'Result', 'Input', 'Output', 'Helper', 'Helpers', 'Utils',
-                       'Constants', 'Errors', 'Messages', 'Labels',
-                       'Description', 'Descriptions', 'Descriptor', 'Descriptors',
-                       'Operation', 'Operations', 'Field', 'Fields',
-                       'Property', 'Properties', 'Definition', 'Definitions',
-                       'Mapping', 'Mappings', 'Enum', 'Enums',
-                       'Value', 'Values', 'Entry', 'Entries',
-                       'Category', 'Categories', 'Group', 'Groups',
-                       'Collection', 'Collections', 'List', 'Lists'}
 
 
 def map_state(
@@ -106,6 +90,14 @@ def map_state(
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 _collect_js_imports(content, rel_path, all_imports_by_file)
                 _collect_js_exports(content, rel_path, all_exports_by_file)
+
+            elif ext == ".vue":
+                # Extract script section from Vue SFC for import/export collection
+                script_match = re.search(r'<script[^>]*>(.*?)</script>', content, re.DOTALL)
+                if script_match:
+                    script_content = script_match.group(1)
+                    _collect_js_imports(script_content, rel_path, all_imports_by_file)
+                    _collect_js_exports(script_content, rel_path, all_exports_by_file)
 
             elif ext == ".py":
                 _collect_py_imports(content, rel_path, all_imports_by_file)
@@ -178,6 +170,30 @@ def map_state(
                     stores.extend(xstate_results["stores"])
                     state_flow.extend(xstate_results["flow"])
 
+            # ─── Svelte Stores ────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte"}:
+                svelte_store_results = _extract_svelte_stores(content, rel_path)
+                if svelte_store_results["stores"]:
+                    frameworks_detected.add("svelte_stores")
+                    stores.extend(svelte_store_results["stores"])
+                    state_flow.extend(svelte_store_results["flow"])
+
+            # ─── Svelte 5 Runes ──────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte"}:
+                runes_results = _extract_svelte_runes(content, rel_path)
+                if runes_results["stores"]:
+                    frameworks_detected.add("svelte_runes")
+                    stores.extend(runes_results["stores"])
+                    state_flow.extend(runes_results["flow"])
+
+            # ─── Preact Signals ──────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                preact_results = _extract_preact_signals(content, rel_path)
+                if preact_results["stores"]:
+                    frameworks_detected.add("preact_signals")
+                    stores.extend(preact_results["stores"])
+                    state_flow.extend(preact_results["flow"])
+
             # ─── Module-level State ────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 global_results = _extract_js_global_state(content, rel_path)
@@ -194,17 +210,6 @@ def map_state(
                     state_flow.extend(py_global_results["flow"])
 
     # ─── Post-processing: Resolve consumers ──────────────────
-
-    # Filter module_level_js stores: only include if they appear to be mutated (reassigned) somewhere.
-    # A variable that is never reassigned is a constant, not state.
-    if stores:
-        stores = _filter_mutable_state(stores, workspace)
-
-    # Cap at MAX_STORES for performance
-    truncated = False
-    if len(stores) > MAX_STORES:
-        truncated = True
-        stores = stores[:MAX_STORES]
 
     # For each store, find files that import it
     for store in stores:
@@ -259,7 +264,6 @@ def map_state(
     return {
         "status": "ok",
         "workspace": workspace,
-        "truncated": truncated,
         "stats": {
             "total_stores": len(stores),
             "total_slices": total_slices,
@@ -724,6 +728,60 @@ def _extract_pinia_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
+    # Setup Stores: defineStore('name', () => { ... }) — Pinia's recommended pattern since v2
+    for m in re.finditer(
+        r'defineStore\s*\(\s*[\'"](\w+)[\'"]\s*,\s*(?:\([^)]*\)\s*=>|function\s*\([^)]*\))',
+        content
+    ):
+        store_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Avoid duplicating if already matched by Options API regex above
+        if any(s["name"] == store_name and s.get("framework") == "pinia" for s in stores):
+            continue
+
+        # Extract reactive variables as state slices
+        store_body = content[m.end():m.end() + 5000]
+        store_end = _find_matching_brace(store_body)
+        store_body = store_body[:store_end]
+
+        slices = []
+        for prop_m in re.finditer(
+            r'(?:const|let)\s+(\w+)\s*=\s*(?:ref|reactive|computed)\s*\(',
+            store_body
+        ):
+            slices.append({"name": prop_m.group(1)})
+
+        # Extract return values as the public API / actions
+        actions = []
+        return_match = re.search(r'return\s*\{([^}]+)\}', store_body, re.DOTALL)
+        if return_match:
+            for prop_m in re.finditer(r'(\w+)', return_match.group(1)):
+                name = prop_m.group(1)
+                if name not in {s["name"] for s in slices} and not name.startswith('_'):
+                    actions.append(name)
+
+        # Also look for function declarations inside the setup store body (these are actions)
+        for fn_m in re.finditer(
+            r'(?:async\s+)?(?:function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>)',
+            store_body
+        ):
+            fn_name = fn_m.group(1) or fn_m.group(2)
+            if fn_name and fn_name not in actions and not fn_name.startswith('_'):
+                actions.append(fn_name)
+
+        stores.append({
+            "name": store_name,
+            "type": "store",
+            "framework": "pinia",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": slices,
+            "actions": actions,
+            "consumers": [],
+            "store_type": "setup",
+        })
+
     # useStoreName()
     for m in re.finditer(r'(use\w+Store)\s*\(\s*\)', content):
         store_hook = m.group(1)
@@ -1032,144 +1090,212 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
     return {"stores": stores, "flow": flow}
 
 
-# ─── Mutable State Filter ─────────────────────────────────────
+# ─── Svelte Stores ─────────────────────────────────────────────
 
-def _filter_mutable_state(stores: List[Dict[str, Any]], workspace: str) -> List[Dict[str, Any]]:
-    """Filter module_level_js/py stores to only include those that are actually mutated.
+def _extract_svelte_stores(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Svelte stores: writable(), readable(), derived().
 
-    A module-level variable should only be counted as a "store" if it's
-    reassigned somewhere. If the variable is never reassigned, it's a
-    constant, not state.
-
-    For framework-backed stores (Redux, Pinia, Zustand, etc.), always keep them.
-
-    Heuristic: For module_level stores with `mutable: True` (object/array literal),
-    only keep if the name strongly suggests runtime-mutable state (cache, registry,
-    pool, store, etc.). Most object literals in TypeScript are configuration constants,
-    not state.
+    Detects:
+    - import { writable, readable, derived } from 'svelte/store'
+    - const count = writable(0)
+    - const name = readable('initial')
+    - const doubled = derived(count, $ => $ * 2)
     """
-    # Separate framework stores (always keep) from module_level stores
-    framework_stores = []
-    module_stores = []
+    stores = []
+    flow = []
 
-    for store in stores:
-        fw = store.get("framework", "")
-        if fw in ("module_level_js", "module_level_py"):
-            module_stores.append(store)
-        else:
-            framework_stores.append(store)
+    has_svelte_store = bool(re.search(
+        r"(?:from\s+['\"]svelte/store['\"]|import\s+.*svelte/store)",
+        content
+    ))
+    if not has_svelte_store and not re.search(r'\bwritable\s*\(|\breadable\s*\(|\bderived\s*\(', content):
+        return {"stores": [], "flow": []}
 
-    if not module_stores:
-        return stores
+    # Extract store declarations
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(writable|readable|derived)\s*\(',
+        content
+    ):
+        name, store_type = m.group(1), m.group(2)
+        stores.append({
+            "name": name,
+            "type": "store",
+            "framework": "svelte_stores",
+            "store_type": store_type,
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
 
-    # Name patterns that strongly indicate mutable runtime state
-    # These are words commonly found in variable names that are actually
-    # mutated at runtime (not just configuration objects)
-    # We check these at camelCase word boundaries to avoid false positives
-    # e.g., "certificateCache" matches "Cache" as a suffix, but "CacheKey" is a type
-    mutable_name_suffixes = (
-        'Cache', 'Registry', 'Pool', 'Buffer', 'Queue', 'Store',
-        'State', 'Counter', 'Lock', 'Semaphore', 'Connection',
-        'Socket', 'Timer', 'Interval', 'Subscription', 'Listener',
-        'Watcher', 'Monitor', 'Tracker', 'Manager',
-        'Controller', 'Broker', 'Dispatcher',
-        'Emitter', 'Receiver', 'Processor', 'Worker', 'Scheduler',
-        'Coordinator', 'Supervisor', 'Observer',
-    )
+    return {"stores": stores, "flow": flow}
 
-    # Name patterns that strongly indicate static configuration (NOT state)
-    static_name_indicators = {
-        'Statuses', 'Periods', 'Pages', 'Wallets', 'Codes',
-        'Currencies', 'Countries', 'Addresses', 'Notice',
-        'Description', 'Option', 'Property', 'Authentication',
-        'Billing', 'Shipping', 'Mailing', 'Campaign',
-        'Picker', 'Source', 'Metadata', 'Timeout',
-        # lowercase
-        'statuses', 'periods', 'pages', 'wallets', 'codes',
-        'currencies', 'countries', 'addresses', 'notice',
-        'description', 'option', 'property', 'authentication',
-        'billing', 'shipping', 'mailing', 'campaign',
-        'picker', 'source', 'metadata', 'timeout',
-        'address', 'currencies',
-    }
 
-    filtered_module = []
-    for store in module_stores:
-        name = store.get("name", "")
-        name_lower = name.lower()
+# ─── Svelte 5 Runes ────────────────────────────────────────────
 
-        # Skip if name ends with a non-state suffix (already checked earlier,
-        # but double-check since mutable filter runs after extraction)
-        if any(name.endswith(suffix) for suffix in NON_STATE_SUFFIXES):
-            continue
+def _extract_svelte_runes(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Svelte 5 runes: $state, $derived, $effect, $props.
 
-        # Skip names that indicate static configuration
-        is_static = False
-        for indicator in static_name_indicators:
-            if indicator in name or indicator.lower() in name_lower:
-                is_static = True
-                break
-        if is_static:
-            continue
+    Detects:
+    - let count = $state(0)
+    - let doubled = $derived(count * 2)
+    - $effect(() => { ... })
+    - let { name } = $props()
+    - Also .svelte.ts files that use runes
+    """
+    stores = []
+    flow = []
 
-        # Check if name ends with a mutable suffix (camelCase word boundary)
-        is_stateful_name = False
-        for suffix in mutable_name_suffixes:
-            # Match as suffix: name ends with the suffix
-            if name.endswith(suffix):
-                is_stateful_name = True
-                break
-            # Match as lowercase prefix: e.g., "cache" or "store" at the start
-            if name_lower.startswith(suffix.lower()):
-                is_stateful_name = True
-                break
-            # Match underscore-separated: e.g., "_cloudIdCache", "certificate_cache"
-            if ('_' + suffix.lower() + '_') in name_lower or name_lower.endswith('_' + suffix.lower()):
-                is_stateful_name = True
-                break
+    # $state rune
+    for m in re.finditer(r'(?:let|const|var)\s+(\w+)\s*=\s*\$state\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "reactive_state",
+            "framework": "svelte_runes",
+            "rune_type": "$state",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
 
-        # For mutable containers ({}, []), only keep if name suggests runtime state
-        if store.get("mutable"):
-            if is_stateful_name:
-                filtered_module.append(store)
-            # Otherwise skip — it's a configuration object, not state
-            continue
+    # $derived rune
+    for m in re.finditer(r'(?:let|const|var)\s+(\w+)\s*=\s*\$derived\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "reactive_state",
+            "framework": "svelte_runes",
+            "rune_type": "$derived",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
 
-        # For non-mutable values (function calls, etc.), only keep if name
-        # strongly suggests runtime state
-        if is_stateful_name:
-            filtered_module.append(store)
+    # $effect rune
+    for m in re.finditer(r'\$effect\s*\(', content):
+        stores.append({
+            "name": f"effect@{content[:m.start()].count(chr(10)) + 1}",
+            "type": "side_effect",
+            "framework": "svelte_runes",
+            "rune_type": "$effect",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
 
-    return framework_stores + filtered_module
+    # $props rune
+    for m in re.finditer(r'(?:let|const)\s*\{([^}]+)\}\s*=\s*\$props\s*\(', content):
+        props_str = m.group(1)
+        for prop in re.findall(r'(\w+)', props_str):
+            stores.append({
+                "name": prop,
+                "type": "prop",
+                "framework": "svelte_runes",
+                "rune_type": "$props",
+                "defined_in": rel_path,
+                "line": content[:m.start()].count('\n') + 1,
+                "consumers": [],
+                "actions": [],
+            })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── Preact Signals ────────────────────────────────────────────
+
+def _extract_preact_signals(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract Preact signals: signal(), computed(), effect().
+
+    Detects:
+    - import { signal, computed, effect } from '@preact/signals'
+    - const count = signal(0)
+    - const doubled = computed(() => count.value * 2)
+    - effect(() => { console.log(count.value) })
+    """
+    stores = []
+    flow = []
+
+    has_preact_signals = bool(re.search(
+        r"(?:from\s+['\"]@preact/signals['\"]|import\s+.*@preact/signals)",
+        content
+    ))
+    if not has_preact_signals and not re.search(r'\bsignal\s*\(|\bcomputed\s*\(', content):
+        return {"stores": [], "flow": []}
+
+    # Extract signal declarations
+    for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=\s*signal\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "signal",
+            "framework": "preact_signals",
+            "signal_type": "signal",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # Extract computed signals
+    for m in re.finditer(r'(?:const|let|var)\s+(\w+)\s*=\s*computed\s*\(', content):
+        name = m.group(1)
+        stores.append({
+            "name": name,
+            "type": "signal",
+            "framework": "preact_signals",
+            "signal_type": "computed",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    # Extract effect calls
+    for m in re.finditer(r'\beffect\s*\(', content):
+        stores.append({
+            "name": f"effect@{content[:m.start()].count(chr(10)) + 1}",
+            "type": "side_effect",
+            "framework": "preact_signals",
+            "signal_type": "effect",
+            "defined_in": rel_path,
+            "line": content[:m.start()].count('\n') + 1,
+            "consumers": [],
+            "actions": [],
+        })
+
+    return {"stores": stores, "flow": flow}
 
 
 # ─── Module-level State (JS) ───────────────────────────────────
 
 def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
-    """Extract module-level global variables and singletons in JS/TS."""
+    """Extract module-level global variables and singletons in JS/TS.
+
+    Filters out common false positives:
+    - ALL_CAPS constants (enums, config) that are primitive values
+    - i18n/locale translation objects
+    - Type/Interface declarations
+    - React component exports (functional components)
+    - CSS/style objects
+    """
     stores = []
     flow = []
 
-    # Skip obvious config files, test files, and non-state directories
+    # Skip obvious config files, test files, and locale/i18n files
     skip_path_patterns = [
         '.test.', '.spec.', '.config.', 'jest.', 'webpack.',
-        '__tests__/', '__mocks__/', '/test/', '/tests/',
-        '.d.ts',
-        # Credentials/configuration directories — these are config, not state
-        '/credentials/', '\\credentials\\',
-        '/constants/', '\\constants\\',
-        '/types/', '\\types\\',
-        '/interfaces/', '\\interfaces\\',
-        '/schemas/', '\\schemas\\',
-        '/definitions/', '\\definitions\\',
-        '/enums/', '\\enums\\',
-        # File extensions that are purely type declarations
-        '.types.ts', '.types.js',
+        '/locales/', '/locale/', '/i18n/', '/intl/', '/lang/',
+        '/translations/', '/l10n/', '/messages/',
+        '.d.ts',  # TypeScript declaration files
     ]
     if any(x in rel_path for x in skip_path_patterns):
         return {"stores": [], "flow": []}
 
-    # v6: Expanded skip list for constants that are NOT mutable state.
+    # Expanded skip list for constants that are NOT mutable state.
     # ALL_CAPS patterns are immutable constants, not state stores.
     # PascalCase patterns that are React components or class instantiations
     # are also not state.
@@ -1185,117 +1311,73 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         'WIDTH', 'HEIGHT', 'DEPTH', 'OFFSET', 'INDEX', 'COUNT',
         'PREFIX', 'SUFFIX', 'SEPARATOR', 'DELIMITER', 'FORMAT',
         'PATTERN', 'REGEX', 'MASK', 'TEMPLATE', 'SCHEMA',
-        # Configuration/credential constants that are not state
-        'SCOPES', 'SCOPE', 'DEFAULT_SCOPES', 'ALGORITHMS', 'URLS',
-        'HEADERS', 'SECURITY_HEADERS', 'PERMISSIONS', 'PERMISSION',
-        'PROPERTIES', 'PROPERTY', 'FIELDS', 'FIELD', 'OPTIONS',
-        'SETTINGS', 'SETTING', 'RULES', 'RULE', 'MAPPINGS', 'MAPPING',
-        'CREDENTIALS', 'CREDENTIAL', 'AUTH', 'AUTH_OPTIONS',
-        'DEFAULTS', 'DEFAULT_VALUE', 'INITIAL', 'INIT',
-        'REQUIRED', 'VALIDATION', 'VALIDATOR', 'CONSTRAINTS',
-        'SCOPE_MAP', 'SCOPE_MAPPING', 'PERMISSION_MAP',
-        'ROLE', 'ROLES', 'GRANT', 'GRANTS', 'CLAIM', 'CLAIMS',
-        'AUDIENCE', 'ISSUER', 'PROVIDER', 'PROVIDERS',
-        'ENDPOINT', 'ENDPOINTS', 'BASE_URL', 'API_URL',
-        'REDIRECT', 'CALLBACK', 'ORIGIN', 'ORIGINS',
-        'ALGORITHM', 'ALGORITHMS', 'METHOD', 'METHODS',
-        'ENCODING', 'CONTENT_TYPE', 'MIME_TYPE', 'MEDIA_TYPE',
-        'PARAMS', 'PARAMETERS', 'QUERY', 'QUERY_PARAMS',
-        'BODY', 'HEADERS', 'RESPONSE', 'REQUEST',
+        # Additional config constant prefixes/suffixes from tauri-ipc
+        'BASE_URL', 'BASE_PATH', 'API_URL', 'API_KEY', 'API_BASE',
+        'NODE_ENV', 'APP_ENV', 'APP_NAME', 'APP_VERSION',
+        'RETRY', 'MAX_RETRIES', 'MAX_LENGTH', 'MAX_SIZE',
+        'COLORS', 'BREAKPOINTS', 'Z_INDEX',
     }
 
-    # Additional lowercase names to skip — common config/credential variable names
-    LOWER_SKIP_NAMES = {
-        'url', 'scopes', 'defaultScopes', 'secret', 'algorithms',
-        'securityHeaders', 'headers', 'params', 'queryParams',
-        'properties', 'fields', 'permissions', 'defaults',
-        'options', 'settings', 'config', 'mapping', 'mappings',
-        'initialValue', 'initialValues', 'defaultValue', 'defaultValues',
-        'rules', 'validation', 'constraints', 'required',
-        'redirect', 'callback', 'origin', 'method', 'methods',
-        'encoding', 'contentType', 'mimeType', 'basePath', 'baseUrl',
-        'apiUrl', 'endpoint', 'endpoints', 'provider', 'providers',
-        'audience', 'issuer', 'role', 'roles', 'grant', 'grants',
-        'claim', 'claims', 'description', 'label', 'displayName',
-        'placeholder', 'tooltip', 'icon', 'color', 'theme',
-    }
+    # Names that are likely config/enums (contain common suffixes)
+    config_suffixes = ('_URL', '_URI', '_PATH', '_PORT', '_HOST', '_KEY',
+                       '_SECRET', '_TOKEN', '_ENV', '_VERSION', '_NAME',
+                       '_TYPE', '_STATUS', '_CODE', '_ID', '_COLOR',
+                       '_SIZE', '_WIDTH', '_HEIGHT', '_TIMEOUT', '_RETRY',
+                       '_MAX', '_MIN', '_DEFAULT', '_CONFIG', '_ENABLED',
+                       '_DISABLED', '_PREFIX', '_SUFFIX', '_LABEL',
+                       '_TITLE', '_DESC', '_DESCRIPTION', '_MSG', '_TEXT')
+
 
     lines = content.split('\n')
-
-    # Pre-scan: detect TypeScript type-only declarations to skip them
-    type_only_names: Set[str] = set()
-    for line in lines:
-        stripped = line.strip()
-        # export enum X { ... } — not state
-        m = re.match(r'^(?:export\s+)?enum\s+(\w+)', stripped)
-        if m:
-            type_only_names.add(m.group(1))
-        # export interface X { ... } — not state
-        m = re.match(r'^(?:export\s+)?interface\s+(\w+)', stripped)
-        if m:
-            type_only_names.add(m.group(1))
-        # export type X = ... — not state
-        m = re.match(r'^(?:export\s+)?type\s+(\w+)\s*=', stripped)
-        if m:
-            type_only_names.add(m.group(1))
-
-    # Scan for variable declarations that are actually assigned from type-only exports
-    # e.g., export const UserStatuses = { ... } alongside export type UserStatuses
-    # These are data shapes, not state
-
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # Only consider top-level (module-level) declarations
-        # Indented declarations are inside functions/classes and NOT module-level state
-        if line and line[0] in (' ', '\t'):
-            continue
-
         # Module-level const/let/var with initial values (potential globals)
-        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w*)\s*(?::\s*[^=]+)?\s*=\s*(.*)', stripped)
-        if not m:
-            # Also match lowercase-starting variable names that could be state
-            m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([a-z_]\w*)\s*(?::\s*[^=]+)?\s*=\s*(.*)', stripped)
+        m = re.match(r'^(?:export\s+)?(?:const|let|var)\s+([A-Z_]\w+)\s*=\s*(.*)', stripped)
         if m:
             var_name = m.group(1)
             value_part = m.group(2).strip() if m.group(2) else ""
 
-            # v6: Skip ALL_CAPS constants — they are immutable, not state.
-            # A name like MAX_FILES, FETCH_TIMEOUT_MS is a constant.
-            if var_name == var_name.upper() and len(var_name) > 2 and '_' in var_name:
-                continue
-
-            # Skip ALL_CAPS constants with primitive values even without underscores
-            # e.g., const MAX = 100, const PI = 3.14
+            # Skip ALL_CAPS constants — they are immutable, not state.
+            # A name like MAX_FILES, FETCH_TIMEOUT_MS, COLORS, THEME, VARIANTS is a constant.
             if var_name == var_name.upper() and len(var_name) > 2:
-                if re.match(r'^([\'"`\d]|true|false|null|undefined)', value_part):
-                    continue
+                continue
 
             # Skip common non-state constants
             if var_name in CONSTANT_SKIP_PATTERNS or len(var_name) <= 2:
                 continue
 
-            # Skip common lowercase config/credential variable names
-            if var_name in LOWER_SKIP_NAMES:
+            # v6: Skip PascalCase names that look like TypeScript types/enums/classes.
+            # These are type exports, not runtime state. E.g.:
+            #   const BookingReferences = ...
+            #   const CustomFieldTypeEnum = ...
+            #   const Status = ...
+            # A name is PascalCase if it starts with uppercase and contains
+            # no underscores (ALL_CAPS already skipped above).
+            if var_name[0].isupper() and '_' not in var_name and len(var_name) > 2:
+                # Heuristic: PascalCase names are type/enum/class exports
+                # Skip unless the value clearly looks like mutable state
+                # (object literal, Map, Set, new SomeClass)
+                value_is_stateful = bool(re.match(r'^(\{|\[|new\s|Map\b|Set\b|WeakMap|WeakSet)', value_part))
+                if not value_is_stateful:
+                    continue
+
+            # Skip names ending with config/enum suffixes
+            if any(var_name.endswith(s) for s in config_suffixes):
                 continue
 
-            # Skip TypeScript type-only declarations (enum, interface, type)
-            if var_name in type_only_names:
-                continue
+            # v6: Skip names ending with common TypeScript/enum patterns
+            enum_type_suffixes = ('Enum', 'Type', 'Interface', 'Schema', 'Args',
+                                  'Input', 'Output', 'Result', 'Response', 'Request',
+                                  'Payload', 'Event', 'Action', 'Keys', 'Map',
+                                  'Record', 'List', 'Set', 'Dict', 'Union')
+            if any(var_name.endswith(s) for s in enum_type_suffixes):
+                # Only skip if value doesn't look like mutable state
+                is_mutable_early = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
+                if not is_mutable_early:
+                    continue
 
-            # Skip names with non-state suffixes (Dto, Interface, Type, Types, Schema, Config, etc.)
-            if any(var_name.endswith(suffix) for suffix in NON_STATE_SUFFIXES):
-                continue
-
-            # Skip `as const` assertions — these are immutable constants, not state
-            if re.search(r'\bas\s+const\b', value_part):
-                continue
-
-            # Skip Readonly<> typed variables — these are immutable
-            if re.search(r'Readonly<', stripped):
-                continue
-
-            # v6: Skip React components — PascalCase + arrow function or function
+            # Skip React components — PascalCase + arrow function or function
             # A line like "const Logo = () =>" or "const Button = function" is NOT state.
             # Also handles: "const X: React.FC<Props> = () =>", "const X = forwardRef(...)",
             # "const X = memo(...)", "const X = styled.div(...)", etc.
@@ -1307,16 +1389,38 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             # Skip forwardRef, memo, styled, createStyled, etc.
             if re.match(r'^(forwardRef|memo|styled|createStyled|withStyles|connect|compose)\s*\(', value_part):
                 continue
+            # Skip React.memo and React.forwardRef
+            if re.match(r'^React\.(forwardRef|memo)\s*\(', value_part):
+                continue
             # Skip JSX components: "const X = <SomeComponent"
             if value_part.startswith('<'):
                 continue
+            # Skip factory functions that return components: "const X = createX(...)"
+            if re.match(r'^[A-Z]\w+\s*\(', value_part) and '=>' not in value_part:
+                continue
 
-            # v6: Skip class instantiations of known non-state patterns
+            # v7: Skip known config/constant suffixes — these are immutable design tokens,
+            # not mutable state. Examples: ThemeConfig, ButtonVariants, ColorMapping, etc.
+            _CONFIG_SUFFIXES = (
+                'Config', 'Options', 'Props', 'Defaults', 'Mapping', 'Registry',
+                'Theme', 'Colors', 'Variants', 'Schema', 'Meta', 'Presets',
+                'Constants', 'Definitions', 'Mappings', 'Settings', 'Params',
+                'Tokens', 'Breakpoints', 'Spacings', 'Typography', 'Palette',
+            )
+            if any(var_name.endswith(s) for s in _CONFIG_SUFFIXES):
+                continue
+
+            # Skip class instantiations of known non-state patterns
             # "const x = createSomething()" is a factory, not necessarily state
             # But "const x = createStore()" IS state
             if re.match(r'create(?!Store|Context|Slice|Reducer|State)', value_part):
                 # Skip factories that are NOT state-related
                 pass
+
+            # v6: Skip function calls that are clearly not state
+            # e.g., const X = someFunction(), const X = z.object(), const X = t.type()
+            if re.match(r'^(z\.|t\.|zod\.|joi\.|yup\.|v\.|Type\()', value_part):
+                continue
 
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
@@ -1326,6 +1430,17 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             if is_immutable:
                 continue
+
+            # v6: For non-mutable, non-immutable values (function calls, references),
+            # be more conservative — only include if the name suggests state.
+            # Names like "state", "cache", "store" suggest state.
+            # Names like "handler", "service", "client" suggest utilities.
+            if not is_mutable and not is_immutable:
+                state_keywords = ('state', 'cache', 'store', 'mutex', 'lock', 'queue',
+                                  'pool', 'registry', 'buffer', 'session')
+                is_likely_state = any(kw in var_name.lower() for kw in state_keywords)
+                if not is_likely_state:
+                    continue
 
             # For things that don't match either pattern, include them
             # (could be function calls that return mutable objects)
@@ -1364,10 +1479,11 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             "consumers": [],
         })
 
-    # v6: Skip module.exports scanning — it produces massive false positives.
+    # Skip module.exports scanning — it produces massive false positives.
     # Every exported utility function gets classified as a "state store",
     # which is incorrect. Module exports are API surfaces, not state.
     # Only track stateful singletons (already handled above).
+
 
     return {"stores": stores, "flow": flow}
 
@@ -1380,15 +1496,8 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
     flow = []
 
     # Skip test and config files
-    if any(x in rel_path for x in ['test_', 'conftest', 'settings.py', 'config.py',
-                                     'constants.py', '/constants/', '\\constants\\',
-                                     '/types/', '\\types\\', '/enums/', '\\enums\\']):
+    if any(x in rel_path for x in ['test_', 'conftest', 'settings.py', 'config.py']):
         return {"stores": [], "flow": []}
-
-    # Skip Python class definitions that start with uppercase but are classes, not variables
-    class_names: Set[str] = set()
-    for m in re.finditer(r'^class\s+(\w+)', content, re.MULTILINE):
-        class_names.add(m.group(1))
 
     lines = content.split('\n')
     for i, line in enumerate(lines):
@@ -1399,26 +1508,8 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             m = re.match(r'^([A-Z_]\w+)\s*=\s*', stripped)
             if m:
                 var_name = m.group(1)
-
-                # Skip ALL_CAPS constants (standard Python convention)
-                if var_name == var_name.upper() and len(var_name) > 2 and '_' in var_name:
-                    continue
-
-                # Skip common non-state Python constants
-                skip = {'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN',
-                        'DEBUG', 'LOG', 'PATH', 'DIR', 'BASE', 'ROOT', 'HOME',
-                        'NAME', 'TITLE', 'KEY', 'SECRET', 'TOKEN', 'ID', 'TYPE',
-                        'STATUS', 'LABEL', 'DESC', 'VALUE', 'DEFAULT', 'NULL',
-                        'TRUE', 'FALSE', 'NONE', 'PI', 'INF', 'NAN'}
+                skip = {'URL', 'API', 'PORT', 'HOST', 'ENV', 'VERSION', 'MAX', 'MIN', 'DEBUG', 'LOG'}
                 if var_name in skip or len(var_name) <= 2:
-                    continue
-
-                # Skip class name assignments ( ClassName = something)
-                if var_name in class_names:
-                    continue
-
-                # Skip if variable ends with non-state suffix
-                if any(var_name.endswith(suffix) for suffix in NON_STATE_SUFFIXES):
                     continue
 
                 stores.append({
