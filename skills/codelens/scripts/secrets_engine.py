@@ -423,7 +423,9 @@ ENTROPY_EXCLUSION_PATTERNS = [
 def detect_secrets(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000,
+    max_findings: int = 200
 ) -> Dict[str, Any]:
     """
     Detect hardcoded secrets, API keys, tokens, and passwords in source code.
@@ -435,6 +437,8 @@ def detect_secrets(
         workspace: Absolute path to workspace
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict
+        max_files: Max source files to scan (default 5000, prevents timeout on huge repos)
+        max_findings: Max findings to return (default 200)
 
     Returns:
         Dict with findings, stats, risk level, env exposure, and recommendations
@@ -445,6 +449,7 @@ def detect_secrets(
     env_files: List[Dict[str, Any]] = []
     env_exposed: List[str] = []
     files_scanned = 0
+    truncated = False
 
     # ─── Phase 1: Pattern-based scanning ──────────────────────
     for root, dirs, filenames in os.walk(workspace):
@@ -454,6 +459,10 @@ def detect_secrets(
             continue
 
         for filename in filenames:
+            if files_scanned >= max_files:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -484,10 +493,18 @@ def detect_secrets(
             file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
             findings.extend(file_findings)
 
+            # Early termination if we already have enough findings
+            if len(findings) >= max_findings * 2:  # Allow buffer for dedup/filtering
+                truncated = True
+                break
+
             # Entropy-based scanning for code files
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
                 entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
                 findings.extend(entropy_findings)
+
+        if truncated:
+            break
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
@@ -517,9 +534,11 @@ def detect_secrets(
         "status": "ok",
         "workspace": workspace,
         "severity_filter": severity,
+        "files_scanned": files_scanned,
+        "truncated": truncated,
         "stats": stats,
         "risk": risk,
-        "findings": findings[:200],  # Cap to avoid explosion
+        "findings": findings[:max_findings],
         "env_exposed": env_exposed,
         "recommendations": recommendations,
     }

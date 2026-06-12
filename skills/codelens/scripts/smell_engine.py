@@ -45,12 +45,18 @@ GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 MAX_FILE_SIZE = 500 * 1024  # 500KB
 
+# Performance limits for large codebases
+MAX_SMELL_FILES = 5000     # Max files to scan for smells
+MAX_SMELLS_PER_CAT = 200   # Max smells per category
+
 
 def detect_smells(
     workspace: str,
     categories: Optional[List[str]] = None,
     severity_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = MAX_SMELL_FILES,
+    max_per_category: int = MAX_SMELLS_PER_CAT
 ) -> Dict[str, Any]:
     """
     Detect code smells across the workspace.
@@ -63,6 +69,8 @@ def detect_smells(
                     duplicate_pattern, inconsistent)
         severity_filter: Optional filter: "info", "warning", "critical"
         config: CodeLens config
+        max_files: Max files to scan (default 5000, prevents timeout on huge repos)
+        max_per_category: Max smells per category (default 200)
 
     Returns:
         Dict with smells found, categorized and prioritized
@@ -83,6 +91,7 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
+    truncated = False
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -91,6 +100,11 @@ def detect_smells(
             continue
 
         for filename in filenames:
+            # Early termination: stop scanning if we've hit the file limit
+            if files_scanned >= max_files:
+                truncated = True
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -180,6 +194,14 @@ def detect_smells(
             if "god_object" in categories and not _is_test_or_mock_file(rel_path):
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
+
+        if truncated:
+            break
+
+    # Cap smells per category to prevent output bloat
+    for cat in all_smells:
+        if len(all_smells[cat]) > max_per_category:
+            all_smells[cat] = all_smells[cat][:max_per_category]
 
     # Duplicate pattern detection (cross-file, only if requested)
     if "duplicate_pattern" in categories:
@@ -295,6 +317,7 @@ def detect_smells(
         "status": "ok",
         "workspace": workspace,
         "health_score": health_score,  # v5.8: Also at top-level for easy access
+        "truncated": truncated,
         "stats": {
             "files_scanned": files_scanned,
             "total_smells": total_smells,

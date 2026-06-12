@@ -2,11 +2,18 @@
 Trace Engine for CodeLens
 Deep call chain tracing — follows the graph up (callers) and down (callees)
 to produce full impact chains for root cause analysis and change planning.
+
+v6.1: Uses edge_resolver's cached index for O(1) lookups instead of building
+adjacency lists from scratch. Adds max_results cap to prevent timeout on
+massive codebases (127K+ nodes, 495K+ edges).
 """
 
 import os
 from collections import deque
 from typing import Dict, List, Any, Optional, Set, Tuple
+
+# Performance limit: max chain entries to return (prevents timeout on huge repos)
+MAX_CHAIN_RESULTS = 500
 
 
 def trace_symbol(
@@ -14,7 +21,8 @@ def trace_symbol(
     workspace: str,
     direction: str = "up",
     max_depth: int = 10,
-    domain: str = "auto"
+    domain: str = "auto",
+    max_results: int = MAX_CHAIN_RESULTS
 ) -> Dict[str, Any]:
     """
     Trace a symbol's call chain deeply (BFS traversal).
@@ -25,6 +33,7 @@ def trace_symbol(
         direction: "up" (callers/who uses this), "down" (callees/what this uses), "both"
         max_depth: Maximum traversal depth (default 10)
         domain: "frontend", "backend", or "auto"
+        max_results: Max chain entries to return (default 500, prevents timeout)
 
     Returns:
         Dict with chains, tree representation, and stats
@@ -32,18 +41,16 @@ def trace_symbol(
     workspace = os.path.abspath(workspace)
     chains = {"up": [], "down": []}
     tree = {"root": name, "children": []}
-    visited = set()
 
     # ─── Backend Tracing ────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry
+        from edge_resolver import get_callers, get_callees
         backend = load_backend_registry(workspace)
         nodes = backend.get("nodes", [])
         edges = backend.get("edges", [])
 
-        # Build adjacency lists
-        callers_of: Dict[str, List[Dict]] = {}   # node_id → list of caller node_ids
-        callees_of: Dict[str, List[Dict]] = {}   # node_id → list of callee node_ids
+        # Build lookup maps (much faster than iterating all edges)
         node_by_id: Dict[str, Dict] = {}
         node_by_fn: Dict[str, List[Dict]] = {}
 
@@ -54,26 +61,6 @@ def trace_symbol(
             if fn not in node_by_fn:
                 node_by_fn[fn] = []
             node_by_fn[fn].append(node)
-
-        for edge in edges:
-            from_id = edge.get("from", "")
-            to_id = edge.get("to", "")
-
-            if to_id:
-                if to_id not in callers_of:
-                    callers_of[to_id] = []
-                callers_of[to_id].append({
-                    "node_id": from_id,
-                    "edge": edge
-                })
-
-            if from_id:
-                if from_id not in callees_of:
-                    callees_of[from_id] = []
-                callees_of[from_id].append({
-                    "node_id": to_id,
-                    "edge": edge
-                })
 
         # Find starting node(s) — case-insensitive + fuzzy matching
         start_nodes = node_by_fn.get(name, [])
@@ -97,19 +84,19 @@ def trace_symbol(
         for start_node in start_nodes:
             start_id = start_node["id"]
 
-            # Trace UP (callers)
+            # Trace UP (callers) — uses edge_resolver's cached index
             if direction in ("up", "both"):
-                up_chain = _bfs_trace(
-                    start_id, callers_of, node_by_id,
-                    max_depth, "caller"
+                up_chain = _bfs_trace_indexed(
+                    start_id, edges, nodes, node_by_id,
+                    max_depth, "caller", max_results - len(chains["up"])
                 )
                 chains["up"].extend(up_chain)
 
-            # Trace DOWN (callees)
+            # Trace DOWN (callees) — uses edge_resolver's cached index
             if direction in ("down", "both"):
-                down_chain = _bfs_trace(
-                    start_id, callees_of, node_by_id,
-                    max_depth, "callee"
+                down_chain = _bfs_trace_indexed(
+                    start_id, edges, nodes, node_by_id,
+                    max_depth, "callee", max_results - len(chains["down"])
                 )
                 chains["down"].extend(down_chain)
 
@@ -165,24 +152,42 @@ def trace_symbol(
         }
     }
 
+    if total_up + total_down >= max_results:
+        result["truncated"] = True
+        result["truncation_note"] = f"Results capped at {max_results}. Use --max-results to increase."
+
     return result
 
 
-def _bfs_trace(
+def _bfs_trace_indexed(
     start_id: str,
-    adjacency: Dict[str, List[Dict]],
+    edges: List[Dict],
+    nodes: List[Dict],
     node_by_id: Dict[str, Dict],
     max_depth: int,
-    direction_label: str
+    direction_label: str,
+    max_results: int = MAX_CHAIN_RESULTS
 ) -> List[Dict]:
     """
-    BFS traversal of the call graph from start_id.
+    BFS traversal using edge_resolver's cached index for O(1) lookups.
 
-    Returns a list of chain entries, each with depth, node info, and path.
+    Instead of building adjacency lists from scratch (O(n) where n = 495K edges),
+    this uses get_callers/get_callees which leverage the pre-built index.
+
+    Args:
+        start_id: Node ID to start from
+        edges: List of all edges (passed to edge_resolver for indexed lookup)
+        nodes: List of all nodes (passed to edge_resolver for indexed lookup)
+        node_by_id: Lookup map for node by ID
+        max_depth: Maximum BFS depth
+        direction_label: "caller" (trace up) or "callee" (trace down)
+        max_results: Max entries to return (prevents timeout)
     """
+    from edge_resolver import get_callers, get_callees
+
     chain = []
     visited: Set[str] = set()
-    reported_cycles: Set[str] = set()  # Track reported cycles to avoid duplicates
+    reported_cycles: Set[str] = set()
     queue = deque()
 
     # Start node
@@ -207,17 +212,52 @@ def _bfs_trace(
         if depth > max_depth:
             continue
 
-        neighbors = adjacency.get(current_id, [])
+        if len(chain) >= max_results:
+            break
+
+        # Use edge_resolver's cached index for O(1) lookup
+        if direction_label == "caller":
+            neighbors_raw = get_callers(current_id, edges)
+            neighbors = [{"node_id": n["from"]} for n in neighbors_raw]
+        else:
+            neighbors_raw = get_callees(current_id, edges, nodes)
+            neighbors = []
+            for n in neighbors_raw:
+                if n.get("resolved", True) is not False:
+                    neighbors.append({"node_id": n.get("to", ""), "fn": n.get("fn", "")})
+                else:
+                    neighbors.append({"node_id": "", "to_fn": n.get("to_fn", "unknown"), "resolved": False})
+
         for neighbor in neighbors:
-            neighbor_id = neighbor["node_id"]
-            edge = neighbor.get("edge", {})
+            if len(chain) >= max_results:
+                break
+
+            neighbor_id = neighbor.get("node_id", "")
+
+            # Skip empty/unresolved neighbor IDs for callers
+            if not neighbor_id:
+                if neighbor.get("resolved") is False:
+                    # Unresolved target
+                    to_fn = neighbor.get("to_fn", "unknown")
+                    chain.append({
+                        "depth": depth,
+                        "direction": direction_label,
+                        "node_id": "unresolved",
+                        "fn": to_fn,
+                        "resolved": False,
+                        "path": f"{path} → {to_fn}(unresolved)"
+                    })
+                continue
+
+            # Skip self-edges (recursion is not a meaningful trace)
+            if neighbor_id == current_id:
+                continue
 
             if neighbor_id in visited:
                 # Already visited — record as cyclic reference
-                # Skip trivial self-loops (function calls itself at depth 0→1)
+                # Skip trivial self-loops back to start at depth 1
                 if neighbor_id == start_id and depth <= 1:
                     continue
-                # Deduplicate: skip if we've already reported this cycle at this depth
                 cycle_key = f"{neighbor_id}@{depth}"
                 if cycle_key in reported_cycles:
                     continue
@@ -260,7 +300,7 @@ def _bfs_trace(
                 queue.append((neighbor_id, depth + 1, f"{path} → {neighbor_id}"))
             else:
                 # Unresolved target
-                to_fn = edge.get("to_fn", "unknown")
+                to_fn = neighbor.get("to_fn", "unknown")
                 chain.append({
                     "depth": depth,
                     "direction": direction_label,

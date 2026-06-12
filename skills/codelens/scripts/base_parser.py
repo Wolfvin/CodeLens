@@ -41,6 +41,20 @@ JS_TSX_SKIP_NAMES_EXTRA = frozenset({
     'useRef', 'useCallback', 'useMemo', 'useContext', 'useReducer',
 })
 
+# Python builtins — common identifiers that are NOT user-defined functions
+PYTHON_SKIP_NAMES = frozenset({
+    'if', 'else', 'elif', 'for', 'while', 'with', 'try', 'except', 'finally',
+    'return', 'yield', 'raise', 'break', 'continue', 'pass', 'import', 'from',
+    'class', 'def', 'async', 'await', 'lambda', 'global', 'nonlocal',
+    'True', 'False', 'None',
+    'print', 'len', 'range', 'int', 'str', 'float', 'bool', 'list', 'dict',
+    'set', 'tuple', 'type', 'isinstance', 'super', 'property',
+    'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed',
+    'iter', 'next', 'abs', 'min', 'max', 'sum', 'any', 'all',
+    'self', 'cls', 'open', 'hasattr', 'getattr', 'setattr',
+    'staticmethod', 'classmethod', 'abstractmethod',
+})
+
 
 class BaseParser:
     """Base class for all tree-sitter based parsers."""
