@@ -634,6 +634,15 @@ def _detect_debugger_statements(
             if label == "debugger" and ext not in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".vue", ".svelte"}:
                 continue
 
+            # v6.3.1: Skip dump() in Python if it's a method call (json.dump, pickle.dump, etc.)
+            # dump() is only a debug statement in PHP (Symfony VarDumper), not Python.
+            if label == "dump()" and ext == ".py":
+                # Only match standalone dump() — not obj.dump()
+                if re.search(r'(?<!\.)\bdump\s*\(', stripped) and not re.search(r'\w+\.\s*dump\s*\(', stripped):
+                    pass  # standalone dump() in Python is unusual, flag it
+                else:
+                    continue
+
             m = re.search(pattern, stripped)
             if not m:
                 continue

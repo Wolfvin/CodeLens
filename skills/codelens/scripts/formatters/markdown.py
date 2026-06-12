@@ -2282,7 +2282,7 @@ def _md_analyze(data: Dict, lines: list) -> None:
             lines.append("")
             lines.append("**Entry Points:**")
             for ep in entry_points[:10]:
-                lines.append(f"  - [{ep.get('type', '')}] `{ep.get('file', '')}:{ep.get('line', '')}` — {ep.get('handler', '')}")
+                lines.append(f"  - <{ep.get('type', '')}> `{ep.get('file', '')}:{ep.get('line', '')}` — {ep.get('handler', '')}")
 
         lines.append("")
 

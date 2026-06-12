@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.4.0"
+CODELENS_VERSION = "6.3.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -402,50 +402,6 @@ GENERATED_FILE_PATTERNS = frozenset({
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative file path looks like a bundled/compiled file.
-
-    Detects:
-    - Files in dist/, build/, out/, bundle/ directories
-    - Minified files (.min.js, .min.css)
-    - Bundled files (.bundle.js, .chunk.js, .global.js)
-    - Vendor/third-party directories
-
-    Args:
-        rel_path: Relative path from workspace root (e.g., 'dist/app.min.js')
-
-    Returns:
-        True if the file appears to be bundled/compiled output.
-    """
-    normalized = rel_path.replace('\\', '/').lower()
-    parts = normalized.split('/')
-
-    # Check for bundled output directories
-    bundled_dirs = {'dist', 'build', 'out', 'bundle', 'bundles', 'compiled', '.output'}
-    if any(p in bundled_dirs for p in parts):
-        return True
-
-    # Check for vendor/third-party directories (but not just "vendor" as a leaf — that's common in Go)
-    vendor_dirs = {'third-party', '3rdparty', 'third_party', 'vendor-dist'}
-    if any(p in vendor_dirs for p in parts):
-        return True
-
-    # Check filename patterns
-    filename = parts[-1] if parts else ''
-    if '.min.' in filename:
-        return True
-    if '.bundle.' in filename:
-        return True
-    if '.chunk.' in filename:
-        return True
-    if '.global.' in filename and filename.endswith('.js'):
-        return True
-    if filename.endswith('.d.ts') or filename.endswith('.d.ts.map'):
-        return True
-
-    return False
 
 
 def is_generated_file(filename: str) -> bool:
@@ -476,46 +432,5 @@ def is_generated_file(filename: str) -> bool:
     return False
 
 
-# ─── Bundled/Compiled File Detection ────────────────────────────
-
-BUNDLED_DIR_PREFIXES = (
-    "dist/", "build/", "out/", "bundle/", "bundled/",
-    "vendor/", ".output/", ".nuxt/", ".next/", ".svelte-kit/",
-)
-
-BUNDLED_FILE_SUFFIXES = (
-    ".min.js", ".min.css", ".bundle.js", ".chunk.js",
-    ".global.js", ".vendor.js", ".pack.js",
-    ".map",  # source maps
-)
-
-
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a file path looks like a bundled, compiled, or generated output file.
-
-    Skips files in dist/build/out directories, minified/bundled JS/CSS,
-    and source maps — these are not meaningful for code analysis.
-
-    Args:
-        rel_path: Relative file path from workspace root, e.g. 'dist/app.min.js'
-
-    Returns:
-        True if the file appears to be bundled/compiled output.
-    """
-    lower = rel_path.lower()
-
-    # Check directory prefixes (e.g. dist/, build/, out/)
-    for prefix in BUNDLED_DIR_PREFIXES:
-        if lower.startswith(prefix) or f"/{prefix}" in lower:
-            return True
-
-    # Check file suffixes (e.g. .min.js, .bundle.js, .map)
-    for suffix in BUNDLED_FILE_SUFFIXES:
-        if lower.endswith(suffix):
-            return True
-
-    # Check .d.ts declaration files (TypeScript type declarations, not source)
-    if lower.endswith(".d.ts") or lower.endswith(".d.mts") or lower.endswith(".d.cts"):
-        return True
-
-    return False
+# Alias for backward compatibility — some engines import is_bundled_file
+is_bundled_file = is_generated_file

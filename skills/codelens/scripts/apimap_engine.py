@@ -279,6 +279,10 @@ def map_api_routes(
                 '/examples/', '/example/',
             ]) else "production"
 
+    # v6.3.1: Filter out test routes if production_only is requested
+    if production_only:
+        routes = [r for r in routes if r.get("source") != "test"]
+
     # Attach middleware to routes
     for mw in global_middleware:
         scope = mw.get("scope", "global")
@@ -1274,6 +1278,41 @@ def _extract_python_routes(
                     "response_type": resp_type,
                     "framework": "fastapi",
                 })
+
+        # FastAPI router.add_api_route() programmatic route registration
+        # Pattern: router.add_api_route('/path', handler, methods=['GET', 'POST'])
+        # Also: router.add_api_route(f'{base}/path', self._handler, methods=['GET'])
+        if is_fastapi:
+            for m in re.finditer(
+                r'(\w+)\s*\.\s*add_api_route\s*\(\s*[fr]?[\'"]([^\'"]+)[\'"]\s*,\s*(\S+?)\s*(?:,|\))',
+                content
+            ):
+                obj_name = m.group(1)
+                route_path = m.group(2)
+                handler_name = m.group(3).rstrip(',')
+                line_num = content[:m.start()].count('\n') + 1
+
+                # Extract methods from the rest of the call
+                rest_of_call = content[m.start():m.start() + 200]
+                methods_match = re.search(r'methods\s*=\s*\[([^\]]+)\]', rest_of_call)
+                if methods_match:
+                    methods = [x.strip().strip("'\"").upper() for x in methods_match.group(1).split(',')]
+                    methods = [m for m in methods if m in VALID_HTTP_METHODS_UPPER]
+                else:
+                    methods = ["GET"]  # FastAPI defaults to GET if no methods specified
+
+                for method in methods:
+                    routes.append({
+                        "method": method,
+                        "path": _normalize_path(route_path),
+                        "handler_name": handler_name,
+                        "file": rel_path,
+                        "line": line_num,
+                        "middleware_chain": [],
+                        "request_type": None,
+                        "response_type": None,
+                        "framework": "fastapi",
+                    })
 
     # Django URL patterns
     if is_django:
