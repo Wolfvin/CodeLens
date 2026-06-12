@@ -32,6 +32,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
+    ".nim", ".nims",
 }
 
 STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant"}

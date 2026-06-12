@@ -24,6 +24,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
     ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
     ".lua", ".java", ".cs", ".php", ".zig",
+    ".nim", ".nims",
 }
 
 # Performance limits for large codebases

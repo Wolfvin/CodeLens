@@ -1,5 +1,5 @@
 """
-Code Smell Detector for CodeLens — v3.1
+Code Smell Detector for CodeLens — v3
 Systematically detects code smells that AI struggles to find without reading every file.
 
 Smell Categories:
@@ -13,8 +13,6 @@ Smell Categories:
 8. Callback Hell — deeply nested callbacks/promises
 9. Large File — file with too many lines
 10. Complex Conditional — overly complex if/switch/ternary
-11. Mutable Default Argument — Python mutable defaults (list/dict/set)
-12. SQL Injection Risk — f-string/format SQL queries
 
 Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 """
@@ -31,7 +29,7 @@ from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
-    ".php", ".go", ".java", ".cs", ".dart", ".lua",
+    ".nim", ".nims",
 }
 
 # Thresholds
@@ -76,8 +74,7 @@ def detect_smells(
     valid_categories = {
         "long_fn", "deep_nesting", "many_params", "large_file",
         "callback_hell", "magic_values", "god_object",
-        "complex_conditional", "duplicate_pattern", "inconsistent",
-        "mutable_default", "sql_injection"
+        "complex_conditional", "duplicate_pattern", "inconsistent"
     }
 
     if categories:
@@ -189,16 +186,6 @@ def detect_smells(
                 gods = _detect_god_objects(content, ext, rel_path)
                 all_smells["god_object"].extend(gods)
 
-            # Mutable default argument detection (Python-specific)
-            if "mutable_default" in categories and ext == ".py":
-                mut_defaults = _detect_mutable_defaults(content, rel_path)
-                all_smells["mutable_default"].extend(mut_defaults)
-
-            # SQL injection risk (Python f-string/format SQL)
-            if "sql_injection" in categories and ext == ".py":
-                sql_inj = _detect_sql_injection(content, rel_path)
-                all_smells["sql_injection"].extend(sql_inj)
-
     # Duplicate pattern detection (cross-file, only if requested)
     if "duplicate_pattern" in categories:
         dupes = _detect_duplicate_patterns(workspace)
@@ -272,27 +259,17 @@ def detect_smells(
         base_score = 8
 
     # Critical penalty: based on critical count per production file (capped)
-    # v6.1: Fixed — any critical smells should always reduce health below 95
     critical_per_file = prod_critical / score_files
-    if prod_critical == 0:
+    if critical_per_file <= 1:
         critical_penalty = 0
-    elif critical_per_file <= 0.01:
-        critical_penalty = 3  # Even a single critical in a large project hurts
-    elif critical_per_file <= 1:
-        critical_penalty = 5
     elif critical_per_file <= 5:
-        critical_penalty = 10
-    elif critical_per_file <= 10:
-        critical_penalty = 15
-    elif critical_per_file <= 20:
-        critical_penalty = 20
-    else:
-        critical_penalty = min(35, int(critical_per_file * 0.5))
-
-    # v6.1: Absolute minimum penalty if any critical smells exist
-    # A project with critical code smells should never score 95+
-    if prod_critical > 0 and critical_penalty < 5:
         critical_penalty = 5
+    elif critical_per_file <= 10:
+        critical_penalty = 10
+    elif critical_per_file <= 20:
+        critical_penalty = 15
+    else:
+        critical_penalty = min(25, int(critical_per_file * 0.5))
 
     # Critical ratio adjustment: fewer criticals relative to total = healthier
     critical_ratio = prod_critical / max(prod_smells, 1)
@@ -306,7 +283,7 @@ def detect_smells(
     health_score = max(0, min(100, base_score - critical_penalty + ratio_bonus))
 
     # Top priority smells (critical first, then by category importance)
-    priority_order = ["god_object", "sql_injection", "mutable_default", "long_fn", "deep_nesting", "callback_hell",
+    priority_order = ["god_object", "long_fn", "deep_nesting", "callback_hell",
                       "many_params", "complex_conditional", "large_file",
                       "magic_values", "duplicate_pattern", "inconsistent"]
     top_smells = []
@@ -344,12 +321,6 @@ def detect_smells(
 def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions that are too long."""
     smells = []
-
-    # v5.9.2: Skip test/story/fixture files — long functions are expected there
-    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
-    if any(kw in rel_path for kw in _skip_keywords):
-        return smells
-
     lines = content.split('\n')
 
     # Find function definitions and their line ranges
@@ -377,19 +348,6 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         for i, line in enumerate(lines):
             if re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+', line.strip()):
                 m = re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', line.strip())
-                if m:
-                    fn_starts.append((i, m.group(1)))
-
-    elif ext == ".php":
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            # PHP method with visibility: public function, private function, protected function
-            m = re.match(r'(?:public|private|protected)\s+(?:static\s+)?function\s+(\w+)', stripped)
-            if m:
-                fn_starts.append((i, m.group(1)))
-            # PHP standalone function
-            elif re.match(r'function\s+(\w+)', stripped):
-                m = re.match(r'function\s+(\w+)', stripped)
                 if m:
                     fn_starts.append((i, m.group(1)))
 
@@ -660,65 +618,6 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
-                })
-
-    elif ext == ".php":
-        # PHP function/method: (public|private|protected) function name(params)
-        for m in re.finditer(r'(?:public|private|protected)\s+(?:static\s+)?function\s+\w+\s*\(([^)]*)\)', content):
-            params_str = m.group(1).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use an options array or DTO class for grouping."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider using an associative array or config object."
-                })
-
-        # PHP standalone functions: function name(params)
-        for m in re.finditer(r'\bfunction\s+(\w+)\s*\(([^)]*)\)', content):
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use an options array or DTO class for grouping."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider using an associative array or config object."
                 })
 
     return smells
@@ -1315,7 +1214,6 @@ def _is_docs_or_example(rel_path: str) -> bool:
         '/tests/', '/test/', '/__tests__/', '/spec/',
         '/fixtures/', '/fixture/',
         '/migrations/',
-        '/stories/', '/storybook/',  # v6.1: Storybook stories are not production code
     ]
     # Also match paths that START with these directory names
     # (no leading slash in rel_path, e.g., "tests/foo.py" or "docs_src/bar.py")
@@ -1327,7 +1225,6 @@ def _is_docs_or_example(rel_path: str) -> bool:
         'tests/', 'test/', '__tests__/', 'spec/',
         'fixtures/', 'fixture/',
         'migrations/',
-        'stories/', 'storybook/',  # v6.1: Storybook stories are not production code
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))
@@ -1371,163 +1268,5 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
 
     return False
 
-
-# ─── New Smell Detectors (v3.1) ────────────────────────────────────
-
-def _detect_mutable_defaults(content: str, rel_path: str) -> List[Dict]:
-    """Detect mutable default arguments in Python functions.
-
-    This is one of the most common Python bugs — mutable default arguments
-    (list, dict, set) are shared across all calls, causing unexpected behavior.
-
-    Catches:
-    - def foo(x=[]): ...
-    - def foo(x={}): ...
-    - def foo(x=set()): ...
-    - def foo(x=list()): ...
-    - def foo(x=dict()): ...
-    """
-    smells = []
-    lines = content.split('\n')
-
-    # Pattern: function definition with mutable default argument
-    # Matches: def func(param=[], param2={}, param3=set())
-    mutable_default_pattern = re.compile(
-        r'^\s*(?:async\s+)?def\s+\w+\s*\((.*?)\)\s*:',
-        re.DOTALL
-    )
-
-    for i, line in enumerate(lines):
-        # Quick pre-check for common mutable defaults
-        if '=[]' not in line and '={}' not in line and '=set()' not in line \
-                and '=list()' not in line and '=dict()' not in line:
-            continue
-
-        # Check if this is a function definition with mutable defaults
-        m = re.match(r'^\s*(?:async\s+)?def\s+(\w+)\s*\((.*?)\)\s*(?:->.*?)?:', line)
-        if not m:
-            continue
-
-        fn_name = m.group(1)
-        params_str = m.group(2)
-
-        # Parse parameters for mutable defaults
-        mutable_types = {
-            '[]': 'list',
-            '{}': 'dict',
-            'set()': 'set',
-            'list()': 'list',
-            'dict()': 'dict',
-        }
-
-        found_mutables = []
-        for param in params_str.split(','):
-            param = param.strip()
-            for default_val, type_name in mutable_types.items():
-                if f'={default_val}' in param:
-                    # Extract parameter name
-                    param_name = param.split('=')[0].strip().split(':')[
-0].strip()
-                    found_mutables.append((param_name, type_name))
-
-        for param_name, type_name in found_mutables:
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "fn": fn_name,
-                "param": param_name,
-                "mutable_type": type_name,
-                "severity": "critical",
-                "message": f"Mutable default argument '{param_name}={type_name}()' in function '{fn_name}'",
-                "suggestion": f"Use None as default and initialize inside the function: def {fn_name}({param_name}=None): if {param_name} is None: {param_name} = {type_name}()"
-            })
-
-    return smells
-
-
-def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
-    """Detect potential SQL injection vulnerabilities in Python code.
-
-    Catches:
-    - f-string SQL queries: f"SELECT * FROM users WHERE id = {user_id}"
-    - .format() SQL queries: "SELECT * FROM users WHERE id = {}".format(user_id)
-    - % formatting SQL queries: "SELECT * FROM users WHERE id = '%s'" % user_id
-
-    Does NOT flag:
-    - Parameterized queries with placeholders (?, %s without % operator)
-    - Static SQL strings without variable interpolation
-    """
-    smells = []
-    lines = content.split('\n')
-
-    # SQL keywords to detect SQL statements
-    sql_keywords = re.compile(
-        r'(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b'
-    )
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        # Skip comments
-        if stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
-            continue
-
-        # Skip test files for severity reduction
-        is_test = _is_test_or_mock_file(rel_path)
-
-        # Check for f-string SQL injection
-        # Pattern: f"SELECT ..." or f"INSERT ..." etc. with {variable} inside
-        fstring_sql = re.findall(
-            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC).{0,200})["\']',
-            stripped, re.IGNORECASE
-        )
-        for sql_str in fstring_sql:
-            # Check if it contains variable interpolation
-            if '{' in sql_str and '}' in sql_str:
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "f-string_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: f-string used in SQL query",
-                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of f-string interpolation."
-                })
-                break  # One finding per line is enough
-
-        # Check for .format() SQL injection
-        if '.format(' in stripped:
-            # Find SQL strings followed by .format()
-            format_sql = re.search(
-                r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*\.format\(',
-                stripped, re.IGNORECASE
-            )
-            if format_sql:
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "format_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: .format() used in SQL query",
-                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
-                })
-
-        # Check for % formatting SQL injection
-        # Pattern: "SELECT ... %s ..." % variable (but not just "SELECT ... %s" alone)
-        pct_sql = re.search(
-            r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*%\s*\(',
-            stripped, re.IGNORECASE
-        )
-        if pct_sql:
-            severity = "warning" if is_test else "critical"
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "pattern": "percent_format_sql",
-                "severity": severity,
-                "message": f"Potential SQL injection: % formatting used in SQL query",
-                "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
-            })
-
-    return smells
+# _is_docs_or_example is defined above. Note: paths like "docs_src/foo.py"
+# start without a leading slash, so we also match on path-starts-with.

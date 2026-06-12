@@ -30,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go",
+    ".go", ".nim", ".nims",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -118,6 +118,21 @@ ENTRYPOINT_PATTERNS = {
                 "label": "laravel_service_provider",
             },
             # PHP — console kernel / http kernel
+            {
+                # Nim — when isMainModule: (equivalent to if __name__ == "__main__")
+                "regex": r'when\s+isMainModule\s*:',
+                "language": {".nim", ".nims"},
+                "extract": "none",
+                "label": "nim_main_guard",
+            },
+            {
+                # Nim — proc main()
+                "regex": r'proc\s+main\s*\(',
+                "language": {".nim", ".nims"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "nim_main_proc",
+            },
             {
                 "regex": r'class\s+(\w+Kernel)\s+extends\s+\w+Kernel',
                 "language": {".php"},

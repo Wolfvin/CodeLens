@@ -5,24 +5,35 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.2] — 2026-06-12
+## [5.8.2] — 2026-06-12
 
-### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
+### Tested against nim-lang/Nim (3,672 .nim files, self-hosting compiler, 36MB)
 
-Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
-across all analysis engines after targeted fixes based on SWR analysis findings.
+Real-world test on a self-hosting Nim compiler — the language writes itself!
+Only 40/3734 source files were parsed before this release (1.1% coverage).
+After adding Nim support: 3,710 files parsed, 99.6% coverage.
+
+### Added
+
+- **Nim fallback parser** (`fallback_nim.py`): Regex-based parser that extracts `proc`, `func`, `method`, `iterator`, `template`, `macro` declarations, `type` definitions (object/ref object/enum/distinct/alias), imports/exports/includes, module-level `const`/`let`/`var`, `when isMainModule:` entry points, and function call edges. Handles Nim's `*` export marker, backtick-quoted identifiers, and indentation-based block tracking.
+- **Nim framework detection**: `detect_frameworks()` now detects `nim` (via `.nim`/`.nims`/`.nimble` files), `nimble` (package manager), `jester` (web framework), `prologue` (web framework), `karax` (SPA framework), `happyx` (web framework), `norm` (ORM), `nimcrypto` (crypto library). Parses `.nimble` files for `requires "package"` dependencies.
+- **`has_nim` field in framework detection**: `detect_frameworks()` now includes `has_nim: true` when Nim source files are found.
+- **Handbook Nim identity**: `handbook` now parses `.nimble` files for project name, version, and description. Classifies Nim projects as `nim-compiler`, `nim-web-service`, `nim-database`, `nim-frontend-app`, or `nim-project` based on name and dependencies.
+- **Nim entrypoints**: `entrypoints` command now detects `when isMainModule:` (Nim's equivalent of `if __name__ == "__main__"`) and `proc main()`.
+- **Nimble manifest parsing in vuln-scan**: `vuln-scan` now parses `.nimble` files for dependency versions and checks against the vulnerability database. Supports `requires "pkg >= version"` patterns.
+- **Nim code indicators for debug-leak commented_code**: Added `code_indicators_nim` with Nim-specific patterns (`proc`, `func`, `method`, `iterator`, `template`, `macro`, `type`, `const`, `let`, `var`, `import`, `from`, `export`, `discard`, `echo`, `new`).
+- **Nim comment prefix**: Debug-leak engine now recognizes `#` as the comment prefix for `.nim`/`.nims` files.
 
 ### Fixed
 
-- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
-- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
-- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
-- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
-- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
-- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
-- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
-- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
-- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
+- **`echo()` false positive in debug-leak**: Python's `def echo(debugger, command, result, internal_dict)` in LLDB extensions was flagged as a debug print statement. Now skips: (1) Python function definitions `def echo(...)`, (2) echo calls in LLDB/debugger context, (3) Nim `echo()` calls without debug patterns (echo is standard output in Nim, like `println!` in Rust).
+- **Handbook `type: unknown` and `version: 0.0.0` for Nim projects**: Nim projects without package.json/Cargo.toml/go.mod had no identity detection. Now parses `.nimble` files for name, version, description, and type classification.
+- **Scan reports Nim as unsupported language**: Nim was silently dropped during scan (0 files parsed from 3672). Now has full parser support and is listed in the `supported` set.
+
+### Changed
+
+- **SOURCE_EXTENSIONS expanded**: Added `.nim` and `.nims` to all 16 engines (smell, complexity, debug-leak, entrypoints, regex-audit, side-effect, dataflow, ownership, config-drift, type-infer, secrets, env-check, test-map, state-map, dead-code, perf-hint, api-map).
+- **Version bump**: 5.8.1 → 5.8.2
 
 ## [5.8.1] — 2026-06-12
 

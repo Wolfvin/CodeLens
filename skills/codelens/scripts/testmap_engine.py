@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
-SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}
+SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".nim", ".nims"}
 
 TEST_FILE_PATTERNS = [
     r'\.test\.(?:js|ts|tsx|jsx|mjs)$',

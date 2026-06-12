@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
-from utils import logger, DEFAULT_IGNORE_DIRS
+from utils import logger
 from registry import (
     load_config, save_config, ensure_codelens_dir,
     load_frontend_registry, save_frontend_registry,
@@ -25,12 +25,12 @@ from parsers.fallback_js_backend import parse_js_backend_fallback
 from parsers.fallback_rust import parse_rust_fallback
 from parsers.fallback_python import parse_python_fallback
 from parsers.fallback_java import parse_java_fallback
-from parsers.fallback_kotlin import parse_kotlin_fallback
 from parsers.fallback_c import parse_c_fallback
 from parsers.fallback_go import parse_go_fallback
 from parsers.fallback_lua import parse_lua_fallback
 from parsers.fallback_csharp import parse_csharp_fallback
 from parsers.fallback_php import parse_php_fallback
+from parsers.fallback_nim import parse_nim_fallback
 from parsers.blade_parser import parse_blade_template
 
 from commands import register_command
@@ -509,7 +509,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
-    # Parse Java files
+    # Parse Java/Kotlin files
     java_data = []
     if files["java"]:
         for path in files["java"]:
@@ -526,24 +526,6 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 })
             except IOError:
                 logger.debug(f"Failed to read Java file: {path}")
-
-    # Parse Kotlin files
-    kotlin_data = []
-    if files["kotlin"]:
-        for path in files["kotlin"]:
-            if incremental and changed_files and path not in changed_files:
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                refs = parse_kotlin_fallback(content, os.path.relpath(path, workspace))
-                kotlin_data.append({
-                    "path": os.path.relpath(path, workspace),
-                    "nodes": refs.get("nodes", []),
-                    "edges": refs.get("edges", [])
-                })
-            except IOError:
-                logger.debug(f"Failed to read Kotlin file: {path}")
 
     # Parse C/C++ files
     c_cpp_data = []
@@ -637,7 +619,25 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
 
 
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data
+    # Parse Nim files
+    nim_data = []
+    if files["nim"]:
+        for path in files["nim"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_nim_fallback(content, os.path.relpath(path, workspace))
+                nim_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Nim file: {path}")
+
+    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + nim_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -723,23 +723,23 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
             "java": len(files["java"]),
-            "kotlin": len(files["kotlin"]),
             "c_cpp": len(files["c_cpp"]),
             "go": len(files["go"]),
             "lua": len(files["lua"]),
             "csharp": len(files["csharp"]),
             "php": len(files["php"]),
             "blade": len(files["blade"]),
+            "nim": len(files["nim"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
-        "kotlin_parsed": len(kotlin_data),
         "c_cpp_parsed": len(c_cpp_data),
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
         "csharp_parsed": len(csharp_data),
         "php_parsed": len(php_data),
         "blade_parsed": len(blade_data),
+        "nim_parsed": len(nim_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -761,7 +761,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade", "kotlin"}
+    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade", "nim"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -771,6 +771,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "csharp": "C#",
         "swift": "Swift",
         "ruby": "Ruby",
+        "nim": "Nim",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
     return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
@@ -792,27 +793,19 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "vue": [],
         "svelte": [],
         "java": [],
-        "kotlin": [],
         "c_cpp": [],
         "go": [],
         "lua": [],
         "csharp": [],
         "php": [],
         "blade": [],
+        "nim": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
         
-        # v6.4: Check both config ignore patterns AND DEFAULT_IGNORE_DIRS
         if should_ignore(rel_root, config):
-            dirs.clear()
-            continue
-
-        # v6.4: Also skip directories in DEFAULT_IGNORE_DIRS (fixtures, vendored, etc.)
-        # This ensures demo_files/, sample_files/, vendored_parsers/, etc. are always excluded
-        parts = rel_root.replace('\\', '/').split('/')
-        if any(p in DEFAULT_IGNORE_DIRS for p in parts):
             dirs.clear()
             continue
 
@@ -831,10 +824,6 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
             # Skip TypeScript declaration files (auto-generated, no runtime code)
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
-                continue
-
-            # Skip minified files (.min.js, .min.css) — no meaningful analysis possible
-            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             if ext in ('.html', '.htm'):
@@ -864,10 +853,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["svelte"].append(file_path)
             elif ext in ('.scss', '.less', '.sass'):
                 files["css"].append(file_path)
-            elif ext == '.java':
+            elif ext in ('.java', '.kt'):
                 files["java"].append(file_path)
-            elif ext == '.kt':
-                files["kotlin"].append(file_path)
             elif ext in ('.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'):
                 files["c_cpp"].append(file_path)
             elif ext == '.go':
@@ -881,6 +868,8 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                     files["blade"].append(file_path)
                 else:
                     files["php"].append(file_path)
+            elif ext in ('.nim', '.nims'):
+                files["nim"].append(file_path)
 
     return files
 
