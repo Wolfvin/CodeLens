@@ -433,152 +433,101 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6.1: Try composer.json — detect PHP projects
+    # C/C++ project detection
+    c_cpp_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    makefile_path = os.path.join(workspace, 'Makefile')
+    meson_path = os.path.join(workspace, 'meson.build')
+    configure_path = os.path.join(workspace, 'configure.ac')
+    autotools_path = os.path.join(workspace, 'configure')
+    if os.path.isfile(cmake_path):
+        c_cpp_type = "cmake-project"
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            proj_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
+            ver_match = re.search(r'project\s*\(\s*\w+\s+VERSION\s+(\S+)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    elif os.path.isfile(makefile_path):
+        c_cpp_type = "makefile-project"
+    elif os.path.isfile(meson_path):
+        c_cpp_type = "meson-project"
+        try:
+            with open(meson_path, 'r', encoding='utf-8') as f:
+                meson_content = f.read()
+            proj_match = re.search(r"project\s*\(\s*['\"](\w+)['\"]", meson_content)
+            ver_match = re.search(r"version\s*:\s*['\"]([^'\"]+)['\"]", meson_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    elif os.path.isfile(configure_path) or os.path.isfile(autotools_path):
+        c_cpp_type = "autotools-project"
+
+    # If no build system found but C/C++ files exist, classify generically
+    if c_cpp_type is None:
+        c_cpp_count = 0
+        for ext_cc in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp'):
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                c_cpp_count += sum(1 for f in files if f.endswith(ext_cc))
+                if c_cpp_count > 10:
+                    break
+            if c_cpp_count > 10:
+                break
+        if c_cpp_count > 0:
+            c_cpp_type = "c-project"
+
+    # Lua project detection
+    lua_type = None
+    rockspec_files = [f for f in os.listdir(workspace) if f.endswith('.rockspec')]
+    if rockspec_files:
+        lua_type = "lua-rock-project"
+        try:
+            with open(os.path.join(workspace, rockspec_files[0]), 'r', encoding='utf-8') as f:
+                rock_content = f.read()
+            name_match = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
+            ver_match = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
+            if name_match:
+                identity["name"] = name_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+        except Exception:
+            pass
+    else:
+        lua_count = sum(1 for f in os.listdir(workspace) if f.endswith('.lua'))
+        if lua_count > 3:
+            lua_type = "lua-project"
+
+    # PHP project detection (beyond what framework_detect already handles)
     php_type = None
     composer_path = os.path.join(workspace, 'composer.json')
     if os.path.isfile(composer_path):
         try:
             with open(composer_path, 'r', encoding='utf-8') as f:
                 composer = json.load(f)
-            composer_name = composer.get("name", "")
-            if composer_name:
-                # composer name is "vendor/package" — use package part
-                identity["name"] = composer_name.split('/')[-1]
-            composer_version = composer.get("version", "")
-            if composer_version:
-                identity["version"] = composer_version
-            identity["description"] = composer.get("description", identity.get("description", ""))
-            # Classify PHP project type based on dependencies
+            identity["name"] = composer.get("name", identity["name"]).split('/')[-1]
+            identity["version"] = composer.get("version", identity["version"])
+            identity["description"] = composer.get("description", "")
             require = composer.get("require", {})
-            require_dev = composer.get("require-dev", {})
-            all_deps = {**require, **require_dev}
-            if "laravel/framework" in all_deps or "illuminate/framework" in all_deps:
+            if "laravel/framework" in require or "illuminate/database" in require:
                 php_type = "laravel-app"
-            elif "symfony/symfony" in all_deps or "symfony/framework-bundle" in all_deps:
+            elif "symfony/symfony" in require:
                 php_type = "symfony-app"
-            elif "slim/slim" in all_deps or "slim/php-view" in all_deps:
-                php_type = "slim-app"
-            elif "codeigniter4/framework" in all_deps:
-                php_type = "codeigniter-app"
-            elif "yiisoft/yii2" in all_deps:
-                php_type = "yii-app"
-            elif any(k.startswith("wordpress") or k == "johnpbloch/wordpress" for k in all_deps):
-                php_type = "wordpress-app"
-            elif "drupal/core" in all_deps:
-                php_type = "drupal-app"
             else:
                 php_type = "php-project"
         except Exception:
-            logger.warning("composer.json parsing failed", exc_info=True)
-
-    # v6.1: Detect C/C++ projects
-    c_cpp_type = None
-    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    makefile_path = os.path.join(workspace, 'Makefile')
-    gnu_makefile_path = os.path.join(workspace, 'GNUmakefile')
-    configure_path = os.path.join(workspace, 'configure')
-    configure_ac_path = os.path.join(workspace, 'configure.ac')
-    autoconf_path = os.path.join(workspace, 'auto')
-    # Check for C/C++ source files
-    has_c_cpp_sources = False
-    try:
-        for entry in os.listdir(workspace):
-            entry_path = os.path.join(workspace, entry)
-            if os.path.isdir(entry_path) and entry not in DEFAULT_IGNORE_DIRS and not entry.startswith('.'):
-                for sub_entry in os.listdir(entry_path):
-                    sub_path = os.path.join(entry_path, sub_entry)
-                    if os.path.isfile(sub_path) and any(sub_entry.endswith(ext) for ext in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')):
-                        has_c_cpp_sources = True
-                        break
-                    elif os.path.isdir(sub_path):
-                        # One more level
-                        try:
-                            for deep_entry in os.listdir(sub_path):
-                                if any(deep_entry.endswith(ext) for ext in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')):
-                                    has_c_cpp_sources = True
-                                    break
-                        except OSError:
-                            pass
-                    if has_c_cpp_sources:
-                        break
-            if has_c_cpp_sources:
-                break
-    except OSError:
-        pass
-
-    if os.path.isfile(cmake_path):
-        c_cpp_type = "cmake-project"
-        try:
-            with open(cmake_path, 'r', encoding='utf-8') as f:
-                cmake_content = f.read()
-            # Extract project name from CMakeLists.txt
-            proj_match = re.search(r'project\s*\(\s*(\w+)', cmake_content, re.IGNORECASE)
-            if proj_match:
-                identity["name"] = proj_match.group(1).lower()
-            ver_match = re.search(r'project\s*\([^)]*VERSION\s+(\d+(?:\.\d+)*)', cmake_content, re.IGNORECASE)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-        except Exception:
-            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
-    elif os.path.isfile(makefile_path) or os.path.isfile(gnu_makefile_path):
-        c_cpp_type = "makefile-project"
-    elif os.path.isfile(configure_path) or os.path.isfile(configure_ac_path):
-        c_cpp_type = "autotools-project"
-        # Try to extract project name from configure.ac
-        try:
-            ac_path = configure_ac_path if os.path.isfile(configure_ac_path) else None
-            if ac_path:
-                with open(ac_path, 'r', encoding='utf-8') as f:
-                    ac_content = f.read()
-                ac_init = re.search(r'AC_INIT\s*\(\s*\[?(\w+)', ac_content)
-                if ac_init:
-                    identity["name"] = ac_init.group(1).lower()
-                ver_match = re.search(r'AC_INIT\s*\([^,]*,\s*\[?([^\],\s]+)', ac_content)
-                if ver_match:
-                    identity["version"] = ver_match.group(1)
-        except Exception:
             pass
-    elif has_c_cpp_sources:
-        c_cpp_type = "c-cpp-project"
-        # Use directory name as project name (already set as default)
 
-    # v6.1: Detect Lua projects (Neovim plugins, LuaRocks packages)
-    lua_type = None
-    rockspec_files = [f for f in os.listdir(workspace) if f.endswith('.rockspec')] if os.path.isdir(workspace) else []
-    if rockspec_files:
-        lua_type = "lua-rocks-package"
-        try:
-            rockspec_path = os.path.join(workspace, rockspec_files[0])
-            with open(rockspec_path, 'r', encoding='utf-8') as f:
-                rockspec_content = f.read()
-            name_match = re.search(r'^\s*package\s*=\s*["\']([^"\']+)["\']', rockspec_content, re.MULTILINE)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            ver_match = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', rockspec_content, re.MULTILINE)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-        except Exception:
-            pass
-    else:
-        # Check for Neovim plugin pattern: init.lua + lua/ directory
-        has_init_lua = os.path.isfile(os.path.join(workspace, 'init.lua'))
-        has_lua_dir = os.path.isdir(os.path.join(workspace, 'lua'))
-        has_plugin_dir = os.path.isdir(os.path.join(workspace, 'plugin'))
-        if has_init_lua and has_lua_dir:
-            lua_type = "neovim-plugin"
-        elif has_lua_dir and has_plugin_dir:
-            lua_type = "neovim-plugin"
-        elif has_lua_dir:
-            # Check if there are .lua files
-            lua_count = 0
-            for root, dirs, files in os.walk(os.path.join(workspace, 'lua')):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS]
-                lua_count += sum(1 for f in files if f.endswith('.lua'))
-            if lua_count >= 3:
-                lua_type = "lua-project"
-
-    # v6.1: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
+    # v6: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, c_cpp_type, lua_type, php_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -588,11 +537,11 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         if go_type:
             type_parts.append("go")
         if c_cpp_type:
-            type_parts.append("cpp" if "cpp" in c_cpp_type else "c")
-        if php_type:
-            type_parts.append("php")
+            type_parts.append("c-cpp")
         if lua_type:
             type_parts.append("lua")
+        if php_type:
+            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:

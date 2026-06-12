@@ -30,7 +30,8 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go", ".nim", ".nims",
+    ".go", ".lua", ".java", ".cs",
+    ".ex", ".exs",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -80,7 +81,7 @@ ENTRYPOINT_PATTERNS = {
             },
             # C / C++
             {
-                "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
+                "regex": r'(?:int|void)\s+main\s*\(\s*(?:(?:int|void)\s*(?:argc)?\s*(?:,\s*char\s*\*+\s*argv\[\])?)?\s*\)',
                 "language": {".cc", ".cpp", ".cxx", ".c"},
                 "extract": "handler",
                 "handler_group": 0,
@@ -93,13 +94,12 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "cpp_main_short",
             },
-            # C/C++ main with calling convention macro (e.g. int ngx_cdecl\nmain(...))
             {
-                "regex": r'\n(main)\s*\([^)]*\)',
+                "regex": r'(?:int|void)\s+w?main\s*\(',
                 "language": {".cc", ".cpp", ".cxx", ".c"},
                 "extract": "handler",
-                "handler_group": 1,
-                "label": "cpp_main_calling_conv",
+                "handler_group": 0,
+                "label": "cpp_win_main",
             },
             # Go
             {
@@ -126,21 +126,6 @@ ENTRYPOINT_PATTERNS = {
                 "label": "laravel_service_provider",
             },
             # PHP — console kernel / http kernel
-            {
-                # Nim — when isMainModule: (equivalent to if __name__ == "__main__")
-                "regex": r'when\s+isMainModule\s*:',
-                "language": {".nim", ".nims"},
-                "extract": "none",
-                "label": "nim_main_guard",
-            },
-            {
-                # Nim — proc main()
-                "regex": r'proc\s+main\s*\(',
-                "language": {".nim", ".nims"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "nim_main_proc",
-            },
             {
                 "regex": r'class\s+(\w+Kernel)\s+extends\s+\w+Kernel',
                 "language": {".php"},
@@ -220,7 +205,6 @@ ENTRYPOINT_PATTERNS = {
                 "label": "flask_route",
             },
             # FastAPI @app.get/post/etc
-            # v5.9: Only match if FastAPI is actually imported in the file
             {
                 "regex": r'@app\.(get|post|put|delete|patch|head|options)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".py"},
@@ -228,10 +212,8 @@ ENTRYPOINT_PATTERNS = {
                 "method_group": 1,
                 "path_group": 2,
                 "label": "fastapi_route",
-                "requires_import": "fastapi",  # v5.9: Only match when fastapi is imported
             },
             # FastAPI @router.get/post/etc
-            # v5.9: Only match if FastAPI is actually imported in the file
             {
                 "regex": r'@router\.(get|post|put|delete|patch|head|options)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".py"},
@@ -239,7 +221,6 @@ ENTRYPOINT_PATTERNS = {
                 "method_group": 1,
                 "path_group": 2,
                 "label": "fastapi_router_route",
-                "requires_import": "fastapi",  # v5.9: Only match when fastapi is imported
             },
             # Django URL patterns
             {
@@ -339,7 +320,7 @@ ENTRYPOINT_PATTERNS = {
             },
             # Go Gin framework
             {
-                "regex": r'(?:r|router|engine)\.(?:GET|POST|PUT|DELETE|PATCH)\s*\(\s*["\']([^"\']+)["\']',
+                "regex": r'(\w+)\.(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|Any|Handle)\s*\(\s*["\']([^"\']+)["\']',
                 "language": {".go"},
                 "extract": "go_gin_route",
                 "path_group": 1,
@@ -809,6 +790,61 @@ ENTRYPOINT_PATTERNS = {
                 "name_group": 1,
                 "label": "rust_test_module",
             },
+            # Go test functions: func TestXxx(t *testing.T)
+            {
+                "regex": r'func\s+(Test\w+)\s*\(\s*\w+\s+\*?testing\.T\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_test_fn",
+            },
+            # Go benchmark functions: func BenchmarkXxx(b *testing.B)
+            {
+                "regex": r'func\s+(Benchmark\w+)\s*\(\s*\w+\s+\*?testing\.B\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_benchmark_fn",
+            },
+            # Go fuzz functions: func FuzzXxx(f *testing.F)
+            {
+                "regex": r'func\s+(Fuzz\w+)\s*\(\s*\w+\s+\*?testing\.F\s*\)',
+                "language": {".go"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "go_fuzz_fn",
+            },
+            # C/C++ test functions (Google Test / Unity / CMocka)
+            {
+                "regex": r'(?:TEST|TEST_F|TEST_P|TEST_C)\s*\(\s*\w+\s*,\s*(\w+)\s*\)',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "gtest_macro",
+            },
+            {
+                "regex": r'void\s+(test_\w+)\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "c_test_fn",
+            },
+            # Lua busted test framework: describe/it
+            {
+                "regex": r'(?:describe|it)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "test_name",
+                "name_group": 1,
+                "label": "lua_busted_test",
+            },
+            # PHP PHPUnit test methods
+            {
+                "regex": r'public\s+function\s+(test\w+)\s*\(',
+                "language": {".php"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "phpunit_test",
+            },
         ],
     },
 }
@@ -925,14 +961,6 @@ def map_entrypoints(
                     )
                     entrypoints.extend(file_entrypoints)
 
-    # ─── Phase 1.5: Detect barrel files and named export entry points ──
-    # v6.1: For library projects, the main entry point is often a barrel file
-    # (index.ts/index.js) that re-exports all public API. Detect these as
-    # module_export entry points so they appear prominently.
-    if "module_export" in types_to_scan:
-        barrel_entrypoints = _detect_barrel_exports(workspace)
-        entrypoints.extend(barrel_entrypoints)
-
     # ─── Phase 2: Deduplicate ─────────────────────────────────
     entrypoints = _deduplicate_entrypoints(entrypoints)
 
@@ -969,17 +997,6 @@ def _extract_entrypoints(
     results = []
     regex = pattern_def["regex"]
     extract_type = pattern_def.get("extract", "handler_only")
-
-    # v5.9: Check requires_import constraint — skip pattern if the
-    # required module is not imported in this file (e.g., FastAPI
-    # decorator patterns should not match in Flask-only files).
-    requires_import = pattern_def.get("requires_import")
-    if requires_import:
-        import_pattern = re.compile(
-            rf'(?:from\s+{re.escape(requires_import)}\s+import|import\s+{re.escape(requires_import)})'
-        )
-        if not import_pattern.search(content):
-            return []
 
     try:
         for match in re.finditer(regex, content):
@@ -1299,86 +1316,6 @@ def _find_called_functions(content: str, handler_name: str) -> List[str]:
                     called.append(fn_name)
 
     return called
-
-
-# ─── Barrel File Detection ────────────────────────────────────
-
-def _detect_barrel_exports(workspace: str) -> List[Dict[str, Any]]:
-    """v6.1: Detect barrel files (index.ts/index.js) that re-export the public API.
-
-    For library projects, the main entry point is often src/index.ts which
-    re-exports all hooks/components. These should be detected as module_export
-    entry points since they define the library's public interface.
-    """
-    entrypoints = []
-
-    # Check for common barrel file locations
-    barrel_candidates = [
-        os.path.join(workspace, 'src', 'index.ts'),
-        os.path.join(workspace, 'src', 'index.js'),
-        os.path.join(workspace, 'src', 'index.tsx'),
-        os.path.join(workspace, 'index.ts'),
-        os.path.join(workspace, 'index.js'),
-        os.path.join(workspace, 'lib', 'index.ts'),
-        os.path.join(workspace, 'lib', 'index.js'),
-    ]
-
-    for barrel_path in barrel_candidates:
-        if not os.path.isfile(barrel_path):
-            continue
-
-        rel_path = os.path.relpath(barrel_path, workspace)
-
-        try:
-            with open(barrel_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-        except IOError:
-            continue
-
-        # Count re-exports (export { ... }, export * from, export function/const)
-        re_export_count = len(re.findall(r'export\s+\*\s+from', content))
-        named_export_count = len(re.findall(r'export\s+\{', content))
-        fn_export_count = len(re.findall(r'export\s+(?:function|const|class|type|interface)\s+', content))
-
-        total_exports = re_export_count + named_export_count + fn_export_count
-
-        # Only flag as barrel if it has multiple re-exports (a real barrel file)
-        if total_exports < 2:
-            continue
-
-        # Extract exported names for metadata
-        exported_names = []
-
-        # export * from './module' — count but can't extract names
-        if re_export_count > 0:
-            exported_names.append(f"{re_export_count} re-export(s)")
-
-        # export { foo, bar } from './module'
-        for match in re.finditer(r'export\s+\{([^}]+)\}', content):
-            names = [n.strip().split(' as ')[0].strip() for n in match.group(1).split(',')]
-            exported_names.extend(names[:10])  # Limit to first 10
-
-        # export function/const/class name
-        for match in re.finditer(r'export\s+(?:function|const|class|type|interface)\s+(\w+)', content):
-            exported_names.append(match.group(1))
-
-        entrypoints.append({
-            "type": "module_export",
-            "file": rel_path,
-            "line": 1,
-            "label": "barrel_export",
-            "handler": rel_path,
-            "metadata": {
-                "is_barrel": True,
-                "total_exports": total_exports,
-                "re_exports": re_export_count,
-                "named_exports": named_export_count,
-                "fn_exports": fn_export_count,
-                "exported_names": exported_names[:30],
-            },
-        })
-
-    return entrypoints
 
 
 # ─── Deduplication ─────────────────────────────────────────────

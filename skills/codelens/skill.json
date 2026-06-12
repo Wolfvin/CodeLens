@@ -1,8 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.4.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v6.4.0: Runtime vs dev dependency classification (prevents framework false positives), 14 new framework signatures (Express, Fastify, Koa, Hono, NestJS, tRPC, SWR, React Query, Zustand, Jotai, Recoil, Pinia, Vite, esbuild), monorepo tool detection (pnpm/turborepo/lerna/nx), SWR/React Query state detection, source classification across all engines (core/test/example/config), severity downgrade for non-core findings, Next.js handler name extraction and auth detection, duplicate_define per-file fix. Tested on vercel/swr.",  "author": "codelens",
-  "tags": [    "code-analysis",
+  "version": "6.2.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",  "tags": [    "code-analysis",
     "reference-tracking",    "dead-code",
     "duplicate-detection",    "frontend",    "backend",
     "rust",

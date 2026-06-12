@@ -5,41 +5,59 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.4.0] — 2026-06-12
+## [6.2.0] — 2026-06-12
 
-### Tested against vercel/swr (334 source files, React data-fetching library, pnpm monorepo)
+### Tested against 8 diverse real-world repos (multi-language stress test)
 
-Real-world test on a React Hooks library for remote data fetching. 805 backend nodes,
-11,312 edges, 14 API routes (all example), 68 state stores (SWR atoms), 43 circular deps.
-Confirmed: framework detection correctly identifies `react` as runtime dep and `next.js`/`swr`
-as dev-only frameworks. Monorepo tool (pnpm) detected. Module system: dual (ESM+CJS).
+| Repo | Language | Files | Smells | Complexity | Before |
+|------|----------|-------|--------|------------|--------|
+| BurntSushi/ripgrep | Rust | 221 | 843 | 2,185 fns | 0 smells, 0 fns |
+| gin-gonic/gin | Go | 130 | 365 | 1,318 fns | 0 smells, 0 fns |
+| htop-dev/htop | C/Lua | 352 | 1,210 | 1,562 fns | 0 smells, 0 fns |
+| luvit/luvit | Lua/C | 284 | 635 | 816 fns | 0 smells, 0 fns |
+| nicm/fdm | C | 101 | 372 | 3 fns | 0 smells, 0 fns |
+| elixir-lang/elixir | Elixir | 777 | N/A | N/A | 0 nodes (unsupported) |
+| pallets/flask | Python | 236 | 242 | 1,365 fns | Smells worked, complexity 0 |
+| laravel/laravel | PHP | 63 | 122 | N/A | 0 smells |
 
 ### Added
 
-- **Runtime vs dev dependency classification**: `detect_frameworks()` now separates `dependencies`/`peerDependencies` (runtime) from `devDependencies` (dev). Runtime frameworks go to `frameworks`, dev-only frameworks go to new `dev_frameworks` list. Prevents false positives like SWR being classified as a Next.js project when `next` is only in devDependencies.
-- **14 new framework signatures**: Express, Fastify, Koa, Hono, NestJS (backend); tRPC (API layer); SWR, React Query/TanStack Query (data fetching); Zustand, Jotai, Recoil, Pinia (state management); Vite, esbuild (build tools).
-- **Monorepo tool detection**: New `monorepo_tool` field in framework detection output. Detects pnpm (pnpm-workspace.yaml), Turborepo (turbo.json), Lerna (lerna.json), Nx (nx.json). Multiple tools joined with "+" (e.g., "pnpm+turborepo").
-- **Module system detection improvement**: Now detects "dual" module system (both ESM and CJS support) when package.json has both `"exports"` and `"main"` fields.
-- **SWR state management detection**: `state-map` now recognizes SWR as a state management framework. Detects `useSWR`/`useSWRInfinite`/`useSWRMutation` (atom consumers), `mutate()` (mutations), `SWRConfig` (context provider), and `cache` (store). Each SWR key becomes a named state slice (e.g., `swr:/api/data`).
-- **React Query state management detection**: `state-map` detects `useQuery`/`useMutation`/`useQueryClient`/`QueryClientProvider` patterns with query key as slice name.
-- **Source classification across all engines**: Every finding in smell, circular, dead-code, perf-hint, api-map, and state-map engines now includes a `source` field: "core" (main source), "test" (test files), "example" (examples/demos), or "config" (config files). Each engine also reports `by_source` stats in output.
-- **Severity downgrade for non-core findings**: Smell engine and dead-code engine automatically downgrade severity for findings in test/example files (critical→warning, warning→info). Downgraded findings include `downgraded: true` field.
-- **Test-only cycle detection**: Circular engine classifies cycles entirely in test/example files as "info" severity instead of "warning". Adds `test_involvement` field ("full" or "partial") and `source` classification per cycle.
-- **Next.js handler name extraction**: API map now extracts actual handler function names from Next.js Pages Router routes instead of generic "default_handler".
-- **Next.js auth detection**: API map detects auth patterns in Next.js routes: `getSession`/`getServerSession` (next-auth), `req.headers.authorization`, cookie-based session checks, and middleware.ts auth scanning.
-- **API map source classification**: Routes now include `source` field ("core", "example", "test", "generated") and `filter_source` parameter to filter routes by source.
-- **`_set_framework_flag()` helper**: Refactored repetitive `if/elif` flag-setting chains in framework_detect.py into a single `flag_map` lookup for maintainability.
+- **Elixir language support in scan**: New `fallback_elixir.py` parser extracts `defmodule`, `def`, `defp`, `defmacro`, `use`, `import`, `require`, `alias`, and function calls. Elixir files (.ex, .exs) are now discovered and parsed during scan. Result on elixir-lang/elixir: 16,136 nodes, 61,970 edges (from 0).
+- **Go/C/C++/Lua/PHP function detection in smell engine**: Added branches for `_detect_long_functions`, `_detect_deep_nesting`, `_detect_many_params`, and `_detect_god_objects` for Go (`func`), C/C++ (`type name(params)`), Lua (`function name()`), and PHP (`function name()`). Health scores now vary realistically across all languages.
+- **Go/C/C++/Lua/PHP variable detection in dead-code engine**: Added `_detect_unused_variables` branches for Go (`var`/`:=`), C/C++ (typed declarations), Lua (`local`), and PHP (`$var`). Added `_detect_unreachable_code` function-start detection for Go, C/C++, Lua, and PHP.
+- **Go/Rust/C/Lua/PHP export/import collection**: New `_collect_go_exports_imports`, `_collect_rust_exports_imports`, `_collect_c_exports_imports`, `_collect_lua_exports_imports`, and `_collect_php_exports_imports` functions for cross-file dead code detection.
+- **Lua/PHP function extraction in complexity engine**: New `_extract_lua_functions` and `_extract_php_functions` with body extractors (`_get_lua_function_body`, `_get_php_function_body`).
+- **Elixir function extraction in complexity engine**: New `_extract_elixir_functions` and `_get_elixir_function_body` using do/end block matching.
+- **C/C++ project type detection in handbook**: Detects CMakeLists.txt, Makefile, meson.build, configure.ac projects. Falls back to "c-project" if C/C++ source files are found without a build system.
+- **Lua project type detection in handbook**: Detects .rockspec files and Lua-dense directories.
+- **PHP project type detection in handbook**: Parses composer.json for Laravel/Symfony detection.
+- **Go test entry detection**: `entrypoints` command now detects `func TestXxx(t *testing.T)`, `func BenchmarkXxx(b *testing.B)`, and `func FuzzXxx(f *testing.F)`.
+- **C/C++ test entry detection**: Detects Google Test macros (`TEST`, `TEST_F`, `TEST_P`) and `test_` function prefixes.
+- **Lua test entry detection**: Detects busted framework `describe`/`it` patterns.
+- **PHP test entry detection**: Detects PHPUnit `public function testXxx()` methods.
+- **Elixir extensions in SOURCE_EXTENSIONS**: All analysis engines now include `.ex` and `.exs`.
+- **Flexible C main() regex**: Now matches `int main(void)`, `void main()`, `char **argv`, and `WinMain`/`wmain` variants.
+- **Flexible Go Gin route regex**: Now matches any variable name, not just `r`/`router`/`engine`.
+- **Multi-language error handling patterns**: Inconsistent patterns detector now tracks Go errors (`if err != nil`), C errno/return codes, Lua pcall/xpcall, and PHP exceptions.
+- **Multi-language async patterns**: Tracks Go goroutines and Lua coroutines.
+- **Multi-language export patterns**: Tracks Go imports, Rust use, C includes, Lua requires, and PHP use statements.
 
 ### Fixed
 
-- **Framework detection false positive for devDependencies**: Projects with `next` only in devDependencies no longer get `has_nextjs = True`. Instead, `next.js` appears in `dev_frameworks`.
-- **`duplicate_define` false positive across files**: Functions with common names (Page, Layout, handler) in different files were incorrectly flagged as duplicates. Now only flags as duplicate when the same function name is defined multiple times in the SAME file. Next.js convention names (Page, Layout, GET, POST, etc.) are never flagged as duplicates.
-- **Dead-code engine missing examples/ directory**: The test/example filter in `_detect_dead_from_registry` only checked `/example` but not `/examples/`. Expanded to include `/examples/`, `/e2e/`, `/__tests__/`, `/stories/`, `/storybook/`.
-- **pyproject.toml syntax error**: Line 8 had `description` and `readme` merged into one line, causing pytest to crash.
+- **Smell engine `SOURCE_EXTENSIONS` excluded Go, C, C++, Lua, PHP**: These languages were completely invisible to the smell engine. Added all missing extensions.
+- **Smell `_detect_inconsistent_patterns` excluded non-JS/Python/Rust**: Now scans Go, C/C++, Lua, and PHP files for pattern inconsistencies.
+- **Complexity engine excluded Lua, PHP, Elixir**: Added `.lua`, `.php`, `.ex`, `.exs` to SOURCE_EXTENSIONS and added function extractors.
+- **Dead-code engine had no function detection for Go, C, C++, Lua, PHP**: Unreachable code detection was completely disabled for these languages.
+- **Dead-code engine had no variable detection for Go, C, C++, Lua, PHP**: Unused variable detection only worked for JS/TS and Python.
+- **Entrypoints engine excluded Lua, Elixir**: Added `.lua`, `.ex`, `.exs` to SOURCE_EXTENSIONS.
+- **Handbook returned `type=None` for C/C++/Lua/PHP projects**: No project identity detection existed for these languages.
+- **Elixir files produced 0 backend nodes**: Elixir was completely unrecognized by the scanner.
+- **pyproject.toml formatting error**: Missing newline between `description` and `readme` fields.
 
 ### Changed
 
-- **Version bump**: 5.9.1 → 6.4.0
+- **Version bump**: 5.8.1 → 6.2.0
+- **Architecture**: Analysis engines now cover Go, C, C++, Lua, PHP, and Elixir in addition to existing JS/TS, Python, and Rust support.
 
 ## [5.8.1] — 2026-06-12
 
