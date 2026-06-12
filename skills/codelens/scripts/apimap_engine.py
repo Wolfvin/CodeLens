@@ -81,7 +81,8 @@ def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -305,6 +306,9 @@ def map_api_routes(
         route["deprecated"] = _is_deprecated_route(route)
 
     # Apply filters
+    if production_only:
+        routes = [r for r in routes if r.get("source") != "test"]
+
     if method:
         method_upper = method.upper()
         routes = [r for r in routes if r["method"].upper() == method_upper]

@@ -276,7 +276,29 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "composer_packages": ["drupal/core"],
         "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "indicators": ["sites/default/", "themes/"]
+    },
+    # Game engines
+    "godot": {
+        "packages": [],
+        "config_files": ["project.godot"],
+        "indicators": [".gd", "scene_tree", "extends Node"]
+    },
+    "unreal": {
+        "packages": [],
+        "config_files": [".uproject"],
+        "indicators": [".uasset", ".umap"]
+    },
+    "unity": {
+        "packages": [],
+        "config_files": ["ProjectSettings/ProjectSettings.asset"],
+        "indicators": [".prefab", ".unity"]
+    },
+    # .NET / C#
+    "dotnet": {
+        "packages": [],
+        "config_files": [".csproj", ".sln", "global.json", "Directory.Build.props"],
+        "indicators": []
     },
 }
 
@@ -419,6 +441,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_express": False,
+        "has_godot": False,
+        "has_dotnet": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -559,6 +583,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "dotnet":
+                    detected["has_dotnet"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -811,6 +839,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
+            elif f.endswith('.gd') and not detected["has_godot"]:
+                if "godot" not in detected["frameworks"]:
+                    detected["frameworks"].append("godot")
+                detected["has_godot"] = True
+            elif (f.endswith('.csproj') or f.endswith('.sln')) and not detected["has_dotnet"]:
+                if "dotnet" not in detected["frameworks"]:
+                    detected["frameworks"].append("dotnet")
+                detected["has_dotnet"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -832,6 +868,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "dotnet":
+                    detected["has_dotnet"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -889,17 +929,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect unsupported languages (languages without parser support)
+    # Note: Go, Java, Kotlin, C/C++, C#, Ruby, Elixir, Swift, Scala, Shell, GDScript,
+    # Dart, Lua, Haskell, Nim, R all have fallback parsers now.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        "perl": ["Makefile.PL", "cpanfile"],
+        "clojure": ["project.clj", "deps.edn"],
+        "fsharp": [".fsproj"],
+        "ocaml": ["dune", "dune-project"],
+        "zig": ["build.zig"],
+        "erlang": ["rebar.config", "erlang.mk"],
+        "fortran": ["Makefile"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:

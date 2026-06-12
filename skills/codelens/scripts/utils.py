@@ -120,7 +120,11 @@ def compute_summary(workspace, outline_data, scan_result):
 
 # ─── Path and Caller Utilities ───────────────────────────────
 
-_FILE_PATH_EXTENSIONS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte'}
+_FILE_PATH_EXTENSIONS = {
+    '.ts', '.tsx', '.js', '.jsx', '.py', '.css', '.html', '.rs', '.vue', '.svelte',
+    '.java', '.kt', '.go', '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.ex', '.exs',
+    '.dart', '.swift', '.scala', '.sh', '.bash', '.zsh', '.gd', '.lua', '.php',
+}
 
 
 # ─── Performance Safeguards ────────────────────────────────
@@ -181,6 +185,33 @@ def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SE
         True if the budget has expired.
     """
     return (time.time() - start_time) > budget_sec
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative file path looks like a bundled/compiled output file.
+
+    Matches files in dist/, build/, .output/ directories, or files with
+    common bundled extensions (.min.js, .bundle.js, .chunk.js, .global.js)
+    that are not meaningful for code analysis.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be a bundled/compiled output.
+    """
+    normalized = rel_path.replace('\\', '/')
+    # Check directory prefixes
+    for prefix in ('dist/', 'build/', '.output/', '.bundle/', 'out/'):
+        if normalized.startswith(prefix) or '/' + prefix in normalized:
+            return True
+    # Check filename patterns
+    filename = os.path.basename(rel_path).lower()
+    if filename.endswith(('.min.js', '.min.css', '.bundle.js', '.chunk.js', '.global.js', '.global.css')):
+        return True
+    if '.bundle.' in filename or '.chunk.' in filename:
+        return True
+    return False
 
 
 def is_file_path(name: str) -> bool:
@@ -389,7 +420,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.4.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
