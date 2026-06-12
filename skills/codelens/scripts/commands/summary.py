@@ -120,7 +120,26 @@ def generate_summary(
     This is the single entry point for agents who want to understand a
     codebase without information overload. It runs multiple engines
     internally but filters and prioritizes the output.
+
+    v6.3: Added time budget — expensive sub-engines are skipped when the
+    budget runs low, preventing timeout on repos with 40k+ nodes.
     """
+    import time as _time
+    _SUMMARY_BUDGET_SEC = 45  # Total budget for summary generation
+    _start = _time.time()
+    skipped_engines = []
+
+    def _budget_remaining() -> float:
+        return _SUMMARY_BUDGET_SEC - (_time.time() - _start)
+
+    def _can_run(engine_name: str, est_seconds: float = 10) -> bool:
+        """Check if we have enough budget to run an engine."""
+        if _budget_remaining() >= est_seconds:
+            return True
+        skipped_engines.append(engine_name)
+        logger.info(f"Skipping {engine_name} in summary — time budget low ({_budget_remaining():.1f}s remaining)")
+        return False
+
     workspace = os.path.abspath(workspace)
 
     # Severity filter based on detail level
@@ -209,151 +228,160 @@ def generate_summary(
 
     if focus in ("security", "all"):
         # Security findings
-        try:
-            from secrets_engine import detect_secrets
-            sec = detect_secrets(workspace)
-            sec_stats = sec.get("stats", {})
-            if sec_stats.get("total_secrets", 0) > 0:
-                # Get only the highest severity items
-                sec_items = sec.get("findings", sec.get("items", []))
-                filtered = [s for s in sec_items
-                            if s.get("severity", "low") in severity_filter][:max_items]
-                findings.append({
-                    "category": "secrets",
-                    "total": sec_stats.get("total_secrets", 0),
-                    "by_severity": sec_stats.get("by_severity", {}),
-                    "top_items": filtered,
-                    "action": "Review and move secrets to environment variables or secret manager",
-                })
-        except Exception:
-            logger.debug("Secrets scan failed in summary")
-
-        try:
-            from vulnscan_engine import scan_vulnerabilities
-            vuln = scan_vulnerabilities(workspace)
-            vuln_count = vuln.get("stats", {}).get("total_vulnerabilities", 0)
-            if vuln_count > 0:
-                findings.append({
-                    "category": "vulnerabilities",
-                    "total": vuln_count,
-                    "by_severity": vuln.get("stats", {}).get("by_severity", {}),
-                    "top_items": vuln.get("vulnerabilities", [])[:max_items],
-                    "action": "Update vulnerable dependencies or apply patches",
-                })
-        except Exception:
-            logger.debug("Vuln scan failed in summary")
-
-        try:
-            from dataflow_engine import trace_dataflow
-            df = trace_dataflow(workspace)
-            violations = df.get("stats", {}).get("violations", 0)
-            if violations > 0:
-                df_items = df.get("violations", [])
-                # Filter by severity for minimal/standard detail
-                filtered_df = [v for v in df_items
-                               if v.get("severity", "medium") in severity_filter][:max_items]
-                if detail == "full" or filtered_df:
+        if _can_run("secrets", est_seconds=15):
+            try:
+                from secrets_engine import detect_secrets
+                sec = detect_secrets(workspace)
+                sec_stats = sec.get("stats", {})
+                if sec_stats.get("total_secrets", 0) > 0:
+                    # Get only the highest severity items
+                    sec_items = sec.get("findings", sec.get("items", []))
+                    filtered = [s for s in sec_items
+                                if s.get("severity", "low") in severity_filter][:max_items]
                     findings.append({
-                        "category": "dataflow_violations",
-                        "total": violations,
-                        "top_items": filtered_df if detail != "full" else df_items[:max_items],
-                        "action": "Add sanitizers or validators for unsafe data flows",
+                        "category": "secrets",
+                        "total": sec_stats.get("total_secrets", 0),
+                        "by_severity": sec_stats.get("by_severity", {}),
+                        "top_items": filtered,
+                        "action": "Review and move secrets to environment variables or secret manager",
                     })
-        except Exception:
-            logger.debug("Dataflow scan failed in summary")
+            except Exception:
+                logger.debug("Secrets scan failed in summary")
+
+        if _can_run("vuln_scan", est_seconds=10):
+            try:
+                from vulnscan_engine import scan_vulnerabilities
+                vuln = scan_vulnerabilities(workspace)
+                vuln_count = vuln.get("stats", {}).get("total_vulnerabilities", 0)
+                if vuln_count > 0:
+                    findings.append({
+                        "category": "vulnerabilities",
+                        "total": vuln_count,
+                        "by_severity": vuln.get("stats", {}).get("by_severity", {}),
+                        "top_items": vuln.get("vulnerabilities", [])[:max_items],
+                        "action": "Update vulnerable dependencies or apply patches",
+                    })
+            except Exception:
+                logger.debug("Vuln scan failed in summary")
+
+        if _can_run("dataflow", est_seconds=10):
+            try:
+                from dataflow_engine import trace_dataflow
+                df = trace_dataflow(workspace)
+                violations = df.get("stats", {}).get("violations", 0)
+                if violations > 0:
+                    df_items = df.get("violations", [])
+                    # Filter by severity for minimal/standard detail
+                    filtered_df = [v for v in df_items
+                                   if v.get("severity", "medium") in severity_filter][:max_items]
+                    if detail == "full" or filtered_df:
+                        findings.append({
+                            "category": "dataflow_violations",
+                            "total": violations,
+                            "top_items": filtered_df if detail != "full" else df_items[:max_items],
+                            "action": "Add sanitizers or validators for unsafe data flows",
+                        })
+            except Exception:
+                logger.debug("Dataflow scan failed in summary")
 
     if focus in ("quality", "all"):
         # Quality findings
-        try:
-            from smell_engine import detect_smells
-            smell = detect_smells(workspace)
-            smell_stats = smell.get("stats", {})
-            if smell_stats.get("total_smells", 0) > 0:
-                top_items = smell.get("top_priority", [])[:max_items]
-                filtered = [s for s in top_items
-                            if s.get("severity", "info") in severity_filter]
-                findings.append({
-                    "category": "code_smells",
-                    "total": smell_stats.get("total_smells", 0),
-                    "health_score": smell_stats.get("health_score", 0),
-                    "by_severity": {
-                        "critical": smell_stats.get("critical", 0),
-                        "warning": smell_stats.get("warning", 0),
-                    },
-                    "top_items": filtered,
-                    "action": "Address critical smells first, then warnings",
-                })
-        except Exception:
-            logger.debug("Smell scan failed in summary")
-
-        try:
-            from debugleak_engine import detect_debug_leaks
-            dl = detect_debug_leaks(workspace)
-            dl_stats = dl.get("stats", {})
-            if dl_stats.get("total_leaks", 0) > 0:
-                high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
-                              if v > 0}
-                dl_items = dl.get("items", [])
-                filtered_dl = [d for d in dl_items
-                               if d.get("severity", "low") in severity_filter][:max_items]
-                # Skip debug_leaks entirely in minimal mode if no critical items
-                if detail != "minimal" or filtered_dl:
+        if _can_run("smell", est_seconds=20):
+            try:
+                from smell_engine import detect_smells
+                smell = detect_smells(workspace)
+                smell_stats = smell.get("stats", {})
+                if smell_stats.get("total_smells", 0) > 0:
+                    top_items = smell.get("top_priority", [])[:max_items]
+                    filtered = [s for s in top_items
+                                if s.get("severity", "info") in severity_filter]
                     findings.append({
-                        "category": "debug_leaks",
-                        "total": dl_stats.get("total_leaks", 0),
-                        "by_category": high_leaks,
-                        "top_items": filtered_dl,
-                        "action": "Remove console.log, debugger, and TODO/FIXME before production",
+                        "category": "code_smells",
+                        "total": smell_stats.get("total_smells", 0),
+                        "health_score": smell_stats.get("health_score", 0),
+                        "by_severity": {
+                            "critical": smell_stats.get("critical", 0),
+                            "warning": smell_stats.get("warning", 0),
+                        },
+                        "top_items": filtered,
+                        "action": "Address critical smells first, then warnings",
                     })
-        except Exception:
-            logger.debug("Debug leak scan failed in summary")
+            except Exception:
+                logger.debug("Smell scan failed in summary")
+
+        if _can_run("debug_leak", est_seconds=10):
+            try:
+                from debugleak_engine import detect_debug_leaks
+                dl = detect_debug_leaks(workspace)
+                dl_stats = dl.get("stats", {})
+                if dl_stats.get("total_leaks", 0) > 0:
+                    high_leaks = {k: v for k, v in dl_stats.get("by_category", {}).items()
+                                  if v > 0}
+                    dl_items = dl.get("items", [])
+                    filtered_dl = [d for d in dl_items
+                                   if d.get("severity", "low") in severity_filter][:max_items]
+                    # Skip debug_leaks entirely in minimal mode if no critical items
+                    if detail != "minimal" or filtered_dl:
+                        findings.append({
+                            "category": "debug_leaks",
+                            "total": dl_stats.get("total_leaks", 0),
+                            "by_category": high_leaks,
+                            "top_items": filtered_dl,
+                            "action": "Remove console.log, debugger, and TODO/FIXME before production",
+                        })
+            except Exception:
+                logger.debug("Debug leak scan failed in summary")
 
     if focus in ("architecture", "all"):
         # Architecture findings
-        try:
-            from circular_engine import detect_circular
-            circ = detect_circular(workspace)
-            cycle_count = circ.get("cycle_count", 0)
-            if cycle_count > 0:
-                chains = circ.get("cycles", circ.get("chains", {}))
-                all_chains = []
-                if isinstance(chains, dict):
-                    for cat, items in chains.items():
-                        all_chains.extend(items[:3])
-                elif isinstance(chains, list):
-                    all_chains = chains[:5]
-                findings.append({
-                    "category": "circular_dependencies",
-                    "total": cycle_count,
-                    "top_items": all_chains[:max_items],
-                    "action": "Break circular imports to improve modularity",
-                })
-        except Exception:
-            logger.debug("Circular detection failed in summary")
-
-        try:
-            from deadcode_engine import detect_dead_code
-            dc = detect_dead_code(workspace)
-            dc_stats = dc.get("stats", {})
-            dead_count = dc_stats.get("total_dead_code", 0)
-            if dead_count > 0:
-                dc_items = dc.get("results", {}).get("unreachable", [])
-                filtered_dc = [d for d in dc_items
-                               if d.get("severity", "warning") in severity_filter][:max_items]
-                # Skip dead_code in minimal mode if no critical items
-                if detail != "minimal" or filtered_dc:
+        if _can_run("circular", est_seconds=15):
+            try:
+                from circular_engine import detect_circular
+                circ = detect_circular(workspace)
+                cycle_count = circ.get("total_cycles", circ.get("cycle_count", 0))
+                if cycle_count > 0:
+                    chains = circ.get("cycles", circ.get("chains", {}))
+                    all_chains = []
+                    if isinstance(chains, dict):
+                        for cat, items in chains.items():
+                            all_chains.extend(items[:3])
+                    elif isinstance(chains, list):
+                        all_chains = chains[:5]
                     findings.append({
-                        "category": "dead_code",
-                        "total": dead_count,
-                        "by_category": dc_stats.get("by_category", {}),
-                        "top_items": filtered_dc,
-                        "action": "Remove dead code to reduce maintenance burden",
+                        "category": "circular_dependencies",
+                        "total": cycle_count,
+                        "top_items": all_chains[:max_items],
+                        "action": "Break circular imports to improve modularity",
                     })
-        except Exception:
-            logger.debug("Dead code scan failed in summary")
+            except Exception:
+                logger.debug("Circular detection failed in summary")
+
+        if _can_run("dead_code", est_seconds=15):
+            try:
+                from deadcode_engine import detect_dead_code
+                dc = detect_dead_code(workspace)
+                dc_stats = dc.get("stats", {})
+                dead_count = dc_stats.get("total_dead_code", 0)
+                if dead_count > 0:
+                    dc_items = dc.get("results", {}).get("unreachable", [])
+                    filtered_dc = [d for d in dc_items
+                                   if d.get("severity", "warning") in severity_filter][:max_items]
+                    # Skip dead_code in minimal mode if no critical items
+                    if detail != "minimal" or filtered_dc:
+                        findings.append({
+                            "category": "dead_code",
+                            "total": dead_count,
+                            "by_category": dc_stats.get("by_category", {}),
+                            "top_items": filtered_dc,
+                            "action": "Remove dead code to reduce maintenance burden",
+                        })
+            except Exception:
+                logger.debug("Dead code scan failed in summary")
 
     result["findings"] = findings
     result["total_finding_categories"] = len(findings)
+    result["skipped_engines"] = skipped_engines if skipped_engines else None
+    result["generation_time_ms"] = int((_time.time() - _start) * 1000)
 
     # ─── 5. Actionable Summary ───────────────────────────
     actions = []

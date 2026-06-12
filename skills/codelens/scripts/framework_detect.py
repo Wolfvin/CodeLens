@@ -112,6 +112,7 @@ FRAMEWORK_SIGNATURES = {
     "tauri": {
         "packages": ["@tauri-apps/api", "@tauri-apps/cli"],
         "config_files": ["tauri.conf.json", "Tauri.toml"],
+        "cargo_crates": ["tauri"],
         "indicators": ["src-tauri"]
     },
     "electron": {
@@ -177,6 +178,12 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["deno_core", "deno_core_impl"],
         "indicators": []
     },
+    "deno": {
+        "packages": [],
+        "config_files": ["deno.json", "deno.jsonc"],
+        "cargo_crates": ["deno"],
+        "indicators": ["deno.json", "deno.jsonc", ".dlint.json", "import_map.json"]
+    },
     "warp": {
         "packages": [],
         "config_files": [],
@@ -187,6 +194,24 @@ FRAMEWORK_SIGNATURES = {
         "packages": [],
         "config_files": [],
         "cargo_crates": ["rocket"],
+        "indicators": []
+    },
+    # tRPC
+    "trpc": {
+        "packages": ["@trpc/server", "@trpc/client", "@trpc/react-query", "@trpc/next"],
+        "config_files": [],
+        "indicators": []
+    },
+    # State management
+    "zustand": {
+        "packages": ["zustand"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Build tools
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.js", "vite.config.ts", "vite.config.mjs"],
         "indicators": []
     },
     # PHP frameworks
@@ -238,55 +263,77 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
-    # Nim frameworks
-    "nim": {
-        "packages": [],
-        "config_files": [],
-        "indicators": [".nim"]
-    },
-    "nimble": {
-        "packages": [],
-        "nimble_packages": [],
-        "config_files": [],
-        "indicators": []
-    },
-    "jester": {
-        "packages": [],
-        "nimble_packages": ["jester"],
-        "config_files": [],
-        "indicators": []
-    },
-    "prologue": {
-        "packages": [],
-        "nimble_packages": ["prologue"],
-        "config_files": [],
-        "indicators": []
-    },
-    "karax": {
-        "packages": [],
-        "nimble_packages": ["karax"],
-        "config_files": [],
-        "indicators": []
-    },
-    "happyx": {
-        "packages": [],
-        "nimble_packages": ["happyx"],
-        "config_files": [],
-        "indicators": []
-    },
-    "norm": {
-        "packages": [],
-        "nimble_packages": ["norm"],
-        "config_files": [],
-        "indicators": []
-    },
-    "nimcrypto": {
-        "packages": [],
-        "nimble_packages": ["nimcrypto"],
-        "config_files": [],
-        "indicators": []
-    },
 }
+
+
+def _detect_monorepo(workspace: str, detected: Dict[str, Any]) -> None:
+    """
+    Detect if the workspace is a monorepo and which tools manage it.
+    Checks for: pnpm-workspace.yaml, lerna.json, nx.json, turborepo (turbo.json),
+    npm/yarn workspaces in package.json, Cargo workspace in Cargo.toml.
+    """
+    monorepo_tools = []
+
+    # pnpm workspace
+    if os.path.exists(os.path.join(workspace, "pnpm-workspace.yaml")):
+        monorepo_tools.append("pnpm-workspace")
+
+    # Lerna
+    if os.path.exists(os.path.join(workspace, "lerna.json")):
+        monorepo_tools.append("lerna")
+
+    # Nx
+    if os.path.exists(os.path.join(workspace, "nx.json")):
+        monorepo_tools.append("nx")
+
+    # Turborepo
+    if os.path.exists(os.path.join(workspace, "turbo.json")):
+        monorepo_tools.append("turborepo")
+
+    # npm/yarn workspaces in package.json
+    pkg_path = os.path.join(workspace, "package.json")
+    if os.path.exists(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            if "workspaces" in pkg:
+                if "npm-workspace" not in monorepo_tools:
+                    monorepo_tools.append("npm-workspace")
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Cargo workspace
+    cargo_path = os.path.join(workspace, "Cargo.toml")
+    if os.path.exists(cargo_path):
+        try:
+            with open(cargo_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if "[workspace]" in cargo_content:
+                monorepo_tools.append("cargo-workspace")
+        except IOError:
+            pass
+
+    if monorepo_tools:
+        detected["is_monorepo"] = True
+        detected["monorepo_tools"] = monorepo_tools
+
+
+def _detect_lockfile(workspace: str, detected: Dict[str, Any]) -> None:
+    """
+    Detect which lockfile type is used in the workspace.
+    Priority: pnpm-lock.yaml > bun.lockb > yarn.lock > package-lock.json
+    """
+    lockfile_checks = [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("bun.lockb", "bun"),
+        ("bun.lock", "bun"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    for lockfile_name, lockfile_type in lockfile_checks:
+        if os.path.exists(os.path.join(workspace, lockfile_name)):
+            detected["lockfile"] = lockfile_type
+            return
 
 
 def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
@@ -338,10 +385,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_rust_backend": False,
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
-        "has_nim": False,
+        "has_deno": False,
+        "is_monorepo": False,
+        "monorepo_tools": [],
+        "lockfile": None,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -359,12 +410,64 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             all_deps.update(pkg.get("devDependencies", {}))
             all_deps.update(pkg.get("peerDependencies", {}))
 
-            # Detect module system from root package.json only
+            # Detect module system from root package.json
             if pkg_path == os.path.join(workspace, "package.json"):
                 if "type" in pkg and pkg["type"] == "module":
                     detected["module_system"] = "esm"
                 else:
-                    detected["module_system"] = "cjs"
+                    # v5.9.2: Check additional ESM indicators before defaulting to cjs
+                    # Many TypeScript projects compile to ESM without "type": "module"
+                    esm_hints = 0
+                    cjs_hints = 0
+
+                    # Check tsconfig.json for module setting
+                    tsconfig_path = os.path.join(workspace, "tsconfig.json")
+                    if os.path.isfile(tsconfig_path):
+                        try:
+                            with open(tsconfig_path, 'r', encoding='utf-8') as tf:
+                                tsconfig = json.load(tf)
+                            compiler_opts = tsconfig.get("compilerOptions", {})
+                            module_setting = compiler_opts.get("module", "").lower()
+                            if module_setting in ("esnext", "es6", "es2015", "es2020", "es2022", "node16", "nodenext"):
+                                esm_hints += 2
+                            elif module_setting in ("commonjs", "amd", "system", "umd"):
+                                cjs_hints += 2
+                        except (json.JSONDecodeError, IOError):
+                            pass
+
+                    # Check for .mjs files (ESM indicator)
+                    try:
+                        for root_d, _, fnames in os.walk(workspace):
+                            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
+                                continue
+                            for fn in fnames:
+                                if fn.endswith('.mjs'):
+                                    esm_hints += 1
+                                    break
+                                elif fn.endswith('.cjs'):
+                                    cjs_hints += 1
+                                    break
+                            if esm_hints > 0 or cjs_hints > 0:
+                                break
+                    except OSError:
+                        pass
+
+                    # Check for ESM exports field (indicates ESM package)
+                    if "exports" in pkg:
+                        exports = pkg["exports"]
+                        if isinstance(exports, dict):
+                            if "import" in exports or "module" in exports:
+                                esm_hints += 2
+
+                    if esm_hints > cjs_hints:
+                        detected["module_system"] = "esm"
+                    elif cjs_hints > esm_hints:
+                        detected["module_system"] = "cjs"
+                    elif esm_hints > 0 and cjs_hints > 0:
+                        detected["module_system"] = "mixed"
+                    else:
+                        # No ESM indicators found; default to cjs per Node.js convention
+                        detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
 
@@ -391,6 +494,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "deno":
+                        detected["has_deno"] = True
                     break
 
         # Detect CSS preprocessor
@@ -598,59 +703,29 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for crate_name in cargo_crates:
                 if crate_name.lower() in cargo_deps:
                     detected["frameworks"].append(fw_name)
+                    if fw_name == "tauri":
+                        detected["has_tauri"] = True
+                    elif fw_name == "deno":
+                        detected["has_deno"] = True
                     break
 
-    # 4b. Check Nim .nimble files for framework detection
-    nimble_deps = set()
-    for root, dirs, fnames in os.walk(workspace):
-        skip = False
-        normalized_root = root.replace('\\', '/')
-        for ignore_dir in DEFAULT_IGNORE_DIRS:
-            seg = '/' + ignore_dir + '/'
-            if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        for f in fnames:
-            if f.endswith('.nimble'):
-                nimble_path = os.path.join(root, f)
-                try:
-                    with open(nimble_path, 'r', encoding='utf-8') as fh:
-                        nimble_content = fh.read()
-                    # Parse requires/deps lines: requires "jester >= 0.5.0"
-                    for m in re.finditer(r'requires\s+"([^">=]+)', nimble_content):
-                        nimble_deps.add(m.group(1).strip().lower())
-                    # Also parse: requires "package"
-                    for m in re.finditer(r'requires\s+"(\w+)', nimble_content):
-                        nimble_deps.add(m.group(1).strip().lower())
-                except IOError:
-                    pass
+        # Tauri or Deno detected via Cargo.toml means Rust backend
+        if detected["has_tauri"] or detected["has_rust"] or detected["has_deno"]:
+            detected["has_rust_backend"] = True
 
-    if nimble_deps:
-        if "nim" not in detected["frameworks"]:
-            detected["frameworks"].append("nim")
-        detected["has_nim"] = True
+    # 4b. Detect monorepo structure
+    _detect_monorepo(workspace, detected)
 
-        # Match nimble deps against framework signatures
-        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
-            if fw_name in detected["frameworks"]:
-                continue
-            nimble_pkgs = sig.get("nimble_packages", [])
-            for pkg_name in nimble_pkgs:
-                if pkg_name.lower() in nimble_deps:
-                    detected["frameworks"].append(fw_name)
-                    break
+    # 4c. Detect lockfile type
+    _detect_lockfile(workspace, detected)
 
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
             skip = False
-            normalized_root = root.replace('\\', '/')
-            for ignore_dir in DEFAULT_IGNORE_DIRS:
-                seg = '/' + ignore_dir + '/'
-                if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
                     skip = True
                     break
             if skip or '.codelens' in root:
@@ -668,10 +743,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
                 skip = False
-                normalized_root = root.replace('\\', '/')
-                for ignore_dir in DEFAULT_IGNORE_DIRS:
-                    seg = '/' + ignore_dir + '/'
-                    if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
                         skip = True
                         break
                 if skip or '.codelens' in root:
@@ -680,21 +753,32 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                     break
 
-    # 5. Check file patterns (for Vue, Svelte, Nim)
+    # If tauri was detected by any means, ensure has_rust_backend is set
+    if detected["has_tauri"] and not detected["has_rust_backend"]:
+        detected["has_rust_backend"] = True
+
+    # 5. Check file patterns (for Vue, Svelte)
+    # IMPORTANT: Skip test/benchmark directories to avoid false positives.
+    # Many projects have .vue or .svelte files in test fixtures but aren't
+    # actually Vue/Svelte projects.
+    _TEST_DIR_SEGMENTS = {'test', 'tests', 'spec', 'specs', '__tests__', 'fixture', 'fixtures', 'benchmark', 'bench'}
     for root, dirs, files in os.walk(workspace):
-        # Skip ignored dirs — use path-segment-aware matching to avoid
-        # false positives like "test-target-nim" matching "target".
+        # Skip ignored dirs
         skip = False
-        normalized_root = root.replace('\\', '/')
-        for ignore_dir in DEFAULT_IGNORE_DIRS:
-            # Check if ignore_dir appears as a complete path segment
-            seg = '/' + ignore_dir + '/'
-            if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
                 skip = True
                 break
         if skip:
+            continue
+
+        # Check if we're in a test/fixture directory
+        path_parts = root.replace('\\', '/').split('/')
+        in_test_dir = any(p in _TEST_DIR_SEGMENTS for p in path_parts)
+        if in_test_dir:
             continue
 
         for f in files:
@@ -710,10 +794,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
-            elif (f.endswith('.nim') or f.endswith('.nims') or f.endswith('.nimble')) and not detected["has_nim"]:
-                if "nim" not in detected["frameworks"]:
-                    detected["frameworks"].append("nim")
-                detected["has_nim"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -735,6 +815,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "deno":
+                    detected["has_deno"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -742,10 +824,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
             skip = False
-            normalized_root = root.replace('\\', '/')
-            for ignore_dir in DEFAULT_IGNORE_DIRS:
-                seg = '/' + ignore_dir + '/'
-                if normalized_root.startswith(ignore_dir + '/') or seg in normalized_root or normalized_root.endswith('/' + ignore_dir):
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
                     skip = True
                     break
             if skip:
@@ -833,7 +913,11 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "jsx_mode": False,
         "vue_mode": False,
         "svelte_mode": False,
-        "tailwind_mode": False
+        "tailwind_mode": False,
+        "is_monorepo": fw.get("is_monorepo", False),
+        "monorepo_tools": fw.get("monorepo_tools", []),
+        "lockfile": fw.get("lockfile"),
+        "has_rust_backend": fw.get("has_rust_backend", False),
     }
 
     # Adjust paths based on framework
@@ -879,29 +963,30 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_tauri"):
         config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
         config["frontend_paths"].append("src/")
-        # Find and add app-specific src-tauri paths
+        # Remove src/ from backend_paths for Tauri projects to avoid confusion
+        # (src/ is the frontend in Tauri, src-tauri/src/ is the backend)
+        config["backend_paths"] = [p for p in config["backend_paths"] if p == "src/" and fw.get("has_rust") and not fw.get("has_tauri") or p != "src/"]
+        # Find and add app-specific src-tauri paths in monorepo structure
         for app_dir in ('apps', 'packages'):
             app_path = os.path.join(workspace, app_dir)
             if os.path.isdir(app_path):
                 try:
                     for entry in os.listdir(app_path):
-                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
+                        entry_base = os.path.join(app_path, entry)
+                        if not os.path.isdir(entry_base):
+                            continue
+                        # Check for src-tauri/src inside the app
+                        tauri_src = os.path.join(entry_base, "src-tauri", "src")
                         if os.path.isdir(tauri_src):
                             rel = os.path.relpath(tauri_src, workspace)
                             config["backend_paths"].append(rel + "/")
+                        # Also check for just src-tauri/ (may not have src/ subdir yet)
+                        tauri_dir = os.path.join(entry_base, "src-tauri")
+                        if os.path.isdir(tauri_dir):
+                            rel = os.path.relpath(tauri_dir, workspace)
+                            config["backend_paths"].append(rel + "/src/")
                 except OSError:
                     pass
-
-    # Nim: add Nim-specific paths
-    if fw.get("has_nim"):
-        config["backend_paths"].extend(["src/", "compiler/", "lib/", "nimble/"])
-        # Check for common Nim project structures
-        nim_src = os.path.join(workspace, "src")
-        if os.path.isdir(nim_src):
-            config["backend_paths"].append("src/")
-        compiler_dir = os.path.join(workspace, "compiler")
-        if os.path.isdir(compiler_dir):
-            config["backend_paths"].append("compiler/")
 
     # Laravel/PHP: add PHP-specific paths
     if fw.get("has_laravel") or fw.get("has_php"):
@@ -915,6 +1000,21 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
+
+    # Monorepo: add sub-directory paths
+    if fw.get("is_monorepo"):
+        for subdir in ('apps', 'packages', 'projects', 'services'):
+            subdir_path = os.path.join(workspace, subdir)
+            if os.path.isdir(subdir_path):
+                try:
+                    for entry in os.listdir(subdir_path):
+                        entry_path = os.path.join(subdir_path, entry)
+                        if os.path.isdir(entry_path):
+                            rel = os.path.relpath(entry_path, workspace)
+                            config["frontend_paths"].append(rel + "/src/")
+                            config["backend_paths"].append(rel + "/src/")
+                except OSError:
+                    pass
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
