@@ -77,6 +77,10 @@ def get_file_outline(
         outline = _outline_svelte(content, detail_level)
     elif ext == '.go':
         outline = _outline_go(content, detail_level)
+    elif ext in ('.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hxx'):
+        outline = _outline_c_cpp(content, detail_level, ext)
+    elif ext == '.lua':
+        outline = _outline_lua(content, detail_level)
     elif ext == '.php':
         outline = _outline_php(content, detail_level)
     elif ext == '.rb':
@@ -134,7 +138,13 @@ def get_workspace_outline(
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
         '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte', '.php',
-        '.gd', '.kt'
+        '.gd', '.kt',
+        # v6.4: Added C/C++, Lua, Ruby, Elixir, Dart, Swift, Scala, Shell, Java, C#, R, Haskell, Nim
+        '.c', '.h', '.cpp', '.cc', '.cxx', '.hpp', '.hxx',
+        '.lua', '.rb', '.ex', '.exs', '.dart', '.swift',
+        '.scala', '.sc', '.sh', '.bash', '.zsh',
+        '.java', '.cs',
+        '.R', '.r', '.hs', '.lhs', '.nim', '.nims',
     }
 
     outlines = []
@@ -534,6 +544,165 @@ def _outline_go(content: str, detail: str) -> Dict:
             outline["variables"].append({"name": const_name, "line": line_num, "const": True})
             if is_exported:
                 outline["exports"].append({"name": const_name, "line": line_num, "kind": "const"})
+
+    return outline
+
+
+def _outline_c_cpp(content: str, detail: str, ext: str) -> Dict:
+    """Extract outline from C/C++ source files."""
+    import re
+    outline = {
+        "imports": [],
+        "functions": [],
+        "classes": [],
+        "variables": [],
+        "exports": []
+    }
+
+    lines = content.split('\n')
+    is_header = ext in {'.h', '.hpp', '.hxx'}
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # #include directives
+        if stripped.startswith('#include'):
+            m = re.match(r'#include\s+[<"]([^>"]+)[>"]', stripped)
+            if m:
+                outline["imports"].append({
+                    "name": m.group(1),
+                    "line": i + 1
+                })
+
+        # Skip preprocessor directives and comments
+        if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*'):
+            continue
+
+        # Struct/union/enum declarations
+        struct_match = re.match(
+            r'(?:typedef\s+)?(?:struct|union|enum|class)\s+(\w+)',
+            stripped
+        )
+        if struct_match and not re.match(r'(?:typedef\s+)?(?:struct|union|enum|class)\s+\w+\s*\w+\s*;', stripped):
+            outline["classes"].append({
+                "name": struct_match.group(1),
+                "line": i + 1
+            })
+
+        # Function definitions: type name(params) {
+        # Distinguish from declarations (ending with ;)
+        fn_match = re.match(
+            r'(?:static\s+|inline\s+|extern\s+)*(?:const\s+)?(?:\w+[\s*]+)+(\w+)\s*\([^)]*\)\s*(?:\{|$)',
+            stripped
+        )
+        if fn_match:
+            fn_name = fn_match.group(1)
+            if fn_name not in ('if', 'for', 'while', 'switch', 'return', 'sizeof',
+                              'include', 'define', 'ifdef', 'ifndef', 'elif', 'pragma'):
+                # Check if this is a definition (has body) or declaration (ends with ;)
+                if not stripped.endswith(';'):
+                    outline["functions"].append({
+                        "name": fn_name,
+                        "line": i + 1
+                    })
+                elif detail == "full" and is_header:
+                    # In headers, include declarations in full detail mode
+                    outline["functions"].append({
+                        "name": fn_name,
+                        "line": i + 1,
+                        "declaration": True
+                    })
+
+        # Typedef declarations
+        typedef_match = re.match(r'typedef\s+.*\s+(\w+)\s*;', stripped)
+        if typedef_match:
+            name = typedef_match.group(1)
+            if name not in ('struct', 'union', 'enum'):
+                outline["variables"].append({
+                    "name": name,
+                    "line": i + 1,
+                    "type": "typedef"
+                })
+
+    if detail != "full":
+        outline["imports"] = outline["imports"][:50]
+        outline["functions"] = outline["functions"][:100]
+        outline["classes"] = outline["classes"][:50]
+
+    return outline
+
+
+def _outline_lua(content: str, detail: str) -> Dict:
+    """Extract outline from Lua source files."""
+    import re
+    outline = {
+        "imports": [],
+        "functions": [],
+        "classes": [],
+        "variables": [],
+        "exports": []
+    }
+
+    lines = content.split('\n')
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Skip comments
+        if stripped.startswith('--'):
+            continue
+
+        # require() calls
+        req_match = re.match(r'local\s+(\w+)\s*=\s*require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)', stripped)
+        if req_match:
+            outline["imports"].append({
+                "name": req_match.group(2),
+                "alias": req_match.group(1),
+                "line": i + 1
+            })
+            continue
+
+        # Function definitions: function name(), local function name()
+        fn_match = re.match(r'(?:local\s+)?function\s+([\w.:]+)', stripped)
+        if fn_match:
+            outline["functions"].append({
+                "name": fn_match.group(1),
+                "line": i + 1
+            })
+            continue
+
+        # Module assignments: M.name = function(...)
+        mod_match = re.match(r'(\w+)\.(\w+)\s*=\s*function', stripped)
+        if mod_match:
+            outline["functions"].append({
+                "name": f"{mod_match.group(1)}.{mod_match.group(2)}",
+                "line": i + 1
+            })
+            continue
+
+        # Table definitions: local name = {}
+        table_match = re.match(r'local\s+(\w+)\s*=\s*\{', stripped)
+        if table_match:
+            outline["variables"].append({
+                "name": table_match.group(1),
+                "line": i + 1,
+                "type": "table"
+            })
+            continue
+
+        # vim.api/vim.keymap/vim.opt calls (Neovim-specific)
+        if detail == "full" and stripped.startswith('vim.'):
+            vim_match = re.match(r'vim\.(keymap|opt|api|cmd)', stripped)
+            if vim_match:
+                outline["variables"].append({
+                    "name": f"vim.{vim_match.group(1)}",
+                    "line": i + 1,
+                    "type": "vim_api"
+                })
+
+    if detail != "full":
+        outline["imports"] = outline["imports"][:30]
+        outline["functions"] = outline["functions"][:50]
 
     return outline
 
@@ -1222,10 +1391,13 @@ def _detect_language(ext: str) -> str:
         '.scala': 'scala', '.sc': 'scala',
         '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell', '.zsh-theme': 'shell',
         '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin',
-        '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+        '.c': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp',
+        '.h': 'c', '.hpp': 'cpp', '.hxx': 'cpp',
         '.cs': 'csharp', '.lua': 'lua',
         '.R': 'r', '.r': 'r',
         '.hs': 'haskell', '.lhs': 'haskell',
         '.nim': 'nim', '.nims': 'nim',
+        '.gd': 'gdscript',
+        '.zig': 'zig', '.wgsl': 'wgsl',
     }
     return mapping.get(ext, 'unknown')

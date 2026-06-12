@@ -527,8 +527,122 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    # v6.4: Detect PHP projects via composer.json
+    php_type = None
+    composer_path = os.path.join(workspace, 'composer.json')
+    if os.path.isfile(composer_path):
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer_data = json.load(f)
+            php_name = composer_data.get('name', '')
+            if php_name:
+                identity["name"] = php_name.split('/')[-1]
+            php_version = composer_data.get('version', '')
+            if php_version:
+                identity["version"] = php_version
+            # Detect PHP framework from require dependencies
+            php_req = composer_data.get('require', {})
+            php_req_str = ' '.join(php_req.keys()).lower()
+            if 'laravel/framework' in php_req or 'laravel/laravel' in php_req:
+                php_type = "laravel-app"
+            elif 'symfony/symfony' in php_req or 'symfony/framework-bundle' in php_req:
+                php_type = "symfony-app"
+            elif 'slim/slim' in php_req:
+                php_type = "slim-app"
+            elif 'laravel/lumen' in php_req:
+                php_type = "lumen-app"
+            elif 'cakephp/cakephp' in php_req:
+                php_type = "cakephp-app"
+            elif 'drupal/core' in php_req or 'drupal/drupal' in php_req:
+                php_type = "drupal-app"
+            elif 'wordpress' in php_req_str or os.path.isfile(os.path.join(workspace, 'wp-config.php')):
+                php_type = "wordpress-app"
+            else:
+                php_type = "php-project"
+        except Exception:
+            logger.warning("composer.json parsing failed", exc_info=True)
+
+    # v6.4: Detect C/C++ projects
+    c_cpp_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    makefile_path = os.path.join(workspace, 'Makefile')
+    gnu_makefile_path = os.path.join(workspace, 'GNUmakefile')
+    configure_ac_path = os.path.join(workspace, 'configure.ac')
+
+    # Check for CMake project
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            # Extract project name and version from cmake
+            proj_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
+            ver_match = re.search(r'project\s*\(\s*\w+\s+VERSION\s+(\S+)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            c_cpp_type = "cmake-project"
+        except Exception:
+            pass
+
+    # Check for autotools/autoconf project (nginx-style)
+    if not c_cpp_type and os.path.isfile(configure_ac_path):
+        try:
+            with open(configure_ac_path, 'r', encoding='utf-8') as f:
+                configure_content = f.read()
+            # Extract project name from AC_INIT
+            ac_init = re.search(r'AC_INIT\s*\(\s*\[?(\w+)', configure_content)
+            ver_init = re.search(r'AC_INIT\s*\(\s*\[?\w+\]?\s*,\s*\[?(\S+?)\]?\s*[,)]', configure_content)
+            if ac_init:
+                identity["name"] = ac_init.group(1)
+            if ver_init:
+                identity["version"] = ver_init.group(1)
+            c_cpp_type = "autotools-project"
+        except Exception:
+            pass
+
+    # Check for Makefile-based C/C++ project
+    if not c_cpp_type and (os.path.isfile(makefile_path) or os.path.isfile(gnu_makefile_path)):
+        # Heuristic: if there are .c/.cpp files and a Makefile, it's a C/C++ project
+        c_files = 0
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for f in files:
+                if f.endswith(('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')):
+                    c_files += 1
+                    if c_files >= 3:
+                        break
+            if c_files >= 3:
+                break
+        if c_files >= 3:
+            c_cpp_type = "c-cpp-project"
+
+    # Check for C/C++ project with many source files but no build system file
+    if not c_cpp_type:
+        c_file_count = 0
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
+            for f in files:
+                if f.endswith(('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp')):
+                    c_file_count += 1
+        if c_file_count >= 10:
+            c_cpp_type = "c-cpp-project"
+
+    # v6.4: Detect Lua projects
+    lua_type = None
+    rockspec_files = [f for f in os.listdir(workspace) if f.endswith('.rockspec')] if os.path.isdir(workspace) else []
+    if rockspec_files:
+        lua_type = "lua-rockspec-project"
+    elif os.path.isfile(os.path.join(workspace, 'init.lua')):
+        # Check if it's a Neovim plugin (has lua/ directory with init.lua at root)
+        lua_dir = os.path.join(workspace, 'lua')
+        if os.path.isdir(lua_dir):
+            lua_type = "neovim-plugin"
+        else:
+            lua_type = "lua-project"
+
+    # v6.4: Combined type detection — handle polyglot projects
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, php_type, c_cpp_type, lua_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -541,6 +655,12 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        if php_type:
+            type_parts.append("php")
+        if c_cpp_type:
+            type_parts.append("c-cpp")
+        if lua_type:
+            type_parts.append("lua")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]

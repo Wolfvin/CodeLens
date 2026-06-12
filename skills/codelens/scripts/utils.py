@@ -183,6 +183,33 @@ def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SE
     return (time.time() - start_time) > budget_sec
 
 
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file is a bundled/compiled output that should be skipped.
+
+    Matches common patterns for bundled JavaScript, compiled CSS,
+    and other generated artifacts that are not original source code.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be a bundled/compiled output.
+    """
+    lower = rel_path.lower()
+    bundled_patterns = [
+        '.min.js', '.min.css',
+        '.bundle.js', '.chunk.js', '.vendor.js',
+        '.bundle.css', '.chunk.css',
+        '.d.ts', '.d.ts.map',
+        '/dist/', '/build/', '/out/', '/.output/',
+        '/vendor/', '/bundled/',
+    ]
+    for pattern in bundled_patterns:
+        if pattern in lower:
+            return True
+    return False
+
+
 def is_file_path(name: str) -> bool:
     """Check if a name looks like a file path."""
     if '/' in name:

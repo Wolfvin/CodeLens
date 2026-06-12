@@ -2683,6 +2683,29 @@ def _extract_php_routes(content: str, rel_path: str, frameworks_detected: Set[st
         })
         frameworks_detected.add("laravel")
 
+    # v6.4: Pattern 5: Route::method('/path', function () { ... }) — closure-based routes
+    laravel_closure_pattern = re.compile(
+        r"Route::(get|post|put|patch|delete|options|any)\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"\s*,\s*function\s*\("
+    )
+    for m in laravel_closure_pattern.finditer(content):
+        method = m.group(1).upper()
+        path = m.group(2)
+        line = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": method,
+            "path": path,
+            "handler_name": "Closure",
+            "file": rel_path,
+            "line": line,
+            "framework": "laravel",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "closure",
+            "response_type": None,
+        })
+        frameworks_detected.add("laravel")
+
     # ─── Symfony Route Definitions ─────────────────────────────
     # Attributes: #[Route('/path', name: 'route_name', methods: ['GET'])]
     symfony_attr_pattern = re.compile(

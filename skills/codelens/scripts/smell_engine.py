@@ -78,6 +78,16 @@ LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 
+# C/C++-specific thresholds: C projects use deeper nesting idiomatically
+# (error-handling if-chains, platform #ifdef, switch-case nesting).
+C_CPP_DEEP_NESTING_LEVEL = 7
+C_CPP_DEEP_NESTING_CRITICAL = 10
+C_CPP_LONG_FN_LINES = 80
+C_CPP_LONG_FN_LINES_CRITICAL = 150
+
+# Maximum findings per category per file (prevents noise on large files)
+MAX_FINDINGS_PER_FILE = 20
+
 # Rust-specific thresholds: Rust idiomatically uses large impl blocks
 # (e.g., builder pattern, ECS types, trait implementations). A Rust impl
 # block with 30 methods is often perfectly normal. Only flag when
@@ -502,7 +512,35 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
             # C/C++: type name(...)
             elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
                 m = re.match(r'(?:static\s+|inline\s+)*(?:\w+[\s*]+)+(\w+)\s*\(', stripped)
-                if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'return', 'sizeof', 'include'):
+                if m and m.group(1) not in ('if', 'for', 'while', 'switch', 'return', 'sizeof', 'include',
+                                                   'define', 'ifdef', 'ifndef', 'elif', 'pragma'):
+                    # v6.4: Skip C/C++ function declarations (no body) in header files.
+                    # A declaration ends with ';' on the same or next few lines — no '{' body.
+                    # Only register functions that have an actual body definition.
+                    is_header = ext in {'.h', '.hpp', '.hxx'}
+                    # Check if this line or the next few lines contain '{' (definition)
+                    # or ';' (declaration) to distinguish
+                    found_brace = '{' in line or stripped.endswith('{')
+                    found_semi = False
+                    if not found_brace:
+                        # Look ahead a few lines for opening brace or semicolon
+                        for lookahead in range(i + 1, min(i + 5, len(lines))):
+                            la_stripped = lines[lookahead].strip()
+                            if '{' in lines[lookahead]:
+                                found_brace = True
+                                break
+                            if la_stripped.endswith(';'):
+                                found_semi = True
+                                break
+                            if not la_stripped:  # blank line
+                                continue
+                    if found_semi and not found_brace:
+                        # This is a declaration, not a definition — skip for long_fn detection
+                        # But still track it for many_params (parameter count is still relevant)
+                        continue
+                    if is_header and not found_brace:
+                        # In header files, if we can't find a brace, it's likely a declaration
+                        continue
                     fn_starts.append((i, m.group(1)))
 
     elif ext == ".lua":
@@ -521,30 +559,46 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
             if m:
                 fn_starts.append((i, m.group(1)))
 
+    # v6.4: For C/C++ headers, apply a further sanity check:
+    # If _find_function_end returns the max (300 lines or end-of-file),
+    # the function likely has no body (it's a declaration we missed).
+    is_c_cpp_header = ext in {'.h', '.hpp', '.hxx'}
+    is_c_cpp = ext in {'.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx'}
+
+    # v6.4: Use higher long-fn thresholds for C/C++ (idiomatically longer functions)
+    long_fn_threshold = C_CPP_LONG_FN_LINES if is_c_cpp else LONG_FUNCTION_LINES
+    long_fn_critical = C_CPP_LONG_FN_LINES_CRITICAL if is_c_cpp else LONG_FUNCTION_LINES_CRITICAL
+
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
         end = _find_function_end(lines, start, ext)
         length = end - start
 
-        if length > LONG_FUNCTION_LINES_CRITICAL:
+        # v6.4: For C/C++ header files, skip extremely long "functions"
+        # that span most of the file — these are almost certainly
+        # declarations without bodies that slipped through the initial check.
+        if is_c_cpp_header and length >= 200:
+            continue
+
+        if length > long_fn_critical:
             smells.append({
                 "file": rel_path,
                 "line": start + 1,
                 "fn": name,
                 "length": length,
                 "severity": "critical",
-                "message": f"Function '{name}' is {length} lines (critical threshold: {LONG_FUNCTION_LINES_CRITICAL})",
+                "message": f"Function '{name}' is {length} lines (critical threshold: {long_fn_critical})",
                 "suggestion": "Break into smaller functions. Each function should do one thing."
             })
-        elif length > LONG_FUNCTION_LINES:
+        elif length > long_fn_threshold:
             smells.append({
                 "file": rel_path,
                 "line": start + 1,
                 "fn": name,
                 "length": length,
                 "severity": "warning",
-                "message": f"Function '{name}' is {length} lines (threshold: {LONG_FUNCTION_LINES})",
+                "message": f"Function '{name}' is {length} lines (threshold: {long_fn_threshold})",
                 "suggestion": "Consider extracting helper functions."
             })
 
@@ -656,6 +710,11 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
     if any(kw in rel_path for kw in skip_keywords):
         return smells
     
+    # v6.4: Use higher thresholds for C/C++ (idiomatic deeper nesting)
+    is_c_cpp = ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}
+    nesting_level = C_CPP_DEEP_NESTING_LEVEL if is_c_cpp else DEEP_NESTING_LEVEL
+    nesting_critical = C_CPP_DEEP_NESTING_CRITICAL if is_c_cpp else DEEP_NESTING_CRITICAL
+    
     lines = content.split('\n')
     
     prev_level = 0
@@ -686,15 +745,15 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
             level = indent // 2
 
         # Detect when we first enter a deep nesting block
-        if level >= DEEP_NESTING_LEVEL and not in_deep_block:
+        if level >= nesting_level and not in_deep_block:
             in_deep_block = True
             deep_block_level = level
             deep_block_start = i + 1
         # Detect when we exit the deep nesting block (return to shallower level)
-        elif in_deep_block and level < DEEP_NESTING_LEVEL:
+        elif in_deep_block and level < nesting_level:
             in_deep_block = False
-            severity = "critical" if deep_block_level >= DEEP_NESTING_CRITICAL else "warning"
-            threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+            severity = "critical" if deep_block_level >= nesting_critical else "warning"
+            threshold = nesting_critical if severity == "critical" else nesting_level
             smells.append({
                 "file": rel_path,
                 "line": deep_block_start,
@@ -703,6 +762,9 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
                 "message": f"Code is nested {deep_block_level} levels deep (threshold: {threshold})",
                 "suggestion": "Extract inner logic into separate functions. Use early returns."
             })
+            # v6.4: Cap findings per file to prevent noise
+            if len(smells) >= MAX_FINDINGS_PER_FILE:
+                return smells
         
         # Track the deepest level within the block
         if in_deep_block and level > deep_block_level:
@@ -712,8 +774,8 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
 
     # Handle case where file ends while still in a deep block
     if in_deep_block:
-        severity = "critical" if deep_block_level >= DEEP_NESTING_CRITICAL else "warning"
-        threshold = DEEP_NESTING_CRITICAL if severity == "critical" else DEEP_NESTING_LEVEL
+        severity = "critical" if deep_block_level >= nesting_critical else "warning"
+        threshold = nesting_critical if severity == "critical" else nesting_level
         smells.append({
             "file": rel_path,
             "line": deep_block_start,
