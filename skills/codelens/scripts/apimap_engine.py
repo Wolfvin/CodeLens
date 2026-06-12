@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql", ".php",
+    ".graphql", ".gql", ".php", ".go",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -232,6 +232,16 @@ def map_api_routes(
                     routes.extend(rust_http_routes)
                     # Track which Rust framework was detected
                     for r in rust_http_routes:
+                        fw = r.get("framework", "")
+                        if fw:
+                            frameworks_detected.add(fw)
+
+            # ─── Go HTTP routes (Gin, Echo, Chi, Fiber, net/http) ─
+            if ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path)
+                if go_routes:
+                    routes.extend(go_routes)
+                    for r in go_routes:
                         fw = r.get("framework", "")
                         if fw:
                             frameworks_detected.add(fw)
@@ -1467,13 +1477,28 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
 
+    # Pre-strip comment lines and string-only lines to avoid false positives
+    # from documentation/example code that contains patterns like Query: {
+    clean_lines = []
+    for line in content.split('\n'):
+        stripped = line.strip()
+        # Skip comment lines
+        if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            clean_lines.append('')
+        # Skip string-value-only lines (e.g., "Query: { field }" in a dict literal)
+        elif re.match(r'^["\']?\w+["\']?\s*:\s*["\'].*["\'],?\s*$', stripped):
+            clean_lines.append('')
+        else:
+            clean_lines.append(line)
+    clean_content = '\n'.join(clean_lines)
+
     # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
     for m in re.finditer(
         r'(Query|Mutation|Subscription)\s*:\s*\{',
-        content
+        clean_content
     ):
         parent_type = m.group(1)
-        resolver_block = content[m.end():m.end() + 2000]
+        resolver_block = clean_content[m.end():m.end() + 2000]
         # Find matching close brace
         depth = 1
         pos = 0
@@ -1487,7 +1512,7 @@ def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
 
         for field_m in re.finditer(r'(\w+)\s*[:=]\s*(?:async\s+)?\(', resolver_block):
             field_name = field_m.group(1)
-            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            line_num = clean_content[:m.end() + field_m.start()].count('\n') + 1
             routes.append({
                 "method": parent_type.upper(),
                 "path": f"{parent_type}.{field_name}",
@@ -1528,17 +1553,40 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
     """Extract GraphQL resolvers from Python code (Graphene, Strawberry, Ariadne)."""
     routes = []
 
+    # Pre-strip comment lines and docstring blocks to avoid false positives
+    # from documentation/example code
+    clean_lines = []
+    in_docstring = False
+    for line in content.split('\n'):
+        stripped = line.strip()
+        if in_docstring:
+            if '"""' in line or "'''" in line:
+                in_docstring = False
+            clean_lines.append('')
+            continue
+        if stripped.startswith('#'):
+            clean_lines.append('')
+        elif '"""' in line or "'''" in line:
+            # Single-line docstring or start of multi-line
+            count = line.count('"""') + line.count("'''")
+            if count < 2:
+                in_docstring = True
+            clean_lines.append('')
+        else:
+            clean_lines.append(line)
+    clean_content = '\n'.join(clean_lines)
+
     # Graphene: class Query(graphene.ObjectType): field = graphene.Field(...)
     for m in re.finditer(
         r'class\s+(\w+)\(.*graphene\.ObjectType.*\)\s*:',
-        content
+        clean_content
     ):
         class_name = m.group(1)
-        class_body = content[m.end():m.end() + 3000]
+        class_body = clean_content[m.end():m.end() + 3000]
         # Find fields
         for field_m in re.finditer(r'(\w+)\s*=\s*graphene\.(?:Field|String|Int|Float|Boolean|List)\b', class_body):
             field_name = field_m.group(1)
-            line_num = content[:m.end() + field_m.start()].count('\n') + 1
+            line_num = clean_content[:m.end() + field_m.start()].count('\n') + 1
             method_type = "QUERY" if class_name == "Query" else "MUTATION" if class_name == "Mutation" else class_name.upper()
             routes.append({
                 "method": method_type,
@@ -1553,10 +1601,10 @@ def _extract_graphql_python(content: str, rel_path: str) -> List[Dict[str, Any]]
             })
 
     # Strawberry: @query / @mutation decorators
-    for m in re.finditer(r'@(query|mutation)\s*', content):
+    for m in re.finditer(r'@(query|mutation)\s*', clean_content):
         op_type = m.group(1).upper()
-        handler_name = _find_next_python_function(content, m.end())
-        line_num = content[:m.start()].count('\n') + 1
+        handler_name = _find_next_python_function(clean_content, m.end())
+        line_num = clean_content[:m.start()].count('\n') + 1
         routes.append({
             "method": op_type,
             "path": f"{op_type}.{handler_name}",
@@ -2618,3 +2666,96 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
         })
 
     return middleware
+
+
+# ─── Go HTTP Route Extraction ──────────────────────────────────
+
+def _extract_go_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract HTTP routes from Go source files.
+
+    Supports:
+    - Gin:  router.GET("/path", handler)  /  r.POST("/path", handler)
+    - Echo: e.GET("/path", handler)
+    - Chi:  r.Get("/path", handler)   /  r.Post("/path", handler)
+    - Fiber: app.Get("/path", handler)
+    - net/http: http.HandleFunc("/path", handler)
+    """
+    routes = []
+    framework = None
+
+    # Detect which Go framework is in use
+    if 'gin-gonic/gin' in content or 'gin.Default()' in content or 'gin.New()' in content:
+        framework = "gin"
+    elif 'labstack/echo' in content or 'echo.New()' in content:
+        framework = "echo"
+    elif 'go-chi/chi' in content or 'chi.NewRouter()' in content or 'chi.NewMux()' in content:
+        framework = "chi"
+    elif 'gofiber/fiber' in content or 'fiber.New()' in content:
+        framework = "fiber"
+    elif 'net/http' in content and 'HandleFunc' in content:
+        framework = "net/http"
+
+    if not framework:
+        return []
+
+    # Gin/Echo style: router.METHOD("/path", handler)
+    go_methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
+
+    for method in go_methods:
+        # Gin/Echo: router.GET("/path", handler)
+        pattern = rf'\b\w+\.{method}\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)'
+        for m in re.finditer(pattern, content):
+            path = m.group(1)
+            handler = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": framework,
+            })
+
+        # Chi/Fiber style: r.Get("/path", handler)  (Title-case method)
+        if framework in ("chi", "fiber"):
+            chi_method = method.capitalize()
+            pattern = rf'\b\w+\.{chi_method}\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)'
+            for m in re.finditer(pattern, content):
+                path = m.group(1)
+                handler = m.group(2)
+                line_num = content[:m.start()].count('\n') + 1
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": handler,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": [],
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": framework,
+                })
+
+    # net/http: http.HandleFunc("/path", handler)
+    if framework == "net/http":
+        for m in re.finditer(r'\bhttp\.HandleFunc\s*\(\s*"([^"]+)"\s*,\s*(\w+)\s*\)', content):
+            path = m.group(1)
+            handler = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": "ANY",
+                "path": path,
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "net/http",
+            })
+
+    return routes
