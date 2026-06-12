@@ -448,6 +448,11 @@ def map_state(
         '__non_webpack_require__', '__callGSB', '__extends', '__assign',
         '__rest', '__decorate', '__param', '__metadata', '__awaiter',
         '__generator', '__values', '__read', '__spread', '__spreadArrays',
+        # Python typing generics that get misclassified as state stores
+        'MapEntry', 'DictEntry', 'ListEntry', 'SetEntry', 'TupleEntry',
+        'Optional', 'Union', 'Literal', 'TypedDict', 'NamedTuple',
+        # Common Python dataclass/type aliases
+        'TypeVar', 'Generic', 'Protocol', 'Callable', 'Final',
     }
     stores = [s for s in stores if s.get("name", "") not in _POST_FILTER_SKIP_NAMES]
 

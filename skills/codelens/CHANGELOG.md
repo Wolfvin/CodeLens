@@ -5,32 +5,38 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.9.1] — 2026-06-12
+## [5.9.0] — 2026-06-12
 
-### Tested against clash-verge-rev/clash-verge-rev (645 files: 115 Rust + 221 TSX + 107 TS, Tauri 2.0 desktop app with React frontend, Tokio runtime, and Cargo workspace monorepo)
+### Tested against wasmerio/wasmer (2,292 source files: 1,188 Rust + 354 C/C++ + 10 Python + 24 WASM binaries, polyglot WebAssembly runtime)
 
-Real-world test on a large Tauri application with 2,049 backend nodes, 62,466 edges, 739 entrypoints,
-134 circular dependencies, 1923 code smells (health score 55), 265 debug leaks, 163 perf hints,
-1,482 functions analyzed for complexity, 43 regex patterns, 210 a11y issues, 6 React context stores,
-33 data flow violations, and 15 environment variables.
-
-### Fixed
-
-- **CRITICAL: PCRE named group regex crash** — `fallback_rust.py` used `(?<name>...)` (PCRE syntax) instead of `(?P<name>...)` (Python syntax), causing `scan` to crash with "unknown extension ?<t at position 13" on any workspace containing Rust files. Fixed by converting to Python regex syntax.
-- **CRITICAL: `max_files` TypeError in 5 commands** — `perf-hint`, `smell`, `complexity`, `secrets`, and `entrypoints` commands passed `max_files` keyword argument to engine functions that don't accept it, causing `TypeError: detect_perf_hints() got an unexpected keyword argument 'max_files'`. Fixed by removing the mismatched parameter from command wrappers.
-- **CRITICAL: `write_output_files()` TypeError** — `utils.py` called `get_workspace_outline(workspace, max_files=max_files)` but the function doesn't accept `max_files`. Fixed by removing the invalid parameter.
-- **Secrets false positives on i18n/locale files** — Translation files in `locales/`, `i18n/`, `lang/`, `translations/`, `intl/`, `localization/` directories were incorrectly flagged as containing hardcoded passwords (e.g., translated word "Password" in `src/locales/id/shared.json`). Added these directories to the `_is_docs_or_example_file()` skip list.
-- **`impact` command NameError on frontend-only domain** — `impact_engine.py` referenced `node_by_fn` in the result dict, but `node_by_fn` was only defined inside the backend block, causing `NameError` when `domain="frontend"`. Fixed by initializing `node_by_fn = None` before the conditional block and using `is not None` check.
-- **Dead code: unused `fn_stack` variables** — `js_backend_parser.py` and `ts_backend_parser.py` declared `fn_stack = []` that was never used. Removed.
-- **Inline `import re` in function bodies** — `js_backend_parser.py`, `ts_backend_parser.py`, and `outline_engine.py` (12 occurrences) had `import re` inside function bodies, which is both a performance anti-pattern (re-importing on every call) and PEP 8 violation. Moved to module-level imports.
+Real-world test on a Rust+C+WASM polyglot runtime with 20,658 backend nodes and 69,663 edges.
+Found and fixed 5 critical bugs exposed by this unique test case.
 
 ### Added
 
-- **`BaseEngine` class** (`base_engine.py`) — Extracted the common workspace-walking boilerplate (`os.walk` + `should_ignore_dir` + `safe_read_file` + time budget checking) into a reusable base class. Every engine previously duplicated ~50 lines of this pattern. New engines can now subclass `BaseEngine`, define `FILE_EXTENSIONS` and `_analyze_file()`, and get the walking, filtering, and timing for free.
+- **`scan_tauri_artifacts()` function**: Full Tauri reverse engineering analysis in `utils.py`:
+  - Tauri project detection (tauri.conf.json, Tauri.toml, src-tauri/ directory)
+  - Tauri configuration parsing (product name, version, identifier)
+  - IPC command extraction from Rust source (`#[tauri::command]` functions)
+  - Capabilities/permissions security audit
+  - Sidecar binary analysis
+  - Updater configuration analysis (active, endpoints, public key validation)
+  - WebView security audit (CSP, asset protocol, prototype freezing)
+  - Deep-link scheme analysis
+  - Build configuration analysis (dev path, dist dir, before commands)
+  - Electron app detection (for comparison/migration)
+  - Security recommendations engine
+- **GraphQL project validation**: `_is_graphql_project()` in `apimap_engine.py` — validates that a project actually has GraphQL resolver implementations before treating .graphql schema files as active API routes. Prevents false positives in non-GraphQL projects that include schema files as documentation/reference.
+- **Dataflow violation markdown rendering**: Summary markdown formatter now properly renders dataflow violations with source→sink flow chains instead of empty fields.
+- **Python typing false positive filter**: State-map now skips Python typing generics (MapEntry, DictEntry, Optional, Union, TypeVar, Generic, Protocol, etc.) that were incorrectly classified as state stores.
 
-### Changed
+### Fixed
 
-- Version bumped from 5.8.0 to 5.9.1 to reflect the multiple critical fixes.
+- **binary-scan command crash**: `scan_tauri_artifacts` was imported from `utils` but never defined, causing `ImportError` and making the `binary-scan` command completely unusable. Now implemented with full Tauri RE capabilities.
+- **scan/handbook outline TypeError**: `write_output_files()` called `get_workspace_outline(workspace, max_files=max_files)` but `get_workspace_outline()` does not accept a `max_files` parameter, causing a `TypeError` on every scan. Fixed by removing the invalid parameter.
+- **GraphQL schema false positives in api-map**: `.graphql` schema files in non-GraphQL projects (e.g., WASM runtimes with a backend-api directory) were reported as active API routes with fake resolver names. Now validated against actual resolver implementations.
+- **Dataflow violations empty in summary**: Summary markdown formatter attempted to render dataflow violations as flat dicts (`file`, `line`, `message`) but they are nested flow objects (`source`, `sink`). Now properly extracts and displays source→sink flow chains with file paths and labels.
+- **MapEntry false positive in state-map**: Python typing constructs like `MapEntry` from `typing` module were classified as global state stores. Added comprehensive Python typing generics skip list.
 
 ## [5.8.0] — 2026-06-12
 

@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v5.10 — Quick Reference
+# CodeLens v5.9 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -119,7 +119,7 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 42 Commands Quick Reference
+## All 44 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|
@@ -164,7 +164,9 @@ $CLI smell             # Auto-detect → works!
 | 39 | `vuln-scan` | P0 | CVE vulnerability scan |
 | 40 | `perf-hint` | P1 | Performance hints |
 | 41 | `css-deep` | P2 | Deep CSS analysis |
-| 42 | `summary` | P0 | **Anti-overload condensed view** (v5.10) |
+| 42 | `summary` | P0 | **Anti-overload condensed view** |
+| 43 | `binary-scan` | P1 | **Binary/Tauri/Electron RE analysis** (v5.9) |
+| 44 | `artifact-scan` | P1 | **Compiled artifact reverse engineering** (v5.9) |
 
 ## CLI Usage Pattern
 
