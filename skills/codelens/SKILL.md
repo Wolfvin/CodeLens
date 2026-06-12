@@ -40,6 +40,18 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
+
+- **Bugfix: `is_bundled_file` missing from utils.py**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) were silently broken due to missing `is_bundled_file` function in `utils.py`. Now added with proper path-based and extension-based detection for minified, bundled, and dist/build output files.
+- **Bugfix: `analyze` env_issues engine ImportError**: `_detect_env()` called non-existent `audit_environment` from `envcheck_engine`. Fixed to use correct `check_env_vars()` function. The env_issues engine now runs successfully in `analyze`.
+- **Bugfix: Risk score saturation to 0**: `_compute_risk_score()` used linear deduction that immediately saturated to 0/100 on projects with multiple finding categories. Now uses logarithmic scaling (`log2(1+n)`) with per-category caps and exponential decay for negative scores, producing meaningful risk scores (e.g., 30/100 instead of 0/100 for a project with 367 critical issues).
+- **Bugfix: `dependents` workspace auto-swap**: When passing a workspace directory as the first argument to `dependents`, the auto-swap correctly updated `args.workspace` but not the `workspace` parameter passed to engine functions. Fixed by updating both.
+- **Bugfix: `ask` router specificity**: "show me the architecture" was misrouted to `context` (score 4.0) instead of `handbook` (score 3.27) because the coverage bonus favored short keyword patterns. Added a 1.5x specificity bonus for patterns matching weight-3 technical terms.
+- **Auto-detect detail level**: `summary --detail auto` (now the default) automatically adapts detail level based on codebase size: <100 files → "full", 100-1000 → "standard", >1000 → "minimal". Prevents information overload on large repos.
+- **Smart truncation**: `summary --max-tokens 8000` estimates output token count and progressively truncates `top_items` lists to stay within budget. Prevents AI agent context overflow.
+- **AGENT.md generation**: `summary --write-agent-md` writes a condensed markdown file to `.codelens/AGENT.md` optimized for AI agent system prompts. Includes identity, frameworks, priority findings, and actionable recommendations.
+- **Version**: 6.3.0 → 6.4.0.
+
 ## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 
 - **Large repo timeout fixes**: `missing_refs` O(n²) typo detection now time-budgeted (15s cap, 2-char prefix filtering, 500K comparison cap, pre-built lookup dict). `analyze` command gets `--timeout` (default 300s) with per-engine time budget and graceful degradation (skips engines when <20% budget remains). `handbook` command gets `--timeout` (default 120s) with per-engine skip and `partial: true` output flag.

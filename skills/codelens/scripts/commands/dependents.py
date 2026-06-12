@@ -26,6 +26,7 @@ def execute(args, workspace):
                             'go.mod', 'tsconfig.json'}
         if any(os.path.exists(os.path.join(os.path.abspath(file_arg), m)) for m in workspace_markers):
             args.workspace = file_arg
+            workspace = os.path.abspath(file_arg)  # Update workspace param too
             args.file = None
 
     file_path = args.file

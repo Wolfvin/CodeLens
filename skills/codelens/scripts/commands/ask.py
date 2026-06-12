@@ -380,6 +380,7 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
     for keywords, command, extra_args, confidence in patterns:
         score = 0.0
         matched_keywords = 0
+        max_weight_in_pattern = 0.0
 
         for kw in keywords:
             if kw in q:
@@ -388,11 +389,20 @@ def _parse_ask_question(q: str, workspace: str) -> tuple:
                 word_bonus = len(kw.split())
                 score += weight * word_bonus
                 matched_keywords += 1
+                max_weight_in_pattern = max(max_weight_in_pattern, weight)
 
         if matched_keywords > 0:
             # Coverage bonus: matching more keywords from same pattern is better
             coverage = matched_keywords / len(keywords)
             score *= (1 + coverage)
+
+            # Specificity bonus: patterns with high-weight keyword matches
+            # (weight 3 = technical terms like "architecture", "dead code", "api route")
+            # should beat generic patterns (weight 1 = "show me") even when coverage is low.
+            # Without this, "show me the architecture" → context (4.0) > handbook (3.27)
+            if max_weight_in_pattern >= 3:
+                score *= 1.5
+
             candidates.append((score, command, extra_args, confidence))
 
     if not candidates:
