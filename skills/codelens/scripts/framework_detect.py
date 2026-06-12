@@ -275,8 +275,14 @@ FRAMEWORK_SIGNATURES = {
     "drupal": {
         "packages": [],
         "composer_packages": ["drupal/core"],
-        "config_files": [],
-        "indicators": ["sites/default/", "modules/", "themes/"]
+        "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
+        "indicators": ["sites/default/", "web/modules/", "web/themes/"]
+    },
+    "hugo": {
+        "packages": [],
+        "composer_packages": [],
+        "config_files": ["hugo.toml", "config.toml", "config.yaml", "config.json"],
+        "indicators": ["archetypes/", "layouts/", "content/", "static/"]
     },
 }
 
@@ -419,6 +425,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_express": False,
+        "has_hugo": False,
+        "has_drupal": False,
+        "has_deno": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -525,6 +534,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_express"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "hugo":
+                        detected["has_hugo"] = True
+                    elif fw_name == "drupal":
+                        detected["has_drupal"] = True
+                    elif fw_name == "deno":
+                        detected["has_deno"] = True
                     break
 
         # Detect CSS preprocessor
@@ -559,6 +574,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "hugo":
+                    detected["has_hugo"] = True
+                elif fw_name == "drupal":
+                    detected["has_drupal"] = True
+                elif fw_name == "deno":
+                    detected["has_deno"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
