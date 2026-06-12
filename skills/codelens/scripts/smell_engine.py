@@ -32,6 +32,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte",
     ".php", ".go", ".java", ".cs", ".dart", ".lua",
+    ".wgsl",
 }
 
 # Thresholds
@@ -45,6 +46,13 @@ LARGE_FILE_LINES = 500
 LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
+
+# Rust-specific thresholds: Rust idiomatically uses large impl blocks
+# (e.g., builder pattern, ECS types, trait implementations). A Rust impl
+# block with 30 methods is often perfectly normal. Only flag when
+# significantly higher than idiomatic patterns.
+RUST_GOD_IMPL_METHODS = 35
+RUST_GOD_IMPL_METHODS_CRITICAL = 60
 MAX_FILE_SIZE = 500 * 1024  # 500KB
 
 
@@ -1085,27 +1093,27 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                 # End impl block when brace depth returns to start level
                 if brace_depth < impl_start_depth:
                     in_impl = False
-                    if impl_method_count >= GOD_CLASS_METHODS:
+                    if impl_method_count >= RUST_GOD_IMPL_METHODS:
                         impl_blocks.append((impl_name, impl_method_count))
 
         for name, count in impl_blocks:
-            if count >= GOD_CLASS_METHODS_CRITICAL:
+            if count >= RUST_GOD_IMPL_METHODS_CRITICAL:
                 smells.append({
                     "file": rel_path,
                     "impl_for": name,
                     "method_count": count,
                     "severity": "critical",
                     "message": f"Impl block for '{name}' has {count} methods",
-                    "suggestion": "Split into multiple impl blocks or traits."
+                    "suggestion": "Split into multiple impl blocks or traits. Consider grouping related methods into separate modules or using extension traits."
                 })
-            elif count >= GOD_CLASS_METHODS:
+            elif count >= RUST_GOD_IMPL_METHODS:
                 smells.append({
                     "file": rel_path,
                     "impl_for": name,
                     "method_count": count,
                     "severity": "warning",
                     "message": f"Impl block for '{name}' has {count} methods",
-                    "suggestion": "Consider extracting some methods into separate traits."
+                    "suggestion": "Consider extracting some methods into separate traits or helper modules."
                 })
 
     return smells

@@ -19,9 +19,52 @@ Usage:
 
 import os
 import time
+import signal
+import threading
 from typing import Dict, Any, List, Optional
 from commands import register_command
 from utils import logger
+
+
+# ─── Per-Engine Timeout ──────────────────────────────────────
+# Default timeout per engine in seconds. Prevents a single slow engine
+# (e.g., perf-hint on a 10K-file Rust repo) from blocking the entire
+# analyze command. Engines that exceed their timeout are skipped with
+# a warning instead of crashing the whole analysis.
+DEFAULT_ENGINE_TIMEOUT = 60  # seconds per engine
+
+# Engines that are known to be slow on large repos get a longer timeout
+_ENGINE_TIMEOUT_OVERRIDES = {
+    "code_smells": 90,
+    "perf_hints": 90,
+    "debug_leaks": 90,
+    "circular_dependencies": 90,
+}
+
+
+def _run_with_timeout(fn, timeout_seconds, category_label):
+    """Run fn() with a timeout. Returns result or None on timeout."""
+    result = [None]
+    exception = [None]
+
+    def _target():
+        try:
+            result[0] = fn()
+        except Exception as e:
+            exception[0] = e
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+
+    if thread.is_alive():
+        logger.warning(f"Engine '{category_label}' timed out after {timeout_seconds}s — skipping")
+        return None
+
+    if exception[0] is not None:
+        raise exception[0]
+
+    return result[0]
 
 
 def add_args(parser):
@@ -37,6 +80,10 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
+    parser.add_argument("--engine-timeout", type=int, default=DEFAULT_ENGINE_TIMEOUT,
+                        help=f"Timeout per analysis engine in seconds (default: {DEFAULT_ENGINE_TIMEOUT})")
+    parser.add_argument("--max-files", type=int, default=5000,
+                        help="Max files to scan per engine (default: 5000, use 0 for unlimited)")
 
 
 def execute(args, workspace):
@@ -46,6 +93,8 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
+        engine_timeout=getattr(args, 'engine_timeout', DEFAULT_ENGINE_TIMEOUT),
+        max_files=getattr(args, 'max_files', 5000),
     )
 
 
@@ -55,6 +104,8 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
+    engine_timeout: int = DEFAULT_ENGINE_TIMEOUT,
+    max_files: int = 5000,
 ) -> Dict[str, Any]:
     """
     Full repository analysis — the single command to understand an entire codebase.
@@ -85,7 +136,9 @@ def analyze_repository(
         "workspace": workspace,
         "focus": focus,
         "detail": detail,
-        "codelens_version": "6.0",
+        "codelens_version": "6.1",
+        "engine_timeout": engine_timeout,
+        "max_files": max_files,
     }
 
     # ─── Phase 1: Ensure Registry Exists ──────────────────────
@@ -235,39 +288,52 @@ def analyze_repository(
     # ─── Phase 7: Findings (Prioritized) ─────────────────────
 
     findings = []
+    skipped_engines = []
 
     # --- Security ---
     if focus in ("security", "all"):
         _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items))
+                    lambda: _detect_secrets(workspace, severity_filter, max_items),
+                    engine_timeout)
         _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
-                    lambda: _detect_vulns(workspace, max_items))
+                    lambda: _detect_vulns(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "dataflow_violations", "Data Flow Violations",
-                    lambda: _detect_dataflow(workspace, max_items))
+                    lambda: _detect_dataflow(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "env_issues", "Environment Issues",
-                    lambda: _detect_env(workspace, max_items))
+                    lambda: _detect_env(workspace, max_items),
+                    engine_timeout)
 
     # --- Quality ---
     if focus in ("quality", "all"):
         _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items))
+                    lambda: _detect_smells(workspace, severity_filter, max_items),
+                    engine_timeout)
         _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items))
+                    lambda: _detect_debug(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "complexity", "Complexity Hotspots",
-                    lambda: _detect_complexity(workspace, max_items))
+                    lambda: _detect_complexity(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items))
+                    lambda: _detect_dead_code(workspace, max_items),
+                    engine_timeout)
 
     # --- Architecture ---
     if focus in ("architecture", "all"):
         _run_engine(findings, "circular_dependencies", "Circular Dependencies",
-                    lambda: _detect_circular(workspace, max_items))
+                    lambda: _detect_circular(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items))
+                    lambda: _detect_perf(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "config_drift", "Dependency Drift",
-                    lambda: _detect_config_drift(workspace, max_items))
+                    lambda: _detect_config_drift(workspace, max_items),
+                    engine_timeout)
         _run_engine(findings, "binary_artifacts", "Binary Artifacts",
-                    lambda: _detect_binaries(workspace, max_items))
+                    lambda: _detect_binaries(workspace, max_items),
+                    engine_timeout)
 
     result["findings"] = findings
     result["total_finding_categories"] = len(findings)
@@ -297,10 +363,12 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn) -> None:
-    """Safely run an analysis engine and append findings."""
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn,
+                engine_timeout: int = DEFAULT_ENGINE_TIMEOUT) -> None:
+    """Safely run an analysis engine and append findings. Uses per-engine timeout."""
+    timeout = _ENGINE_TIMEOUT_OVERRIDES.get(category, engine_timeout)
     try:
-        result = engine_fn()
+        result = _run_with_timeout(engine_fn, timeout, category)
         if result:
             findings.append(result)
     except Exception as e:
@@ -548,6 +616,7 @@ def _detect_languages(workspace: str) -> Dict[str, int]:
         ".dart": "dart", ".c": "c", ".cpp": "cpp", ".h": "c",
         ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue",
         ".svelte": "svelte", ".sql": "sql", ".sh": "shell",
+        ".wgsl": "wgsl", ".glsl": "glsl", ".hlsl": "hlsl",
     }
     languages = {}
     for root, dirs, files in os.walk(workspace):
@@ -686,6 +755,8 @@ def _generate_recommendations(findings: List[Dict], result: Dict) -> List[str]:
         recs.append("Python project detected — consider adding mypy for type checking and ruff for linting")
     if "go" in langs:
         recs.append("Go project detected — run 'go vet' and 'golangci-lint run' for additional static analysis")
+    if "rust" in langs and langs.get("rust", 0) > 5:
+        recs.append("Rust project detected — run 'cargo clippy' for linting and 'cargo audit' for vulnerability scanning")
 
     # Based on architecture
     fws = result.get("frameworks", [])

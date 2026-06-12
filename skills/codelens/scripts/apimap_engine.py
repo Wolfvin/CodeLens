@@ -249,6 +249,12 @@ def map_api_routes(
                     routes.extend(rust_macro_routes)
                     frameworks_detected.add("actix-web")
 
+                # v6.1: Rust ECS pattern detection (Bevy systems, plugins)
+                rust_ecs_routes = _extract_rust_ecs_patterns(content, rel_path)
+                if rust_ecs_routes:
+                    routes.extend(rust_ecs_routes)
+                    frameworks_detected.add("bevy_ecs")
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -2112,7 +2118,7 @@ def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "methods": sorted(methods),
             "auth_protected": has_auth,
             "routes": [
-                {"method": r["method"], "path": r["path"], "handler": r["handler_name"]}
+                {"method": r["method"], "path": r["path"], "handler": r.get("handler_name", r.get("handler", ""))}
                 for r in group_routes
             ],
         })
@@ -2779,3 +2785,122 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
         })
 
     return middleware
+
+
+# ─── Rust ECS Pattern Detection (Bevy, Legion, etc.) ────────────
+
+def _extract_rust_ecs_patterns(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract Rust ECS (Entity Component System) patterns.
+
+    Detects Bevy-specific patterns:
+    - System functions: fn my_system(query: Query<...>)
+    - Plugin implementations: impl Plugin for MyPlugin
+    - App builder calls: app.add_systems(Update, my_system)
+    - Resource definitions: #[derive(Resource)] struct MyResource
+    - Component definitions: #[derive(Component)] struct MyComponent
+    - Event definitions: #[derive(Event)] struct MyEvent
+    - States: #[derive(States)] enum GameState
+
+    These are not HTTP routes but represent the "API surface" of an ECS
+    application — the systems, plugins, and components that wire the
+    application together.
+    """
+    routes = []
+
+    # ─── Bevy Plugin Implementation ────────────────────────
+    for m in re.finditer(r'impl\s+Plugin\s+for\s+(\w+)', content):
+        plugin_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "PLUGIN",
+            "path": f"/plugin/{plugin_name}",
+            "handler": plugin_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_plugin",
+        })
+
+    # ─── System Registration (app.add_systems / app.add_system) ──
+    for m in re.finditer(r'\.add_systems?\s*\(\s*(?:Update|Startup|FixedUpdate|PreUpdate|PostUpdate|Last|First|RunFixedMainLoop)\s*,\s*(\w+)', content):
+        system_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "SYSTEM",
+            "path": f"/system/{system_name}",
+            "handler": system_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_system",
+        })
+
+    # ─── Component Definitions ─────────────────────────────
+    for m in re.finditer(r'#\[derive\([^)]*Component[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
+        comp_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "COMPONENT",
+            "path": f"/component/{comp_name}",
+            "handler": comp_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_component",
+        })
+
+    # ─── Resource Definitions ──────────────────────────────
+    for m in re.finditer(r'#\[derive\([^)]*Resource[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
+        res_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "RESOURCE",
+            "path": f"/resource/{res_name}",
+            "handler": res_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_resource",
+        })
+
+    # ─── Event Definitions ─────────────────────────────────
+    for m in re.finditer(r'#\[derive\([^)]*Event[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
+        evt_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "EVENT",
+            "path": f"/event/{evt_name}",
+            "handler": evt_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_event",
+        })
+
+    # ─── State Definitions ─────────────────────────────────
+    for m in re.finditer(r'#\[derive\([^)]*States[^)]*\)\]\s*(?:pub\s+)?enum\s+(\w+)', content):
+        state_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        routes.append({
+            "method": "STATE",
+            "path": f"/state/{state_name}",
+            "handler": state_name,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "bevy_ecs",
+            "auth": False,
+            "middleware": [],
+            "route_type": "ecs_state",
+        })
+
+    return routes

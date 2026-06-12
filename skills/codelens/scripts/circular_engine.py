@@ -274,6 +274,32 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
     if cycle_length > 8:
         return "info"
 
+    # v6.1: Rust common method false positive filtering.
+    # In Rust, standard library trait methods like new(), get(), read(),
+    # write(), clone(), drop(), default(), etc. are implemented on many
+    # types across many crates. Cycles formed by these common names across
+    # different modules are almost always false positives from the edge
+    # resolver matching identically-named methods on different types.
+    _RUST_COMMON_METHOD_NAMES = frozenset({
+        "new", "get", "get_mut", "set", "read", "write", "clone", "drop",
+        "default", "from", "into", "as_ref", "as_mut", "deref", "deref_mut",
+        "borrow", "borrow_mut", "to_string", "to_owned", "fmt", "hash",
+        "eq", "cmp", "partial_cmp", "next", "size_hint", "poll",
+        "encode", "decode", "serialize", "deserialize", "init", "update",
+        "handle", "process", "execute", "run", "start", "stop", "reset",
+        "build", "create", "insert", "remove", "delete", "clear",
+        "len", "is_empty", "iter", "into_iter", "spawn", "despawn",
+    })
+
+    # If more than half the nodes in the cycle are common Rust method names
+    # AND the cycle spans multiple files, classify as 'info' — this is almost
+    # certainly a name-matching artifact, not a real circular dependency.
+    files = [c.get("file", "") for c in chain]
+    unique_files = set(f for f in files if f)
+    common_count = sum(1 for fn in fn_names if fn in _RUST_COMMON_METHOD_NAMES)
+    if common_count >= len(fn_names) // 2 + 1 and len(unique_files) > 1:
+        return "info"
+
     # Cross-class name collision detection:
     # If the cycle contains multiple functions with the SAME name but from DIFFERENT
     # files, this is likely a false positive from the edge resolver matching method

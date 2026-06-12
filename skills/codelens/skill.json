@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.9.2",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "6.1.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 45 commands. v6.1: Rust ECS pattern detection (Bevy plugins/systems/components/resources/events/states in api-map), per-engine timeout for analyze command, Rust compile-time env var filtering (CARGO_* vars excluded), Rust-specific god object thresholds (35/60 vs 20/35), Rust doc comment false positive reduction (commented_code 96% reduction), Rust circular dependency common method name filtering, WGSL shader support, lazy_static regex performance fix. Tested on bevyengine/bevy (1809 Rust files, 41K nodes, 2.8K ECS routes), cockroachdb/cockroach (10K Go), denoland/deno (5.4K Rust+TS), elizaOS/eliza (5.3K AI agent).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
@@ -160,5 +160,12 @@
     "monorepo-detection",
     "lockfile-detection",
     "rust-backend",
-    "bun"
+    "bun",
+    "wgsl",
+    "shader",
+    "ecs",
+    "bevy",
+    "game-engine",
+    "compile-time-macros",
+    "engine-timeout"
   ]}

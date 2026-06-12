@@ -2102,29 +2102,39 @@ def _extract_rust_state(content: str, rel_path: str) -> Dict[str, Any]:
 
     # ─── lazy_static! and once_cell::sync::Lazy ──────────────
     # lazy_static! { static ref NAME: Type = ...; }
-    for m in re.finditer(
-        r'lazy_static!\s*\{[^}]*static\s+ref\s+(\w+)\s*:\s*([^=;]+)',
-        content,
-        re.DOTALL
-    ):
-        var_name = m.group(1)
-        type_expr = m.group(2).strip()
-        line_num = content[:m.start()].count('\n') + 1
-
-        if var_name in RUST_SKIP:
+    # v6.1: Use a more efficient regex that avoids catastrophic backtracking
+    # on large files. Instead of matching the entire lazy_static! block with
+    # DOTALL (which can match 100K+ chars on large Rust files), we scan
+    # line-by-line for "static ref NAME:" inside lazy_static! blocks.
+    in_lazy_static = False
+    for line_num_0, line in enumerate(content.split('\n')):
+        stripped = line.strip()
+        if 'lazy_static!' in stripped and '{' in stripped:
+            in_lazy_static = True
             continue
+        if in_lazy_static and stripped == '}':
+            in_lazy_static = False
+            continue
+        if in_lazy_static:
+            m = re.match(r'\s*static\s+ref\s+(\w+)\s*:\s*([^=;]+)', line)
+            if m:
+                var_name = m.group(1)
+                type_expr = m.group(2).strip()
 
-        stores.append({
-            "name": var_name,
-            "type": "global",
-            "framework": "rust_lazy_static",
-            "defined_in": rel_path,
-            "line": line_num,
-            "rust_type": type_expr[:100],
-            "slices": [],
-            "actions": [],
-            "consumers": [],
-        })
+                if var_name in RUST_SKIP:
+                    continue
+
+                stores.append({
+                    "name": var_name,
+                    "type": "global",
+                    "framework": "rust_lazy_static",
+                    "defined_in": rel_path,
+                    "line": line_num_0 + 1,
+                    "rust_type": type_expr[:100],
+                    "slices": [],
+                    "actions": [],
+                    "consumers": [],
+                })
 
     # ─── Arc<Mutex<T>> / Arc<RwLock<T>> shared state structs ─
     # struct AppState { db: Arc<Mutex<Database>>, cache: Arc<RwLock<Cache>> }

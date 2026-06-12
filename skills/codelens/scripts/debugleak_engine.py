@@ -657,12 +657,30 @@ def _detect_commented_code(
     if not comment_prefix:
         return
 
+    # Rust-specific: doc comments (/// and //!) are documentation, NOT
+    # commented-out code. Attribute annotations (#[...]) are also not
+    # commented code. Skip entire blocks that start with doc comments.
+    is_rust = ext == ".rs"
+
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
 
         # Check if this is a comment line
         if not stripped.startswith(comment_prefix):
+            i += 1
+            continue
+
+        # Rust: Skip doc comment blocks (/// or //!)
+        # These are idiomatic Rust documentation, not commented-out code.
+        if is_rust and (stripped.startswith('///') or stripped.startswith('//!')):
+            # Skip the entire doc comment block
+            while i < len(lines) and (lines[i].strip().startswith('///') or lines[i].strip().startswith('//!')):
+                i += 1
+            continue
+
+        # Rust: Skip attribute blocks (#[...])
+        if is_rust and stripped.startswith('#['):
             i += 1
             continue
 
@@ -673,7 +691,8 @@ def _detect_commented_code(
         block_end = i
 
         # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
-        min_initial = 5 if ext == ".go" else 3
+        # Rust also has many false positives from doc comments, so use 5
+        min_initial = 5 if ext in (".go", ".rs") else 3
         if block_end - block_start < min_initial:
             continue
 
@@ -687,7 +706,9 @@ def _detect_commented_code(
 
         # v5.8.1: Go projects use multi-line comments heavily for godoc,
         # so require a higher threshold (3 instead of 2) to avoid false positives.
-        threshold = 3 if ext == ".go" else 2
+        # v6.1: Rust projects similarly have many doc-comment blocks that look
+        # like code (e.g., code examples in /// doc comments). Use higher threshold.
+        threshold = 3 if ext in (".go", ".rs") else 2
 
         if code_score >= threshold:
             severity = "low"

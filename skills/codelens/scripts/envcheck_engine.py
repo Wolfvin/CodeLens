@@ -182,10 +182,13 @@ def check_env_vars(
 
         # Required if no fallback AND not defined in any .env file
         # AND not only referenced in CI/release scripts
+        # AND not a compile-time variable (e.g., Rust env!() macro)
+        is_compile_time = var_info.get("is_compile_time", False)
         var_info["is_required"] = (
             not has_fallback
             and not has_env_file
             and not all_refs_in_ci
+            and not is_compile_time
         )
         # Mark CI-only vars for clarity in output
         if all_refs_in_ci and not has_fallback and not has_env_file:
@@ -393,7 +396,28 @@ def _detect_python_fallback(line: str, var_name: str) -> bool:
 def _extract_rust_env_refs(
     content: str, rel_path: str, env_vars: Dict[str, Dict[str, Any]]
 ):
-    """Extract environment variable references from Rust source files."""
+    """Extract environment variable references from Rust source files.
+
+    Rust has two categories of env var access:
+    - Runtime: std::env::var("X"), std::env::var_os("X") — actual runtime env vars
+    - Compile-time: env!("X"), option_env!("X") — resolved at compile time by the
+      Rust compiler. These are NOT runtime environment variables. CARGO_* vars
+      are set by Cargo automatically and should never appear in .env files.
+    """
+    # Rust compile-time env vars that are set by Cargo automatically.
+    # These are NOT deployment environment variables — they are build system
+    # metadata available at compile time. Reporting them as "required env vars
+    # without fallback" is a false positive that confuses users.
+    _RUST_CARGO_COMPILE_TIME_VARS = frozenset({
+        "CARGO_MANIFEST_DIR", "CARGO_PKG_VERSION", "CARGO_PKG_NAME",
+        "CARGO_PKG_AUTHORS", "CARGO_PKG_DESCRIPTION", "CARGO_PKG_REPOSITORY",
+        "CARGO_PKG_LICENSE", "CARGO_PKG_VERSION_MAJOR",
+        "CARGO_PKG_VERSION_MINOR", "CARGO_PKG_VERSION_PATCH",
+        "CARGO_PKG_VERSION_PRE", "CARGO_CRATE_NAME", "CARGO_BIN_NAME",
+        "CARGO_PRIMARY_PACKAGE", "CARGO_TARGET_TMPDIR",
+        "CARGO_RUSTC_CURRENT_DIR", "OUT_DIR",
+    })
+
     lines = content.split('\n')
 
     for i, line in enumerate(lines):
@@ -403,23 +427,43 @@ def _extract_rust_env_refs(
         if stripped.startswith('//'):
             continue
 
-        # std::env::var("X") — returns Result, may panic on unset
+        # std::env::var("X") — returns Result, runtime environment variable
         for m in re.finditer(r'std::env::var\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
-            has_fallback = 'unwrap_or' in line or '.ok()' in line or 'unwrap_or_else' in line
+            has_fallback = 'unwrap_or' in line or '.ok()' in line or 'unwrap_or_else' in line or '.is_ok()' in line or '.is_err()' in line
             _register_env_ref(
-                env_vars, m.group(1), rel_path, i + 1, line.strip(), has_fallback
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), has_fallback,
+                is_compile_time=False
             )
 
-        # env!("X") — compile-time, required (will fail to compile if missing)
-        for m in re.finditer(r'env!\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
+        # std::env::var_os("X") — returns Option<OsString>, runtime
+        for m in re.finditer(r'std::env::var_os\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
+            # var_os returns Option, so it inherently has a "fallback" (None)
             _register_env_ref(
-                env_vars, m.group(1), rel_path, i + 1, line.strip(), False
+                env_vars, m.group(1), rel_path, i + 1, line.strip(), True,
+                is_compile_time=False
+            )
+
+        # env!("X") — compile-time macro. NOT a runtime env var.
+        # Skip CARGO_* and other build-system compile-time vars entirely.
+        for m in re.finditer(r'env!\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
+            var_name = m.group(1)
+            if var_name in _RUST_CARGO_COMPILE_TIME_VARS:
+                continue  # Skip Cargo build-system compile-time vars
+            # Non-Cargo env!() vars might be genuine compile-time requirements
+            # (e.g., git commit hashes, build timestamps). Mark as compile-time.
+            _register_env_ref(
+                env_vars, var_name, rel_path, i + 1, line.strip(), True,
+                is_compile_time=True
             )
 
         # option_env!("X") — compile-time, optional (returns Option)
         for m in re.finditer(r'option_env!\s*\(\s*"([A-Za-z_]\w*)"\s*\)', line):
+            var_name = m.group(1)
+            if var_name in _RUST_CARGO_COMPILE_TIME_VARS:
+                continue  # Skip Cargo build-system compile-time vars
             _register_env_ref(
-                env_vars, m.group(1), rel_path, i + 1, line.strip(), True
+                env_vars, var_name, rel_path, i + 1, line.strip(), True,
+                is_compile_time=True
             )
 
 
@@ -607,30 +651,44 @@ def _register_env_ref(
     rel_path: str,
     line_num: int,
     context: str,
-    has_fallback: bool
+    has_fallback: bool,
+    is_compile_time: bool = False
 ):
-    """Register an environment variable reference."""
+    """Register an environment variable reference.
+
+    Args:
+        is_compile_time: If True, this env var is resolved at compile time
+            (e.g., Rust's env!() macro) rather than at runtime. Compile-time
+            vars are NOT deployment requirements and should not trigger
+            "required without fallback" warnings.
+    """
     if name not in env_vars:
         env_vars[name] = {
             "name": name,
             "referenced_in": [],
             "has_fallback": has_fallback,
-            "is_required": not has_fallback,
+            "is_required": not has_fallback and not is_compile_time,
             "defined_in_env_file": [],
             "is_in_gitignore": False,
             "documentation": None,
             "is_secret": _is_secret_var(name, ""),
+            "is_compile_time": is_compile_time,
         }
 
     # Update fallback: if any reference has a fallback, mark it
     if has_fallback:
         env_vars[name]["has_fallback"] = True
 
+    # If any reference is NOT compile-time, the var is considered runtime
+    if not is_compile_time:
+        env_vars[name].setdefault("is_compile_time", False)
+
     # Add reference
     env_vars[name]["referenced_in"].append({
         "file": rel_path,
         "line": line_num,
         "context": context[:150],
+        "is_compile_time": is_compile_time,
     })
 
     # Update secret status
