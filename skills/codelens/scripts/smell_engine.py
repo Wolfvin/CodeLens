@@ -1884,13 +1884,21 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
     Does NOT flag:
     - Parameterized queries with placeholders (?, %s without % operator)
     - Static SQL strings without variable interpolation
+    - f-strings that only interpolate table/column names but use %s/? for values
+    - Django migration files (downgraded to info)
+    - CLI command strings containing SQL keywords in non-SQL context
     """
     smells = []
     lines = content.split('\n')
 
-    # SQL keywords to detect SQL statements
-    sql_keywords = re.compile(
-        r'(?i)\b(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE)\b'
+    # v7.0: Detect file context
+    is_test = _is_test_or_mock_file(rel_path)
+    is_migration = '/migrations/' in rel_path or '/migration/' in rel_path
+    is_cli_file = '/cli/' in rel_path or '/management/commands/' in rel_path
+
+    # SQL keywords that start a SQL statement
+    sql_start_keywords = re.compile(
+        r'(?i)^(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|WITH|TRUNCATE)\s'
     )
 
     for i, line in enumerate(lines):
@@ -1900,62 +1908,143 @@ def _detect_sql_injection(content: str, rel_path: str) -> List[Dict]:
         if stripped.startswith('#') or stripped.startswith('"""') or stripped.startswith("'''"):
             continue
 
-        # Skip test files for severity reduction
-        is_test = _is_test_or_mock_file(rel_path)
-
         # Check for f-string SQL injection
-        # Pattern: f"SELECT ..." or f"INSERT ..." etc. with {variable} inside
+        # v7.0: Improved regex — require SQL keyword at start of string content
+        # (within first 20 chars) to avoid false positives from CLI commands
+        # containing "SET", "SELECT" in HTML, etc.
         fstring_sql = re.findall(
-            r'f["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC).{0,200})["\']',
+            r'f["\'](.{0,200})["\']',
             stripped, re.IGNORECASE
         )
         for sql_str in fstring_sql:
             # Check if it contains variable interpolation
-            if '{' in sql_str and '}' in sql_str:
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "f-string_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: f-string used in SQL query",
-                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of f-string interpolation."
-                })
-                break  # One finding per line is enough
+            if '{' not in sql_str or '}' not in sql_str:
+                continue
+
+            # v7.0: Require SQL keyword near the start of the string content.
+            # Real SQL queries start with a keyword like SELECT, INSERT, etc.
+            # CLI commands like "archivebox config --set FOO={bar}" should NOT match.
+            # HTML like '<select name="{name}">' should NOT match.
+            prefix = sql_str[:20].strip()
+            if not sql_start_keywords.search(prefix):
+                continue
+
+            # v7.0: Skip if this looks like HTML (common false positive)
+            # e.g., f'<select ...>' or f'<option value="{val}">'
+            if '<select' in sql_str.lower() or '<option' in sql_str.lower():
+                continue
+
+            # v7.0: Skip if this looks like a CLI command (not SQL)
+            # e.g., f"archivebox config --set KEY={val}"
+            if re.search(r'--\w+=', sql_str) or re.search(r'\bconfig\b.*--', sql_str, re.IGNORECASE):
+                continue
+
+            # v7.0: If the f-string uses %s or ? placeholders for VALUES
+            # and only uses f-string interpolation for table/column names,
+            # it's a partially parameterized query — still a smell but less severe.
+            # e.g., f"UPDATE {table_name} SET config = %s WHERE id = %s"
+            has_param_placeholder = bool(re.search(r'%s|\?', sql_str))
+            # Count f-string interpolations vs placeholders
+            interp_count = len(re.findall(r'\{[^}]+\}', sql_str))
+
+            if has_param_placeholder and interp_count <= 2:
+                # Likely just table/column name interpolation — less severe
+                severity = "info"
+            elif is_migration:
+                severity = "info"
+            elif is_test:
+                severity = "info"
+            elif is_cli_file:
+                severity = "info"
+            else:
+                severity = "critical"
+
+            message = "Potential SQL injection: f-string used in SQL query"
+            if has_param_placeholder and interp_count <= 2:
+                message = "Partial SQL injection risk: f-string for table/column names with parameterized values"
+            elif is_migration:
+                message += " (in migration file — typically safe)"
+            elif is_cli_file:
+                message += " (in CLI file — verify context)"
+
+            smells.append({
+                "file": rel_path,
+                "line": i + 1,
+                "pattern": "f-string_sql",
+                "severity": severity,
+                "message": message,
+                "suggestion": "Use parameterized queries with placeholders (? or %s) instead of f-string interpolation."
+            })
+            break  # One finding per line is enough
 
         # Check for .format() SQL injection
         if '.format(' in stripped:
-            # Find SQL strings followed by .format()
+            # v7.0: Require SQL keyword near the start of the string content
             format_sql = re.search(
-                r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*\.format\(',
+                r'["\'](.{0,200})["\']\s*\.format\(',
                 stripped, re.IGNORECASE
             )
             if format_sql:
-                severity = "warning" if is_test else "critical"
-                smells.append({
-                    "file": rel_path,
-                    "line": i + 1,
-                    "pattern": "format_sql",
-                    "severity": severity,
-                    "message": f"Potential SQL injection: .format() used in SQL query",
-                    "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
-                })
+                sql_str = format_sql.group(1)
+                prefix = sql_str[:20].strip()
+                if sql_start_keywords.search(prefix):
+                    # Skip HTML false positives
+                    if '<select' in sql_str.lower() or '<option' in sql_str.lower():
+                        continue
+
+                    if is_migration:
+                        severity = "info"
+                    elif is_test:
+                        severity = "info"
+                    elif is_cli_file:
+                        severity = "info"
+                    else:
+                        severity = "critical"
+
+                    message = "Potential SQL injection: .format() used in SQL query"
+                    if is_migration:
+                        message += " (in migration file — typically safe)"
+
+                    smells.append({
+                        "file": rel_path,
+                        "line": i + 1,
+                        "pattern": "format_sql",
+                        "severity": severity,
+                        "message": message,
+                        "suggestion": "Use parameterized queries with placeholders (? or %s) instead of .format()."
+                    })
 
         # Check for % formatting SQL injection
         # Pattern: "SELECT ... %s ..." % variable (but not just "SELECT ... %s" alone)
         pct_sql = re.search(
-            r'["\'](.{0,200}(?:SELECT|INSERT|UPDATE|DELETE|DROP).{0,200})["\']\s*%\s*\(',
+            r'["\'](.{0,200})["\']\s*%\s*\(',
             stripped, re.IGNORECASE
         )
         if pct_sql:
-            severity = "warning" if is_test else "critical"
-            smells.append({
-                "file": rel_path,
-                "line": i + 1,
-                "pattern": "percent_format_sql",
-                "severity": severity,
-                "message": f"Potential SQL injection: % formatting used in SQL query",
-                "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
-            })
+            sql_str = pct_sql.group(1)
+            # v7.0: Require SQL keyword near the start
+            prefix = sql_str[:20].strip()
+            if sql_start_keywords.search(prefix):
+                if is_migration:
+                    severity = "info"
+                elif is_test:
+                    severity = "info"
+                elif is_cli_file:
+                    severity = "info"
+                else:
+                    severity = "critical"
+
+                message = "Potential SQL injection: % formatting used in SQL query"
+                if is_migration:
+                    message += " (in migration file — typically safe)"
+
+                smells.append({
+                    "file": rel_path,
+                    "line": i + 1,
+                    "pattern": "percent_format_sql",
+                    "severity": severity,
+                    "message": message,
+                    "suggestion": "Use parameterized queries with cursor.execute(query, params) instead of % string formatting."
+                })
 
     return smells

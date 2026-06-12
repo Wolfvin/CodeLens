@@ -36,7 +36,7 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte",
 }
 
-STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant"}
+STATE_TYPES = {"store", "context", "atom", "global", "machine", "derived_store", "module_constant", "django_model"}
 
 # ─── JS/TS Keywords & Built-ins (false-positive filter) ────────
 
@@ -2427,12 +2427,86 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
         '__loader__', '__cached__', '__version__',
     }
 
+    # ─── Django model detection ──────────────────────────────────
+    # Detect Django model class names so we can skip them from being
+    # classified as state stores. Django models are ORM definitions,
+    # not runtime state — they define database schemas.
+    django_model_names: Set[str] = set()
+    has_django_import = bool(re.search(
+        r'(?:from\s+django\.db\s+import\s+models|from\s+django\.db\.models\s+import|import\s+django\.db\.models)',
+        content
+    ))
+    if has_django_import:
+        # Find all class definitions that inherit from models.Model (or a mixin chain ending in models.Model)
+        for dm in re.finditer(
+            r'class\s+([A-Z]\w+)\s*\([^)]*models\.Model[^)]*\)',
+            content
+        ):
+            django_model_names.add(dm.group(1))
+        # Also catch classes that inherit from a base that itself inherits from models.Model
+        # e.g., class Crawl(ModelWithDeleteAfter, ModelWithOutputDir, ...):
+        # We detect these by finding classes in model files that use Django model field types
+        for dm in re.finditer(
+            r'class\s+([A-Z]\w+)\s*\([^)]*(?:Model|ModelState|StateMachine)[^)]*\)\s*:',
+            content
+        ):
+            django_model_names.add(dm.group(1))
+    # Also detect apps.get_model() pattern in Django migrations
+    # e.g., Crawl = apps.get_model("crawls", "Crawl")
+    for gm in re.finditer(
+        r'([A-Z]\w+)\s*=\s*apps\.get_model\s*\(',
+        content
+    ):
+        django_model_names.add(gm.group(1))
+    # Detect get_user_model() pattern
+    for gm in re.finditer(
+        r'([A-Z]\w+)\s*=\s*get_user_model\s*\(\s*\)',
+        content
+    ):
+        django_model_names.add(gm.group(1))
+
+    # ─── Lazy import detection ───────────────────────────────────
+    # Names starting with _ that are module references (lazy imports).
+    # Pattern: _psutil = None / _psutil: Any | None = None, followed by
+    #   import psutil  OR  import psutil as _psutil_import
+    # Pattern: _markdown = importlib.import_module("markdown").markdown
+    lazy_import_names: Set[str] = set()
+    # Detect _name assigned to None (with optional type annotation before = None)
+    for lm in re.finditer(r'^(_\w+)\s*(?::\s*[^=]+)?=\s*None\s*$', content, re.MULTILINE):
+        lazy_name = lm.group(1)
+        base_name = lazy_name.lstrip('_')
+        # Check if there's a corresponding import statement for the module
+        if re.search(rf'\bimport\s+{re.escape(base_name)}\b', content):
+            lazy_import_names.add(lazy_name)
+        # Also check for "import X as _name_import" pattern
+        if re.search(rf'\bimport\s+\w+\s+as\s+{re.escape(lazy_name)}_?import\b', content):
+            lazy_import_names.add(lazy_name)
+    # Detect _name = importlib.import_module("...") pattern
+    for lm in re.finditer(r'^(_\w+)\s*=\s*importlib\.import_module\s*\(', content, re.MULTILINE):
+        lazy_import_names.add(lm.group(1))
+    # Detect _name = <module_ref> pattern (e.g., _psutil = _psutil_import)
+    for lm in re.finditer(r'^(_\w+)\s*=\s*(_\w+_import)\s*$', content, re.MULTILINE):
+        lazy_import_names.add(lm.group(1))
+
+    # ─── Type alias detection ─────────────────────────────────────
+    # Type aliases like ObjectState = State | str are NOT state stores.
+    # Also catches: ConfigOverrides = Mapping[str, object]
+    #               ConfigPayload = dict[str, object]
+    type_alias_names: Set[str] = set()
+    # Union type aliases: Name = TypeA | TypeB
+    for tm in re.finditer(r'^([A-Z]\w+)\s*=\s*\w+\s*\|\s*\w+', content, re.MULTILINE):
+        type_alias_names.add(tm.group(1))
+    # Generic type aliases: Name = SomeGeneric[...] or Name = somebuiltin[...]
+    for tm in re.finditer(r'^([A-Z]\w+)\s*=\s*(?:Mapping|dict|list|set|tuple|frozenset|Sequence|MutableMapping|OrderedDict|defaultdict|ChainMap|Counter|Type|Callable|Optional|Union|Literal|Annotated|Final|ClassVar)\s*\[', content, re.MULTILINE):
+        type_alias_names.add(tm.group(1))
+
     lines = content.split('\n')
     for i, line in enumerate(lines):
         stripped = line.strip()
 
         # Module-level assignments (not inside functions/classes)
-        if not stripped.startswith((' ', '\t')):  # Top-level
+        # Use the ORIGINAL line (not stripped) to check indentation
+        if not line.startswith((' ', '\t')):  # Top-level
             m = re.match(r'^([A-Z_]\w+)\s*=\s*(.*)', stripped)
             if m:
                 var_name = m.group(1)
@@ -2452,6 +2526,18 @@ def _extract_python_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
                 # v5.8: Skip path references and env var lookups
                 if re.match(r'^(os\.path|Path|pathlib|os\.getenv|os\.environ)', value_part):
+                    continue
+
+                # Skip lazy import patterns (e.g., _psutil = None, _markdown = None)
+                if var_name in lazy_import_names:
+                    continue
+
+                # Skip Django model class names — they are ORM definitions, not state stores
+                if var_name in django_model_names:
+                    continue
+
+                # Skip type aliases (e.g., ObjectState = State | str)
+                if var_name in type_alias_names:
                     continue
 
                 stores.append({

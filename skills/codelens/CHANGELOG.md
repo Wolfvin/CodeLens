@@ -5,6 +5,37 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.2.0] — 2026-06-12
+
+### Tested against ArchiveBox/ArchiveBox (412 Python files, Django+CLI+MCP)
+
+Real-world test on a self-hosted web archiving tool — a Django project with management commands, REST API, MCP server, LDAP auth, background workers, and heavy subprocess/shell integration. This test target exposed critical gaps in CodeLens's handling of Django URL routing, Django model state classification, Python project identity extraction, and Python-centric false positive patterns.
+
+### Added
+
+- **Django URL route detection** — apimap_engine.py now properly parses Django `path()`, `re_path()`, and legacy `url()` patterns from `urls.py` files. Detects `include('module.path')`, `ViewClass.as_view()`, `admin.site.urls`, and `lambda` handlers. Uses paren-depth-aware extraction (`_extract_until_paren_close()`) to prevent look-ahead from bleeding into the next route definition. Route count: 0 → 61 on ArchiveBox.
+- **`production_only` parameter for api-map** — `map_api_routes()` now accepts `production_only: bool = False` to filter out test/example routes. Fixes TypeError crash when `--production-only` flag was used.
+- **`is_bundled_file()` utility** — New function in utils.py that detects bundled/compiled artifacts (dist/, build/, out/ directories, .bundle./.chunk./.global. patterns, .min.js/.min.css, .d.ts). Path-segment-aware matching prevents false positives on directories like `distributed/`. Fixes ImportError that broke 4 commands (ask, complexity, context, perf_hint).
+- **Django model state filtering** — statemap_engine.py now detects `class X(models.Model)`, `X = apps.get_model()`, `X = get_user_model()` and skips those from state store classification. Also detects lazy import patterns (`_name = None` + `import name as _name_import`) and type aliases (`Name = TypeA | TypeB`). Indentation check fixed to use raw line instead of stripped line. Stores: 22 → 1 on ArchiveBox.
+- **Secrets: path value filtering** — `pwd="/tmp/archivebox"` is now correctly identified as a filesystem path (not a password) when the key is `pwd` and the value starts with `/tmp/`, `/var/`, `/home/`, etc.
+- **Secrets: URL test data filtering** — Values containing `example.com`, `ex.co`, `test.com` in test files are now skipped. Prevents flagging URL parsing test fixtures.
+- **pyproject.toml description extraction** — Handbook now extracts `description` field from the `[project]` section in pyproject.toml. Uses section-scoped regex with `re.MULTILINE` flag to avoid matching fields from other TOML sections (e.g., `[tool.bumpver]`). Description: `""` → `"Self-hosted internet archiving solution."` on ArchiveBox.
+- **Debug-leak Django CLI context** — Files in `management/commands/`, `cli/`, or files using `click.command()`/`argparse` are detected as CLI files. `print()`/`pprint()` in CLI files are skipped unless they contain debug-specific patterns. Django settings files get higher commented_block thresholds (5 lines, score 3). Total leaks: 1041 → 728 (-30%). print() in cli/: 200 → 1 (-99.5%).
+- **SQL injection FP reduction** — smell_engine.py now requires SQL keywords at the START of f-strings (first 20 chars), not anywhere. Skips HTML context (`<select>` tags), CLI commands (`--flag=` patterns), and migration files. Parameterized queries with `%s`/`?` placeholders are downgraded to info severity. SQL findings: 124 → 24 (-81%). Critical: 88 → 1 (-99%).
+
+### Fixed
+
+- **CRITICAL: `is_bundled_file` missing from utils.py** — 4 commands (ask, complexity, context, perf_hint) failed with ImportError. Now defined in utils.py.
+- **CRITICAL: api-map TypeError crash** — `map_api_routes() got an unexpected keyword argument 'production_only'`. Now accepted as optional parameter.
+- **CRITICAL: Zero Django routes detected** — Django `path()`/`re_path()`/`url()` patterns were not being parsed from urls.py files due to regex that couldn't capture dotted handler names (`admin.site.urls`, `View.as_view()`).
+- **State map: Django models classified as module_constant** — `Crawl`, `Snapshot`, `ArchiveResult`, etc. were misclassified as state stores. Now properly detected and filtered.
+- **State map: Lazy imports classified as stores** — `_psutil = None`, `_environ = {}`, `_fcntl = None` were misclassified. Now detected as lazy import patterns.
+- **Handbook: empty description from pyproject.toml** — Description field was never extracted from `[project]` section. Now properly parsed.
+- **Secrets: pwd= path values flagged as passwords** — `pwd="/tmp/archivebox"` is a filesystem path, not a password.
+- **Secrets: URL test data flagged as credentials** — `"http://us:pa@ex.co:42/..."` in test files is URL parsing test data, not real credentials.
+- **Debug-leak: Django management command print() flagged** — print() in CLI/management commands is legitimate output, not debug leaks.
+- **SQL injection: massive false positive rate** — 124 findings reduced to 24, with only 1 genuine critical finding remaining.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

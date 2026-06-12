@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "7.2.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -429,4 +429,48 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
+    return False
+
+
+# ─── Bundled File Detection ────────────────────────────────
+
+_BUNDLED_DIR_SEGMENTS = frozenset({'dist', 'build', 'out'})
+_BUNDLED_NAME_PATTERNS = ('.bundle.', '.chunk.', '.global.')
+_BUNDLED_SUFFIXES = ('.min.js', '.min.css', '.d.ts')
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative file path looks like a bundled/generated artifact
+    that should be skipped during analysis.
+
+    Detects:
+      - Files inside dist/, build/, out/ directories (path-segment-aware)
+      - Bundled file name patterns: .bundle., .chunk., .global.
+      - Minified files: .min.js, .min.css
+      - TypeScript declaration files: .d.ts
+
+    Args:
+        rel_path: Relative path from workspace root (e.g., 'dist/app.bundle.js')
+
+    Returns:
+        True if the file appears to be a bundled/build artifact.
+    """
+    # Check directory segments for dist/build/out
+    parts = rel_path.replace('\\', '/').split('/')
+    for segment in parts[:-1]:  # exclude filename itself
+        if segment in _BUNDLED_DIR_SEGMENTS:
+            return True
+
+    lower = rel_path.lower()
+
+    # Check bundled name patterns
+    for pattern in _BUNDLED_NAME_PATTERNS:
+        if pattern in lower:
+            return True
+
+    # Check suffixes
+    for suffix in _BUNDLED_SUFFIXES:
+        if lower.endswith(suffix):
+            return True
+
     return False

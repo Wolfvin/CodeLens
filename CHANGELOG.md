@@ -2,6 +2,33 @@
 
 All notable changes to CodeLens are documented here.
 
+## [7.2.0] — 2026-06-12
+
+### Tested against ArchiveBox/ArchiveBox (412 Python files, Django+CLI+MCP)
+
+Real-world test on a self-hosted web archiving tool — Django project with management commands, REST API, MCP server, and heavy subprocess/shell integration.
+
+### Added
+
+- Django URL route detection (path(), re_path(), url(), include(), View.as_view()) — 0 → 61 routes
+- `production_only` parameter for api-map (fixes TypeError crash)
+- `is_bundled_file()` utility (fixes 4 broken commands)
+- Django model/lazy-import/type-alias state filtering — 22 → 1 stores
+- Secrets: path value filtering (pwd="/tmp/..." is a path, not password)
+- Secrets: URL test data filtering (example.com in tests)
+- pyproject.toml description extraction — empty → "Self-hosted internet archiving solution."
+- Debug-leak Django CLI context — 1041 → 728 leaks (-30%)
+- SQL injection FP reduction — 124 → 24 (-81%), critical 88 → 1 (-99%)
+
+### Fixed
+
+- CRITICAL: `is_bundled_file` missing — broke 4 commands
+- CRITICAL: api-map TypeError crash (production_only kwarg)
+- CRITICAL: Zero Django routes detected
+- State map: Django models misclassified as module_constant
+- Handbook: empty description from pyproject.toml
+- SQL injection: 124 FPs from HTML context and CLI commands
+
 ## [7.1.0] — 2026-06-12
 
 ### Tested against nestjs/nest (1673 TypeScript files, lerna monorepo, 11 packages)
