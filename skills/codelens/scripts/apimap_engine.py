@@ -38,7 +38,7 @@ from utils import DEFAULT_IGNORE_DIRS
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
-    ".graphql", ".gql", ".php",
+    ".graphql", ".gql", ".php", ".go",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -81,7 +81,8 @@ def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -92,6 +93,7 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
+        production_only: If True, filter out routes from test files
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -249,6 +251,16 @@ def map_api_routes(
                     routes.extend(rust_macro_routes)
                     frameworks_detected.add("actix-web")
 
+            # ─── Go HTTP routes (net/http, gin, echo, chi, fiber) ──
+            if ext == ".go":
+                go_routes = _extract_go_http_routes(content, rel_path)
+                if go_routes:
+                    routes.extend(go_routes)
+                    for r in go_routes:
+                        fw = r.get("framework", "")
+                        if fw:
+                            frameworks_detected.add(fw)
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
@@ -327,6 +339,13 @@ def map_api_routes(
     recommendations = _generate_recommendations(
         routes, frameworks_detected, auth_protected_routes
     )
+
+    # Apply production_only filter if requested
+    if production_only:
+        test_indicators = ['/tests/', '/test/', '/__tests__/', '/spec/',
+                          'test_', '_test.', '.test.', '.spec.',
+                          '/examples/', '/example/']
+        routes = [r for r in routes if not any(x in r.get('file', '') for x in test_indicators)]
 
     return {
         "status": "ok",
@@ -2112,7 +2131,7 @@ def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "methods": sorted(methods),
             "auth_protected": has_auth,
             "routes": [
-                {"method": r["method"], "path": r["path"], "handler": r["handler_name"]}
+                {"method": r["method"], "path": r["path"], "handler": r.get("handler_name", r.get("handler", "unknown"))}
                 for r in group_routes
             ],
         })
@@ -2784,3 +2803,189 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
         })
 
     return middleware
+
+
+# ─── Go HTTP Route Extraction ──────────────────────────────────
+
+def _extract_go_http_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract HTTP routes from Go source files.
+
+    Supports:
+    1. net/http: http.HandleFunc("/path", handler), mux.HandleFunc("/path", handler)
+    2. gin: r.GET("/path", handler), r.POST("/path", handler)
+    3. echo: e.GET("/path", handler), e.POST("/path", handler)
+    4. chi: r.Get("/path", handler), r.Post("/path", handler)
+    5. fiber: app.Get("/path", handler), app.Post("/path", handler)
+    6. gorilla/mux: r.HandleFunc("/path", handler).Methods("GET")
+    7. Go 1.22+ ServeMux pattern routing: mux.Handle("GET /path", handler)
+    """
+    routes = []
+
+    # Quick check: any Go HTTP pattern?
+    if not any(marker in content for marker in [
+        "HandleFunc", "Handle(", ".GET(", ".POST(", ".PUT(", ".DELETE(", ".PATCH(",
+        ".Get(", ".Post(", ".Put(", ".Delete(", ".Patch(",
+        "HandleRoute(", "Group(",
+    ]):
+        return routes
+
+    lines = content.split('\n')
+
+    # ─── 1. net/http: HandleFunc ─────────────────────────────
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('//') or stripped.startswith('/*'):
+            continue
+
+        # http.HandleFunc("/path", handler)
+        # mux.HandleFunc("/path", handler)
+        handle_func = re.search(
+            r'(?:\w+\.)?HandleFunc\s*\(\s*["\'](/[^"\']*)["\']\s*,',
+            stripped
+        )
+        if handle_func:
+            path = handle_func.group(1)
+            # Try to extract method from Go 1.22+ pattern: "GET /path"
+            method = "ALL"
+            method_match = re.match(r'(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+', path)
+            if method_match:
+                method = method_match.group(1).upper()
+                path = path[method_match.end():]
+
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": "<handlefunc>",
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "net/http",
+                "auth": False,
+                "middleware": [],
+                "route_type": "go_handlefunc",
+            })
+            continue
+
+        # mux.Handle("GET /path", handler) — Go 1.22+ pattern routing
+        handle_pattern = re.search(
+            r'(?:\w+\.)?Handle\s*\(\s*["\']((?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+/[^"\']*)["\']\s*,',
+            stripped
+        )
+        if handle_pattern:
+            full_pattern = handle_pattern.group(1)
+            parts = full_pattern.split(None, 1)
+            method = parts[0].upper() if len(parts) > 1 else "ALL"
+            path = parts[1] if len(parts) > 1 else full_pattern
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler_name": "<handle>",
+                "file": rel_path,
+                "line": i + 1,
+                "framework": "net/http",
+                "auth": False,
+                "middleware": [],
+                "route_type": "go_handle_pattern",
+            })
+            continue
+
+    # ─── 2. Gin framework ────────────────────────────────────
+    if "gin" in content.lower() or "gin-gonic" in content:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # r.GET("/path", handler)
+            gin_match = re.search(
+                r'(?:\w+)\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*["\'](/[^"\']*)["\']\s*,',
+                stripped
+            )
+            if gin_match:
+                method = gin_match.group(1).upper()
+                path = gin_match.group(2)
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": "<gin_handler>",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "framework": "gin",
+                    "auth": False,
+                    "middleware": [],
+                    "route_type": "gin_route",
+                })
+
+    # ─── 3. Echo framework ───────────────────────────────────
+    if "echo" in content.lower() and "labstack/echo" in content:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            echo_match = re.search(
+                r'(?:\w+)\.(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*["\'](/[^"\']*)["\']\s*,',
+                stripped
+            )
+            if echo_match:
+                method = echo_match.group(1).upper()
+                path = echo_match.group(2)
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": "<echo_handler>",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "framework": "echo",
+                    "auth": False,
+                    "middleware": [],
+                    "route_type": "echo_route",
+                })
+
+    # ─── 4. Chi router ────────────────────────────────────────
+    if "chi" in content.lower() and ("go-chi" in content or "chi.v5" in content):
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # r.Get("/path", handler) — Chi uses Title Case methods
+            chi_match = re.search(
+                r'(?:\w+)\.(Get|Post|Put|Delete|Patch|Head|Options|Route|Mount)\s*\(\s*["\'](/[^"\']*)["\']\s*,',
+                stripped
+            )
+            if chi_match:
+                method_raw = chi_match.group(1)
+                method_map = {
+                    "Get": "GET", "Post": "POST", "Put": "PUT",
+                    "Delete": "DELETE", "Patch": "PATCH", "Head": "HEAD",
+                    "Options": "OPTIONS", "Route": "ALL", "Mount": "ALL",
+                }
+                method = method_map.get(method_raw, "ALL")
+                path = chi_match.group(2)
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": "<chi_handler>",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "framework": "chi",
+                    "auth": False,
+                    "middleware": [],
+                    "route_type": "chi_route",
+                })
+
+    # ─── 5. Fiber framework ──────────────────────────────────
+    if "fiber" in content.lower() and "gofiber" in content:
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            fiber_match = re.search(
+                r'(?:\w+)\.(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*["\'](/[^"\']*)["\']\s*,',
+                stripped
+            )
+            if fiber_match:
+                method = fiber_match.group(1).upper()
+                path = fiber_match.group(2)
+                routes.append({
+                    "method": method,
+                    "path": path,
+                    "handler_name": "<fiber_handler>",
+                    "file": rel_path,
+                    "line": i + 1,
+                    "framework": "fiber",
+                    "auth": False,
+                    "middleware": [],
+                    "route_type": "fiber_route",
+                })
+
+    return routes

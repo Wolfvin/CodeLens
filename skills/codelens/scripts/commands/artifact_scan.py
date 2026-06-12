@@ -338,7 +338,11 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                     bytes_remaining = file_size - payload_start
                     if section_size > bytes_remaining:
                         # Truncated or malformed — still record the section
-                        sections[section_name] = sections.get(section_name, 0) + 1
+                        current = sections.get(section_name, 0)
+                        if isinstance(current, list):
+                            sections[f"{section_name}_count"] = sections.get(f"{section_name}_count", len(current)) + 1
+                        else:
+                            sections[section_name] = current + 1
                         info["truncated"] = True
                         break
 
@@ -350,7 +354,11 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                                 name_bytes = f.read(name_len)
                                 if name_bytes:
                                     name = name_bytes.decode('utf-8', errors='replace')
-                                    sections.setdefault("custom", []).append(name)
+                                    # Ensure "custom" is a list, not an int
+                                    # (could have been set as int by the truncated path above)
+                                    if "custom" not in sections or not isinstance(sections["custom"], list):
+                                        sections["custom"] = []
+                                    sections["custom"].append(name)
                         except (IOError, ValueError):
                             pass
                         # Skip to end of section
@@ -358,7 +366,14 @@ def _analyze_wasm(file_path: str, file_size: int, deep: bool = False) -> Dict[st
                         f.seek(section_end)
                         continue
                     
-                    sections[section_name] = sections.get(section_name, 0) + 1
+                    # If this section key is already a list (e.g., "custom" with names),
+                    # increment a separate counter instead of overwriting
+                    current = sections.get(section_name, 0)
+                    if isinstance(current, list):
+                        # Already a list of names — increment count separately
+                        sections[f"{section_name}_count"] = sections.get(f"{section_name}_count", len(current)) + 1
+                    else:
+                        sections[section_name] = current + 1
 
                     # Deep mode: extract export names from export section (id=7)
                     if deep and section_id == 7 and section_size < 1000000:
