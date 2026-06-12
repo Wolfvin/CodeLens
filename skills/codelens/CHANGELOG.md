@@ -7,64 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [5.10.0] — 2026-06-12
 
-### Tested against immich-app/immich (2,760 source files: 1,242 Dart + 995 TS + 413 Svelte + 31 Python, self-hosted photo/video backup with NestJS server + Flutter mobile + SvelteKit web + ML)
+### Tested against database & network-themed repos
 
-Real-world test on a polyglot desktop+mobile+web+ML application with 41 NestJS controllers, 52 services, Flutter/Dart mobile app, SvelteKit web frontend, and Python ML pipeline.
+Real-world testing on 7 repos across C, C++, Python, JS/TS, and Rust:
+- **Redis** (C, 30MB, 1842 files) — 19,025 backend nodes, 4,523 edges
+- **LevelDB** (C++, 1.9MB, 181 files) — 1,557 backend nodes, 778 edges
+- **RethinkDB** (C++, 39MB, 1930 files) — 21,477 backend nodes, 25,647 edges
+- **Axios** (JS/TS, 5.5MB, 478 files) — HTTP client library
+- **Got** (JS/TS, 2.6MB, 149 files) — Node.js HTTP request library
+- **HTTPie** (Python, 4.4MB, 294 files) — Modern HTTP client
+- **Reqwest** (Rust, 1.9MB, 123 files) — Rust HTTP client
+
+### Fixed
+
+- **CRITICAL: `perf-hint` command crash**: `detect_perf_hints()` did not accept `max_files` parameter but the command passed it, causing TypeError crash. Added `max_files` parameter to `detect_perf_hints()` with default value of `MAX_FILES_TO_SCAN` (5000). Now uses the parameter instead of hardcoded constant.
+- **CRITICAL: `scan` and `handbook` WARNING on every run**: `get_workspace_outline()` did not accept `max_files` parameter but `write_output_files()` and `handbook` both passed it, causing TypeError WARNING on every scan and handbook execution. Added `max_files` parameter to `get_workspace_outline()` with proper file limiting logic.
+- **CRITICAL: `perf-hint` early return used `findings` key**: When an unknown category was passed, the early return dict used `findings` key instead of the current `hints` key. Updated to `hints` for API consistency.
+- **`max_files` parameter missing from 4 engine functions**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` all lacked `max_files` parameter despite their command handlers passing it via `**kwargs`. Added `max_files` parameter to all four engines with proper file scan limiting.
+- **`pyproject.toml` syntax error**: Missing newlines between `description`, `readme`, and `requires-python` fields on line 8-9 caused `tomllib` parse failure. Fixed formatting.
+- **`has_rust_backend` key missing from framework detection**: Tests expected this key but it was never set. Added `has_rust_backend` field to detected dict, set to `True` when Tauri or Rust web frameworks (axum, actix, rocket) are detected.
+- **`is_monorepo` key missing from framework detection**: Tests expected this key but it was never set. Added `is_monorepo` field with detection for npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
+- **`lockfile` key missing from framework detection**: Tests expected lockfile type detection. Added `lockfile` field that detects pnpm-lock.yaml, yarn.lock, bun.lock, and package-lock.json.
+- **Tauri monorepo config paths**: For Tauri monorepo projects, `src/` was incorrectly added to `backend_paths` by the Rust handler. Now properly removed and placed in `frontend_paths`. Monorepo sub-app paths like `apps/<name>/src/` are now correctly added to frontend paths.
+- **Rust parser regex syntax**: `fallback_rust.py` used `?<name>` named group syntax (Perl/JS style) but Python's `re` module requires `?P<name>`. Caused `re.error` crash on any Rust impl block parsing.
+- **Missing framework signatures**: Added `trpc`, `zustand`, and `vite` framework signatures that tests expected but were not in `FRAMEWORK_SIGNATURES`.
+- **Perf-hint test API mismatch**: Tests used `findings` key but engine returns `hints`. Updated tests to match the current API.
 
 ### Added
 
-- **Dart/Flutter fallback parser** (`fallback_dart.py`): Full regex-based Dart parser extracting:
-  - Classes (with methods, fields, constructors) including abstract classes
-  - Flutter widgets (StatelessWidget, StatefulWidget, ConsumerWidget, HookConsumerWidget, etc.)
-  - Enums (with values), Mixins, Extensions, Typedefs
-  - Top-level functions with type-annotated return types
-  - Riverpod providers (Provider, StateNotifierProvider, FutureProvider, etc.)
-  - AutoRoute/GoRoute route declarations
-  - Dart import statements (package:, dart:, relative)
-  - @RoutePage annotation detection for Flutter route pages
-  - All nodes include `fn` key for edge_resolver compatibility
-
-- **Dart file discovery**: `discover_files()` now includes `.dart` files in the `dart` category. Scan output includes `dart` file count and `dart_parsed` count.
-
-- **SQL file discovery**: `discover_files()` now includes `.sql` files in the `sql` category. SQL files are tracked for database analysis awareness.
-
-- **NestJS framework detection**: `detect_frameworks()` now detects NestJS from `@nestjs/core`/`@nestjs/common` in package.json dependencies and `nest-cli.json` config file. Adds `has_nestjs: true` to detected dict. Auto-configures backend paths for `server/src/`, `src/controllers/`, `src/services/`, `src/modules/`, etc.
-
-- **Express.js framework detection**: `detect_frameworks()` now detects Express from `express` in package.json. Adds `has_express: true`.
-
-- **Fastify framework detection**: `detect_frameworks()` now detects Fastify from `fastify` in package.json. Adds `has_fastify: true`.
-
-- **Flutter framework detection**: `detect_frameworks()` now detects Flutter/Dart from `pubspec.yaml` files. Scans root and common subdirectories (`mobile/`, `app/`, `flutter/`, `client/`, `packages/*`). Checks for Flutter SDK constraints and common Flutter dependencies. Adds `has_flutter: true` and `has_dart: true`. Auto-configures frontend/backend paths for Flutter project structure.
-
-- **Docker/containerization detection**: `detect_frameworks()` now detects Docker deployment from Dockerfile, docker-compose.yml, .dockerignore files (including subdirectories like `docker/`, `deployment/`). Adds `has_docker: true`.
-
-- **CI/CD pipeline detection**: `detect_frameworks()` now detects CI/CD pipelines from GitHub Actions (`.github/workflows/`), GitLab CI (`.gitlab-ci.yml`), Jenkins (`Jenkinsfile`), CircleCI, Travis CI, Bitbucket Pipelines, Buildkite, Azure DevOps. Adds `has_cicd: true`.
-
-- **NestJS route extraction** (api-map): `_extract_nestjs_routes()` extracts HTTP routes from NestJS controller decorators:
-  - `@Controller('prefix')` for route group prefix
-  - `@Get('path')`, `@Post('path')`, `@Put('path')`, `@Delete('path')`, `@Patch('path')` for method handlers
-  - Combines controller prefix + method path for full endpoint path
-  - Detects auth-related decorators (`@Authenticated`, `@UseGuards(AuthGuard)`, `@Auth()`, etc.)
-  - Extracts handler method names from lines following the decorator
-
-- **NestJS HTTP handler entrypoints**: Entrypoints engine now detects NestJS `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch` decorators as HTTP handler entrypoints.
-
-- **Dart main() entrypoints**: Entrypoints engine now detects `void main()` and `Future<void> main()` as application entry points for Dart/Flutter projects.
-
-- **Dart outline engine**: `_outline_dart()` extracts file outlines from Dart source including imports, classes, enums, mixins, extensions, typedefs, functions, Flutter widget components, and Riverpod provider declarations.
-
-- **Dart extension in apimap**: `.dart` added to SOURCE_EXTENSIONS in apimap_engine for future Dart API route extraction.
-
-- **Additional unsupported language markers**: Elixir (`mix.exs`), Haskell (`stack.yaml`), Scala (`build.sbt`) are now detected as unsupported languages.
-
-### Changed
-
-- Version bumped from 5.8.0 → 5.10.0 (skipped 5.9 to avoid confusion with the PHP branch version)
-- `discover_files()` now returns 16 categories (was 14), adding `dart` and `sql`
-- Framework detection now returns 6 additional flags: `has_nestjs`, `has_express`, `has_fastify`, `has_flutter`, `has_dart`, `has_docker`, `has_cicd`
-- `get_recommended_config()` now suggests NestJS and Flutter-specific paths
-- `skill.json` description updated with v5.10 features and immich test results
-- 27 new tags added to `skill.json` for Dart, Flutter, NestJS, Docker, CI/CD, SQL
+- **Lockfile type detection**: `detect_frameworks()` now returns `lockfile` field with values: `"pnpm"`, `"yarn"`, `"bun"`, or `"npm"`.
+- **Monorepo detection**: `detect_frameworks()` now returns `is_monorepo` field. Detects npm/yarn workspaces, pnpm-workspace.yaml, and lerna.json.
+- **`has_rust_backend` detection**: `detect_frameworks()` returns `has_rust_backend: true` when Tauri or Rust web frameworks (axum, actix, rocket) are detected via Cargo.toml.
+- **tRPC, Zustand, Vite framework signatures**: New framework signatures for popular JS/TS tools.
+- **`max_files` support in outline engine**: `get_workspace_outline()` now accepts and respects `max_files` parameter (0 = unlimited) to prevent timeout on huge repos.
+- **File limiting in 4 engines**: `compute_complexity()`, `detect_secrets()`, `detect_smells()`, and `map_entrypoints()` now all respect `max_files` parameter for consistent behavior across commands.
 
 ## [5.8.0] — 2026-06-12
 

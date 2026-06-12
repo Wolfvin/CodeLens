@@ -398,7 +398,7 @@ def detect_perf_hints(
     severity: Optional[str] = None,
     category: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = 5000
+    max_files: int = MAX_FILES_TO_SCAN
 ) -> Dict[str, Any]:
     """
     Detect performance anti-patterns and optimization opportunities in source code.
@@ -413,8 +413,7 @@ def detect_perf_hints(
                   "expensive_renders", "large_bundle", "inefficient_iteration",
                   "unoptimized_images", "cache_miss"
         config: CodeLens config dict (optional overrides)
-        max_files: Maximum number of source files to scan (default: 5000).
-                   Use 0 for unlimited. Prevents timeout on huge repos.
+        max_files: Maximum number of files to scan (default: MAX_FILES_TO_SCAN)
 
     Returns:
         Dict with findings, stats, risk level, and recommendations
@@ -448,7 +447,7 @@ def detect_perf_hints(
                     "files_scanned": 0,
                 },
                 "risk": "none",
-                "findings": [],
+                "hints": [],
                 "recommendations": [f"Unknown category '{category}'. Valid: {', '.join(sorted(PERF_HINT_CATEGORIES.keys()))}"],
             }
 
@@ -491,8 +490,7 @@ def detect_perf_hints(
             findings.extend(file_findings)
 
             # Check if we've hit file or finding limits
-            effective_max = max_files if max_files > 0 else MAX_FILES_TO_SCAN
-            if files_scanned >= effective_max:
+            if files_scanned >= max_files:
                 truncated = True
                 break
             if len(findings) >= MAX_TOTAL_FINDINGS:

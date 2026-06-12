@@ -775,7 +775,8 @@ ENTRYPOINT_PATTERNS = {
 def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -788,6 +789,7 @@ def map_entrypoints(
         entry_type: Optional filter: "main", "http_handler", "event_handler",
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
+        max_files: Maximum number of files to scan (default: 5000)
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
@@ -815,6 +817,9 @@ def map_entrypoints(
             continue
 
         for filename in filenames:
+            if files_scanned >= max_files:
+                break
+
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue

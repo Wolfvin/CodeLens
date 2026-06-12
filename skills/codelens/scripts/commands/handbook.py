@@ -171,7 +171,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
 
     # 11. Quick reference from summary
     try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        summary = compute_summary(workspace, get_workspace_outline(workspace, max_files=max_files), scan_result)
     except Exception:
         logger.warning("Summary computation failed", exc_info=True)
         summary = {}

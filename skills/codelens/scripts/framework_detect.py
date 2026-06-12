@@ -189,34 +189,19 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
-    # NestJS framework (Node.js)
-    "nestjs": {
-        "packages": ["@nestjs/core", "@nestjs/common"],
-        "config_files": ["nest-cli.json"],
-        "indicators": []
-    },
-    # Express.js
-    "express": {
-        "packages": ["express"],
+    "trpc": {
+        "packages": ["@trpc/server", "@trpc/client"],
         "config_files": [],
         "indicators": []
     },
-    # Fastify
-    "fastify": {
-        "packages": ["fastify"],
+    "zustand": {
+        "packages": ["zustand"],
         "config_files": [],
         "indicators": []
     },
-    # Flutter/Dart
-    "flutter": {
-        "packages": [],
-        "config_files": ["pubspec.yaml"],
-        "indicators": []
-    },
-    # Dart (server/CLI, non-Flutter)
-    "dart": {
-        "packages": [],
-        "config_files": ["pubspec.yaml"],
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
         "indicators": []
     },
 }
@@ -233,16 +218,11 @@ def _find_package_jsons(workspace: str, max_depth: int = 3) -> List[str]:
         pkg_files.append(root_pkg)
 
     # Scan monorepo directories (apps/*, packages/*, etc.) up to max_depth
-    monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules', 'server', 'web', 'mobile', 'api', 'backend', 'frontend')
+    monorepo_dirs = ('apps', 'packages', 'projects', 'services', 'libs', 'modules')
     for subdir in monorepo_dirs:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
             continue
-        # Check for package.json directly in this subdirectory
-        direct_pkg = os.path.join(subdir_path, "package.json")
-        if os.path.isfile(direct_pkg):
-            pkg_files.append(direct_pkg)
-        # Also check one level deeper (e.g., packages/sdk/)
         try:
             for entry in os.listdir(subdir_path):
                 entry_path = os.path.join(subdir_path, entry)
@@ -276,12 +256,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
-        "has_nestjs": False,
-        "has_express": False,
-        "has_flutter": False,
-        "has_dart": False,
-        "has_docker": False,
-        "has_cicd": False,
+        "has_rust_backend": False,
+        "is_monorepo": False,
+        "lockfile": None,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -305,8 +282,31 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
+                # Detect npm/yarn workspaces (monorepo indicator)
+                if "workspaces" in pkg:
+                    detected["is_monorepo"] = True
         except (json.JSONDecodeError, IOError):
             pass
+
+    # Detect pnpm-workspace.yaml (another monorepo indicator)
+    pnpm_workspace_path = os.path.join(workspace, "pnpm-workspace.yaml")
+    if os.path.exists(pnpm_workspace_path):
+        detected["is_monorepo"] = True
+
+    # Detect lerna.json (yet another monorepo indicator)
+    lerna_path = os.path.join(workspace, "lerna.json")
+    if os.path.exists(lerna_path):
+        detected["is_monorepo"] = True
+
+    # Detect lockfile type
+    if os.path.exists(os.path.join(workspace, "pnpm-lock.yaml")):
+        detected["lockfile"] = "pnpm"
+    elif os.path.exists(os.path.join(workspace, "yarn.lock")):
+        detected["lockfile"] = "yarn"
+    elif os.path.exists(os.path.join(workspace, "bun.lock")):
+        detected["lockfile"] = "bun"
+    elif os.path.exists(os.path.join(workspace, "package-lock.json")):
+        detected["lockfile"] = "npm"
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
@@ -331,12 +331,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
-                    elif fw_name == "nestjs":
-                        detected["has_nestjs"] = True
-                    elif fw_name == "express":
-                        detected["has_express"] = True
-                    elif fw_name == "fastify":
-                        detected["has_fastify"] = True
                     break
 
         # Detect CSS preprocessor
@@ -367,17 +361,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_django"] = True
                 elif fw_name == "golang":
                     detected["has_golang"] = True
-                elif fw_name == "nestjs":
-                    detected["has_nestjs"] = True
-                elif fw_name == "express":
-                    detected["has_express"] = True
-                elif fw_name == "fastify":
-                    detected["has_fastify"] = True
-                elif fw_name == "flutter":
-                    detected["has_flutter"] = True
-                    detected["has_dart"] = True
-                elif fw_name == "dart":
-                    detected["has_dart"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -520,6 +503,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for crate_name in cargo_crates:
                 if crate_name.lower() in cargo_deps:
                     detected["frameworks"].append(fw_name)
+                    if fw_name in ("axum", "actix", "rocket"):
+                        detected["has_rust_backend"] = True
                     break
 
     # 5. Check Tauri-specific config files (tauri.conf.json can be nested in src-tauri/)
@@ -538,6 +523,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                     break
             if detected["has_tauri"]:
                 break
@@ -556,6 +542,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     if "tauri" not in detected["frameworks"]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
+                    detected["has_rust_backend"] = True
                     break
 
     # 5. Check file patterns (for Vue, Svelte)
@@ -638,9 +625,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
-        "elixir": ["mix.exs"],
-        "haskell": ["stack.yaml", "cabal.file"],
-        "scala": ["build.sbt"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -651,93 +635,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("golang")
                     detected["has_golang"] = True
                 break
-
-    # 8. Detect Flutter/Dart from pubspec.yaml
-    # pubspec.yaml can be at root or in mobile/ subdirectory
-    pubspec_dirs = [workspace]
-    for subdir in ('mobile', 'app', 'flutter', 'client', 'packages'):
-        subdir_path = os.path.join(workspace, subdir)
-        if os.path.isdir(subdir_path):
-            pubspec_dirs.append(subdir_path)
-            # Also check one level deeper in packages/*
-            try:
-                for entry in os.listdir(subdir_path):
-                    entry_path = os.path.join(subdir_path, entry)
-                    if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, "pubspec.yaml")):
-                        pubspec_dirs.append(entry_path)
-            except OSError:
-                pass
-
-    for pubspec_dir in pubspec_dirs:
-        pubspec_path = os.path.join(pubspec_dir, "pubspec.yaml")
-        if os.path.exists(pubspec_path):
-            is_flutter = False
-            try:
-                with open(pubspec_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                # Check for Flutter SDK constraint
-                if 'flutter' in content.lower():
-                    is_flutter = True
-                # Check for Flutter-specific dependencies
-                flutter_deps = ['flutter', 'flutter_test', 'flutter_localizations',
-                                'cupertino_icons', 'material', 'hooks_riverpod',
-                                'provider', 'bloc', 'get', 'auto_route']
-                for dep in flutter_deps:
-                    if dep in content:
-                        is_flutter = True
-                        break
-            except IOError:
-                pass
-
-            if is_flutter and not detected["has_flutter"]:
-                if "flutter" not in detected["frameworks"]:
-                    detected["frameworks"].append("flutter")
-                detected["has_flutter"] = True
-                detected["has_dart"] = True
-            elif not is_flutter and not detected["has_dart"]:
-                if "dart" not in detected["frameworks"]:
-                    detected["frameworks"].append("dart")
-                detected["has_dart"] = True
-
-    # 9. Detect Docker/Containerization
-    docker_markers = ['Dockerfile', 'docker-compose.yml', 'docker-compose.yaml',
-                      'docker-compose.prod.yml', 'docker-compose.dev.yml',
-                      'docker-compose.override.yml', '.dockerignore']
-    for marker in docker_markers:
-        if os.path.exists(os.path.join(workspace, marker)):
-            detected["has_docker"] = True
-            break
-    # Also check subdirectories (docker/, deployment/, etc.)
-    if not detected["has_docker"]:
-        for subdir in ('docker', 'deployment', 'deploy', 'containers'):
-            subdir_path = os.path.join(workspace, subdir)
-            if os.path.isdir(subdir_path):
-                try:
-                    for f in os.listdir(subdir_path):
-                        if f.startswith('Dockerfile') or f.startswith('docker-compose'):
-                            detected["has_docker"] = True
-                            break
-                except OSError:
-                    pass
-                if detected["has_docker"]:
-                    break
-
-    # 10. Detect CI/CD pipelines
-    cicd_markers = [
-        os.path.join('.github', 'workflows'),   # GitHub Actions
-        os.path.join('.gitlab-ci.yml'),           # GitLab CI
-        os.path.join('.circleci'),                # CircleCI
-        os.path.join('Jenkinsfile'),              # Jenkins
-        os.path.join('.travis.yml'),              # Travis CI
-        os.path.join('bitbucket-pipelines.yml'),  # Bitbucket
-        os.path.join('.buildkite'),               # Buildkite
-        os.path.join('azure-pipelines.yml'),      # Azure DevOps
-    ]
-    for marker in cicd_markers:
-        marker_path = os.path.join(workspace, marker)
-        if os.path.exists(marker_path):
-            detected["has_cicd"] = True
-            break
 
     return detected
 
@@ -755,6 +652,7 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "watch": True,
         "ignore": ["node_modules/", "dist/", ".git/", "build/", "target/", "__pycache__/"],
         "frameworks": fw["frameworks"],
+        "is_monorepo": fw.get("is_monorepo", False),
         "css_preprocessor": fw.get("css_preprocessor"),
         "jsx_mode": False,
         "vue_mode": False,
@@ -785,40 +683,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_tailwind"]:
         config["tailwind_mode"] = True
 
-    # NestJS: add NestJS-specific paths
-    if fw.get("has_nestjs"):
-        config["backend_paths"].extend(["server/src/", "src/controllers/", "src/services/",
-                                         "src/modules/", "src/providers/", "src/guards/",
-                                         "src/interceptors/", "src/pipes/", "src/dto/",
-                                         "src/entities/", "src/repositories/"])
-        # Also check for common NestJS directory patterns
-        for nest_dir in ('server', 'api', 'backend'):
-            nest_path = os.path.join(workspace, nest_dir, "src")
-            if os.path.isdir(nest_path):
-                rel = os.path.relpath(nest_path, workspace)
-                config["backend_paths"].append(rel + "/")
-
-    # Express/Fastify: add server paths
-    if fw.get("has_express") or fw.get("has_fastify"):
-        config["backend_paths"].extend(["server/", "api/", "src/routes/", "src/controllers/",
-                                         "src/middleware/", "src/models/"])
-
-    # Flutter: add Flutter-specific paths
-    if fw.get("has_flutter"):
-        config["frontend_paths"].extend(["mobile/lib/", "app/lib/", "flutter/lib/",
-                                          "lib/pages/", "lib/widgets/", "lib/screens/",
-                                          "lib/components/"])
-        config["backend_paths"].extend(["mobile/lib/services/", "mobile/lib/repositories/",
-                                         "mobile/lib/providers/", "mobile/lib/domain/",
-                                         "mobile/lib/infrastructure/"])
-        # Check for common Flutter directory patterns
-        for flutter_dir in ('mobile', 'app', 'flutter', 'client'):
-            lib_path = os.path.join(workspace, flutter_dir, "lib")
-            if os.path.isdir(lib_path):
-                rel = os.path.relpath(lib_path, workspace)
-                config["frontend_paths"].append(rel + "/")
-                config["backend_paths"].append(rel + "/")
-
     # Rust: add Rust-specific paths
     if fw.get("has_rust"):
         config["backend_paths"].extend(["src/", "crates/", "ext/"])
@@ -839,16 +703,26 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_tauri"):
         config["backend_paths"].extend(["src-tauri/src/", "src-tauri/"])
         config["frontend_paths"].append("src/")
+        # For Tauri, src/ is the frontend — remove it from backend_paths if present
+        config["backend_paths"] = [p for p in config["backend_paths"] if p != "src/"]
         # Find and add app-specific src-tauri paths
         for app_dir in ('apps', 'packages'):
             app_path = os.path.join(workspace, app_dir)
             if os.path.isdir(app_path):
                 try:
                     for entry in os.listdir(app_path):
-                        tauri_src = os.path.join(app_path, entry, "src-tauri", "src")
-                        if os.path.isdir(tauri_src):
-                            rel = os.path.relpath(tauri_src, workspace)
-                            config["backend_paths"].append(rel + "/")
+                        entry_path = os.path.join(app_path, entry)
+                        if not os.path.isdir(entry_path):
+                            continue
+                        rel_app = os.path.relpath(entry_path, workspace)
+                        # Add apps/<name>/src/ as frontend path
+                        config["frontend_paths"].append(rel_app + "/src/")
+                        # Check for src-tauri directory
+                        sub_tauri = os.path.join(entry_path, "src-tauri")
+                        if os.path.isdir(sub_tauri):
+                            # Add apps/<name>/src-tauri/ and apps/<name>/src-tauri/src/ as backend paths
+                            config["backend_paths"].append(rel_app + "/src-tauri/")
+                            config["backend_paths"].append(rel_app + "/src-tauri/src/")
                 except OSError:
                     pass
 
