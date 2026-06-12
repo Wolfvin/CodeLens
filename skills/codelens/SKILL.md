@@ -40,6 +40,14 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v5.9.3 — Tested on fastapi/fastapi (1,120 Python files)
+
+- **API-map middleware file-scoping fix**: Middleware detected via `app.add_middleware()` was incorrectly applied to ALL routes in the workspace. Now scoped to routes from the same file only. In multi-app projects (e.g., FastAPI docs_src with 78 tutorial apps), this eliminates cross-contamination where `GZipMiddleware` from one tutorial appeared on every route.
+- **Backend node type propagation**: All backend nodes stored their `type` (`function`, `class`, etc.) in the registry, but 6 command outputs hardcoded `type: "function"`. Fixed in: `symbols`, `context`, `query` (single + multi-match), `impact`, `list`, `trace`. Classes like `FastAPI` now correctly show as `type: "class"` with `superclasses` info, not `type: "function"`.
+- **Handbook version word-boundary fix**: `pyproject.toml` version regex `version\s*=` matched `minversion = "9.0"` because `version` is a substring of `minversion`. Added `\b` word boundary: `\bversion\s*=`. FastAPI's version now correctly shows `0.136.3` instead of `9.0`.
+- **pyproject.toml description extraction**: Handbook only extracted `description` from `package.json`. Now also reads `description = "..."` from `[project]` section in `pyproject.toml`. Python projects get proper descriptions.
+- **Dynamic version fallback**: Many Python projects use `dynamic = ["version"]` in pyproject.toml with the actual version in `pkg/__init__.py` as `__version__ = "x.y.z"`. Handbook now detects this pattern and falls back to reading `__version__` from the package's `__init__.py`.
+
 ## What's New in v6.0 — The "Analyze Everything" Release
 
 - **`analyze` command (P0)**: One-shot full repository analysis. Automatically runs init + scan + all engines (secrets, smells, complexity, debug-leak, dead-code, circular, perf-hints, config-drift, binary-artifacts, dataflow, env-check, vuln-scan). Produces comprehensive report with project identity, frameworks, languages, architecture overview, API routes, entry points, risk assessment (0-100 score), prioritized action plan, and contextual recommendations.

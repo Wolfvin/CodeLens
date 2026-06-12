@@ -313,14 +313,15 @@ def search_symbols(
             if fn_name == name or substring_pattern.search(fn_name):
                 results.append({
                     "domain": "backend",
-                    "type": "function",
+                    "type": node.get("type", "function"),
                     "name": fn_name,
                     "status": node.get("status", "active"),
                     "ref_count": node.get("ref_count", 0),
                     "location": f"{node.get('file', '')}:{node.get('line', 0)}",
                     "async": node.get("async", False),
                     "impl_for": node.get("impl_for"),
-                    "component": node.get("component", False)
+                    "component": node.get("component", False),
+                    "superclasses": node.get("superclasses"),
                 })
 
     # Sort: exact matches first, then by ref_count descending

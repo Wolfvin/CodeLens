@@ -268,16 +268,23 @@ def map_api_routes(
             ]) else "production"
 
     # Attach middleware to routes
+    # v5.9.3: Fix middleware cross-contamination — "global" middleware is scoped
+    # to its own FILE, not the entire workspace. In multi-app projects (e.g.,
+    # FastAPI docs_src with many tutorial apps), each file defines its own app
+    # instance, so app.add_middleware() only applies to routes in that same file.
     for mw in global_middleware:
         scope = mw.get("scope", "global")
+        mw_file = mw.get("file", "")
         if scope == "global":
             for route in routes:
-                route.setdefault("middleware_chain", []).append({
-                    "name": mw["name"],
-                    "type": mw.get("type", "unknown"),
-                    "file": mw["file"],
-                    "line": mw["line"],
-                })
+                # Only attach middleware to routes from the same file
+                if route.get("file", "") == mw_file:
+                    route.setdefault("middleware_chain", []).append({
+                        "name": mw["name"],
+                        "type": mw.get("type", "unknown"),
+                        "file": mw_file,
+                        "line": mw["line"],
+                    })
 
     # Build middleware map
     for route in routes:

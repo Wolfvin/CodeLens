@@ -412,7 +412,7 @@ def _build_tree(
     """Build a tree representation from traced chains."""
     tree = {
         "name": root_name,
-        "type": "function",
+        "type": start_nodes[0].get("type", "function") if start_nodes else "function",
         "callers": [],
         "callees": []
     }

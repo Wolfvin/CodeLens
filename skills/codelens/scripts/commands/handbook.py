@@ -408,12 +408,34 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
-            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            name_match = re.search(r'\bname\s*=\s*["\']([^"\']+)["\']', content)
+            # v5.9.3: Use word boundary \b to avoid matching 'minversion', 'requires_python', etc.
+            ver_match = re.search(r'\bversion\s*=\s*["\']([^"\']+)["\']', content)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
+            # v5.9.3: Fallback to __init__.py __version__ when pyproject.toml has dynamic version
+            # Many Python projects use: dynamic = ["version"] with version stored in __init__.py
+            if not ver_match:
+                dynamic_ver_match = re.search(r'dynamic\s*=\s*\[[^\]]*version[^\]]*\]', content)
+                if dynamic_ver_match:
+                    pkg_name = identity.get("name", "")
+                    if pkg_name:
+                        init_path = os.path.join(workspace, pkg_name, "__init__.py")
+                        if os.path.isfile(init_path):
+                            try:
+                                with open(init_path, 'r', encoding='utf-8') as ivf:
+                                    init_content = ivf.read()
+                                dunder_ver = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', init_content)
+                                if dunder_ver:
+                                    identity["version"] = dunder_ver.group(1)
+                            except Exception:
+                                pass
+            # v5.9.3: Extract description from pyproject.toml (was only from package.json)
+            desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', content)
+            if desc_match:
+                identity["description"] = desc_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
                 python_type = "backend-api"
             elif "pytest" in content:
@@ -430,8 +452,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(cargo_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
-            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            name_match = re.search(r'\bname\s*=\s*["\']([^"\']+)["\']', content)
+            ver_match = re.search(r'\bversion\s*=\s*["\']([^"\']+)["\']', content)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:

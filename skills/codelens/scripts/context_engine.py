@@ -203,13 +203,15 @@ def get_symbol_context(
                 context["definition"]["also_matched_in"] = "frontend"
             else:
                 context["definition"] = {
-                    "type": "function",
+                    "type": node.get("type", "function"),
                     "name": node["fn"],
                     "status": node.get("status", "active"),
                     "ref_count": node.get("ref_count", 0),
                     "file": node.get("file", ""),
                     "line": node.get("line", 0),
                     "async": node.get("async", False),
+                    "impl_for": node.get("impl_for"),
+                    "superclasses": node.get("superclasses"),
                     "match_type": match_type
                 }
 
