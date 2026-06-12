@@ -404,43 +404,6 @@ GENERATED_FILE_PATTERNS = frozenset({
 })
 
 
-def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative file path looks like a bundled/compiled output file.
-
-    Detects files that are build artifacts rather than source code:
-    - Files in dist/, build/, out/, .output/ directories
-    - Files with bundled extensions (.bundle.js, .chunk.js, .global.js)
-    - Minified files (.min.js, .min.css)
-    - Declaration files (.d.ts)
-
-    Args:
-        rel_path: Relative path from workspace root (e.g., 'dist/app.bundle.js')
-
-    Returns:
-        True if the file appears to be bundled/compiled output.
-    """
-    normalized = rel_path.replace('\\', '/')
-    parts = normalized.split('/')
-
-    # Check if file is in a known build output directory
-    bundled_dirs = frozenset({'dist', 'build', 'out', '.output', '.cache', 'storybook-static'})
-    if any(p in bundled_dirs for p in parts):
-        return True
-
-    # Check file extension patterns
-    lower = normalized.lower()
-    bundled_suffixes = (
-        '.bundle.js', '.chunk.js', '.global.js',
-        '.min.js', '.min.css',
-        '.d.ts', '.d.ts.map',
-        '.map',
-    )
-    if lower.endswith(bundled_suffixes):
-        return True
-
-    return False
-
-
 def is_generated_file(filename: str) -> bool:
     """Check if a filename looks like a generated or lock file that should be skipped.
 
@@ -469,5 +432,62 @@ def is_generated_file(filename: str) -> bool:
     return False
 
 
-# Alias for backward compatibility — some engines import is_bundled_file
-is_bundled_file = is_generated_file
+# ─── Bundled File Detection ──────────────────────────────────
+
+BUNDLED_FILE_PATTERNS = (
+    '.min.js', '.min.css',       # Minified JS/CSS
+    '.bundle.js', '.chunk.js',   # Webpack/Vite bundles
+    '.vendor.js',                # Vendor bundles
+    '.global.js', '.global.css', # Global bundles (e.g. Ant Design)
+    '.pack.js',                  # Packaged bundles
+    '.esm.js',                   # ESM bundles (often built)
+)
+
+BUNDLED_DIR_SEGMENTS = frozenset({
+    'dist', 'build', 'out', 'bundle', 'bundles',
+    '.output', '.nuxt', '.next', '.cache',
+})
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file is a bundled/compiled artifact that should be skipped.
+
+    Bundled files are build output (minified JS/CSS, vendor bundles, etc.)
+    that are not original source code and should not be analyzed for
+    quality, complexity, or code smells.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be a bundled/compiled artifact.
+    """
+    lower = rel_path.lower()
+
+    # Check file extension patterns
+    for pattern in BUNDLED_FILE_PATTERNS:
+        if lower.endswith(pattern):
+            return True
+
+    # Check if file is in a bundled output directory
+    parts = lower.replace('\\', '/').split('/')
+    for segment in parts:
+        if segment in BUNDLED_DIR_SEGMENTS:
+            return True
+
+    # Check for source maps
+    if lower.endswith('.map') and (lower.endswith('.js.map') or lower.endswith('.css.map')):
+        return True
+
+    # Check for common bundle filename patterns
+    filename = parts[-1] if parts else ''
+    if filename.startswith('vendor') and filename.endswith('.js'):
+        return True
+    if filename.startswith('polyfill') and filename.endswith('.js'):
+        return True
+    # Webpack chunk pattern: [name].[hash].js or [name].[hash].css
+    import re
+    if re.match(r'.+\.[a-f0-9]{8,}\.(js|css)$', filename):
+        return True
+
+    return False
