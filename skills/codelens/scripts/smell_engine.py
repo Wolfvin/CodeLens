@@ -654,11 +654,13 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
     # Also detect nested callback patterns (function(err, result))
     callback_depth = 0
     cb_start_line = 0
+    cb_start_indent = 0  # Track indentation of the first callback
     for i, line in enumerate(lines):
         stripped = line.strip()
         if re.search(r'function\s*\(\s*(?:err|error)', stripped) or re.search(r'\(err(?:or)?\)', stripped):
             if callback_depth == 0:
                 cb_start_line = i + 1
+                cb_start_indent = len(line) - len(line.lstrip())
             callback_depth += 1
 
         if callback_depth >= 3:
@@ -671,6 +673,12 @@ def _detect_callback_hell(content: str, rel_path: str) -> List[Dict]:
                 "suggestion": "Refactor to use async/await or Promises."
             })
             callback_depth = 0
+        # Reset callback depth when indentation returns to start level or less
+        # (indicates the callback scope has closed)
+        elif callback_depth > 0 and stripped:
+            current_indent = len(line) - len(line.lstrip())
+            if current_indent <= cb_start_indent and not re.search(r'function\s*\(\s*(?:err|error)', stripped):
+                callback_depth = 0
 
     return smells
 
@@ -872,9 +880,46 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        # Count class methods
-        method_count = len(re.findall(r'(?:async\s+)?(?:private|public|protected|static)?\s*(?:get|set)?\s*\w+\s*\(', content))
+        # Count class methods using brace-depth tracking (scoped to class body).
+        # The old approach counted ALL \w+\s*\( in the entire file — 10-30x inflation.
         class_match = re.search(r'class\s+(\w+)', content)
+        method_count = 0
+
+        if class_match:
+            # Find the class body and count methods inside it
+            class_start = content.find('{', class_match.start())
+            if class_start != -1:
+                brace_depth = 0
+                i = class_start
+                while i < len(content):
+                    ch = content[i]
+                    if ch == '{':
+                        brace_depth += 1
+                    elif ch == '}':
+                        brace_depth -= 1
+                        if brace_depth == 0:
+                            break  # End of class body
+                    i += 1
+
+                class_body = content[class_start:i+1]
+                # Count method definitions inside the class body
+                # v5.9: Tightened regex to avoid matching if/for/while/switch/return/super
+                # and property accesses like console.log( inside class body.
+                # Method def patterns: [access] [static] [async] name( OR name = ( => {
+                method_count = len(re.findall(
+                    r'(?:^|\n)\s*'                              # line start
+                    r'(?:(?:public|private|protected|static)\s+)?'  # optional access modifier
+                    r'(?:async\s+)?'                            # optional async
+                    r'(?:(?:get|set)\s+)?'                      # optional getter/setter
+                    r'(?:\*)?\s*'                               # optional generator
+                    r'(?!if\s*\(|for\s*\(|while\s*\(|switch\s*\('  # negative lookahead: control flow
+                    r'|return\s*\(|super\s*\(|throw\s*\('
+                    r'|console\.\w+\s*\(|this\.\w+\s*\('
+                    r'|new\s+\w+\s*\(|typeof\s*\('
+                    r'|delete\s+\w+\s*\()'                       # end negative lookahead
+                    r'[a-zA-Z_$]\w*\s*\(',                       # method name + opening paren
+                    class_body
+                ))
 
         if class_match and method_count >= GOD_CLASS_METHODS_CRITICAL:
             smells.append({

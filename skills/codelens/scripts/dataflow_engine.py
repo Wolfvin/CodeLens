@@ -49,7 +49,7 @@ SOURCE_PATTERNS = {
             r"document\.getElementById\s*\([^)]+\)\.value",
             r"document\.querySelector\s*\([^)]+\)\.value",
             r"event\.target\.value",
-            r"\.value\s*",
+            r"(?:getElementById|querySelector|querySelectorAll)\s*\([^)]*\)\.value",
             r"prompt\s*\(",
             r"window\.location\.(?:href|search|hash)",
         ],
@@ -740,7 +740,7 @@ def _check_sanitizer(
     # Check same-file sanitizers
     for san in sanitizers_by_file.get(source["file"], []):
         # Sanitizer must be between source and sink
-        if san["line"] > source["line"] and san["line"] < sink["line"]:
+        if san["line"] >= source["line"] and san["line"] < sink["line"]:
             if sink_key in san.get("sanitizes_for", set()):
                 return True
 

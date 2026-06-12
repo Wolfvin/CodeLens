@@ -625,6 +625,27 @@ def _scan_file_hints(
                         break
                     line_num = content[:match.start()].count('\n') + 1
 
+                    # Skip false-positive large_bundle findings for runtime-only imports
+                    # that are never bundled (Node.js built-ins, VSCode extension API, etc.)
+                    if cat_name == "large_bundle":
+                        matched_text = match.group(0)
+                        # Node.js built-in modules (node:* protocol) — never bundled
+                        if re.search(r"""from\s+['"]node:""", matched_text):
+                            continue
+                        # VSCode extension API — provided at runtime by the host, never bundled
+                        if re.search(r"""from\s+['"]vscode['"]""", matched_text):
+                            continue
+                        # Electron built-in — provided at runtime
+                        if re.search(r"""from\s+['"]electron['"]""", matched_text):
+                            continue
+
+                    # Skip false-positive memory_leak findings for process signal handlers
+                    # that are intentionally permanent (exit, SIGINT, SIGTERM, SIGHUP)
+                    if cat_name == "memory_leak":
+                        matched_text = match.group(0)
+                        if re.search(r"""\.\s*(?:on|addListener)\s*\(\s*['"](?:exit|SIGINT|SIGTERM|SIGHUP|uncaughtException|unhandledRejection)['"]""", matched_text):
+                            continue
+
                     # Apply negative regex: if the negative pattern exists in the
                     # matched region, skip this match.
                     if negative_regex:

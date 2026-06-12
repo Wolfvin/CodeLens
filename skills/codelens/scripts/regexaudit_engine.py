@@ -514,6 +514,17 @@ def _check_incorrect_escaping(
     """Check for common escaping mistakes in regex patterns."""
     issues = []
 
+    # v5.9: Skip URL-like strings that are NOT regex patterns.
+    # Common false positive: strings like "gitlab.com", "example.org", "www.w3.org"
+    # in CSP allowlists, test fixtures, or SVG namespaces — these are plain strings,
+    # not regex patterns. We detect this by checking if the pattern lacks regex
+    # metacharacters (quantifiers, anchors, groups, character classes).
+    _has_regex_meta = bool(re.search(r'[+*?^$|\\[\]{}()]', pattern_str))
+    if not _has_regex_meta:
+        # No regex metacharacters at all — this is a plain string, not a regex.
+        # Don't flag unescaped dots in plain strings.
+        return
+
     # Unescaped dots that should match literal dots
     # Common in IP address patterns, version numbers, file extensions
     if re.search(r'\d\\\.\d', pattern_str):

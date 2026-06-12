@@ -2,6 +2,26 @@
 
 All notable changes to CodeLens are documented here.
 
+## [5.9.0] — 2026-06-12
+
+### Tested against gitlab-org/gitlab-vscode-extension (882 files: 763 TS + 82 JS + 18 Vue)
+
+Real-world test on a VSCode extension with unusual hybrid architecture (TypeScript extension host + Vue 2/3 webview subprojects).
+This test target exposed significant gaps in CodeLens's handling of VSCode extension patterns, monorepo structures, and runtime-only APIs.
+
+### Fixed
+
+- **CRITICAL: JS/TS god object detection counts control flow as methods**: smell_engine.py regex matched `if(`, `for(`, `while(`, `return(`, `super(`, `console.log(` as class methods — 10-30x inflation. Added negative lookahead for control flow keywords and property accesses.
+- **HIGH: perf-hint large_bundle false positives for Node.js built-ins**: `import * as path from 'node:path'` flagged as "prevents tree-shaking" — never bundled. Now skipped for `node:*` protocol imports.
+- **HIGH: perf-hint large_bundle false positives for VSCode extension API**: `import * as vscode from 'vscode'` flagged — provided at runtime, never bundled. Now skipped.
+- **HIGH: perf-hint memory_leak false positives for process signal handlers**: `process.on('exit')` flagged as memory leak — intentionally permanent. Now skipped for exit/SIGINT/SIGTERM/SIGHUP events.
+- **HIGH: side-effect engine misses VSCode extension API calls**: `activate()` classified as "pure" despite calling `vscode.window.createOutputChannel()`, `vscode.commands.registerCommand()`, etc. Added `vscode_api` side-effect category with 11 patterns covering window, commands, workspace, languages, debug, and webview IPC. Now correctly detects 119 VSCode API side effects in GitLab extension.
+- **HIGH: config-drift reports `vscode` as missing dependency**: `vscode` is an ambient runtime API declared as `@types/vscode` in devDependencies — standard VSCode practice. Added `vscode` and `electron` to builtins. Missing deps dropped from 24 to 2.
+- **HIGH: config-drift false positives in monorepo structures**: Only root `package.json` was scanned; nested subproject package.json files were invisible. Added `_merge_nested_package_jsons()` that discovers and merges dependencies from subprojects (Lerna/Nx/Turborepo/VSCode webview workspaces).
+- **MEDIUM: regex-audit flags URL strings as "unescaped dot"**: `gitlab.com`, `example.org`, `www.w3.org` in CSP allowlists and test fixtures flagged. Now skips patterns with no regex metacharacters — plain strings, not regex patterns.
+- **MEDIUM: a11y color contrast warnings in test files**: Color contrast in `*.test.js` is meaningless. Now skips color contrast checks in files matching test indicators.
+- **pyproject.toml formatting fix**: Merged `description` and `readme` fields on the same line — separated for valid TOML.
+
 ## [5.8.1] — 2026-06-12
 
 ### Security

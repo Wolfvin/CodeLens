@@ -267,7 +267,7 @@ def _build_frontend_registry_impl(
 
     # Process HTML data
     for item in html_data:
-        add_refs(item.get("classes", []), "class", "css")   # HTML class= is definition, map to css category
+        add_refs(item.get("classes", []), "class", "html")   # HTML class= is a definition/usage
         add_refs(item.get("ids", []), "id", "html")
 
     # Process CSS data
@@ -349,7 +349,7 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
     """Build final class entries from the aggregated map."""
     classes = []
     for name, refs in sorted(class_map.items()):
-        ref_count = len(refs["css"]) + len(refs["js"])
+        ref_count = len(refs["css"]) + len(refs["js"])  # HTML refs are definitions, not usage refs
         status = compute_frontend_status(name, "class", refs["html"], refs["css"], refs["js"])
 
         # Check duplicate_define across CSS
@@ -371,6 +371,7 @@ def _build_class_entries(class_map: Dict) -> List[Dict]:
             "name": name,
             "ref_count": ref_count,
             "status": status,
+            "html": refs["html"],
             "css": refs["css"],
             "js": refs["js"]
         }
