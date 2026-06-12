@@ -1,30 +1,54 @@
 """
 Fallback Kotlin Parser for CodeLens — regex-based extraction.
-Extracts classes, functions, objects, companion objects, data classes,
-sealed classes, extension functions, suspend functions, properties,
-imports, and annotations from Kotlin source files.
+Extracts classes, data classes, sealed classes, objects, companion objects,
+interfaces, functions, extension functions, properties, type aliases, imports,
+annotations, and function call relationships for edge resolution.
 
-Kotlin-specific features handled:
-- fun (including extension functions: fun Type.name())
-- class / data class / sealed class / sealed interface / enum class / annotation class
-- object (singleton declarations)
-- companion object
-- interface
-- suspend functions
-- val / var (properties)
-- typealias
-- Kotlin import syntax (no semicolons)
-- @Annotations (including Android-specific ones)
-- property delegates (by lazy, by viewModels, etc.)
-- lambda receivers and context receivers
+Supports:
+  - fun, suspend fun, infix fun, operator fun, inline fun
+  - class, data class, sealed class, abstract class, enum class, open class
+  - object, companion object
+  - interface
+  - typealias
+  - val/var properties (with custom getters)
+  - extension functions: fun Type.name()
+  - coroutines: launch{}, async{}, withContext{}, flow{}, channelFlow{}
+  - annotations: @Composable, @Inject, @HiltViewModel, @Singleton, etc.
+  - import, package
+  - implements (:) edges
+  - call edges within function bodies
 """
 
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
+
+
+# ─── Kotlin keywords / builtins to filter from call edges ───────────
+_KOTLIN_KEYWORDS = frozenset({
+    'if', 'else', 'when', 'for', 'while', 'do', 'try', 'catch', 'finally',
+    'return', 'throw', 'break', 'continue', 'class', 'interface', 'object',
+    'enum', 'sealed', 'abstract', 'open', 'data', 'inner', 'companion',
+    'fun', 'val', 'var', 'const', 'lateinit', 'override', 'private',
+    'protected', 'internal', 'public', 'suspend', 'inline', 'noinline',
+    'crossinline', 'reified', 'tailrec', 'operator', 'infix', 'typealias',
+    'import', 'package', 'as', 'is', 'in', '!in', 'out', 'in', 'where',
+    'by', 'constructor', 'init', 'get', 'set', 'field', 'delegate',
+    'property', 'receiver', 'param', 'setparam', 'dynamic', 'true',
+    'false', 'null', 'this', 'super', 'it', 'also', 'let', 'apply',
+    'run', 'with', 'takeIf', 'takeUnless', 'repeat', 'lazy', 'observable',
+    'println', 'print', 'assert', 'require', 'check', 'error',
+    'todo', 'TODO',
+    # Coroutine builders / scope functions we treat as keywords in edges
+    'launch', 'async', 'withContext', 'flow', 'channelFlow', 'produce',
+    'suspend', 'resume', 'resumeWithException', 'yield',
+    # Common standard lib false positives
+    'toString', 'equals', 'hashCode', 'copy', 'component1', 'component2',
+    'component3', 'component4', 'component5',
+})
 
 
 def parse_kotlin_fallback(content: str, rel_path: str) -> Dict[str, Any]:
-    """Parse Kotlin source using regex — extracts Kotlin-specific constructs.
+    """Parse Kotlin source using regex — extracts classes, functions, and call edges.
 
     Args:
         content: File content as string.
@@ -35,720 +59,496 @@ def parse_kotlin_fallback(content: str, rel_path: str) -> Dict[str, Any]:
     """
     nodes: List[Dict[str, Any]] = []
     edges: List[Dict[str, Any]] = []
+    lines = content.split('\n')
 
-    # ─── Package ────────────────────────────────────────────────
+    # Collect definitions for edge resolution
+    fn_defs: Dict[str, str] = {}      # fn_name → node_id
+    type_defs: Dict[str, str] = {}    # type_name → node_id
+
+    # ─── Package ────────────────────────────────────────────────────
     pkg = ""
-    pkg_match = re.search(r'^\s*package\s+([\w.]+)\s*$', content, re.MULTILINE)
-    if pkg_match:
-        pkg = pkg_match.group(1)
+    for line in lines:
+        m = re.match(r'\s*package\s+([\w.]+)\s*', line)
+        if m:
+            pkg = m.group(1)
+            break
 
-    # ─── Imports ────────────────────────────────────────────────
-    _extract_imports(content, rel_path, edges)
+    # ─── Imports ────────────────────────────────────────────────────
+    for i, line in enumerate(lines, 1):
+        m = re.match(r'\s*import\s+([\w.*]+)(?:\s+as\s+(\w+))?\s*', line)
+        if m:
+            import_path = m.group(1)
+            edges.append({
+                "from": rel_path,
+                "to": import_path,
+                "type": "imports",
+                "file": rel_path,
+                "line": i,
+            })
 
-    # ─── Type Aliases ───────────────────────────────────────────
-    _extract_typealiases(content, rel_path, nodes, pkg)
+    # ─── Annotations ────────────────────────────────────────────────
+    # Collect annotations and associate them with the next declaration.
+    # We record them as edges (decorates relationship) and tag nodes.
+    _pending_annotations: List[str] = []
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        # Match annotations: @Name or @Name(...) or @Name(arg1, arg2)
+        for m in re.finditer(r'@(\w+)(?:\s*\([^)]*\))?', stripped):
+            annotation_name = m.group(1)
+            # Filter out common non-semantic annotations
+            if annotation_name in ('Override', 'Deprecated', 'Suppress', 'Suppress',
+                                   'SuppressWarnings', 'PublishedApi', 'JvmStatic',
+                                   'JvmOverloads', 'JvmField', 'JvmName',
+                                   'JvmMultifileClass', 'JvmWildcard', 'Throws'):
+                continue
+            _pending_annotations.append(annotation_name)
 
-    # ─── Annotation classes ─────────────────────────────────────
-    _extract_annotation_classes(content, rel_path, nodes, pkg)
+    # ─── Type aliases ───────────────────────────────────────────────
+    for i, line in enumerate(lines, 1):
+        m = re.match(r'\s*typealias\s+(\w+)\s*=\s*(.+)', line)
+        if m:
+            alias_name = m.group(1)
+            aliased_type = m.group(2).strip()
+            node_id = f"{rel_path}:{i}:{alias_name}"
+            nodes.append({
+                "id": node_id, "type": "typealias",
+                "name": alias_name, "fn": alias_name,
+                "file": rel_path, "line": i,
+            })
+            type_defs[alias_name] = node_id
+            # Edge from alias to the aliased type
+            base_type = re.match(r'([\w.]+)', aliased_type)
+            if base_type:
+                edges.append({
+                    "from": node_id,
+                    "to": base_type.group(1),
+                    "type": "aliases",
+                    "file": rel_path,
+                    "line": i,
+                })
 
-    # ─── Enum classes ───────────────────────────────────────────
-    _extract_enum_classes(content, rel_path, nodes, pkg)
+    # ─── Classes / Data classes / Sealed classes / Abstract classes /
+    #       Enum classes / Open classes / Objects / Companion objects ─
 
-    # ─── Sealed classes/interfaces ──────────────────────────────
-    _extract_sealed_classes(content, rel_path, nodes, pkg)
+    # Pattern for class-like declarations
+    # Handles: [modifiers] (data|sealed|abstract|enum|open|inner)* class Name<...>(...) : ...
+    # Also handles: [modifiers] object Name [: ...]
+    # Also handles: companion object { ... }
+    _RE_CLASS = re.compile(
+        r'^\s*'
+        r'(?:(?:public|private|protected|internal)\s+)?'  # visibility
+        r'(?:(?:data|sealed|abstract|enum|open|inner|expect|actual|value|fun)\s+)*'  # class modifiers
+        r'(class|object)\s+'                              # keyword
+        r'(\w+)?'                                         # name (optional for companion object)
+    )
+    _RE_COMPANION = re.compile(r'^\s*companion\s+object\s*(\w+)?\s*[:{]?')
 
-    # ─── Data classes ───────────────────────────────────────────
-    _extract_data_classes(content, rel_path, nodes, pkg)
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
 
-    # ─── Regular classes ────────────────────────────────────────
-    _extract_classes(content, rel_path, nodes, pkg)
+        # ── companion object ────────────────────────────────────
+        m = _RE_COMPANION.match(line)
+        if m:
+            name = m.group(1) or "Companion"
+            node_id = f"{rel_path}:{i}:{name}"
+            ntype = "companion_object"
+            nodes.append({
+                "id": node_id, "type": ntype,
+                "name": name, "fn": name,
+                "file": rel_path, "line": i,
+            })
+            type_defs[name] = node_id
+            # Check for supertype
+            m2 = re.search(r':\s*([\w.]+)', line[line.find('companion'):])
+            if m2:
+                edges.append({
+                    "from": node_id,
+                    "to": m2.group(1),
+                    "type": "implements",
+                    "file": rel_path,
+                    "line": i,
+                })
+            continue
 
-    # ─── Interfaces ─────────────────────────────────────────────
-    _extract_interfaces(content, rel_path, nodes, pkg)
+        # ── class / object ──────────────────────────────────────
+        m = _RE_CLASS.match(line)
+        if m:
+            keyword = m.group(1)
+            name = m.group(2)
+            if not name:
+                continue
 
-    # ─── Object declarations (singletons) ───────────────────────
-    _extract_objects(content, rel_path, nodes, pkg)
+            # Determine the specific type
+            ntype = "class"
+            if 'data ' in stripped:
+                ntype = "data_class"
+            elif 'sealed ' in stripped:
+                ntype = "sealed_class"
+            elif 'abstract ' in stripped:
+                ntype = "abstract_class"
+            elif 'enum ' in stripped:
+                ntype = "enum_class"
+            elif keyword == 'object':
+                ntype = "object"
 
-    # ─── Companion objects ──────────────────────────────────────
-    _extract_companion_objects(content, rel_path, nodes, pkg)
+            node_id = f"{rel_path}:{i}:{name}"
+            nodes.append({
+                "id": node_id, "type": ntype,
+                "name": name, "fn": name,
+                "file": rel_path, "line": i,
+            })
+            type_defs[name] = node_id
 
-    # ─── Top-level functions (including extension and suspend) ──
-    _extract_functions(content, rel_path, nodes, pkg)
+            # Check for supertypes (implements / extends via colon)
+            # Kotlin: class Foo : Bar(), Baz
+            # Must skip past constructor params (which may contain colons in types)
+            # e.g. data class Success(val data: String) : UiState()
+            supertypes = _extract_supertypes(line, name)
+            for parent in supertypes:
+                if parent not in ('Unit', 'Any', 'Nothing'):
+                    edges.append({
+                        "from": node_id,
+                        "to": parent,
+                        "type": "implements",
+                        "file": rel_path,
+                        "line": i,
+                    })
+            continue
 
-    # ─── Top-level properties (val / var) ───────────────────────
-    _extract_properties(content, rel_path, nodes, pkg)
+    # ─── Interfaces ─────────────────────────────────────────────────
+    _RE_INTERFACE = re.compile(
+        r'^\s*'
+        r'(?:(?:public|private|protected|internal)\s+)?'
+        r'(?:fun\s+)?'  # fun interface (SAM)
+        r'interface\s+(\w+)'
+    )
+    for i, line in enumerate(lines, 1):
+        m = _RE_INTERFACE.match(line)
+        if m:
+            name = m.group(1)
+            node_id = f"{rel_path}:{i}:{name}"
+            nodes.append({
+                "id": node_id, "type": "interface",
+                "name": name, "fn": name,
+                "file": rel_path, "line": i,
+            })
+            type_defs[name] = node_id
+            # Check for super-interfaces
+            m2 = re.search(r':\s*([\w.]+)', line[line.find(name):])
+            if m2:
+                parent = m2.group(1)
+                if parent not in ('Unit', 'Any', 'Nothing'):
+                    edges.append({
+                        "from": node_id,
+                        "to": parent,
+                        "type": "implements",
+                        "file": rel_path,
+                        "line": i,
+                    })
 
-    # ─── Android-specific annotations ───────────────────────────
-    _extract_android_annotations(content, rel_path, nodes)
+    # ─── Functions ──────────────────────────────────────────────────
+    # Handles:
+    #   fun name(params)
+    #   fun <T> name(params)
+    #   suspend fun name(params)
+    #   fun Type.name(params)          ← extension function
+    #   fun Type<T>.name(params)       ← extension with generic receiver
+    #   infix fun Type.name(params)
+    #   operator fun Type.name(params)
+    #   inline fun name(params)
+    #   private / protected / internal / public fun name(params)
+    #   override fun name(params)
+    #   tailrec fun name(params)
+    _RE_FUN = re.compile(
+        r'^\s*'
+        r'(?:(?:public|private|protected|internal)\s+)?'  # visibility
+        r'(?:(?:override|open|abstract|final|suspend|inline|noinline|crossinline|'
+        r'tailrec|operator|infix|expect|actual|reified|lateinit|external)\s+)*'  # modifiers
+        r'fun\s+'                                           # fun keyword
+        r'(?:<[^>]+>\s*)?'                                  # optional type params <T>
+        r'(?:(\w[\w.<>,\s\[\]]*?)\s*\.\s*)?'               # optional receiver Type. (group 1)
+        r'(\w+)'                                            # function name (group 2)
+        r'\s*[\(<]'                                         # open paren or type param
+    )
+
+    for i, line in enumerate(lines, 1):
+        m = _RE_FUN.match(line)
+        if not m:
+            continue
+        receiver = m.group(1)
+        fn_name = m.group(2)
+
+        # Skip keywords that look like function names
+        if fn_name in _KOTLIN_KEYWORDS:
+            continue
+
+        node_id = f"{rel_path}:{i}:{fn_name}"
+        ntype = "function"
+        display_name = fn_name
+
+        if receiver:
+            ntype = "extension_function"
+            display_name = f"{receiver.strip()}.{fn_name}"
+        elif 'suspend ' in line[:line.find('fun')]:
+            ntype = "suspend_function"
+        elif 'infix ' in line[:line.find('fun')]:
+            ntype = "infix_function"
+        elif 'operator ' in line[:line.find('fun')]:
+            ntype = "operator_function"
+
+        # Check for annotations on the preceding lines
+        annotations = _collect_annotations(lines, i)
+
+        node = {
+            "id": node_id,
+            "type": ntype,
+            "name": display_name,
+            "fn": fn_name,
+            "file": rel_path,
+            "line": i,
+        }
+        if receiver:
+            node["receiver"] = receiver.strip()
+        if annotations:
+            node["annotations"] = annotations
+
+        nodes.append(node)
+        fn_defs[fn_name] = node_id
+
+    # ─── Properties (val/var with custom getters or type annotations) ─
+    _RE_PROPERTY = re.compile(
+        r'^\s*'
+        r'(?:(?:public|private|protected|internal)\s+)?'
+        r'(?:(?:override|open|abstract|final|lateinit|const|expect|actual|external)\s+)*'
+        r'(val|var)\s+'
+        r'(\w+)'                                             # property name
+        r'(?:\s*:\s*([\w.<>,\s\[\]?]+))?'                    # optional type
+        r'\s*(?:[=]{1}|get\s*\(|$)'                          # assignment, getter, or end
+    )
+    for i, line in enumerate(lines, 1):
+        m = _RE_PROPERTY.match(line)
+        if not m:
+            continue
+        kind = m.group(1)  # val or var
+        prop_name = m.group(2)
+        prop_type = m.group(3)
+
+        # Skip keywords
+        if prop_name in _KOTLIN_KEYWORDS:
+            continue
+
+        # Only record properties that have custom getters or explicit types
+        # at class/object level (indent <= 4)
+        indent = len(line) - len(line.lstrip())
+        if indent > 4:
+            continue
+
+        # Check for custom getter on same or subsequent lines
+        has_getter = bool(re.search(r'\bget\s*\(', line))
+
+        node_id = f"{rel_path}:{i}:{prop_name}"
+        ntype = "property"
+        if has_getter:
+            ntype = "property_getter"
+        elif kind == 'const':
+            ntype = "constant"
+
+        node = {
+            "id": node_id,
+            "type": ntype,
+            "name": prop_name,
+            "fn": prop_name,
+            "file": rel_path,
+            "line": i,
+        }
+        if prop_type:
+            node["value_type"] = prop_type.strip()
+        nodes.append(node)
+        fn_defs[prop_name] = node_id
+
+    # ─── Annotations as nodes ───────────────────────────────────────
+    # Track notable framework annotations as lightweight nodes
+    _NOTABLE_ANNOTATIONS = frozenset({
+        'Composable', 'Inject', 'Singleton', 'HiltViewModel', 'AndroidEntryPoint',
+        'Module', 'InstallIn', 'Provides', 'Binds', 'EntryPoint',
+        'Worker', 'HiltWorker', 'AssistedInject', 'Assisted',
+        'Serializable', 'Parcelize', 'Keep', 'Suppress',
+    })
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        for m in re.finditer(r'@(\w+)(?:\s*\([^)]*\))?', stripped):
+            annotation_name = m.group(1)
+            if annotation_name in _NOTABLE_ANNOTATIONS:
+                node_id = f"{rel_path}:{i}:@{annotation_name}"
+                nodes.append({
+                    "id": node_id,
+                    "type": "annotation",
+                    "name": f"@{annotation_name}",
+                    "fn": f"@{annotation_name}",
+                    "file": rel_path,
+                    "line": i,
+                })
+
+    # ─── Function call edges ────────────────────────────────────────
+    # Build function→body range map (brace-tracking)
+    fn_ranges = []
+    current_fn = None
+    fn_start = 0
+    brace_count = 0
+
+    for i, line in enumerate(lines, 1):
+        # Check if this line starts a function
+        for node in nodes:
+            if (node.get("line") == i and
+                node.get("type") in ("function", "extension_function",
+                                     "suspend_function", "infix_function",
+                                     "operator_function", "property_getter")):
+                if current_fn:
+                    fn_ranges.append((current_fn, fn_start, i - 1))
+                current_fn = node["id"]
+                fn_start = i
+                brace_count = 0
+                break
+
+        if current_fn:
+            stripped = line.strip()
+            brace_count += stripped.count('{') - stripped.count('}')
+            if brace_count <= 0 and i > fn_start:
+                fn_ranges.append((current_fn, fn_start, i))
+                current_fn = None
+
+    if current_fn:
+        fn_ranges.append((current_fn, fn_start, len(lines)))
+
+    # Extract calls from each function body
+    _RE_METHOD_CALL = re.compile(r'([\w]+)\.([\w]+)\s*\(')
+    _RE_SIMPLE_CALL = re.compile(r'(?<!\.)([\w]+)\s*\(')
+
+    for fn_id, start_line, end_line in fn_ranges:
+        body = '\n'.join(lines[start_line:end_line])
+
+        # Method calls: obj.method()
+        for m in _RE_METHOD_CALL.finditer(body):
+            obj = m.group(1)
+            method = m.group(2)
+            if obj in _KOTLIN_KEYWORDS or method in _KOTLIN_KEYWORDS:
+                continue
+            if method in fn_defs:
+                edges.append({
+                    "from": fn_id,
+                    "to": fn_defs[method],
+                    "type": "calls",
+                    "file": rel_path,
+                    "line": start_line,
+                })
+            else:
+                full_name = f"{obj}.{method}"
+                edges.append({
+                    "from": fn_id,
+                    "to": full_name,
+                    "type": "calls",
+                    "file": rel_path,
+                    "line": start_line,
+                })
+
+        # Simple function calls: funcName()
+        for m in _RE_SIMPLE_CALL.finditer(body):
+            called = m.group(1)
+            if called in _KOTLIN_KEYWORDS:
+                continue
+            if called in fn_defs:
+                edges.append({
+                    "from": fn_id,
+                    "to": fn_defs[called],
+                    "type": "calls",
+                    "file": rel_path,
+                    "line": start_line,
+                })
 
     return {"nodes": nodes, "edges": edges}
 
 
-# ─── Import Extraction ──────────────────────────────────────────
+# ─── Helpers ────────────────────────────────────────────────────────
 
-def _extract_imports(content: str, rel_path: str, edges: list):
-    """Extract Kotlin import statements (no semicolons required)."""
-    for m in re.finditer(r'^\s*import\s+([\w.*]+)(?:\s+as\s+(\w+))?\s*$', content, re.MULTILINE):
-        import_path = m.group(1)
-        alias = m.group(2)
-        edge = {
-            "from": rel_path,
-            "to": import_path,
-            "type": "import",
-            "weight": 1,
-        }
-        if alias:
-            edge["alias"] = alias
-        edges.append(edge)
+def _extract_supertypes(line: str, class_name: str) -> List[str]:
+    """Extract supertype names from a Kotlin class/object declaration line.
 
+    Skips past the constructor parameter list (which may contain colons in
+    type annotations like ``val data: String``) before looking for the
+    inheritance colon.
 
-# ─── Type Alias Extraction ──────────────────────────────────────
+    Example::
+        "data class Success(val data: String) : UiState()" -> ["UiState"]
+    """
+    # Find where the class name starts in the line
+    name_pos = line.find(class_name)
+    if name_pos == -1:
+        return []
+    rest = line[name_pos + len(class_name):]
 
-def _extract_typealiases(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract typealias declarations."""
-    for m in re.finditer(r'^\s*typealias\s+(\w+)\s*=\s*(.+)$', content, re.MULTILINE):
-        name = m.group(1)
-        target = m.group(2).strip()
-        line_no = content[:m.start()].count('\n') + 1
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "typealias",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "package": pkg,
-            "target_type": target[:100],  # Cap length
-        })
-
-
-# ─── Annotation Class Extraction ────────────────────────────────
-
-def _extract_annotation_classes(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract annotation class declarations."""
-    for m in re.finditer(
-        r'^\s*(?:public\s+|internal\s+|private\s+)?'
-        r'annotation\s+class\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "annotation_class",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-        })
-
-
-# ─── Enum Class Extraction ──────────────────────────────────────
-
-def _extract_enum_classes(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract enum class declarations with their values."""
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'enum\s+class\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-        # Extract enum values from the body
-        body = _extract_brace_block(content, m.end())
-        values = []
-        if body:
-            for val_m in re.finditer(r'(\w+)\s*(?:[,(\n])', body):
-                val = val_m.group(1)
-                if val[0].isupper() or val == '_':
-                    values.append(val)
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "enum_class",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "values": values[:30],
-        })
-
-
-# ─── Sealed Class Extraction ────────────────────────────────────
-
-def _extract_sealed_classes(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract sealed class and sealed interface declarations."""
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'sealed\s+(class|interface)\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        kind = m.group(1)  # "class" or "interface"
-        name = m.group(2)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Check for generic parameters
-        generics = ""
-        gen_m = re.search(r'<([^>]+)>', content[m.end():m.end() + 50])
-        if gen_m:
-            generics = gen_m.group(0)
-
-        # Check for inheritance
-        inherits = []
-        rest = content[m.end():m.end() + 200]
-        inherit_m = re.search(r':\s*([^{]+)', rest)
-        if inherit_m:
-            inherit_str = inherit_m.group(1).strip()
-            for part in re.finditer(r'(\w+)', inherit_str):
-                parent = part.group(1)
-                if parent not in ('constructor', 'this', 'super') and parent != name:
-                    inherits.append(parent)
-
-        node_type = "sealed_class" if kind == "class" else "sealed_interface"
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": node_type,
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "generics": generics,
-            "inherits": inherits[:5],
-        })
-
-
-# ─── Data Class Extraction ──────────────────────────────────────
-
-def _extract_data_classes(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract data class declarations with their primary constructor properties."""
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'data\s+class\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Extract primary constructor parameters
-        constructor_params = _extract_constructor_params(content, m.end())
-
-        # Check for inheritance
-        inherits = []
-        rest = content[m.end():m.end() + 200]
-        inherit_m = re.search(r'\)\s*:\s*([^{]+)', rest)
-        if inherit_m:
-            inherit_str = inherit_m.group(1).strip()
-            for part in re.finditer(r'(\w+)', inherit_str):
-                parent = part.group(1)
-                if parent not in ('constructor', 'this', 'super') and parent != name:
-                    inherits.append(parent)
-
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "data_class",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "properties": constructor_params[:15],
-            "inherits": inherits[:5],
-        })
-
-
-# ─── Regular Class Extraction ───────────────────────────────────
-
-def _extract_classes(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract regular class declarations (not data/sealed/enum/annotation)."""
-    # Match class declarations but exclude data/sealed/enum/annotation
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'(?:open\s+|abstract\s+)*'
-        r'class\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Skip if this is actually a data/sealed/enum/annotation class
-        prefix = content[max(0, m.start() - 30):m.start()]
-        if re.search(r'(data|sealed|enum|annotation)\s+$', prefix):
-            continue
-
-        # Check for abstract/open
-        is_abstract = 'abstract' in prefix.split('class')[0]
-        is_open = 'open' in prefix.split('class')[0]
-
-        # Extract primary constructor parameters
-        constructor_params = _extract_constructor_params(content, m.end())
-
-        # Check for inheritance
-        inherits = []
-        rest = content[m.end():m.end() + 300]
-        # Look for : after constructor
-        inherit_m = re.search(r'\)?\s*:\s*([^{]+)', rest)
-        if not inherit_m:
-            # No constructor — look for : directly
-            inherit_m = re.search(r'\s*:\s*([^{]+)', rest[:100])
-        if inherit_m:
-            inherit_str = inherit_m.group(1).strip()
-            for part in re.finditer(r'(\w+)', inherit_str):
-                parent = part.group(1)
-                if parent not in ('constructor', 'this', 'super') and parent != name:
-                    inherits.append(parent)
-
-        node_type = "abstract_class" if is_abstract else "class"
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": node_type,
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "is_open": is_open,
-            "is_abstract": is_abstract,
-            "properties": constructor_params[:15],
-            "inherits": inherits[:5],
-        })
-
-
-# ─── Interface Extraction ───────────────────────────────────────
-
-def _extract_interfaces(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract interface declarations (not sealed interface)."""
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'interface\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Skip if this is actually a sealed interface
-        prefix = content[max(0, m.start() - 20):m.start()]
-        if re.search(r'sealed\s+$', prefix):
-            continue
-
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "interface",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-        })
-
-
-# ─── Object (Singleton) Extraction ──────────────────────────────
-
-def _extract_objects(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract object declarations (Kotlin singletons). Excludes companion objects."""
-    for m in re.finditer(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'object\s+(\w+)',
-        content, re.MULTILINE
-    ):
-        name = m.group(1)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Skip companion objects
-        if name == 'companion':
-            continue
-
-        # Check for inheritance
-        inherits = []
-        rest = content[m.end():m.end() + 200]
-        inherit_m = re.search(r':\s*([^{]+)', rest)
-        if inherit_m:
-            inherit_str = inherit_m.group(1).strip()
-            for part in re.finditer(r'(\w+)', inherit_str):
-                parent = part.group(1)
-                if parent not in ('constructor', 'this', 'super') and parent != name:
-                    inherits.append(parent)
-
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "object",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "is_singleton": True,
-            "inherits": inherits[:5],
-        })
-
-
-# ─── Companion Object Extraction ────────────────────────────────
-
-def _extract_companion_objects(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract companion object declarations."""
-    for m in re.finditer(
-        r'^\s*companion\s+object(?:\s+(\w+))?\s*\{',
-        content, re.MULTILINE
-    ):
-        name = m.group(1) or "Companion"
-        line_no = content[:m.start()].count('\n') + 1
-        nodes.append({
-            "id": f"{rel_path}:{name}",
-            "type": "companion_object",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "package": pkg,
-        })
-
-
-# ─── Function Extraction ────────────────────────────────────────
-
-def _extract_functions(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract top-level and class functions including extension and suspend functions."""
-    # Match: fun, suspend fun, inline fun, etc.
-    # Also matches extension functions: fun Type.name() or fun Type<T>.name()
-    func_pattern = re.compile(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'(?:(?:override|open|abstract|operator|infix|inline|tailrec|external|expect|actual)\s+)*'
-        r'(suspend\s+)?'  # suspend modifier
-        r'fun\s+'         # fun keyword
-        r'(?:<[^>]+>\s*)?'  # optional type parameters
-        r'(?:(\w+(?:<[^>]*>)?)\s*\.\s*)?'  # optional receiver type (extension function)
-        r'(\w+)\s*\(',    # function name
-        re.MULTILINE
-    )
-
-    for m in func_pattern.finditer(content):
-        is_suspend = bool(m.group(1))
-        receiver_type = m.group(2)  # None for regular functions
-        func_name = m.group(3)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Skip keywords that could match
-        if func_name in ('if', 'else', 'while', 'for', 'when', 'return', 'throw',
-                          'class', 'interface', 'object', 'val', 'var'):
-            continue
-
-        # Determine function type
-        if receiver_type:
-            func_type = "extension_function"
-        elif is_suspend:
-            func_type = "suspend_function"
+    # Skip optional type parameters <T, U>
+    if rest.startswith('<'):
+        depth = 0
+        idx = 0
+        while idx < len(rest):
+            if rest[idx] == '<':
+                depth += 1
+            elif rest[idx] == '>':
+                depth -= 1
+                if depth == 0:
+                    rest = rest[idx + 1:]
+                    break
+            idx += 1
         else:
-            func_type = "function"
+            return []
 
-        # Check for modifiers
-        prefix = content[max(0, m.start() - 50):m.start()]
-        is_override = 'override' in prefix.split('fun')[-1] if 'fun' in prefix else False
-        is_operator = 'operator' in prefix.split('fun')[-1] if 'fun' in prefix else False
+    # Skip constructor parameters (...), accounting for nested parens/angles
+    if rest.lstrip().startswith('('):
+        rest = rest.lstrip()
+        depth = 0
+        idx = 0
+        while idx < len(rest):
+            c = rest[idx]
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    rest = rest[idx + 1:]
+                    break
+            idx += 1
+        else:
+            return []
 
-        # Extract parameter types
-        params = _extract_function_params(content, m.end())
+    # Now find the inheritance colon and extract supertype names
+    supertypes: List[str] = []
+    colon_match = re.search(r':\s*', rest)
+    if not colon_match:
+        return supertypes
 
-        # Extract return type
-        return_type = _extract_return_type(content, m)
+    after_colon = rest[colon_match.end():]
+    # Extract supertype names — they appear as Name, Name<T>, Name(), Name<T>()
+    # Pattern: Name (optionally with <...>) followed by '(' or ',' or end of string
+    for m in re.finditer(r'([\w.]+)(?:\s*<[^>]*>)?\s*(?:[\(,]|\s*$)', after_colon):
+        sup = m.group(1)
+        if sup and sup[0].isupper():
+            supertypes.append(sup)
 
-        node = {
-            "id": f"{rel_path}:{func_name}",
-            "type": func_type,
-            "name": func_name,
-            "fn": func_name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "is_suspend": is_suspend,
-            "is_override": is_override,
-            "is_operator": is_operator,
-            "params": params[:10],
-            "return_type": return_type,
-        }
-
-        if receiver_type:
-            node["receiver_type"] = receiver_type
-
-        nodes.append(node)
+    return supertypes
 
 
-# ─── Property Extraction ────────────────────────────────────────
+def _collect_annotations(lines: List[str], target_line: int) -> List[str]:
+    """Scan backwards from target_line to collect annotations that precede it.
 
-def _extract_properties(content: str, rel_path: str, nodes: list, pkg: str):
-    """Extract top-level val and var properties."""
-    prop_pattern = re.compile(
-        r'^\s*(?:(?:public|private|protected|internal)\s+)?'
-        r'(?:(?:override|open|abstract|const|lateinit)\s+)*'
-        r'(val|var)\s+'       # val or var
-        r'(\w+)'              # property name
-        r'(?:\s*:\s*([^\s=]+))?'  # optional type annotation
-        r'(?:\s*=\s*(.+?))?'      # optional initializer
-        r'\s*$',
-        re.MULTILINE
-    )
-
-    for m in prop_pattern.finditer(content):
-        mutability = m.group(1)  # "val" or "var"
-        name = m.group(2)
-        prop_type = m.group(3)
-        initializer = m.group(4)
-        line_no = content[:m.start()].count('\n') + 1
-
-        # Skip keywords and common false positives
-        if name in ('if', 'else', 'while', 'for', 'when', 'return', 'throw',
-                     'class', 'interface', 'object', 'fun', 'this', 'super'):
+    Looks at up to 5 lines before the target for @Annotation markers.
+    """
+    annotations: List[str] = []
+    start = max(0, target_line - 6)  # lines is 1-indexed, look back up to 5 lines
+    for j in range(start, target_line):
+        if j < 1 or j > len(lines):
             continue
-
-        # Check for property delegation
-        delegate = None
-        if initializer and ' by ' in initializer:
-            by_match = re.search(r'by\s+(\w+)', initializer)
-            if by_match:
-                delegate = by_match.group(1)
-
-        node = {
-            "id": f"{rel_path}:{name}",
-            "type": "property",
-            "name": name,
-            "fn": name,
-            "file": rel_path,
-            "line": line_no,
-            "domain": "backend",
-            "visibility": _extract_visibility(m.group(0)),
-            "package": pkg,
-            "mutability": mutability,
-        }
-
-        if prop_type:
-            node["prop_type"] = prop_type.strip()
-        if delegate:
-            node["delegate"] = delegate
-        if initializer:
-            # Detect common Android patterns
-            init_str = initializer.strip()
-            if 'viewModels' in init_str or 'viewModel' in init_str:
-                node["android_delegate"] = "viewmodel"
-            elif 'lazy' in init_str:
-                node["android_delegate"] = "lazy"
-            elif 'SharedPreferences' in init_str:
-                node["android_delegate"] = "shared_preferences"
-
-        nodes.append(node)
-
-
-# ─── Android Annotation Extraction ──────────────────────────────
-
-def _extract_android_annotations(content: str, rel_path: str, nodes: list):
-    """Extract Android-specific annotations for component detection."""
-    android_annotations = {
-        '@Inject': 'inject',
-        '@Module': 'dagger_module',
-        '@Component': 'dagger_component',
-        '@Provides': 'dagger_provides',
-        '@Singleton': 'dagger_singleton',
-        '@ViewModel': 'viewmodel',
-        '@HiltViewModel': 'hilt_viewmodel',
-        '@AndroidEntryPoint': 'hilt_entrypoint',
-        '@EntryPoint': 'hilt_entrypoint',
-        '@Worker': 'workmanager_worker',
-        '@BindView': 'butterknife_bind',
-        '@OnClick': 'butterknife_click',
-        '@EBean': 'androidannotations_bean',
-        '@EActivity': 'androidannotations_activity',
-        '@EService': 'androidannotations_service',
-        '@EReceiver': 'androidannotations_receiver',
-        '@Composable': 'composable',
-    }
-
-    for annotation, annotation_type in android_annotations.items():
-        for m in re.finditer(re.escape(annotation), content):
-            line_no = content[:m.start()].count('\n') + 1
-            # Find the annotated element name
-            elem_name = _find_next_element_name(content, m.end())
-            nodes.append({
-                "id": f"{rel_path}:{annotation_type}:{line_no}",
-                "type": "android_annotation",
-                "name": annotation,
-                "fn": annotation,
-                "file": rel_path,
-                "line": line_no,
-                "domain": "backend",
-                "annotation_type": annotation_type,
-                "annotated_element": elem_name,
-            })
-
-
-# ─── Helper Functions ───────────────────────────────────────────
-
-def _extract_visibility(prefix: str) -> str:
-    """Extract visibility modifier from a code prefix."""
-    if 'public' in prefix:
-        return "public"
-    if 'private' in prefix:
-        return "private"
-    if 'protected' in prefix:
-        return "protected"
-    if 'internal' in prefix:
-        return "internal"
-    return "public"  # Kotlin default is public
-
-
-def _extract_brace_block(content: str, start: int) -> Optional[str]:
-    """Extract a balanced brace block starting from a position after '{'."""
-    # Find the opening brace
-    brace_pos = content.find('{', start)
-    if brace_pos < 0:
-        return None
-
-    depth = 0
-    pos = brace_pos
-    while pos < len(content):
-        if content[pos] == '{':
-            depth += 1
-        elif content[pos] == '}':
-            depth -= 1
-            if depth == 0:
-                return content[brace_pos + 1:pos]
-        pos += 1
-
-    return content[brace_pos + 1:]  # Unclosed block
-
-
-def _extract_constructor_params(content: str, start: int) -> List[Dict[str, str]]:
-    """Extract primary constructor parameters from a Kotlin class."""
-    params = []
-
-    # Find the opening parenthesis
-    paren_pos = content.find('(', start)
-    if paren_pos < 0 or paren_pos - start > 10:
-        # No primary constructor within reasonable distance
-        return params
-
-    # Extract the balanced paren block
-    depth = 0
-    pos = paren_pos
-    end_pos = paren_pos
-    while pos < len(content):
-        if content[pos] == '(':
-            depth += 1
-        elif content[pos] == ')':
-            depth -= 1
-            if depth == 0:
-                end_pos = pos
-                break
-        pos += 1
-
-    param_str = content[paren_pos + 1:end_pos]
-
-    # Parse individual parameters: val name: Type, var name: Type = default
-    for param_m in re.finditer(
-        r'(val|var)\s+(\w+)\s*(?::\s*([^\s,=]+))?',
-        param_str
-    ):
-        mutability = param_m.group(1)
-        name = param_m.group(2)
-        param_type = param_m.group(3)
-        param = {"name": name, "mutability": mutability}
-        if param_type:
-            param["type"] = param_type.strip()
-        params.append(param)
-
-    return params
-
-
-def _extract_function_params(content: str, start: int) -> List[Dict[str, str]]:
-    """Extract function parameters."""
-    params = []
-
-    # Find opening paren
-    paren_pos = content.find('(', start - 1)
-    if paren_pos < 0:
-        return params
-
-    # Extract balanced paren block
-    depth = 0
-    pos = paren_pos
-    end_pos = paren_pos
-    while pos < len(content) and pos < paren_pos + 500:
-        if content[pos] == '(':
-            depth += 1
-        elif content[pos] == ')':
-            depth -= 1
-            if depth == 0:
-                end_pos = pos
-                break
-        pos += 1
-
-    param_str = content[paren_pos + 1:end_pos]
-
-    # Parse parameters: name: Type or name: Type = default
-    for param_m in re.finditer(
-        r'(\w+)\s*:\s*([^\s,=)]+)',
-        param_str
-    ):
-        name = param_m.group(1)
-        param_type = param_m.group(2)
-        if name in ('val', 'var', 'crossinline', 'noinline', 'reified', 'vararg'):
-            continue
-        params.append({"name": name, "type": param_type.strip()})
-
-    return params
-
-
-def _extract_return_type(content: str, match) -> Optional[str]:
-    """Extract the return type of a function after the closing paren."""
-    # Find the closing paren of the function
-    start = match.end()
-    depth = 1
-    pos = start
-    while pos < len(content) and pos < start + 500:
-        if content[pos] == '(':
-            depth += 1
-        elif content[pos] == ')':
-            depth -= 1
-            if depth == 0:
-                # Look for : ReturnType after the closing paren
-                rest = content[pos + 1:pos + 60].strip()
-                type_match = re.match(r':\s*([^\s{=]+)', rest)
-                if type_match:
-                    return type_match.group(1).strip()
-                break
-        pos += 1
-
-    return None
-
-
-def _find_next_element_name(content: str, offset: int) -> str:
-    """Find the next named element (class, function, val, var) after an annotation."""
-    remaining = content[offset:offset + 300]
-    # Try class
-    m = re.search(r'class\s+(\w+)', remaining)
-    if m:
-        return m.group(1)
-    # Try function
-    m = re.search(r'fun\s+(\w+)', remaining)
-    if m:
-        return m.group(1)
-    # Try val/var
-    m = re.search(r'(?:val|var)\s+(\w+)', remaining)
-    if m:
-        return m.group(1)
-    return "unknown"
+        line_text = lines[j - 1] if j - 1 < len(lines) else ""
+        for m in re.finditer(r'@(\w+)(?:\s*\([^)]*\))?', line_text.strip()):
+            annotation_name = m.group(1)
+            annotations.append(annotation_name)
+    return annotations

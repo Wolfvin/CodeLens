@@ -3,61 +3,137 @@
 All notable changes to CodeLens will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
 
-## [7.0.1] — 2026-06-12
+## [6.0.0] — 2026-06-12
 
-### Tested against screenpipe/screenpipe (1962 files, Rust+TS+Swift Tauri monorepo)
+### Universal Analysis — Go API Maps, Kotlin, R, Haskell, ZSH
 
-Real-world test on a massive Tauri desktop app with 15,308 backend nodes, 93,755 edges, and
-1,286 CSS classes. Screenpipe is a 24/7 AI screen & mic recorder (19k+ GitHub stars) with
-Rust core, TypeScript/React frontend, Swift integrations, and a complex monorepo structure
-(cargo-workspace + multiple apps). This is the most diverse and challenging test target to date.
+**Tested on ohmyzsh/ohmyzsh (373 shell/zsh files, 1146 nodes, 21352 edges) and syncthing/syncthing (548 Go files, 5636 nodes, 30119 edges)**
 
-### Fixed
+This release focuses on broad repo analysis improvements: Go API route extraction, three new language parsers,
+framework detection accuracy, and shell/ZSH file recognition.
 
-- **CRITICAL: `is_bundled_file()` missing from utils.py** — The function was imported by
-  `complexity_engine.py` and `perfhint_engine.py`, but never defined in `utils.py`. This caused
-  ImportError cascade that completely disabled 4 commands: `ask`, `complexity`, `context`, and
-  `perf-hint`. Added the missing function with detection for dist/build/out directories, bundled
-  file extensions (.bundle.js, .chunk.js, .global.js), minified files, and declaration files.
-- **`_classify_cycle_severity()` returned single value instead of tuple** — In `circular_engine.py`
-  line 381, the Rust common method names check returned `return "info"` (single value) instead of
-  `return "info", test_involvement` (tuple). This caused `ValueError: too many values to unpack`
-  in `_format_function_cycle()` and crashed both `circular` and `handbook` commands on repos with
-  Rust common method name cycles (e.g., `new()`, `get()`, `read()`, `write()` across crates).
-- **`impact_engine.py` redundant `node_by_fn = None`** — Line 44 had a duplicate initialization
-  `node_by_fn = None` that was immediately overwritten by line 33. Removed the redundant line
-  for code clarity.
+#### Go API-Map Route Extraction (NEW)
 
-## [7.0.0] — 2026-06-12
+- **net/http**: `http.HandleFunc("/path", handler)`, `http.Handle`, `mux.HandleFunc`, `mux.Handle`
+- **Gin**: `r.GET("/path", handler)`, `r.Group("/api")` with prefix inheritance
+- **Echo**: `e.GET("/path", handler)`, `e.Group("/api")` with prefix inheritance
+- **Chi**: `r.Get("/path", handler)`, `r.Route("/path", func(r chi.Router) {...})` with recursive nesting
+- **Fiber**: `app.Get("/path", handler)`, `app.Group("/api")`
+- **httprouter**: `router.GET("/path", handler)`, `router.Handle("METHOD", "/path", handler)`
+- Go middleware extraction from route call arguments
+- Go framework detection from `go.mod` imports (gin, echo, chi, fiber, httprouter)
+- **Impact**: syncthing/syncthing had 0 detected routes → now detects all HTTP API endpoints
 
-### Tested against freqtrade/freqtrade (480 Python files, crypto trading bot)
+#### New Language Parsers
 
-Real-world test on a Python/FastAPI crypto trading bot with 4,678 backend nodes and 29,176 edges.
-Confirmed significant false positive reduction and improved agent usability across all analysis engines.
+- **Kotlin** (`fallback_kotlin.py`): data classes, sealed classes, companion objects, object declarations,
+  extension functions (with receiver type), suspend functions, infix/operator/inline modifiers,
+  type aliases, annotations, supertype extraction (skipping constructor colons),
+  coroutines (launch, async, withContext), call edges
+- **R** (`fallback_r.py`): Functions (`<-` and `=` assignment), S3 methods, S4 classes (setClass, setGeneric,
+  setMethod, setRefClass), R6 classes with inheritance, library/require/namespace imports,
+  source() file references, pipe operators (%>%, |>), Shiny UI/server patterns,
+  reactive/render functions, input$/output$ references
+- **Haskell** (`fallback_haskell.py`): Type signatures, function definitions, data types (including GADTs),
+  newtype, type aliases, type families, type classes, instance declarations,
+  module declarations, qualified imports, deriving clauses,
+  expression-only call extraction (filters parameters/bindings)
 
-### Added
+#### Framework Detection Improvements
 
-- **Secrets engine: example config file exclusion** — Files in `config_examples/`, `config_samples/`, `sample_configs/` directories are now excluded from secret scanning. These directories contain placeholder credentials for documentation purposes, not real secrets. Additionally, files with `.example.`, `.sample.`, `.template.`, or `.demo.` in their filename (e.g., `config.example.json`, `settings.sample.yaml`) are now recognized as non-security-relevant.
-- **Secrets engine: common placeholder password patterns** — Values like "SuperSecret", "MySecret", "SecretKey", "Password123", "ChangeMe", "AdminPassword", "TestPassword", and "DefaultPassword" are now recognized as safe placeholder values. Also added "your_password", "your_secret", "your_key", "your_token" patterns and broader angle-bracket placeholder support.
-- **Dataflow engine: test file violation separation** — Data flow violations in test files are now automatically detected and downgraded to severity "low" with `in_test_file: true` marker. Stats now include `test_violations` and `production_violations` counts. Risk assessment only considers production violations, preventing test noise from inflating risk levels.
-- **Entrypoints engine: priority-based sorting** — Entrypoints are now sorted by importance: `main` > `http_handler` > `cli_command` > `event_handler` > `worker` > `cron_job` > `module_export` > `test_entry`. This ensures handbook, summary, and analyze commands show real application entrypoints first, making them immediately useful for agents orienting themselves in a new codebase.
-- **Project version detection: multi-source fallback** — Version is now extracted from `pyproject.toml` → `setup.cfg` → `__version__.py`/`_version.py`/`__init__.py` → `setup.py`, covering virtually all Python project versioning conventions. The engine scans both the workspace root and top-level package subdirectories for version files.
-- **Project description extraction** — Description is now extracted from `pyproject.toml` `description` field and `setup.cfg`, with README fallback that parses the first paragraph after the title (supports both Markdown and RST formats).
-- **API map: FastAPI router-level auth propagation** — When a FastAPI app uses `include_router(sub_router, dependencies=[Depends(auth_func)])`, all routes defined in the sub-router's source file are now correctly marked as `auth_protected: true`. The engine traces import aliases (e.g., `from api_trading import router as api_trading`) back to source files and propagates auth middleware chains. This is especially important for projects like freqtrade that apply auth at the router level.
-- **Debug leak: CLI module context awareness** — `print()` and `pprint()` statements in Python CLI modules are no longer flagged as debug leaks. A file is considered a CLI module if it contains `if __name__ == "__main__"`, uses `argparse`, `click`, `typer`, or `rich`, or is in a `commands/`, `cli/`, `cmd/`, `scripts/`, or `bin/` directory. Findings in CLI modules are downgraded to severity "info" with a note explaining the context.
+- **Fixed Drupal false positive**: Changed indicators from generic "modules/", "themes/" to Drupal-specific
+  "sites/default/settings.php", "core/lib/Drupal.php" (was matching ohmyzsh etc.)
+- **Added oh-my-zsh detection**: Detects from "oh-my-zsh.sh" and "custom/plugins/"
+- **Added Kotlin detection**: .kt files now detected as "kotlin" framework (separate from Java)
+- **Added R language detection**: .R/.r files detected as "r" framework
+- **Added Haskell detection**: .hs files detected as "haskell" framework
+- **Removed Nim and Kotlin from unsupported_langs**: Both have dedicated parsers now
+- **Fixed path-segment-aware matching**: Replaced `if ignore in root` substring matching with
+  `should_ignore_dir()` from utils.py (prevents "test-target-nim" matching "target")
 
-### Fixed
+#### File Recognition Improvements
 
-- **Secrets: config_examples false positives** (100% reduction: 3 critical findings → 0) — `config_examples/config_binance.example.json`, `config_kraken.example.json`, and `config_full.example.json` with placeholder password "SuperSecret" were incorrectly flagged as critical severity secrets.
-- **Dataflow: test file noise** (93% noise reduction: 245 total → 17 production violations) — Test files with `rc.json()` (API response assertions) and file writes in different test functions created false positive intra-file violations.
-- **Entrypoints: test entries dominating output** — Handbook and summary commands listed hundreds of test entries before real application entrypoints, making the output useless for project orientation.
-- **Version: always "0.0.0" for Python projects** — Projects using `__init__.py`, `setup.cfg`, or `setup.py` for versioning showed "0.0.0" because only `pyproject.toml` was checked.
-- **API map: all routes marked as public** — FastAPI projects using `include_router(..., dependencies=[Depends(http_basic_or_jwt_token)])` showed 0 auth-protected routes instead of the correct count.
-- **Debug leak: print() noise in CLI tools** — Every `print()` in Python CLI tools was flagged as a debug leak, creating hundreds of false positives in command-line applications.
+- **.zsh-theme files**: Now recognized as shell files (143 files in ohmyzsh were previously missed)
+- **.kt files**: Now routed to dedicated Kotlin parser instead of Java fallback
+- **.R/.r files**: Recognized as R language (with false-positive filtering for .editorconfig, README)
+- **.hs/.lhs files**: Recognized as Haskell
 
-## [5.9.2] — 2026-06-12
+#### Engine Updates
+
+- `entrypoints_engine.py`: Added .kt, .R, .r, .hs, .lhs, .nim, .nims, .lua, .zsh to SOURCE_EXTENSIONS
+- `outline_engine.py`: Added .zsh-theme, .R, .r, .hs, .lhs, .nim, .nims to language detection
+- `utils.py`: Added .kt, .R, .r, .hs, .zsh, .lua, .cs, .c, .cpp, .nim to FILE_PATH_EXTENSIONS
+- `scan.py`: Added kotlin, r_lang, haskell file categories and parsing sections
+
+## [5.10.0] — 2026-06-12
+
+### Polyglot Expansion — 6 New Language Parsers
+
+**Tested against a polyglot monorepo with 7 languages (Ruby, Elixir, Kotlin, Swift, Dart, Scala, Shell)**
+
+Real-world test on a multi-language project with 56 source files across 7 languages.
+Results: 609 backend nodes, 1,090 edges, 129 active nodes, 94 API routes.
+Before: Only 8 Kotlin files parsed (103 nodes, 0 edges, 0 routes).
+
+#### New Language Parsers (regex-based fallback)
+
+- **Ruby** (`fallback_ruby.py`): Classes, modules, methods (instance & class), attr_accessor/reader/writer,
+  Rails patterns (before_action, has_many, belongs_to, validates, scope), require/require_relative,
+  include/extend, method call edges
+- **Elixir** (`fallback_elixir.py`): defmodule, def/defp, defmacro/defmacrop, use/import/alias/require,
+  Phoenix routes (get/post/put/patch/delete), scope, pipe_through, Ecto schemas (field, has_many, belongs_to),
+  GenServer patterns, pipe operator call chains (|>)
+- **Dart** (`fallback_dart_extra.py`): Classes, abstract classes, mixins, extensions, enums, typedef,
+  factory constructors, Flutter widget detection (StatefulWidget/StatelessWidget),
+  import/export/part, method call edges
+- **Swift** (`fallback_swift.py`): Classes, structs, protocols, extensions, enums, actors,
+  SwiftUI View detection, ObservableObject, async/await patterns, import dependencies,
+  inheritance tracking
+- **Scala** (`fallback_scala.py`): Classes, case classes, objects, traits, sealed traits/classes,
+  implicit functions, Spark patterns, SBT build detection, package/import dependencies,
+  extension method calls
+- **Shell/Bash** (`fallback_shell.py`): Function definitions, export variables,
+  source/. dependencies, Dockerfile patterns (FROM, RUN, ENTRYPOINT, CMD),
+  function call edges
+
+#### New Framework Detection
+
+- **Rails**: Gemfile, config/routes.rb, app/controllers/, app/models/ directory indicators
+- **Phoenix**: mix.exs, config/config.exs, lib/*_web/endpoint.ex indicators
+- **Flutter**: pubspec.yaml, lib/main.dart directory indicators
+- **SwiftUI**: Package.swift, import SwiftUI indicators
+- **Vapor**: Package.swift, import Vapor indicators
+- **Spark**: build.sbt, import org.apache.spark indicators
+- **Akka**: build.sbt, import akka indicators
+- **Play Framework**: build.sbt, conf/application.conf indicators
+
+#### New API Route Extraction
+
+- **Rails** (`routes.rb`): get/post/put/patch/delete, resources, namespace, root
+- **Phoenix** (`router.ex`): get/post/put/patch/delete, resources, scope, pipe_through
+
+#### New Outline Support
+
+- Ruby: modules, classes, methods (instance & class), require
+- Elixir: defmodule, def/defp/defmacro, use/import/alias/require
+- Dart: classes, mixins, enums, extensions, functions, imports
+- Swift: classes, structs, protocols, extensions, enums, functions, imports
+- Scala: case classes, classes, traits, objects, enums, functions, imports
+- Shell: functions, exports, Dockerfile FROM patterns
+
+#### Other Changes
+
+- Updated `unsupported_langs` to remove Ruby, Elixir, Dart, Swift, Scala, Shell (now parsed)
+- Added Kotlin to detected-but-not-unsupported (Java fallback parses .kt files)
+- Extended `_detect_language()` mapping with 14 new extensions
+- Extended `_FILE_PATH_EXTENSIONS` with new language extensions
+- Updated `lang_note` supported set and language name mapping
+- Added framework-specific path configurations for Rails, Phoenix, Flutter, SwiftUI, Vapor, Spark, Akka, Play
+- File discovery: .rb, .ex, .exs, .dart, .swift, .scala, .sh, .bash, .zsh, .rake, Dockerfile, Rakefile, Gemfile, mix.exs
+
+## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
 

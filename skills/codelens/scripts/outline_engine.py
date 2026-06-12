@@ -1219,9 +1219,12 @@ def _detect_language(ext: str) -> str:
         '.rb': 'ruby', '.ex': 'elixir', '.exs': 'elixir',
         '.dart': 'dart', '.swift': 'swift',
         '.scala': 'scala', '.sc': 'scala',
-        '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell',
+        '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell', '.zsh-theme': 'shell',
         '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin',
         '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
         '.cs': 'csharp', '.lua': 'lua',
+        '.R': 'r', '.r': 'r',
+        '.hs': 'haskell', '.lhs': 'haskell',
+        '.nim': 'nim', '.nims': 'nim',
     }
     return mapping.get(ext, 'unknown')

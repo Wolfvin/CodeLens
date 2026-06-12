@@ -18,8 +18,12 @@ Framework Detection & Route Extraction:
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
 14. SvelteKit — file-based routes (+page, +server, +layout, +error)
-15. NestJS    — @Controller, @Get/@Post/..., @Query/@Mutation (GraphQL),
-               @GrpcMethod, @MessagePattern/@EventPattern (microservices)
+15. Go stdlib — net/http: HandleFunc, Handle
+16. Gin      — r.GET/POST/PUT/DELETE/PATCH
+17. Echo     — e.GET/POST/PUT/DELETE/PATCH
+18. Chi      — r.Get/Post/Put/Delete, r.Route
+19. Fiber    — app.Get/Post/Put/Delete
+20. httprouter — router.GET/POST, router.Handle
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -41,56 +45,11 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".proto",
     ".graphql", ".gql", ".php",
+    ".rb", ".ex", ".exs",
+    ".go",
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
-
-# NestJS HTTP method decorators
-NESTJS_HTTP_DECORATORS = {
-    "Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All",
-}
-
-# NestJS decorator definition file path patterns (these define the decorators,
-# not use them — they should be excluded from route detection)
-NESTJS_DECORATOR_DEF_PATTERNS = [
-    # Core decorator definition files
-    '/decorators/http/request-mapping.decorator.ts',
-    '/decorators/http/route-params.decorator.ts',
-    '/decorators/http/http-code.decorator.ts',
-    '/decorators/http/redirect.decorator.ts',
-    '/decorators/http/header.decorator.ts',
-    '/decorators/http/sse.decorator.ts',
-    '/decorators/http/render.decorator.ts',
-    '/decorators/http/create-route-param-metadata.decorator.ts',
-    '/decorators/http/index.ts',
-    '/decorators/controller.decorator.ts',
-    '/microservices/decorators/message-pattern.decorator.ts',
-    '/microservices/decorators/event-pattern.decorator.ts',
-    '/microservices/decorators/grpc-service.decorator.ts',
-    '/microservices/decorators/client.decorator.ts',
-    '/microservices/decorators/payload.decorator.ts',
-    '/microservices/decorators/ctx.decorator.ts',
-    '/microservices/decorators/index.ts',
-    '/graphql/decorators/',
-    # Test files for decorator definitions (not actual routes)
-    '/test/decorators/',
-    # Broad patterns for common NestJS library internals
-    '/common/decorators/',
-    '/core/router/interfaces/',
-]
-
-# Patterns that indicate a file is a decorator factory definition, not a route consumer
-NESTJS_DECORATOR_FACTORY_SIGNATURES = [
-    r'export\s+const\s+(Get|Post|Put|Delete|Patch|Options|Head|All)\s*=',
-    r'export\s+function\s+(Get|Post|Put|Delete|Patch|Options|Head|All)\s*\(',
-    r'export\s+const\s+(Controller|Query|Mutation|Subscription)\s*=',
-    r'export\s+function\s+(Controller|Query|Mutation|Subscription)\s*\(',
-    r'export\s+const\s+(GrpcMethod|GrpcStreamMethod|GrpcStreamCall)\s*=',
-    r'export\s+const\s+(MessagePattern|EventPattern)\s*=',
-    r'createMappingDecorator',
-    r'createRouteParamDecorator',
-    r'createPipesRouteParamDecorator',
-]
 
 # Valid HTTP methods in uppercase (for validation of extracted method names)
 VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
@@ -124,25 +83,6 @@ VALIDATION_PATTERNS = {
     "validate", "validation", "validator", "schema", "joi",
     "zod", "yup", "celebrate", "checkSchema",
 }
-
-# FastAPI-specific auth dependency patterns (Depends / Security)
-FASTAPI_AUTH_PATTERNS = [
-    r'Depends\s*\(\s*(?:get_current|verify_|auth_|require_|check_|validate_|get_api_|api_key)',
-    r'Security\s*\(',
-    r'HTTPBearer\s*\(\s*\)',
-    r'HTTPBasic\s*\(\s*\)',
-    r'OAuth2PasswordBearer\s*\(',
-    r'APIKeyHeader\s*\(',
-    r'APIKeyQuery\s*\(',
-    r'APIKeyCookie\s*\(',
-    r'dependencies\s*=\s*\[.*Depends\s*\(',
-]
-
-# Pattern for Depends() with auth-related name in function signatures
-FASTAPI_DEPENDS_AUTH_RE = re.compile(
-    r'Depends\s*\(\s*\w*(?:auth|token|user|key|credential|session|login|verify)\w*\s*\)',
-    re.IGNORECASE,
-)
 
 
 def map_api_routes(
@@ -190,15 +130,6 @@ def map_api_routes(
 
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
-
-            # v5.9: Detect if this file is a test/example file for route source tagging
-            is_test_file = any(x in rel_path for x in [
-                '/tests/', '/test/', '/__tests__/', '/spec/',
-                '/conftest', 'test_', '_test.', '.test.', '.spec.',
-                '/examples/', '/example/',
-                '/sample/', '/samples/',
-                '/integration/', '/e2e/',
-            ])
 
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -275,13 +206,6 @@ def map_api_routes(
                     frameworks_detected.add("grpc")
                     routes.extend(grpc_routes)
 
-            # ─── NestJS ─────────────────────────────────────────
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                nestjs_routes = _extract_nestjs_routes(content, rel_path)
-                if nestjs_routes:
-                    frameworks_detected.add("nestjs")
-                    routes.extend(nestjs_routes)
-
             # ─── tRPC ─────────────────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 trpc_routes = _extract_trpc_routes(content, rel_path)
@@ -320,24 +244,23 @@ def map_api_routes(
                         if fw:
                             frameworks_detected.add(fw)
 
-                # v6.1: Custom proc-macro route detection (routes::routes, etc.)
-                rust_macro_routes = _extract_rust_custom_macro_routes(content, rel_path)
-                if rust_macro_routes:
-                    routes.extend(rust_macro_routes)
-                    frameworks_detected.add("actix-web")
+            # ─── Ruby: Rails routes ─────────────────────────────
+            elif ext == ".rb":
+                rails_routes = _extract_rails_routes(content, rel_path, frameworks_detected)
+                routes.extend(rails_routes)
 
-                # v6.1: Rust ECS pattern detection (Bevy systems, plugins)
-                rust_ecs_routes = _extract_rust_ecs_patterns(content, rel_path)
-                if rust_ecs_routes:
-                    routes.extend(rust_ecs_routes)
-                    frameworks_detected.add("bevy_ecs")
+            # ─── Elixir: Phoenix routes ─────────────────────────
+            elif ext in (".ex", ".exs"):
+                phoenix_routes = _extract_phoenix_routes(content, rel_path, frameworks_detected)
+                routes.extend(phoenix_routes)
 
-            # ─── Deno.serve routes ──────────────────────────────
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                deno_routes = _extract_deno_serve_routes(content, rel_path)
-                if deno_routes:
-                    frameworks_detected.add("deno")
-                    routes.extend(deno_routes)
+            # ─── Go: net/http / Gin / Echo / Chi / Fiber / httprouter ──
+            elif ext == ".go":
+                go_routes = _extract_go_routes(content, rel_path, frameworks_detected)
+                routes.extend(go_routes)
+
+    # ─── Go framework detection from go.mod ───────────────────
+    _detect_go_frameworks(workspace, frameworks_detected)
 
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
@@ -346,22 +269,6 @@ def map_api_routes(
         routes.extend(sveltekit_routes)
 
     # ─── Post-processing ──────────────────────────────────────
-
-    # v5.9: Tag route source (production vs test/example) based on file path
-    for route in routes:
-        route_file = route.get("file", "")
-        if "source" not in route:
-            # Check for test/example/sample/integration paths
-            # Note: paths like 'sample/' or 'integration/' can appear at the start
-            # of rel_path (no leading /), so we check both forms
-            is_test = any(x in route_file for x in [
-                '/tests/', '/test/', '/__tests__/', '/spec/',
-                '/conftest', 'test_', '_test.', '.test.', '.spec.',
-                '/examples/', '/example/',
-                '/sample/', '/samples/',
-                '/integration/', '/e2e/',
-            ]) or route_file.startswith(('sample/', 'samples/', 'integration/', 'e2e/', 'example/', 'examples/'))
-            route["source"] = "test" if is_test else "production"
 
     # Attach middleware to routes
     for mw in global_middleware:
@@ -374,139 +281,6 @@ def map_api_routes(
                     "file": mw["file"],
                     "line": mw["line"],
                 })
-
-    # Propagate router-level auth (include_router with auth dependencies)
-    # Find all ROUTER_INCLUDE entries that carry auth, then propagate to
-    # routes defined in the included router's source file.
-    router_auth_names: Dict[str, List[Dict]] = {}  # included_router_alias -> [auth_middleware]
-    for route in list(routes):
-        if route.get("method") == "ROUTER_INCLUDE" and route.get("source") == "router_include_auth":
-            included_router = route.get("handler_name", "")
-            auth_mw = route.get("middleware_chain", [])
-            if included_router not in router_auth_names:
-                router_auth_names[included_router] = auth_mw
-
-    # Remove ROUTER_INCLUDE entries from visible routes
-    routes = [r for r in routes if r.get("method") != "ROUTER_INCLUDE"]
-
-    # Propagate auth: scan files for import aliases that map router names to source files
-    # Pattern: from some_module import router as api_trading
-    # Also:    from some_module import api_router  (direct name)
-    # Build: alias_name -> source_rel_path
-    import_alias_to_file: Dict[str, str] = {}  # alias -> rel_path of defining file
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext != '.py':
-                continue
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(10000)  # Read imports section
-                # Match: from X import router as alias_name
-                for im in re.finditer(r'from\s+[\w.]+\s+import\s+\w+\s+as\s+(\w+)', content):
-                    alias = im.group(1)
-                    import_alias_to_file[alias] = rel_path
-                # Match: from X import some_router (direct import of router variable)
-                for im in re.finditer(r'from\s+([\w.]+)\s+import\s+(\w+)(?:\s+as\s+(\w+))?', content):
-                    direct_name = im.group(2)
-                    alias = im.group(3) or direct_name
-                    # Check if the imported module is a Python file with APIRouter
-                    module_path = im.group(1).replace('.', '/')
-                    # Store both the alias and direct name
-                    import_alias_to_file[alias] = rel_path
-            except IOError:
-                continue
-
-    # Build: file -> set of APIRouter variable names
-    file_router_defs: Dict[str, Set[str]] = defaultdict(set)
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for filename in filenames:
-            ext = os.path.splitext(filename)[1].lower()
-            if ext != '.py':
-                continue
-            file_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(file_path, workspace)
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(5000)
-                for rm in re.finditer(r'(\w+)\s*=\s*APIRouter\s*\(', content):
-                    file_router_defs[rel_path].add(rm.group(1))
-            except IOError:
-                continue
-
-    # Resolve: for each router_auth_names entry, find which file defines the router
-    # Strategy: find the import statement `from X import router as ALIAS` in the ROUTER_INCLUDE file,
-    # then find the source file that defines `router = APIRouter()`
-    # Simpler approach: for each alias in router_auth_names, find files that import it
-    # and trace back to the file that defines the router variable
-    auth_source_files: Set[str] = set()  # files whose routes should inherit auth
-    for alias, auth_mw in router_auth_names.items():
-        # Find where this alias is imported from
-        # Search all files for: from X import Y as alias (or from X import alias)
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            if '.codelens' in root:
-                dirs.clear()
-                continue
-            for filename in filenames:
-                ext = os.path.splitext(filename)[1].lower()
-                if ext != '.py':
-                    continue
-                file_path = os.path.join(root, filename)
-                rel_path = os.path.relpath(file_path, workspace)
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read(10000)
-                    # Find: from some.module import router as <alias>
-                    import_pattern = rf'from\s+([\w.]+)\s+import\s+\w+\s+as\s+{re.escape(alias)}\b'
-                    im = re.search(import_pattern, content)
-                    if im:
-                        module_path = im.group(1)
-                        # Convert module path to file path
-                        parts = module_path.split('.')
-                        # Try to find the file
-                        for possible_path in [
-                            os.path.join(workspace, *parts) + '.py',
-                            os.path.join(workspace, *parts, '__init__.py'),
-                        ]:
-                            if os.path.isfile(possible_path):
-                                source_rel = os.path.relpath(possible_path, workspace)
-                                auth_source_files.add(source_rel)
-                                break
-                        # Also try just matching by file name pattern
-                        # e.g., from freqtrade.rpc.api_server.api_trading import router as api_trading
-                        # -> source file is freqtrade/rpc/api_server/api_trading.py
-                        last_part = parts[-1]
-                        for possible_path in [
-                            os.path.join(workspace, *parts[:-1], last_part + '.py'),
-                        ]:
-                            if os.path.isfile(possible_path):
-                                source_rel = os.path.relpath(possible_path, workspace)
-                                auth_source_files.add(source_rel)
-                except IOError:
-                    continue
-
-    # Now propagate auth to all routes from auth_source_files
-    for route in routes:
-        if route.get("auth_protected"):
-            continue
-        route_file = route.get("file", "")
-        if route_file in auth_source_files:
-            # This route's file is included via include_router with auth
-            for alias, auth_mw in router_auth_names.items():
-                for mw in auth_mw:
-                    route.setdefault("middleware_chain", []).append(mw)
-                break
 
     # Build middleware map
     for route in routes:
@@ -548,9 +322,6 @@ def map_api_routes(
 
     auth_count = sum(1 for r in routes if r.get("auth_protected"))
     public_count = len(routes) - auth_count
-    # v5.9: Count production vs test routes
-    production_count = sum(1 for r in routes if r.get("source") == "production")
-    test_count = len(routes) - production_count
 
     # Recommendations
     recommendations = _generate_recommendations(
@@ -563,8 +334,6 @@ def map_api_routes(
         "frameworks_detected": sorted(frameworks_detected),
         "stats": {
             "total_routes": len(routes),
-            "production_routes": production_count,
-            "test_routes": test_count,
             "by_method": dict(by_method),
             "auth_protected": auth_count,
             "public": public_count,
@@ -916,439 +685,6 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
                     "file": rel_path,
                     "line": i + 1,
                 })
-
-    return middleware
-
-
-# ─── NestJS Routes ──────────────────────────────────────────────
-
-def _is_nestjs_decorator_definition(content: str, rel_path: str) -> bool:
-    """Check if this file is a NestJS decorator factory definition file.
-
-    These files define the decorator functions themselves (e.g., `export const Get = ...`)
-    rather than using them as route handlers. They should be excluded from route detection
-    to avoid false positives.
-    """
-    # Check by file path patterns
-    for pattern in NESTJS_DECORATOR_DEF_PATTERNS:
-        if pattern in rel_path:
-            return True
-
-    # Check by content signatures — if the file exports the decorator factories
-    for sig_pattern in NESTJS_DECORATOR_FACTORY_SIGNATURES:
-        if re.search(sig_pattern, content):
-            return True
-
-    return False
-
-
-def _extract_nestjs_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract routes from NestJS TypeScript/JavaScript files.
-
-    Detects:
-    - HTTP routes: @Controller('path') + @Get/@Post/@Put/@Delete/@Patch/@Options/@Head/@All
-    - GraphQL resolvers: @Resolver() + @Query/@Mutation/@Subscription (from @nestjs/graphql)
-    - gRPC methods: @GrpcMethod/@GrpcStreamMethod/@GrpcStreamCall (from @nestjs/microservices)
-    - Microservice patterns: @MessagePattern/@EventPattern (from @nestjs/microservices)
-
-    Filters out decorator definition files (e.g., packages/common/decorators/) to avoid
-    false positives from the decorator factory implementations themselves.
-    """
-    routes: List[Dict[str, Any]] = []
-
-    # ─── Skip decorator definition files ────────────────────────
-    if _is_nestjs_decorator_definition(content, rel_path):
-        return routes
-
-    # ─── Detect NestJS imports ──────────────────────────────────
-    has_nestjs_common = bool(re.search(
-        r'(?:from\s+[\'"]@nestjs/common[\'"]|import\s+.*@nestjs/common)',
-        content
-    ))
-    has_nestjs_microservices = bool(re.search(
-        r'(?:from\s+[\'"]@nestjs/microservices[\'"]|import\s+.*@nestjs/microservices)',
-        content
-    ))
-    has_nestjs_graphql = bool(re.search(
-        r'(?:from\s+[\'"]@nestjs/graphql[\'"]|import\s+.*@nestjs/graphql)',
-        content
-    ))
-
-    if not (has_nestjs_common or has_nestjs_microservices or has_nestjs_graphql):
-        return routes
-
-    # ─── Detect @Controller() decorators and extract base paths ─
-    # A file can have multiple controllers, so track all of them with their
-    # line positions so we can match method decorators to the right controller.
-    controller_bases: List[Dict[str, Any]] = []  # [{path, start_line, end_line}]
-
-    for ctrl_m in re.finditer(
-        r'@Controller\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
-        content
-    ):
-        ctrl_path = ctrl_m.group(1) or ""
-        ctrl_line = content[:ctrl_m.start()].count('\n') + 1
-
-        # Find the class body to know the controller's scope
-        # Look for the class opening brace after the @Controller decorator
-        class_match = re.search(
-            r'class\s+(\w+)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w,\s]+\s*)?\{',
-            content[ctrl_m.end():ctrl_m.end() + 500]
-        )
-        if class_match:
-            class_name = class_match.group(1)
-            class_start_offset = ctrl_m.end() + class_match.end()
-            # Find matching closing brace for the class body
-            depth = 1
-            pos = class_start_offset
-            while pos < len(content) and depth > 0:
-                if content[pos] == '{':
-                    depth += 1
-                elif content[pos] == '}':
-                    depth -= 1
-                pos += 1
-            class_end_offset = pos
-
-            controller_bases.append({
-                'path': ctrl_path,
-                'start': ctrl_m.start(),
-                'end': class_end_offset,
-                'class_name': class_name,
-                'line': ctrl_line,
-            })
-        else:
-            # Fallback: controller scope extends to next @Controller or end of file
-            controller_bases.append({
-                'path': ctrl_path,
-                'start': ctrl_m.start(),
-                'end': len(content),
-                'class_name': 'AnonymousController',
-                'line': ctrl_line,
-            })
-
-    # ─── Extract HTTP method routes (@Get, @Post, etc.) ────────
-    if has_nestjs_common and controller_bases:
-        for ctrl in controller_bases:
-            ctrl_prefix = ctrl['path']
-            ctrl_content = content[ctrl['start']:ctrl['end']]
-
-            for method_m in re.finditer(
-                r'@(Get|Post|Put|Delete|Patch|Options|Head|All)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
-                ctrl_content
-            ):
-                decorator_name = method_m.group(1)
-                method_path = method_m.group(2) or ""
-                http_method = decorator_name.upper()
-
-                # Calculate absolute position in full content
-                abs_pos = ctrl['start'] + method_m.end()
-
-                # Find the handler method name — look for the method definition
-                # after the decorator
-                handler_name = _find_nestjs_handler_name(content, abs_pos)
-                line_num = content[:ctrl['start'] + method_m.start()].count('\n') + 1
-
-                # Construct full path: controller prefix + method path
-                full_path = _normalize_path('/' + ctrl_prefix + '/' + method_path)
-
-                # Detect middleware from nearby decorators (e.g., @UseGuards)
-                mw_chain = _extract_nestjs_middleware(content, ctrl['start'] + method_m.start(), rel_path, line_num)
-
-                routes.append({
-                    "method": http_method,
-                    "path": full_path,
-                    "handler_name": handler_name,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": mw_chain,
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "nestjs",
-                })
-
-    # ─── Extract GraphQL resolvers (@Query, @Mutation, @Subscription) ──
-    if has_nestjs_graphql:
-        # Find @Resolver() decorated classes
-        resolver_bases: List[Dict[str, Any]] = []
-        for res_m in re.finditer(
-            r'@Resolver\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
-            content
-        ):
-            resolver_name = res_m.group(1) or ""
-            res_line = content[:res_m.start()].count('\n') + 1
-
-            class_match = re.search(
-                r'class\s+(\w+)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w,\s]+\s*)?\{',
-                content[res_m.end():res_m.end() + 500]
-            )
-            if class_match:
-                class_name = class_match.group(1)
-                class_start_offset = res_m.end() + class_match.end()
-                depth = 1
-                pos = class_start_offset
-                while pos < len(content) and depth > 0:
-                    if content[pos] == '{':
-                        depth += 1
-                    elif content[pos] == '}':
-                        depth -= 1
-                    pos += 1
-                resolver_bases.append({
-                    'name': resolver_name,
-                    'start': res_m.start(),
-                    'end': pos,
-                    'class_name': class_name,
-                    'line': res_line,
-                })
-
-        for resolver in resolver_bases:
-            resolver_content = content[resolver['start']:resolver['end']]
-
-            # @Query('fieldName') or @Query()
-            for qm in re.finditer(
-                r'@(Query|Mutation|Subscription)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
-                resolver_content
-            ):
-                gql_type = qm.group(1).upper()  # QUERY, MUTATION, SUBSCRIPTION
-                field_name = qm.group(2) or ""
-
-                abs_pos = resolver['start'] + qm.end()
-                handler_name = _find_nestjs_handler_name(content, abs_pos)
-
-                # If no explicit field name, use the handler method name
-                if not field_name:
-                    field_name = handler_name
-
-                line_num = content[:resolver['start'] + qm.start()].count('\n') + 1
-
-                # Detect middleware from nearby decorators (e.g., @UseGuards)
-                mw_chain = _extract_nestjs_middleware(content, resolver['start'] + qm.start(), rel_path, line_num)
-
-                routes.append({
-                    "method": gql_type,
-                    "path": f"{resolver['name']}.{field_name}" if resolver['name'] else field_name,
-                    "handler_name": handler_name,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": mw_chain,
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "nestjs",
-                })
-
-    # ─── Extract gRPC methods (@GrpcMethod, @GrpcStreamMethod, @GrpcStreamCall) ──
-    if has_nestjs_microservices:
-        for grpc_m in re.finditer(
-            r'@(GrpcMethod|GrpcStreamMethod|GrpcStreamCall)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`]\s*(?:,\s*[\'"`]([^\'"`]*)[\'"`])?)?\s*\)',
-            content
-        ):
-            decorator_name = grpc_m.group(1)
-            service_name = grpc_m.group(2) or ""
-            method_name_hint = grpc_m.group(3) or ""
-
-            abs_pos = grpc_m.end()
-            handler_name = _find_nestjs_handler_name(content, abs_pos)
-
-            # If method name not specified in decorator, use the handler name
-            grpc_method_name = method_name_hint or handler_name
-
-            line_num = content[:grpc_m.start()].count('\n') + 1
-
-            route_path = f"/{service_name}/{grpc_method_name}" if service_name else f"/{grpc_method_name}"
-
-            routes.append({
-                "method": "GRPC",
-                "path": route_path,
-                "handler_name": handler_name,
-                "file": rel_path,
-                "line": line_num,
-                "middleware_chain": [],
-                "request_type": None,
-                "response_type": None,
-                "framework": "nestjs",
-            })
-
-        # ─── Extract microservice patterns (@MessagePattern, @EventPattern) ──
-        for msg_m in re.finditer(
-            r'@(MessagePattern|EventPattern)\s*\(\s*(?:([\'"`][^\'"`]+[\'"`])|(\{[^}]+\}))?\s*\)',
-            content
-        ):
-            decorator_name = msg_m.group(1)
-            string_pattern = msg_m.group(2)
-            object_pattern = msg_m.group(3)
-
-            abs_pos = msg_m.end()
-            handler_name = _find_nestjs_handler_name(content, abs_pos)
-            line_num = content[:msg_m.start()].count('\n') + 1
-
-            # Extract pattern name
-            pattern_name = ""
-            if string_pattern:
-                pattern_name = string_pattern.strip("'\"`")
-            elif object_pattern:
-                # Try to extract cmd or type from object pattern like { cmd: 'sum' }
-                cmd_match = re.search(r'cmd\s*:\s*[\'"`]([^\'"`]+)[\'"`]', object_pattern)
-                if cmd_match:
-                    pattern_name = cmd_match.group(1)
-                else:
-                    # Try to extract any string value
-                    val_match = re.search(r'[\'"`]([^\'"`]+)[\'"`]', object_pattern)
-                    if val_match:
-                        pattern_name = val_match.group(1)
-                    else:
-                        pattern_name = handler_name
-
-            if not pattern_name:
-                pattern_name = handler_name
-
-            method_type = "MESSAGE" if decorator_name == "MessagePattern" else "EVENT"
-
-            routes.append({
-                "method": method_type,
-                "path": pattern_name,
-                "handler_name": handler_name,
-                "file": rel_path,
-                "line": line_num,
-                "middleware_chain": [],
-                "request_type": None,
-                "response_type": None,
-                "framework": "nestjs",
-            })
-
-    return routes
-
-
-def _find_nestjs_handler_name(content: str, offset: int) -> str:
-    """Find the method name that follows a NestJS decorator.
-
-    After a decorator like @Get('path'), the next thing is the method definition.
-    Patterns include:
-      - async methodName(...) {
-      - methodName(...) {
-      - @OtherDecorator() async methodName(...) {
-      - @UseGuards(Auth) @HttpCode(200) async methodName(...) {
-    """
-    # Look ahead up to 500 characters for the method name
-    remaining = content[offset:offset + 500]
-
-    # Skip past any additional decorators that appear between the route
-    # decorator and the method definition, e.g.:
-    #   @HttpCode(200)
-    #   @UseGuards(AuthGuard)
-    #   @UsePipes(ValidationPipe)
-    #   @ApiOperation({ summary: '...' })
-    #   @ApiResponse({ ... })
-    #   @Roles('admin')
-    # We need to skip @DecoratorName(...) patterns including multi-line ones
-    # and then find the actual method name.
-
-    # Strategy: strip out all @Decorator(...) patterns, then find first word(
-    # We'll do this iteratively to handle nested parens in decorators
-    cleaned = remaining
-    # Remove @Decorator(...) patterns — handle nested parens
-    prev = None
-    while prev != cleaned:
-        prev = cleaned
-        # Match @Word(...) with possible newlines — replace with empty
-        cleaned = re.sub(
-            r'@\w+\s*\([^)]*(?:\)[^\w]*)?',  # simple @Decorator(args) 
-            ' ',
-            cleaned,
-            count=1
-        )
-    # Also handle multi-line decorator calls with nested braces/parens
-    # Simpler approach: find all word( patterns and take the first that looks like a method
-
-    # TypeScript keywords to exclude
-    TS_KEYWORDS = {
-        'constructor', 'function', 'async', 'await', 'new', 'return',
-        'if', 'else', 'for', 'while', 'switch', 'case', 'break',
-        'const', 'let', 'var', 'class', 'interface', 'type', 'export',
-        'import', 'from', 'public', 'private', 'protected', 'static',
-        'readonly', 'abstract', 'override', 'get', 'set',
-        # Common decorator names that might match before the actual method
-        'UseGuards', 'UsePipes', 'UseInterceptors', 'UseFilters',
-        'HttpCode', 'Redirect', 'Render', 'Header', 'Sse',
-        'ApiOperation', 'ApiResponse', 'ApiParam', 'ApiQuery',
-        'ApiBody', 'ApiBearerAuth', 'ApiTags', 'ApiHeader',
-        'ApiSecurity', 'ApiExcludeEndpoint', 'ApiOAuth2',
-        'ApiExtraModels', 'ApiOkResponse', 'ApiCreatedResponse',
-        'Roles', 'Permissions', 'SetMetadata',
-    }
-
-    # Find all word( patterns in the cleaned text
-    for m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', cleaned):
-        name = m.group(1)
-        if name not in TS_KEYWORDS:
-            return name
-
-    # Fallback: try the original remaining text with the same filter
-    for m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', remaining):
-        name = m.group(1)
-        if name not in TS_KEYWORDS:
-            return name
-
-    return "anonymous"
-
-
-def _extract_nestjs_middleware(
-    content: str, offset: int, rel_path: str, line_num: int
-) -> List[Dict[str, Any]]:
-    """Extract middleware from NestJS decorators near a route handler.
-
-    Checks for:
-    - @UseGuards(GuardName) — auth, role-based access
-    - @UsePipes(PipeName) — validation
-    - @UseInterceptors(InterceptorName) — logging, caching, etc.
-    """
-    middleware = []
-
-    # Look at lines above the route decorator for other decorators
-    lines = content.split('\n')
-    target_line = line_num - 1  # 0-indexed
-
-    for i in range(max(0, target_line - 10), target_line + 1):
-        if i >= len(lines):
-            break
-        stripped = lines[i].strip()
-
-        # @UseGuards(AuthGuard, RolesGuard)
-        guard_m = re.match(r'@UseGuards\s*\(\s*([\w,\s]+)\s*\)', stripped)
-        if guard_m:
-            guards = [g.strip() for g in guard_m.group(1).split(',')]
-            for guard_name in guards:
-                mw_type = _classify_middleware(guard_name)
-                # Common NestJS auth guards
-                if any(x in guard_name.lower() for x in ['auth', 'jwt', 'guard', 'role', 'permission']):
-                    mw_type = "auth"
-                middleware.append({
-                    "name": guard_name,
-                    "type": mw_type,
-                    "file": rel_path,
-                    "line": i + 1,
-                })
-
-        # @UsePipes(ValidationPipe)
-        pipe_m = re.match(r'@UsePipes\s*\(\s*(\w+)\s*\)', stripped)
-        if pipe_m:
-            pipe_name = pipe_m.group(1)
-            mw_type = "validation" if any(x in pipe_name.lower() for x in ['validation', 'parse', 'validate']) else "custom"
-            middleware.append({
-                "name": pipe_name,
-                "type": mw_type,
-                "file": rel_path,
-                "line": i + 1,
-            })
-
-        # @UseInterceptors(LoggingInterceptor)
-        int_m = re.match(r'@UseInterceptors\s*\(\s*(\w+)\s*\)', stripped)
-        if int_m:
-            int_name = int_m.group(1)
-            middleware.append({
-                "name": int_name,
-                "type": "interceptor",
-                "file": rel_path,
-                "line": i + 1,
-            })
 
     return middleware
 
@@ -1906,16 +1242,6 @@ def _extract_python_routes(
                 if rm:
                     resp_type = rm.group(1)
 
-                # Detect FastAPI auth via Depends() / Security() patterns
-                has_fastapi_auth = _detect_fastapi_auth(content, m.start(), m.end())
-                if has_fastapi_auth:
-                    mw_chain.append({
-                        "name": "fastapi_depends_auth",
-                        "type": "auth",
-                        "file": rel_path,
-                        "line": line_num,
-                    })
-
                 routes.append({
                     "method": http_method,
                     "path": _normalize_path(route_path),
@@ -1926,43 +1252,6 @@ def _extract_python_routes(
                     "request_type": None,
                     "response_type": resp_type,
                     "framework": "fastapi",
-                })
-
-    # FastAPI include_router with auth dependencies
-    # e.g., router.include_router(sub_router, dependencies=[Depends(http_basic_or_jwt_token)])
-    if is_fastapi:
-        for m in re.finditer(
-            r'(\w+)\s*\.\s*include_router\s*\(\s*(\w+)[^)]*dependencies\s*=\s*\[([^\]]*)\]',
-            content
-        ):
-            parent_router = m.group(1)
-            included_router = m.group(2)
-            deps_str = m.group(3)
-            line_num = content[:m.start()].count('\n') + 1
-
-            # Check if the dependencies contain auth-related Depends()
-            has_auth = bool(re.search(
-                r'Depends\s*\(\s*\w*(?:auth|token|user|key|credential|session|login|verify|jwt|bearer|security)\w*\s*\)',
-                deps_str,
-                re.IGNORECASE
-            )) or bool(re.search(
-                r'Security\s*\(',
-                deps_str
-            ))
-
-            if has_auth:
-                # Store this as a route_group with auth for later propagation
-                routes.append({
-                    "method": "ROUTER_INCLUDE",
-                    "path": f"_router_auth:{parent_router}:{included_router}",
-                    "handler_name": included_router,
-                    "file": rel_path,
-                    "line": line_num,
-                    "middleware_chain": [{"name": "fastapi_depends_auth", "type": "auth", "file": rel_path, "line": line_num}],
-                    "request_type": None,
-                    "response_type": None,
-                    "framework": "fastapi",
-                    "source": "router_include_auth",
                 })
 
     # Django URL patterns
@@ -2046,55 +1335,6 @@ def _find_next_python_function(content: str, offset: int) -> str:
     if m:
         return m.group(1)
     return "anonymous"
-
-
-def _detect_fastapi_auth(content: str, decorator_start: int, func_offset: int) -> bool:
-    """Detect FastAPI auth patterns in the decorator line and function signature.
-
-    Checks:
-    1. The full decorator line (including continuation lines) for Depends/Security patterns.
-    2. The function signature parameters for Depends(auth_...) patterns.
-
-    Returns True if auth is detected.
-    """
-    # --- Check the decorator line(s) ---
-    # Collect the decorator and any continuation lines until the function def
-    decorator_end = func_offset if func_offset > decorator_start else decorator_start + 800
-    decorator_text = content[decorator_start:decorator_end]
-
-    for pattern in FASTAPI_AUTH_PATTERNS:
-        if re.search(pattern, decorator_text, re.IGNORECASE):
-            return True
-
-    # --- Check the function signature for Depends(auth_...) ---
-    # Grab only the function signature (from 'def' to the closing ':')
-    # to avoid bleeding into subsequent route handlers.
-    func_remaining = content[func_offset:func_offset + 800]
-    # Find the end of the function signature: first line ending with ':'
-    # that is at the def-level (not inside a string or nested block).
-    sig_lines = []
-    for line in func_remaining.split('\n'):
-        sig_lines.append(line)
-        stripped = line.rstrip()
-        if stripped.endswith(':') and not stripped.startswith((' ', '\t', '#')):
-            break
-        # Also handle multi-line signatures that end with ') -> Type:' or '):'
-        if stripped.endswith('):') or re.match(r'.*\)\s*(->\s*\w+)?:\s*$', stripped):
-            break
-    sig_text = '\n'.join(sig_lines)
-
-    # Check FASTAPI_AUTH_PATTERNS against the function signature area too
-    # (catches HTTPBearer(), APIKeyHeader(), etc. inside Depends(...))
-    for pattern in FASTAPI_AUTH_PATTERNS:
-        if re.search(pattern, sig_text, re.IGNORECASE):
-            return True
-
-    # Check for Depends() with an auth-related dependency name
-    if 'Depends(' in sig_text or 'Depends (' in sig_text:
-        if FASTAPI_DEPENDS_AUTH_RE.search(sig_text):
-            return True
-
-    return False
 
 
 def _extract_python_decorator_middleware(
@@ -2252,17 +1492,6 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
 def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
-
-    # Skip NestJS decorator definition files to avoid false positives
-    # (e.g., packages/common/decorators/http/route-params.decorator.ts
-    # has `Query:` patterns that are decorator factory exports, not resolvers)
-    if _is_nestjs_decorator_definition(content, rel_path):
-        return routes
-
-    # Also skip if this file imports from @nestjs/graphql — those @Query/@Mutation
-    # decorators are handled by the NestJS parser, not the generic GraphQL one
-    if re.search(r'(?:from\s+[\'\"]@nestjs/graphql[\'\"]|import\s+.*@nestjs/graphql)', content):
-        return routes
 
     # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
     for m in re.finditer(
@@ -2881,7 +2110,7 @@ def _build_route_groups(routes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "methods": sorted(methods),
             "auth_protected": has_auth,
             "routes": [
-                {"method": r["method"], "path": r["path"], "handler": r.get("handler_name", r.get("handler", ""))}
+                {"method": r["method"], "path": r["path"], "handler": r["handler_name"]}
                 for r in group_routes
             ],
         })
@@ -3032,7 +2261,7 @@ def _extract_tauri_rust_commands(content: str, rel_path: str) -> List[Dict]:
     # Match #[tauri::command] followed by fn name(
     # Allow attributes between #[tauri::command] and fn
     for m in re.finditer(
-        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(',
+        r'#\[tauri::command\]\s*(?:(?:#\[.*?\])\s*)*(?:pub\s+)?fn\s+(\w+)\s*\(',
         content
     ):
         command_name = m.group(1)
@@ -3096,76 +2325,24 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
             "response_type": None,
         })
 
-    # ─── actix-web: web::resource().route(web::get().to(handler)) ─────
+    # ─── actix-web: web::resource().route().method() ─────────────
     for m in re.finditer(
         r'\.resource\s*\(\s*"([^"]+)"\s*\)',
         content
     ):
         path = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
-
-        # Scan forward for .route(web::get().to(handler)) chains
-        scan_start = m.end()
-        scan_end = min(scan_start + 800, len(content))
-        scan_region = content[scan_start:scan_end]
-
-        route_chain_found = False
-        for chain_m in re.finditer(
-            r'\.route\s*\(\s*web::(get|post|put|delete|patch|head|options)\s*\(\s*\)\s*\.to\s*\(\s*([\w:]+)\s*\)',
-            scan_region
-        ):
-            method_raw = chain_m.group(1).lower()
-            handler = chain_m.group(2).split('::')[-1]
-            chain_line = line_num + scan_region[:chain_m.start()].count('\n')
-            routes.append({
-                "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
-                "path": path,
-                "handler_name": handler,
-                "file": rel_path,
-                "line": chain_line,
-                "framework": "actix-web",
-                "middleware": [],
-                "auth_required": False,
-                "request_type": "http_handler",
-                "response_type": None,
-            })
-            route_chain_found = True
-
-        # Fallback: if no .route() chains found, emit RESOURCE entry
-        if not route_chain_found:
-            routes.append({
-                "method": "RESOURCE",
-                "path": path,
-                "handler_name": None,
-                "file": rel_path,
-                "line": line_num,
-                "framework": "actix-web",
-                "middleware": [],
-                "auth_required": False,
-                "request_type": "resource_route",
-                "response_type": None,
-            })
-
-    # ─── actix-web: web::scope("/prefix") ─────────────
-    for m in re.finditer(r'\.scope\s*\(\s*"([^"]+)"\s*\)', content):
-        scope_path = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
         routes.append({
-            "method": "SCOPE", "path": scope_path, "handler_name": None,
-            "file": rel_path, "line": line_num, "framework": "actix-web",
-            "middleware": [], "auth_required": False,
-            "request_type": "route_scope", "response_type": None,
-        })
-
-    # ─── actix-web: .configure(<Module as Routes>::configure) ─────
-    for m in re.finditer(r'\.configure\s*\(\s*<\s*([\w:]+)\s+as\s+\w+\s*>\s*::\s*configure\s*\)', content):
-        module_name = m.group(1).split('::')[-1]
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "CONFIGURE", "path": None, "handler_name": module_name,
-            "file": rel_path, "line": line_num, "framework": "actix-web",
-            "middleware": [], "auth_required": False,
-            "request_type": "configure", "response_type": None,
+            "method": "RESOURCE",
+            "path": path,
+            "handler_name": None,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "actix-web",
+            "middleware": [],
+            "auth_required": False,
+            "request_type": "resource_route",
+            "response_type": None,
         })
 
     # ─── axum: .route("/path", get(handler)) ─────────────
@@ -3214,85 +2391,525 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
     return routes
 
 
-def _extract_rust_custom_macro_routes(content: str, rel_path: str) -> List[Dict]:
-    """Extract routes from Rust custom proc-macro attributes.
+# ─── Go Route Extraction ─────────────────────────────────────
+
+# Go HTTP method names as they appear in framework calls
+_GO_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+_GO_METHODS_LOWER = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+
+def _extract_go_routes(
+    content: str, rel_path: str, frameworks: Set[str]
+) -> List[Dict[str, Any]]:
+    """Extract API routes from Go source files.
+
     Supports:
-    - #[routes::routes(routes("/path" => get(handler), ...), tag = "...")]
-    - #[route("/path", method = "GET")]
+    - net/http stdlib: http.HandleFunc, http.Handle, mux.HandleFunc, mux.Handle
+    - Gin:             r.GET/POST/PUT/DELETE/PATCH("/path", handler)
+    - Echo:            e.GET/POST/PUT/DELETE/PATCH("/path", handler)
+    - Chi:             r.Get/Post/Put/Delete("/path", handler), r.Route("/path", func...)
+    - Fiber:           app.Get/Post/Put/Delete("/path", handler)
+    - httprouter:      router.GET/POST/PUT/DELETE/PATCH("/path", handler)
+                       router.Handle("METHOD", "/path", handler)
     """
-    routes = []
+    routes: List[Dict[str, Any]] = []
 
-    # Find #[routes::routes(...)] or #[routes(...)] macro
-    for macro_match in re.finditer(r'#\[routes(?:::routes)?\s*\(', content):
-        start_pos = macro_match.start()
-        paren_start = content.index('(', start_pos)
-        depth = 0
-        end_pos = paren_start
-        for i in range(paren_start, min(paren_start + 10000, len(content))):
-            if content[i] == '(':
-                depth += 1
-            elif content[i] == ')':
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
+    # ─── Detect which Go frameworks are in use via imports ─────
+    is_gin = bool(re.search(r'"github\.com/gin-gonic/gin"', content))
+    is_echo = bool(re.search(r'"github\.com/labstack/echo', content))
+    is_chi = bool(re.search(r'"github\.com/go-chi/chi', content))
+    is_fiber = bool(re.search(r'"github\.com/gofiber/fiber', content))
+    is_httprouter = bool(re.search(r'"github\.com/julienschmidt/httprouter"', content))
+    is_net_http = bool(re.search(r'"net/http"', content))
 
-        macro_body = content[start_pos:end_pos]
-        macro_line = content[:start_pos].count('\n') + 1
+    # Track router variable names and their prefixes (for group/prefix support)
+    # Gin:  r := gin.Default(); g := r.Group("/api")
+    # Echo: g := e.Group("/api")
+    # Chi:  r.Route("/api", func(r chi.Router) { ... })
+    router_groups: Dict[str, str] = {}  # var_name → prefix
 
-        # Find struct name after macro
-        after_macro = content[end_pos:end_pos + 200]
-        struct_match = re.search(r'(?:pub\s+)?struct\s+(\w+)', after_macro)
-        struct_name = struct_match.group(1) if struct_match else None
-
-        ACTIX_METHOD_MAP = {
-            'get': 'GET', 'post': 'POST', 'put': 'PUT', 'delete': 'DELETE',
-            'patch': 'PATCH', 'head': 'HEAD', 'options': 'OPTIONS',
-        }
-
-        # Extract: "/path" => get(handler)
-        for route_m in re.finditer(r'"([^"]+)"\s*=>\s*(get|post|put|delete|patch|head|options)\s*\(\s*([\w:]+)\s*\)', macro_body):
-            path = route_m.group(1)
-            method_raw = route_m.group(2).lower()
-            handler = route_m.group(3).split('::')[-1]
-            route_line = macro_line + macro_body[:route_m.start()].count('\n')
-            routes.append({
-                "method": ACTIX_METHOD_MAP.get(method_raw, method_raw.upper()),
-                "path": path, "handler_name": handler,
-                "file": rel_path, "line": route_line, "framework": "actix-web",
-                "middleware": [], "auth_required": False,
-                "request_type": "http_handler", "response_type": None,
-                "macro_source": struct_name or "routes::routes",
-            })
-
-        # Extract: "/path" => sub(module::Api)
-        for sub_m in re.finditer(r'"([^"]+)"\s*=>\s*sub\s*\(\s*([\w:]+)\s*\)', macro_body):
-            scope_path = sub_m.group(1)
-            sub_module = sub_m.group(2).split('::')[-1]
-            route_line = macro_line + macro_body[:sub_m.start()].count('\n')
-            routes.append({
-                "method": "SCOPE", "path": scope_path, "handler_name": sub_module,
-                "file": rel_path, "line": route_line, "framework": "actix-web",
-                "middleware": [], "auth_required": False,
-                "request_type": "route_scope", "response_type": None,
-                "macro_source": struct_name or "routes::routes",
-            })
-
-    # #[route("/path", method = "GET")]
-    for m in re.finditer(r'#\[route\s*\(\s*"([^"]+)"\s*,\s*method\s*=\s*"?(\w+)"?\s*\)\s*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*\(', content):
+    # ─── 1. net/http stdlib: http.HandleFunc("/path", handler) ─
+    for m in re.finditer(
+        r'(?:http|mux)\.(?:HandleFunc|Handle)\s*\(\s*"([^"]+)"\s*,\s*(\w+)',
+        content
+    ):
         path = m.group(1)
-        method_raw = m.group(2).lower()
-        handler = m.group(3)
+        handler = m.group(2)
         line_num = content[:m.start()].count('\n') + 1
         routes.append({
-            "method": method_raw.upper(), "path": path, "handler_name": handler,
-            "file": rel_path, "line": line_num, "framework": "rust-web",
-            "middleware": [], "auth_required": False,
-            "request_type": "http_handler", "response_type": None,
-            "macro_source": "route",
+            "method": "GET",  # HandleFunc defaults to GET; Handle is handler-based
+            "path": _normalize_path(path),
+            "handler_name": handler,
+            "file": rel_path,
+            "line": line_num,
+            "framework": "go-net-http",
+            "middleware_chain": [],
+            "request_type": None,
+            "response_type": None,
         })
+        frameworks.add("go-net-http")
+
+    # ─── 2. Gin: r.GET("/path", handler) ────────────────────────
+    # Also matches router.GET, g.GET, etc.
+    if is_gin:
+        # Detect Group assignments: apiGroup := r.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Parse the full argument list after the path to find handler & middleware
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            # Apply group prefix if available
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "gin",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("gin")
+
+    # ─── 3. Echo: e.GET("/path", handler) ──────────────────────
+    if is_echo:
+        # Detect Echo Group: g := e.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "echo",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("echo")
+
+    # ─── 4. Chi: r.Get("/path", handler), r.Route("/path", fn) ─
+    if is_chi:
+        # Chi uses Title-case methods: r.Get, r.Post, etc.
+        # Detect Chi Route groups
+        for rm in re.finditer(
+            r'(\w+)\s*:=?\s*\w+\.Route\s*\(\s*"([^"]+)"',
+            content
+        ):
+            router_groups[rm.group(1)] = rm.group(2)
+
+        # Collect the character ranges of r.Route(...) closure blocks
+        # so we can exclude those inner routes from the top-level scan.
+        # Ranges start after the opening { so the Route call itself is NOT excluded.
+        route_closure_ranges: List[tuple] = []
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+            content
+        ):
+            closure_start = m.end()  # just past the opening {
+            block = _extract_go_block(content, closure_start)
+            if block is not None:
+                # Range starts at m.end() so the Route call itself is NOT inside the range
+                route_closure_ranges.append((m.end(), closure_start + len(block)))
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            # Skip matches inside r.Route(...) closures — they'll be handled below
+            if any(lo <= m.start() < hi for lo, hi in route_closure_ranges):
+                continue
+
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "chi",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("chi")
+
+        # Chi r.Route("/path", func(r chi.Router) { r.Get(...), r.Post(...) })
+        # Also handles nested Route closures recursively
+        def _extract_chi_route_block(block_text: str, prefix: str, rel: str, ln: int):
+            """Recursively extract Chi routes from a Route closure block."""
+            # Collect nested Route closure ranges to skip from top-level scan
+            nested_ranges: List[tuple] = []
+            for nm in re.finditer(
+                r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+                block_text
+            ):
+                nested_prefix = nm.group(2)
+                nested_closure_start = nm.end()
+                nested_block = _extract_go_block(block_text, nested_closure_start)
+                if nested_block is not None:
+                    nested_ranges.append((nm.start(), nested_closure_start + len(nested_block)))
+                    # Recurse into nested Route
+                    _extract_chi_route_block(
+                        nested_block,
+                        _normalize_path(prefix + nested_prefix),
+                        rel, ln
+                    )
+
+            # Match method calls, skipping those inside nested Route closures
+            for im in re.finditer(
+                r'\.\s*(Get|Post|Put|Delete|Patch|Head|Options)\s*\(\s*"([^"]+)"',
+                block_text
+            ):
+                if any(lo <= im.start() < hi for lo, hi in nested_ranges):
+                    continue
+                inner_method = im.group(1).upper()
+                inner_path = im.group(2)
+                inner_handler, inner_mw = _parse_go_route_args(
+                    block_text, im.end(), rel, ln
+                )
+                full_path = _normalize_path(prefix + inner_path)
+                routes.append({
+                    "method": inner_method,
+                    "path": full_path,
+                    "handler_name": inner_handler,
+                    "file": rel,
+                    "line": ln,
+                    "framework": "chi",
+                    "middleware_chain": inner_mw,
+                    "request_type": None,
+                    "response_type": None,
+                })
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Route\s*\(\s*"([^"]+)"\s*,\s*(?:func\s*\([^)]*\)\s*\{)',
+            content
+        ):
+            # Skip nested Route calls that are inside an outer Route closure
+            # (they'll be handled recursively by _extract_chi_route_block)
+            if any(lo <= m.start() < hi for lo, hi in route_closure_ranges):
+                continue
+            route_path = m.group(2)
+            line_num = content[:m.start()].count('\n') + 1
+            closure_start = m.end()
+            block = _extract_go_block(content, closure_start)
+            if block:
+                _extract_chi_route_block(block, route_path, rel_path, line_num)
+
+    # ─── 5. Fiber: app.Get("/path", handler) ────────────────────
+    if is_fiber:
+        # Fiber uses Title-case methods like Chi
+        # Detect Fiber Group: g := app.Group("/api")
+        for gm in re.finditer(
+            r'(\w+)\s*(?::=|=)\s*\w+\.Group\s*\(\s*"([^"]*)"',
+            content
+        ):
+            router_groups[gm.group(1)] = gm.group(2)
+
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method_raw = m.group(2)
+            method = method_raw.upper() if method_raw != "All" else "ALL"
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "fiber",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("fiber")
+
+    # ─── 6. httprouter: router.GET("/path", handler) ────────────
+    if is_httprouter:
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            routes.append({
+                "method": method,
+                "path": _normalize_path(path),
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "httprouter",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("httprouter")
+
+        # httprouter.Handle("METHOD", "/path", handler)
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*Handle\s*\(\s*"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)"\s*,\s*"([^"]+)"\s*,\s*(\w+)',
+            content
+        ):
+            method = m.group(2).upper()
+            path = m.group(3)
+            handler = m.group(4)
+            line_num = content[:m.start()].count('\n') + 1
+            routes.append({
+                "method": method,
+                "path": _normalize_path(path),
+                "handler_name": handler,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "httprouter",
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+            })
+            frameworks.add("httprouter")
+
+    # ─── Fallback: generic Go HTTP method calls ─────────────────
+    # If no specific framework was detected but the file uses net/http
+    # and has method calls, catch them as generic go-http routes.
+    if not is_gin and not is_echo and not is_chi and not is_fiber and not is_httprouter and is_net_http:
+        # Upper-case method calls (e.g., router.GET, r.POST)
+        for m in re.finditer(
+            r'(\w+)\s*\.\s*(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s*\(\s*"([^"]+)"',
+            content
+        ):
+            obj_name = m.group(1)
+            # Skip if obj is a well-known non-router
+            if obj_name in ("http", "mux"):
+                continue  # already handled above
+            method = m.group(2).upper()
+            path = m.group(3)
+            line_num = content[:m.start()].count('\n') + 1
+
+            # Skip if already captured
+            if any(r["file"] == rel_path and r["line"] == line_num and r["method"] == method for r in routes):
+                continue
+
+            handler_name, mw_chain = _parse_go_route_args(content, m.end(), rel_path, line_num)
+
+            prefix = router_groups.get(obj_name, "")
+            full_path = _normalize_path(prefix + path)
+
+            routes.append({
+                "method": method,
+                "path": full_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "framework": "go-http",
+                "middleware_chain": mw_chain,
+                "request_type": None,
+                "response_type": None,
+            })
 
     return routes
+
+
+def _parse_go_route_args(
+    content: str, start_pos: int, rel_path: str, line_num: int
+) -> tuple:
+    """Parse Go route call arguments after the path string.
+
+    Given that the regex matched up to the closing quote of the path,
+    parse the remaining arguments to determine the final handler name
+    and any middleware in between.
+
+    Returns (handler_name, middleware_chain).
+    For example: r.GET("/path", authMiddleware(), logger(), finalHandler)
+    → ("finalHandler", [{"name": "authMiddleware", ...}, {"name": "logger", ...}])
+    """
+    # Find the opening paren of the call (search backward from current position)
+    paren_start = content.rfind('(', 0, start_pos + 1)
+    if paren_start < 0:
+        return ("anonymous", [])
+
+    # Find the matching closing paren
+    depth = 1
+    pos = paren_start + 1
+    while pos < len(content) and depth > 0:
+        if content[pos] == '(':
+            depth += 1
+        elif content[pos] == ')':
+            depth -= 1
+        pos += 1
+
+    args_section = content[paren_start + 1:pos - 1]
+    args = _split_args(args_section)
+
+    # args[0] should be the path string, remaining args are handlers/middleware
+    # The last non-path arg is the handler; args between are middleware
+    handler_name = "anonymous"
+    middleware: List[Dict[str, Any]] = []
+
+    if len(args) <= 1:
+        # Only path, no handler arg (shouldn't happen in valid Go, but be safe)
+        return (handler_name, middleware)
+
+    # Collect all non-path arguments
+    non_path_args = [a.strip() for a in args[1:] if a.strip()]
+
+    if not non_path_args:
+        return (handler_name, middleware)
+
+    # The last argument is the final handler
+    last_arg = non_path_args[-1]
+    # Extract the identifier name from the handler arg
+    m = re.match(r'(\w+)', last_arg)
+    if m:
+        handler_name = m.group(1)
+
+    # Everything before the last arg is middleware
+    for arg in non_path_args[:-1]:
+        arg = arg.strip()
+        if not arg:
+            continue
+        # Strip function call parens: AuthMiddleware() → AuthMiddleware
+        bare_name = re.sub(r'\(.*\)', '', arg).strip()
+        if not bare_name:
+            bare_name = arg
+        mw_type = _classify_middleware(bare_name)
+        middleware.append({
+            "name": bare_name,
+            "type": mw_type,
+            "file": rel_path,
+            "line": line_num,
+        })
+
+    return (handler_name, middleware)
+
+
+def _go_file_framework(
+    content: str,
+    is_gin: bool, is_echo: bool, is_chi: bool,
+    is_fiber: bool, is_httprouter: bool, is_net_http: bool
+) -> str:
+    """Determine the dominant Go framework for a file based on imports."""
+    if is_gin:
+        return "gin"
+    if is_echo:
+        return "echo"
+    if is_chi:
+        return "chi"
+    if is_fiber:
+        return "fiber"
+    if is_httprouter:
+        return "httprouter"
+    if is_net_http:
+        return "go-net-http"
+    return "go"
+
+
+def _extract_go_block(content: str, start: int) -> Optional[str]:
+    """Extract a balanced curly-brace block starting at `start` (which should be
+    just past the opening brace). Returns the block content without outer braces,
+    or None if the block can't be found."""
+    if start >= len(content):
+        return None
+    depth = 1
+    pos = start
+    while pos < len(content) and depth > 0:
+        if content[pos] == '{':
+            depth += 1
+        elif content[pos] == '}':
+            depth -= 1
+        pos += 1
+    if depth == 0:
+        return content[start:pos - 1]
+    return None
+
+
+def _detect_go_frameworks(workspace: str, frameworks: Set[str]) -> None:
+    """Detect Go web frameworks from go.mod dependency declarations."""
+    go_mod_path = os.path.join(workspace, "go.mod")
+    if not os.path.isfile(go_mod_path):
+        return
+
+    try:
+        with open(go_mod_path, 'r', encoding='utf-8', errors='ignore') as f:
+            go_mod = f.read()
+    except IOError:
+        return
+
+    # Map of import path substrings → framework names
+    go_fw_map = {
+        "github.com/gin-gonic/gin": "gin",
+        "github.com/labstack/echo": "echo",
+        "github.com/go-chi/chi": "chi",
+        "github.com/go-chi/chi/v5": "chi",
+        "github.com/gofiber/fiber": "fiber",
+        "github.com/julienschmidt/httprouter": "httprouter",
+    }
+
+    for import_path, fw_name in go_fw_map.items():
+        if import_path in go_mod:
+            frameworks.add(fw_name)
+
+    # If go.mod exists but no specific framework, note standard library
+    if not any(fw in frameworks for fw in ("gin", "echo", "chi", "fiber", "httprouter")):
+        frameworks.add("go-net-http")
 
 
 # ─── PHP / Laravel Route Extraction ──────────────────────────
@@ -3550,305 +3167,174 @@ def _extract_php_middleware(content: str, rel_path: str) -> List[Dict]:
     return middleware
 
 
-# ─── Rust ECS Pattern Detection (Bevy, Legion, etc.) ────────────
+# ─── Ruby: Rails route extraction ─────────────────────────────────
 
-def _extract_rust_ecs_patterns(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract Rust ECS (Entity Component System) patterns.
-
-    Detects Bevy-specific patterns:
-    - System functions: fn my_system(query: Query<...>)
-    - Plugin implementations: impl Plugin for MyPlugin
-    - App builder calls: app.add_systems(Update, my_system)
-    - Resource definitions: #[derive(Resource)] struct MyResource
-    - Component definitions: #[derive(Component)] struct MyComponent
-    - Event definitions: #[derive(Event)] struct MyEvent
-    - States: #[derive(States)] enum GameState
-
-    These are not HTTP routes but represent the "API surface" of an ECS
-    application — the systems, plugins, and components that wire the
-    application together.
-    """
+def _extract_rails_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract routes from Rails routes.rb files."""
     routes = []
+    is_routes_file = 'routes.rb' in rel_path or 'config/routes' in rel_path
+    if not is_routes_file:
+        return routes
 
-    # ─── Bevy Plugin Implementation ────────────────────────
-    for m in re.finditer(r'impl\s+Plugin\s+for\s+(\w+)', content):
-        plugin_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "PLUGIN",
-            "path": f"/plugin/{plugin_name}",
-            "handler": plugin_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_plugin",
-        })
+    frameworks_detected.add("rails")
 
-    # ─── System Registration (app.add_systems / app.add_system) ──
-    for m in re.finditer(r'\.add_systems?\s*\(\s*(?:Update|Startup|FixedUpdate|PreUpdate|PostUpdate|Last|First|RunFixedMainLoop)\s*,\s*(\w+)', content):
-        system_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "SYSTEM",
-            "path": f"/system/{system_name}",
-            "handler": system_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_system",
-        })
+    current_namespace = ""
 
-    # ─── Component Definitions ─────────────────────────────
-    for m in re.finditer(r'#\[derive\([^)]*Component[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
-        comp_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "COMPONENT",
-            "path": f"/component/{comp_name}",
-            "handler": comp_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_component",
-        })
+    for i, line in enumerate(content.split('\n'), 1):
+        stripped = line.strip()
 
-    # ─── Resource Definitions ──────────────────────────────
-    for m in re.finditer(r'#\[derive\([^)]*Resource[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
-        res_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "RESOURCE",
-            "path": f"/resource/{res_name}",
-            "handler": res_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_resource",
-        })
+        ns_match = re.match(r'\s*namespace\s+:(\w+)\s+do', line)
+        if ns_match:
+            current_namespace = ns_match.group(1)
+            continue
 
-    # ─── Event Definitions ─────────────────────────────────
-    for m in re.finditer(r'#\[derive\([^)]*Event[^)]*\)\]\s*(?:pub\s+)?struct\s+(\w+)', content):
-        evt_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "EVENT",
-            "path": f"/event/{evt_name}",
-            "handler": evt_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_event",
-        })
+        if stripped == 'end' and current_namespace:
+            current_namespace = ""
+            continue
 
-    # ─── State Definitions ─────────────────────────────────
-    for m in re.finditer(r'#\[derive\([^)]*States[^)]*\)\]\s*(?:pub\s+)?enum\s+(\w+)', content):
-        state_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        routes.append({
-            "method": "STATE",
-            "path": f"/state/{state_name}",
-            "handler": state_name,
-            "file": rel_path,
-            "line": line_num,
-            "framework": "bevy_ecs",
-            "auth": False,
-            "middleware": [],
-            "route_type": "ecs_state",
-        })
+        http_match = re.match(
+            r"\s*(get|post|put|patch|delete)\s+['\"]([^'\"]+)['\"]" +
+            r"(?:\s*,\s*to:\s*['\"]([^'\"]+)['\"])?",
+            line
+        )
+        if http_match:
+            method = http_match.group(1).upper()
+            path = http_match.group(2)
+            handler = http_match.group(3) or ""
+            if current_namespace:
+                path = f"/{current_namespace}{path}"
+            routes.append({
+                "method": method,
+                "path": path,
+                "handler": handler,
+                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
+                "file": rel_path,
+                "line": i,
+                "framework": "rails",
+                "group": current_namespace or "default",
+                "auth_required": False,
+            })
+            continue
+
+        res_match = re.match(r"\s*resources\s+:(\w+)", line)
+        if res_match:
+            resource_name = res_match.group(1)
+            base_path = f"/{resource_name}"
+            if current_namespace:
+                base_path = f"/{current_namespace}{base_path}"
+            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                action_map = {"GET": "index", "POST": "create", "PUT": "update",
+                              "PATCH": "update", "DELETE": "destroy"}
+                action = action_map.get(m, "show")
+                routes.append({
+                    "method": m,
+                    "path": base_path,
+                    "handler": f"{resource_name}#{action}",
+                    "handler_name": action,
+                    "file": rel_path,
+                    "line": i,
+                    "framework": "rails",
+                    "group": current_namespace or "default",
+                    "auth_required": False,
+                    "resource": resource_name,
+                })
+            continue
+
+        root_match = re.match(r"\s*root\s+['\"]([^'\"]+)['\"]", line)
+        if root_match:
+            handler = root_match.group(1)
+            routes.append({
+                "method": "GET",
+                "path": "/",
+                "handler": handler,
+                "handler_name": handler.split('#')[-1] if '#' in handler else handler,
+                "file": rel_path,
+                "line": i,
+                "framework": "rails",
+                "group": "default",
+                "auth_required": False,
+            })
 
     return routes
 
 
-# ─── Deno.serve Route Extraction ────────────────────────────────
+# ─── Elixir: Phoenix route extraction ──────────────────────────────
 
-def _extract_deno_serve_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
-    """Extract routes from Deno.serve() calls and URL-based routing patterns.
-
-    Deno.serve() patterns:
-    1. Deno.serve(handler)              — catch-all handler
-    2. Deno.serve({ opts }, handler)    — options + handler
-    3. Deno.serve({ port: N }, () => new Response("..."))  — inline
-
-    Inside handlers, URL-based routing is common:
-      const url = new URL(req.url);
-      if (url.pathname === "/api/foo") { ... }
-      if (url.pathname.startsWith("/api/bar")) { ... }
-      switch (url.pathname) { case "/api/baz": ... }
-    """
+def _extract_phoenix_routes(content: str, rel_path: str, frameworks_detected: Set[str]) -> List[Dict[str, Any]]:
+    """Extract routes from Phoenix router.ex files."""
     routes = []
-
-    # Quick check: does this file contain Deno.serve?
-    if "Deno.serve" not in content:
+    is_router = 'router.ex' in rel_path or 'router.exs' in rel_path
+    if not is_router:
         return routes
 
-    lines = content.split('\n')
+    frameworks_detected.add("phoenix")
 
-    for i, line in enumerate(lines):
+    current_scope = ""
+    current_pipe = ""
+
+    for i, line in enumerate(content.split('\n'), 1):
         stripped = line.strip()
 
-        # Pattern 1: Deno.serve(handler) or Deno.serve({ ... }, handler)
-        # We detect Deno.serve calls and extract the handler
-        serve_match = re.search(r'Deno\.serve\s*\(', stripped)
-        if not serve_match:
+        scope_match = re.match(r'\s*scope\s+"([^"]+)"', line)
+        if scope_match:
+            current_scope = scope_match.group(1)
             continue
 
-        line_num = i + 1
+        pipe_match = re.match(r'\s*pipe_through\s+:([\w]+)', line)
+        if pipe_match:
+            current_pipe = pipe_match.group(1)
+            continue
 
-        # Try to extract handler name from the serve call
-        # Pattern: Deno.serve(handlerFn) or const server = Deno.serve(handlerFn)
-        # Pattern: Deno.serve({ ... }, handlerFn)
-        handler_name = None
-
-        # Case A: Deno.serve(handlerName) — single arg, no options
-        simple_match = re.search(
-            r'Deno\.serve\s*\(\s*(\w+)\s*\)',
-            stripped
+        http_match = re.match(
+            r'\s*(get|post|put|patch|delete)\s+"([^"]+)"\s*,\s*([\w.]+)\s*,\s*:(\w+)',
+            line
         )
-        if simple_match:
-            handler_name = simple_match.group(1)
-
-        # Case B: Deno.serve({ opts }, handlerName)
-        if not handler_name:
-            # Find the closing brace of options, then the handler
-            # This is complex with nested braces, so we look for common patterns
-            opts_handler_match = re.search(
-                r'Deno\.serve\s*\(\s*\{[^}]*\}\s*,\s*(\w+)\s*\)',
-                stripped
-            )
-            if opts_handler_match:
-                handler_name = opts_handler_match.group(1)
-
-        # Case C: Deno.serve({ opts }, () => ...) or Deno.serve({ opts }, async () => ...)
-        # or Deno.serve(() => ...) or Deno.serve(async (req) => { ... })
-        is_inline_handler = False
-        if not handler_name:
-            if re.search(r'Deno\.serve\s*\([^)]*(?:=>|function\s*\()', stripped):
-                is_inline_handler = True
-
-        # Register the Deno.serve endpoint as a catch-all route
-        if handler_name or is_inline_handler:
+        if http_match:
+            method = http_match.group(1).upper()
+            path = http_match.group(2)
+            controller = http_match.group(3)
+            action = http_match.group(4)
+            if current_scope:
+                path = f"{current_scope}{path}"
             routes.append({
-                "method": "ALL",
-                "path": "/",
-                "handler": handler_name or "<inline>",
-                "file": rel_path,
-                "line": line_num,
-                "framework": "deno",
-                "auth": False,
-                "middleware": [],
-                "route_type": "deno_serve",
-            })
-
-    # ─── URL-based routing inside handlers ──────────────────────
-    # Detect pathname checks inside Deno.serve handlers
-    # Patterns:
-    #   url.pathname === "/path"
-    #   url.pathname.startsWith("/path")
-    #   request.url === "http...path"
-    #   case "/path":
-    #   req.url.endsWith("/path")
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        # Pattern: url.pathname === "/path" or url.pathname == "/path"
-        pathname_exact = re.search(
-            r'(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']',
-            stripped
-        )
-        if pathname_exact:
-            path = pathname_exact.group(1)
-            routes.append({
-                "method": "GET",  # Default to GET; can be refined
+                "method": method,
                 "path": path,
-                "handler": "<pathname_route>",
+                "handler": f"{controller}.{action}",
+                "handler_name": action,
                 "file": rel_path,
-                "line": i + 1,
-                "framework": "deno",
-                "auth": False,
-                "middleware": [],
-                "route_type": "deno_pathname",
+                "line": i,
+                "framework": "phoenix",
+                "group": current_scope or "default",
+                "middleware": [current_pipe] if current_pipe else [],
+                "auth_required": current_pipe in ("authenticate", "auth", "require_login"),
             })
             continue
 
-        # Pattern: url.pathname.startsWith("/path")
-        pathname_prefix = re.search(
-            r'(?:url|req|request)\.pathname\.startsWith\s*\(\s*["\'](/[^"\']*)["\']\s*\)',
-            stripped
-        )
-        if pathname_prefix:
-            path = pathname_prefix.group(1)
-            # Prefix route — mark with wildcard
-            routes.append({
-                "method": "GET",
-                "path": f"{path}/*",
-                "handler": "<pathname_prefix_route>",
-                "file": rel_path,
-                "line": i + 1,
-                "framework": "deno",
-                "auth": False,
-                "middleware": [],
-                "route_type": "deno_pathname_prefix",
-            })
-            continue
-
-        # Pattern: case "/path": (inside switch on url.pathname)
-        case_path = re.search(
-            r'case\s+["\'](/[^"\']*)["\']\s*:',
-            stripped
-        )
-        if case_path:
-            path = case_path.group(1)
-            # Only if we're in a file that has Deno.serve
-            routes.append({
-                "method": "GET",
-                "path": path,
-                "handler": "<case_route>",
-                "file": rel_path,
-                "line": i + 1,
-                "framework": "deno",
-                "auth": False,
-                "middleware": [],
-                "route_type": "deno_case_route",
-            })
-            continue
-
-        # Pattern: method check + pathname — (req.method === "POST" && url.pathname === "/path")
-        method_pathname = re.search(
-            r'(?:req|request)\.method\s*===?\s*["\'](GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)["\']'
-            r'.*?(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']',
-            stripped
-        )
-        if not method_pathname:
-            # Reverse order: pathname first, then method
-            method_pathname = re.search(
-                r'(?:url|req|request)\.pathname\s*===?\s*["\'](/[^"\']*)["\']'
-                r'.*?(?:req|request)\.method\s*===?\s*["\'](GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)["\']',
-                stripped
-            )
-            if method_pathname:
-                path = method_pathname.group(1)
-                method = method_pathname.group(2)
+        res_match = re.match(r'\s*resources\s+"([^"]+)"\s*,\s*([\w.]+)', line)
+        if res_match:
+            path = res_match.group(1)
+            controller = res_match.group(2)
+            if current_scope:
+                path = f"{current_scope}{path}"
+            for m in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                action = {"GET": "index", "POST": "create", "PUT": "update",
+                          "PATCH": "update", "DELETE": "delete"}.get(m, "show")
                 routes.append({
-                    "method": method,
+                    "method": m,
                     "path": path,
-                    "handler": "<method_pathname_route>",
+                    "handler": f"{controller}.{action}",
+                    "handler_name": action,
                     "file": rel_path,
-                    "line": i + 1,
-                    "framework": "deno",
-                    "auth": False,
-                    "middleware": [],
-                    "route_type": "deno_method_route",
+                    "line": i,
+                    "framework": "phoenix",
+                    "group": current_scope or "default",
+                    "middleware": [current_pipe] if current_pipe else [],
+                    "auth_required": False,
+                    "resource": True,
                 })
+
+        if stripped == 'end' and current_scope:
+            current_scope = ""
+            current_pipe = ""
 
     return routes

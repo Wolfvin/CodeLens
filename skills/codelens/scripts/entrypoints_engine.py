@@ -31,8 +31,8 @@ SOURCE_EXTENSIONS = {
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
     ".go",
-    ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sc", ".sh", ".bash",
-    ".nim", ".nims", ".lua", ".java", ".cs", ".zig",
+    ".rb", ".ex", ".exs", ".dart", ".swift", ".scala", ".sh", ".bash", ".zsh",
+    ".kt", ".R", ".r", ".hs", ".lhs", ".nim", ".nims", ".lua",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -327,41 +327,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "go_echo_route",
                 "path_group": 1,
                 "label": "go_echo_handler",
-            },
-            # Nim Jester web framework routes
-            {
-                "regex": r'(?:get|post|put|delete|patch|head|options|error)\s+@"([^"]+)"',
-                "language": {".nim", ".nims"},
-                "extract": "http_route_nim_jester",
-                "method_group": 0,
-                "path_group": 1,
-                "label": "nim_jester_route",
-            },
-            # Nim Jester — match directive (pattern matching routes)
-            {
-                "regex": r'match\s+@"([^"]+)"',
-                "language": {".nim", ".nims"},
-                "extract": "http_route_nim_jester_match",
-                "path_group": 1,
-                "label": "nim_jester_match",
-            },
-            # Nim Prologue web framework routes
-            {
-                "regex": r'(?:app|result)\.(?:get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"',
-                "language": {".nim", ".nims"},
-                "extract": "http_route",
-                "method_group": 0,
-                "path_group": 1,
-                "label": "nim_prologue_route",
-            },
-            # Nim HappyX web framework routes
-            {
-                "regex": r'(?:get|post|put|delete|patch)\s+@\{([^}]+)\}',
-                "language": {".nim", ".nims"},
-                "extract": "http_route_nim_happyx",
-                "method_group": 0,
-                "path_group": 1,
-                "label": "nim_happyx_route",
             },
             # C++ crow/drogon HTTP handlers
             {
@@ -946,19 +911,6 @@ def map_entrypoints(
 
     # ─── Phase 5: Generate recommendations ────────────────────
     recommendations = _generate_recommendations(entrypoints, stats)
-
-    # ─── Phase 6: Sort by importance (real entrypoints first, tests last) ─
-    ENTRYPOINT_PRIORITY = {
-        "main": 0,
-        "http_handler": 1,
-        "cli_command": 2,
-        "event_handler": 3,
-        "worker": 4,
-        "cron_job": 5,
-        "module_export": 6,
-        "test_entry": 7,
-    }
-    entrypoints.sort(key=lambda e: ENTRYPOINT_PRIORITY.get(e.get("type", ""), 8))
 
     return {
         "status": "ok",
