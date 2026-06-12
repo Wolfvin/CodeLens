@@ -5,6 +5,43 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] — 2026-06-12
+
+### Tested against fastapi/fastapi (1,130 Python files, 48 core library + 582 tests + 454 docs examples)
+
+Real-world test on a pure Python library project. FastAPI's unique structure — a small
+core library with massive docs_src/ example directories and comprehensive test suites —
+exposed critical false positive patterns that were invisible on application-type repos
+(prior testing: vercel/swr for React hooks, n8n-io/n8n for Vue/TS monorepo).
+
+### Fixed
+
+- **CRITICAL: Missing `is_bundled_file()` function** — 4 engines crashed on import (`ask.py`, `complexity.py`, `context.py`, `perf_hint.py`). The function was referenced in `perfhint_engine.py` and `complexity_engine.py` but never defined in `utils.py`. Added proper implementation that detects dist/, build/, out/, minified, and bundled file patterns.
+
+- **CRITICAL: `api-map` command crash** — `map_api_routes()` received unexpected keyword argument `production_only`. The command passed it but the engine function signature didn't accept it. Added `production_only` parameter to `map_api_routes()` with route source filtering.
+
+- **SQL injection false positives (16 → 0 on FastAPI)** — f-strings containing English words like "Updated", "Created", "update", "DELETE" were flagged as SQL injection. Examples: `f"Updated {path}"`, `f"Created PR: {pr.number}"`, `f"Please update the response model {type_!r}"`. Fixed by requiring: (1) a secondary SQL keyword (FROM, WHERE, SET, INTO, TABLE, VALUES, JOIN, etc.) in the same string, AND (2) the primary keyword must appear at or near the start of the string content.
+
+- **docs_src/example directory inflation** — 454 docs example files in FastAPI inflated ALL metric categories. `smell_engine.py` now downgrades all smells from docs/examples/test files to "info" severity with `source: "docs_example"` tag. `debugleak_engine.py` skips docs/example directories entirely. `deadcode_engine.py` skips docs_src paths in unused_exports and registry_dead. `deep_nesting` detection skips /tests/, /docs_src/, /examples/ directories.
+
+- **Library code false positives in deadcode** — 189 "unused exports" in FastAPI core library were actually public API, not dead code. Added `_detect_library_package()` that detects Python packages (with __init__.py re-exports, `__all__`), JS libraries (main/module/exports in package.json without scripts.start). For detected libraries: capitalized exports are assumed public API, severity downgraded to "info", message includes "library public API — may be used by consumers". Also skip __init__.py files entirely (re-export entry points).
+
+- **Secrets false positives in test files (10 → 0 on FastAPI)** — All 10 "secrets" were dummy test data: `hashed_password="secrethashed"`, `"password": "incorrect"`. Added `_is_obvious_test_value()` that catches: dictionary dummy passwords (secret, test, incorrect, fake, mock, etc.), very short alpha-only values (≤4 chars), and test-prefixed patterns (test_*, fake_*, mock_*). Only applied in test files to preserve real secret detection.
+
+- **Deep nesting false positives in test directories (925 items removed)** — Test files in /tests/ directory had deep nesting from test setup patterns (pytest fixtures, nested describe blocks). Added /tests/, /docs_src/, /examples/ to skip_dirs in `_detect_deep_nesting()`.
+
+- **Debug leak false positives in docs/examples** — docs_src example files used print() as demo output, not debug code. Added `DOCS_EXAMPLE_PATTERNS` and skip logic to `debugleak_engine.py`.
+
+- **`analyze` command showed wrong version "6.0"** — Hard-coded string instead of importing `CODELENS_VERSION` from utils. Now imports and uses the constant.
+
+### Added
+
+- **`is_bundled_file()` utility function** — Detects bundled/compiled files (dist/, build/, .min.js, .bundle.js, .d.ts, etc.) for engine skip logic. Used by complexity and perf_hint engines.
+- **`_detect_library_package()` in deadcode engine** — Detects if workspace is a library vs application, adjusts unused_exports severity accordingly.
+- **`_is_obvious_test_value()` in secrets engine** — Filters out clearly fake test credentials (dummy passwords, test patterns).
+- **docs_src/doc_src/examples/documentation directory patterns** — Added across all engines (apimap, smell, deadcode, debugleak) for consistent exclusion of documentation example code.
+- **API map `production_only` filtering** — Now actually works, filtering routes tagged as "test" source.
+
 ## [5.10.0] — 2026-06-12
 
 ### Tested against n8n-io/n8n (20,355 files: 9,101 JS + 4,626 TSX + 1,092 Vue + 66 Python, workflow automation monorepo)

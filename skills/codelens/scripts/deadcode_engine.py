@@ -183,6 +183,8 @@ def detect_dead_code(
         '/example/', '/examples/', '/e2e/',
         '/fixture/', '/fixtures/', '/mock/', '/mocks/',
         '/stories/', '/storybook/', '/snippets/',
+        '/docs_src/', '/doc_src/', '/docs/examples/',
+        '/documentation/', '/tutorial/',
     ]
     _CONFIG_PATTERNS = [
         '.config.js', '.config.mjs', '.config.ts',
@@ -201,9 +203,13 @@ def detect_dead_code(
                 return 'config'
         return 'core'
 
-    by_source = {"core": 0, "test": 0, "config": 0}
+    by_source = {"core": 0, "test": 0, "config": 0, "library_api": 0}
     for cat, items in results.items():
         for item in items:
+            # Preserve existing source if already set (e.g., library_api from unused_exports)
+            if item.get('source') in ('library_api',):
+                by_source['library_api'] = by_source.get('library_api', 0) + 1
+                continue
             fpath = item.get('file', '')
             source = _classify_source(fpath)
             item['source'] = source
@@ -866,12 +872,23 @@ def _detect_unused_exports(
     for names in all_imports.values():
         all_imported_names.update(names)
 
+    # Check if this looks like a library (package with __init__.py re-exports)
+    # For libraries, exports are the public API and used by downstream consumers
+    _is_library = _detect_library_package(workspace)
+
     unused = []
     for file_path, exports in all_exports.items():
         # Skip test files and index files (they may be entry points)
         if any(x in file_path for x in ['.test.', '.spec.', '__tests__']):
             continue
+        # Skip docs/examples directories
+        if any(x in file_path for x in ['/docs_src/', '/doc_src/', '/examples/', '/example/',
+                                          '/documentation/', '/docs/examples/', '/snippets/']):
+            continue
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
+            continue
+        # For Python packages, skip __init__.py — these are re-export entry points
+        if file_path.endswith('__init__.py') or file_path.endswith('__init__.pyi'):
             continue
 
         for export in exports:
@@ -881,15 +898,24 @@ def _detect_unused_exports(
             if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
+            # Skip names that are clearly public API (capitalized classes, common patterns)
+            if _is_library and name[0:1].isupper():
+                # Capitalized names in library code are likely public API
+                continue
+
             if name not in all_imported_names:
+                severity = "info" if _is_library else "warning"
                 unused.append({
                     "file": file_path,
                     "line": export["line"],
                     "name": name,
                     "type": export["type"],
-                    "severity": "warning",
-                    "message": f"Export '{name}' is never imported by any file",
-                    "suggestion": f"Remove unused export '{name}' or add import where needed."
+                    "severity": severity,
+                    "source": "library_api" if _is_library else "core",
+                    "message": f"Export '{name}' is never imported by any file" +
+                               (" (library public API — may be used by consumers)" if _is_library else ""),
+                    "suggestion": f"Remove unused export '{name}' or add import where needed." +
+                                  (" Consider adding __all__ if this is intentional public API." if _is_library else "")
                 })
 
     return unused[:200]
@@ -948,6 +974,8 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                 '/example/', '/examples/', '/e2e/',
                 '/fixture/', '/fixtures/', '/mock/', '/mocks/',
                 '/stories/', '/storybook/',
+                '/docs_src/', '/doc_src/', '/docs/examples/',
+                '/documentation/', '/snippets/',
             ]
             if any(p in file_path for p in _test_example_patterns):
                 continue
@@ -984,6 +1012,76 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             })
 
     return dead_items
+
+
+def _detect_library_package(workspace: str) -> bool:
+    """Detect if this workspace is a library package (vs an application).
+
+    A library package's exports are its public API, meant for downstream consumers.
+    Flagging them as "unused" is a false positive since they're used outside the repo.
+
+    Indicators:
+    - Python: Has a proper package structure with __init__.py + re-exports
+    - JS/TS: Has "main"/"module"/"exports" in package.json but no "scripts.start"
+    - Has pyproject.toml with library classifiers or no entry-point console_scripts
+    """
+    # Check for Python library indicators
+    init_path = os.path.join(workspace, '__init__.py')
+    src_init = os.path.join(workspace, 'src', '__init__.py')
+    pkg_init = None
+    # Look for top-level package __init__.py (not in tests/)
+    for item in os.listdir(workspace):
+        item_path = os.path.join(workspace, item)
+        if os.path.isdir(item_path) and not item.startswith('.') and item not in ('tests', 'test', 'docs', 'docs_src', 'scripts'):
+            candidate = os.path.join(item_path, '__init__.py')
+            if os.path.isfile(candidate):
+                pkg_init = candidate
+                break
+
+    if pkg_init:
+        # Check if the __init__.py has re-exports (from .xxx import yyy)
+        try:
+            with open(pkg_init, 'r', encoding='utf-8', errors='ignore') as f:
+                init_content = f.read()
+            # If __init__.py has re-exports, it's a library
+            if re.search(r'from\s+\.+\w+\s+import', init_content):
+                return True
+            # If __init__.py has __all__, it's definitely a library
+            if '__all__' in init_content:
+                return True
+        except IOError:
+            pass
+
+    # Check pyproject.toml for library indicators
+    pyproject_path = os.path.join(workspace, 'pyproject.toml')
+    if os.path.isfile(pyproject_path):
+        try:
+            with open(pyproject_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+            # If it has [project.scripts], it's more likely a CLI app than a library
+            if '[project.scripts]' in content:
+                return False
+            # If it has library classifiers
+            if 'Library' in content and 'PyPI' in content:
+                return True
+        except IOError:
+            pass
+
+    # Check package.json for library indicators
+    pkg_json_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_json_path):
+        try:
+            with open(pkg_json_path, 'r', encoding='utf-8', errors='ignore') as f:
+                pkg = json.load(f)
+            # Has "main" or "module" or "exports" but no "scripts.start" → likely a library
+            has_main = bool(pkg.get('main') or pkg.get('module') or pkg.get('exports'))
+            has_start_script = 'start' in pkg.get('scripts', {})
+            if has_main and not has_start_script:
+                return True
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    return False
 
 
 def _detect_zombie_css(workspace: str) -> List[Dict]:

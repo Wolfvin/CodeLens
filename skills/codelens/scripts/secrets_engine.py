@@ -558,6 +558,11 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if _is_example_or_placeholder_line(line_text):
                         continue
 
+                    # Skip obviously fake test values in test files
+                    # e.g., hashed_password="secrethashed", password="incorrect"
+                    if is_test and _is_obvious_test_value(raw_value):
+                        continue
+
                     # Skip localhost connection strings — these are development defaults, not real secrets
                     if _is_localhost_connection_string(raw_value):
                         continue
@@ -1001,6 +1006,36 @@ def _is_example_or_placeholder_line(line: str) -> bool:
     - * JSDoc comment with @password
     """
     return any(pat.search(line) for pat in LINE_EXCLUSION_PATTERNS)
+
+
+def _is_obvious_test_value(value: str) -> bool:
+    """Check if a secret value is clearly a fake/dummy test value.
+
+    These are commonly used in test files and are not real secrets:
+    - "secrethashed", "secret", "incorrect", "password", "test"
+    - Simple dictionary words or obvious test patterns
+    - Short non-random strings that don't look like real secrets
+    """
+    if not value:
+        return True
+    lower = value.strip().lower().strip('"\'')
+    # Obvious dummy test passwords
+    dummy_passwords = {
+        'secret', 'secrethashed', 'hashed', 'password', 'test', 'incorrect',
+        'fake', 'dummy', 'example', 'placeholder', 'changeme', 'default',
+        'none', 'null', 'undefined', 'empty', 'todo', 'fixme', 'xxx',
+        'abc', 'abc123', '123', '1234', '12345', '123456', '1234567890',
+        'pass', 'test123', 'testing', 'mock', 'sample', 'demo',
+    }
+    if lower in dummy_passwords:
+        return True
+    # Very short values (1-4 chars) are unlikely to be real secrets
+    if len(lower) <= 4 and lower.isalpha():
+        return True
+    # Patterns like "test_password", "fake_key", "mock_secret"
+    if any(lower.startswith(p + '_') or lower.startswith(p + '-') for p in ('test', 'fake', 'mock', 'dummy', 'sample', 'example')):
+        return True
+    return False
 
 def _is_template_value(value: str) -> bool:
     """Check if a value is a template expression placeholder, not a real secret.

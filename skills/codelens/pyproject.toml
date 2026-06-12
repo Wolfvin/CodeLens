@@ -4,11 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codelens"
-version = "5.10.0"
-description = "Live Codebase Reference Intelligence — 41 commands for AI-powered code analysis, security auditing, and quality scoring"readme = "README.md"
+version = "6.4.0"
+description = "Live Codebase Reference Intelligence — 45 commands for AI-powered code analysis, security auditing, and quality scoring"
+readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.8"authors = [
-    {name = "Wolfvin"},]keywords = [
+requires-python = ">=3.8"
+authors = [
+    {name = "Wolfvin"},
+]
+keywords = [
     "code-analysis", "reference-tracking", "dead-code", "duplicate-detection",
     "frontend", "backend", "rust", "html", "css", "javascript", "typescript",    "tsx", "jsx", "react", "vue", "svelte", "tailwind", "tree-sitter",
     "ast-parsing", "call-graph", "class-tracking", "impact-analysis",

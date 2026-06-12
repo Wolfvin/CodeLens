@@ -81,7 +81,8 @@ def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    production_only: bool = False
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -92,6 +93,7 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
+        production_only: If True, exclude routes from test/example/docs files
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -128,6 +130,7 @@ def map_api_routes(
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/docs_src/', '/docs/', '/doc_src/', '/documentation/',
             ])
 
             try:
@@ -265,6 +268,7 @@ def map_api_routes(
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/docs_src/', '/docs/', '/doc_src/', '/documentation/',
             ]) else "production"
 
     # Attach middleware to routes
@@ -305,6 +309,9 @@ def map_api_routes(
         route["deprecated"] = _is_deprecated_route(route)
 
     # Apply filters
+    if production_only:
+        routes = [r for r in routes if r.get("source") != "test"]
+
     if method:
         method_upper = method.upper()
         routes = [r for r in routes if r["method"].upper() == method_upper]
