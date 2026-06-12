@@ -1108,7 +1108,8 @@ def map_entrypoints(
     workspace: str,
     entry_type: Optional[str] = None,
     config: Optional[Dict] = None,
-    exclude_tests: bool = False
+    exclude_tests: bool = False,
+    max_files: int = 5000
 ) -> Dict[str, Any]:
     """
     Map all execution entry points in the codebase.
@@ -1122,6 +1123,7 @@ def map_entrypoints(
                    "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
         exclude_tests: If True, exclude "test_entry" from scanning (v6.3)
+        max_files: Maximum number of files to scan (default: 5000, v7.2)
 
     Returns:
         Dict with entrypoints, execution graph, stats, and recommendations
