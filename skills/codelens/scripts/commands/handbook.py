@@ -303,10 +303,31 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            # v6.1: Detect library vs application from package.json fields
+            # Libraries have: main, module, types, files, sideEffects
+            # and typically no "scripts.start" or "scripts.dev"
+            is_library = (
+                "main" in pkg or "module" in pkg or "exports" in pkg
+            ) and (
+                "files" in pkg or "sideEffects" in pkg
+                or "typings" in pkg or "types" in pkg
+            )
+            # Also check: if there's no "start" or "dev" script, it's likely a library
+            scripts = pkg.get("scripts", {})
+            # v6.1: Consider script purpose — "start": "yarn storybook" is NOT an app script
+            start_script = scripts.get("start", "")
+            has_app_script = (
+                ("start" in scripts and "storybook" not in start_script.lower())
+                or "dev" in scripts
+                or "serve" in scripts
+            )
+
             if "next" in deps:
                 js_type = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
                 js_type = "backend-api"
+            elif is_library and not has_app_script:
+                js_type = "frontend-library"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
                 js_type = "frontend-app"
             else:
@@ -316,6 +337,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
 
     # v6: Walk sub-directories for nested package.json (apps/*, packages/*)
     _MONOREPO_SUBDIRS = ["apps", "packages", "services"]
+    _monorepo_subdir_count = 0  # track how many sub-packages found
     for subdir in _MONOREPO_SUBDIRS:
         subdir_path = os.path.join(workspace, subdir)
         if not os.path.isdir(subdir_path):
@@ -325,6 +347,7 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 entry_pkg = os.path.join(subdir_path, entry, "package.json")
                 if not os.path.isfile(entry_pkg):
                     continue
+                _monorepo_subdir_count += 1
                 try:
                     with open(entry_pkg, 'r', encoding='utf-8') as f:
                         pkg = json.load(f)
@@ -357,6 +380,25 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
                 except Exception:
                     pass
         except OSError:
+            pass
+
+    # v6.3: If we found 2+ sub-packages in apps/packages/services, mark as monorepo
+    if _monorepo_subdir_count >= 2 and not identity["is_monorepo"]:
+        identity["is_monorepo"] = True
+        if "yarn-workspace" not in identity["monorepo_tools"]:
+            identity["monorepo_tools"].append("yarn-workspace")
+
+    # v6.3: Also check root package.json for "workspaces" field (npm/yarn workspaces)
+    if has_package_json and not identity["is_monorepo"]:
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            workspaces = pkg.get("workspaces")
+            if workspaces:
+                identity["is_monorepo"] = True
+                if "npm-workspaces" not in identity["monorepo_tools"]:
+                    identity["monorepo_tools"].append("npm-workspaces")
+        except Exception:
             pass
 
     # Try pyproject.toml
@@ -433,119 +475,61 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # C/C++ project detection
-    c_cpp_type = None
+    # v6.1: Try CMakeLists.txt — detect CMake/C++ projects
+    cmake_type = None
     cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    makefile_path = os.path.join(workspace, 'Makefile')
-    meson_path = os.path.join(workspace, 'meson.build')
-    configure_path = os.path.join(workspace, 'configure.ac')
-    autotools_path = os.path.join(workspace, 'configure')
     if os.path.isfile(cmake_path):
-        c_cpp_type = "cmake-project"
         try:
-            with open(cmake_path, 'r', encoding='utf-8') as f:
+            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
                 cmake_content = f.read()
-            proj_match = re.search(r'project\s*\(\s*(\w+)', cmake_content)
-            ver_match = re.search(r'project\s*\(\s*\w+\s+VERSION\s+(\S+)', cmake_content)
+            # Extract project name from cmake: project(Name VERSION X.Y.Z)
+            proj_match = re.search(r'project\s*\(\s*([^\s\)]+)', cmake_content)
+            ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
             if proj_match:
                 identity["name"] = proj_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
-        except Exception:
-            pass
-    elif os.path.isfile(makefile_path):
-        c_cpp_type = "makefile-project"
-    elif os.path.isfile(meson_path):
-        c_cpp_type = "meson-project"
-        try:
-            with open(meson_path, 'r', encoding='utf-8') as f:
-                meson_content = f.read()
-            proj_match = re.search(r"project\s*\(\s*['\"](\w+)['\"]", meson_content)
-            ver_match = re.search(r"version\s*:\s*['\"]([^'\"]+)['\"]", meson_content)
-            if proj_match:
-                identity["name"] = proj_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-        except Exception:
-            pass
-    elif os.path.isfile(configure_path) or os.path.isfile(autotools_path):
-        c_cpp_type = "autotools-project"
-
-    # If no build system found but C/C++ files exist, classify generically
-    if c_cpp_type is None:
-        c_cpp_count = 0
-        for ext_cc in ('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp'):
+            # Classify CMake project type
+            cmake_lower = cmake_content.lower()
+            has_lua = os.path.isdir(os.path.join(workspace, 'builtin')) or os.path.isdir(os.path.join(workspace, 'scripts'))
+            lua_count = 0
             for root, dirs, files in os.walk(workspace):
                 dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                c_cpp_count += sum(1 for f in files if f.endswith(ext_cc))
-                if c_cpp_count > 10:
-                    break
-            if c_cpp_count > 10:
-                break
-        if c_cpp_count > 0:
-            c_cpp_type = "c-project"
-
-    # Lua project detection
-    lua_type = None
-    rockspec_files = [f for f in os.listdir(workspace) if f.endswith('.rockspec')]
-    if rockspec_files:
-        lua_type = "lua-rock-project"
-        try:
-            with open(os.path.join(workspace, rockspec_files[0]), 'r', encoding='utf-8') as f:
-                rock_content = f.read()
-            name_match = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
-            ver_match = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', rock_content, re.MULTILINE)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-        except Exception:
-            pass
-    else:
-        lua_count = sum(1 for f in os.listdir(workspace) if f.endswith('.lua'))
-        if lua_count > 3:
-            lua_type = "lua-project"
-
-    # PHP project detection (beyond what framework_detect already handles)
-    php_type = None
-    composer_path = os.path.join(workspace, 'composer.json')
-    if os.path.isfile(composer_path):
-        try:
-            with open(composer_path, 'r', encoding='utf-8') as f:
-                composer = json.load(f)
-            identity["name"] = composer.get("name", identity["name"]).split('/')[-1]
-            identity["version"] = composer.get("version", identity["version"])
-            identity["description"] = composer.get("description", "")
-            require = composer.get("require", {})
-            if "laravel/framework" in require or "illuminate/database" in require:
-                php_type = "laravel-app"
-            elif "symfony/symfony" in require:
-                php_type = "symfony-app"
+                for fname in files:
+                    if fname.endswith('.lua'):
+                        lua_count += 1
+            if lua_count > 10 or has_lua:
+                cmake_type = "cpp-game-engine"  # C++ with Lua scripting = likely game engine
+            elif 'qt' in cmake_lower or 'Qt5' in cmake_content or 'Qt6' in cmake_content:
+                cmake_type = "qt-desktop-app"
+            elif any(kw in cmake_lower for kw in ('opengl', 'vulkan', 'sdl', 'glfw', 'glew')):
+                cmake_type = "cpp-graphics"
+            elif 'android' in cmake_lower or os.path.isdir(os.path.join(workspace, 'android')):
+                cmake_type = "cpp-mobile-app"
             else:
-                php_type = "php-project"
+                cmake_type = "cpp-project"
         except Exception:
-            pass
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
 
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type, c_cpp_type, lua_type, php_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
+        if cmake_type:
+            type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
-        if c_cpp_type:
-            type_parts.append("c-cpp")
-        if lua_type:
-            type_parts.append("lua")
-        if php_type:
-            type_parts.append("php")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        # v6.1: Add Lua indicator for C++ projects with Lua scripting
+        if cmake_type and lua_count > 10:
+            type_parts.append("lua")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -606,6 +590,23 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
+        # v6.1: Game engine / native C++ project directory hints
+        'builtin': 'Built-in Lua/game scripts',
+        'mods': 'Game modifications / plugins',
+        'games': 'Game content packs',
+        'textures': 'Texture assets',
+        'fonts': 'Font assets',
+        'shaders': 'GPU shader programs',
+        'client': 'Client-side code',
+        'clientmods': 'Client-side modifications',
+        'irr': 'Irrlicht engine fork',
+        'android': 'Android platform support',
+        'po': 'Translation/localization files',
+        'worlds': 'Game world data',
+        'include': 'C/C++ header files',
+        'cmake': 'CMake build modules',
+        'fastlane': 'Mobile deployment automation',
+        'misc': 'Miscellaneous files',
     }
     dir_map = {}
     try:

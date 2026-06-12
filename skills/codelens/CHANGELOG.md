@@ -5,59 +5,55 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [6.2.0] — 2026-06-12
+## [6.1.0] — 2026-06-12
 
-### Tested against 8 diverse real-world repos (multi-language stress test)
+### Tested against minetest/minetest (2,430 files: 598 C++ headers + 445 C++ + 206 Lua + 40 GLSL, CMake/C++ game engine with Lua scripting)
 
-| Repo | Language | Files | Smells | Complexity | Before |
-|------|----------|-------|--------|------------|--------|
-| BurntSushi/ripgrep | Rust | 221 | 843 | 2,185 fns | 0 smells, 0 fns |
-| gin-gonic/gin | Go | 130 | 365 | 1,318 fns | 0 smells, 0 fns |
-| htop-dev/htop | C/Lua | 352 | 1,210 | 1,562 fns | 0 smells, 0 fns |
-| luvit/luvit | Lua/C | 284 | 635 | 816 fns | 0 smells, 0 fns |
-| nicm/fdm | C | 101 | 372 | 3 fns | 0 smells, 0 fns |
-| elixir-lang/elixir | Elixir | 777 | N/A | N/A | 0 nodes (unsupported) |
-| pallets/flask | Python | 236 | 242 | 1,365 fns | Smells worked, complexity 0 |
-| laravel/laravel | PHP | 63 | 122 | N/A | 0 smells |
+Real-world test on a polyglot C++/Lua/GLSL voxel game engine (Luanti/Minetest). This is the first
+test on a non-web, non-API-server project — a native C++ game engine with embedded Lua scripting,
+GLSL shaders, and Android Java support. Identified and fixed major gaps in project identity detection,
+language classification, entry point detection, and tooling recommendations for native/C++ projects.
 
 ### Added
 
-- **Elixir language support in scan**: New `fallback_elixir.py` parser extracts `defmodule`, `def`, `defp`, `defmacro`, `use`, `import`, `require`, `alias`, and function calls. Elixir files (.ex, .exs) are now discovered and parsed during scan. Result on elixir-lang/elixir: 16,136 nodes, 61,970 edges (from 0).
-- **Go/C/C++/Lua/PHP function detection in smell engine**: Added branches for `_detect_long_functions`, `_detect_deep_nesting`, `_detect_many_params`, and `_detect_god_objects` for Go (`func`), C/C++ (`type name(params)`), Lua (`function name()`), and PHP (`function name()`). Health scores now vary realistically across all languages.
-- **Go/C/C++/Lua/PHP variable detection in dead-code engine**: Added `_detect_unused_variables` branches for Go (`var`/`:=`), C/C++ (typed declarations), Lua (`local`), and PHP (`$var`). Added `_detect_unreachable_code` function-start detection for Go, C/C++, Lua, and PHP.
-- **Go/Rust/C/Lua/PHP export/import collection**: New `_collect_go_exports_imports`, `_collect_rust_exports_imports`, `_collect_c_exports_imports`, `_collect_lua_exports_imports`, and `_collect_php_exports_imports` functions for cross-file dead code detection.
-- **Lua/PHP function extraction in complexity engine**: New `_extract_lua_functions` and `_extract_php_functions` with body extractors (`_get_lua_function_body`, `_get_php_function_body`).
-- **Elixir function extraction in complexity engine**: New `_extract_elixir_functions` and `_get_elixir_function_body` using do/end block matching.
-- **C/C++ project type detection in handbook**: Detects CMakeLists.txt, Makefile, meson.build, configure.ac projects. Falls back to "c-project" if C/C++ source files are found without a build system.
-- **Lua project type detection in handbook**: Detects .rockspec files and Lua-dense directories.
-- **PHP project type detection in handbook**: Parses composer.json for Laravel/Symfony detection.
-- **Go test entry detection**: `entrypoints` command now detects `func TestXxx(t *testing.T)`, `func BenchmarkXxx(b *testing.B)`, and `func FuzzXxx(f *testing.F)`.
-- **C/C++ test entry detection**: Detects Google Test macros (`TEST`, `TEST_F`, `TEST_P`) and `test_` function prefixes.
-- **Lua test entry detection**: Detects busted framework `describe`/`it` patterns.
-- **PHP test entry detection**: Detects PHPUnit `public function testXxx()` methods.
-- **Elixir extensions in SOURCE_EXTENSIONS**: All analysis engines now include `.ex` and `.exs`.
-- **Flexible C main() regex**: Now matches `int main(void)`, `void main()`, `char **argv`, and `WinMain`/`wmain` variants.
-- **Flexible Go Gin route regex**: Now matches any variable name, not just `r`/`router`/`engine`.
-- **Multi-language error handling patterns**: Inconsistent patterns detector now tracks Go errors (`if err != nil`), C errno/return codes, Lua pcall/xpcall, and PHP exceptions.
-- **Multi-language async patterns**: Tracks Go goroutines and Lua coroutines.
-- **Multi-language export patterns**: Tracks Go imports, Rust use, C includes, Lua requires, and PHP use statements.
+- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for `project(Name VERSION X.Y.Z)`, extracting project name and version. Classifies CMake projects as `cpp-game-engine` (C++ + Lua scripting), `qt-desktop-app`, `cpp-graphics`, `cpp-mobile-app`, or `cpp-project` based on CMakeLists.txt content and directory structure.
+- **Lua entry point detection**: New `lua_entry` entrypoint type with 4 patterns: `dofile()`, `require()`, `core.register_*()` (Luanti/Minetest API), and `minetest.register_*()` (legacy Minetest API). These detect game mod registration, script loading, and module initialization patterns.
+- **C++ entry point detection**: Added 4 new C++ entry point patterns: `WinMain` (Windows GUI), `wmain` (Unicode console), `SDL_main` (SDL game), `DllMain` (DLL entry). These cover the most common Windows/native application entry points beyond `int main()`.
+- **Game engine directory hints**: `_build_directory_map()` now recognizes 18 new directory names common in game engines and native C++ projects: `builtin`, `mods`, `games`, `textures`, `fonts`, `shaders`, `client`, `clientmods`, `irr`, `android`, `po`, `worlds`, `include`, `cmake`, `fastlane`, `misc`, etc.
+- **GLSL shader language detection**: `_detect_languages()` now recognizes `.glsl`, `.fsh`, `.vsh`, `.frag`, `.vert` extensions as `glsl` language.
+- **CMake language detection**: `.cmake` extension recognized as `cmake` language.
+- **Game/native framework signatures**: Added 4 new framework signatures in `FRAMEWORK_SIGNATURES`: `sdl` (SDL_Init/SDL_main), `irrlicht` (IrrlichtDevice), `opengl` (glGenBuffers/glBindVertexArray), `vulkan` (VkInstance/vkCreateInstance).
+- **Lua debug leak patterns**: Added 3 new debug leak patterns for Lua: `debug.debug()`, `debug.traceback()`, `debug.dump()`.
+- **C++/Lua/GLSL tooling recommendations**: `_generate_recommendations()` now suggests `clang-tidy` + `cppcheck` for C++ projects, `luacheck` + `lua-language-server` for Lua projects, and `glslangValidator` for GLSL shaders.
+- **CMake/Lua path configuration**: `get_recommended_config()` adds `src/`, `lib/`, `include/` for CMake projects, and `builtin/`, `scripts/`, `mods/` for Lua-scriptable projects.
+- **CMake `has_cmake` flag**: Framework detection now sets `has_cmake` when CMakeLists.txt is found.
 
 ### Fixed
 
-- **Smell engine `SOURCE_EXTENSIONS` excluded Go, C, C++, Lua, PHP**: These languages were completely invisible to the smell engine. Added all missing extensions.
-- **Smell `_detect_inconsistent_patterns` excluded non-JS/Python/Rust**: Now scans Go, C/C++, Lua, and PHP files for pattern inconsistencies.
-- **Complexity engine excluded Lua, PHP, Elixir**: Added `.lua`, `.php`, `.ex`, `.exs` to SOURCE_EXTENSIONS and added function extractors.
-- **Dead-code engine had no function detection for Go, C, C++, Lua, PHP**: Unreachable code detection was completely disabled for these languages.
-- **Dead-code engine had no variable detection for Go, C, C++, Lua, PHP**: Unused variable detection only worked for JS/TS and Python.
-- **Entrypoints engine excluded Lua, Elixir**: Added `.lua`, `.ex`, `.exs` to SOURCE_EXTENSIONS.
-- **Handbook returned `type=None` for C/C++/Lua/PHP projects**: No project identity detection existed for these languages.
-- **Elixir files produced 0 backend nodes**: Elixir was completely unrecognized by the scanner.
-- **pyproject.toml formatting error**: Missing newline between `description` and `readme` fields.
+- **`.h` headers classified as C instead of C++**: `_detect_languages()` mapped `.h` → `"c"`, but most `.h` files in C++ projects are C++ headers. Now maps `.h` → `"cpp"`, `.hpp` → `"cpp"`, `.hxx` → `"cpp"`.
+- **C/C++ listed as unsupported languages**: `UNSUPPORTED_MARKERS` in `framework_detect.py` listed C and C++ as unsupported even though fallback parsers exist for both. Removed C, C++, Java, and Kotlin from `UNSUPPORTED_MARKERS` — all have working fallback parsers.
+- **Architecture `total_files` only counting tree-sitter-supported files**: `analyze` command showed `total_files: 7` for a 2430-file C++ project because `get_workspace_outline()` only processes tree-sitter-supported languages. Now counts ALL source files across all supported extensions (including .cpp, .h, .lua, .glsl, etc.) and uses `max(outlined, actual)`.
+- **Project type `unknown` for CMake/C++ projects**: `_extract_project_identity()` returned `type: "unknown"` and `version: "0.0.0"` for CMake projects because it only checked `package.json`, `pyproject.toml`, `Cargo.toml`, and `go.mod`. Now also checks `CMakeLists.txt`.
+- **Polyglot type detection missing C++**: The combined type detection (`active_types`) only checked `[js_type, python_type, rust_type, go_type]`. Now also includes `cmake_type`, producing types like `cpp-lua-polyglot` for C++ game engines with Lua scripting.
 
-### Changed
+## [5.9.2] — 2026-06-12
 
-- **Version bump**: 5.8.1 → 6.2.0
-- **Architecture**: Analysis engines now cover Go, C, C++, Lua, PHP, and Elixir in addition to existing JS/TS, Python, and Rust support.
+### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
+
+Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
+across all analysis engines after targeted fixes based on SWR analysis findings.
+
+### Fixed
+
+- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
+- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
+- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
+- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
+- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
+- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
+- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
+- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
+- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
 
 ## [5.8.1] — 2026-06-12
 
