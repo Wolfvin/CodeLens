@@ -263,11 +263,36 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
-    # NestJS (TypeScript backend framework)
-    "nestjs": {
-        "packages": ["@nestjs/core", "@nestjs/common"],
-        "config_files": ["nest-cli.json"],
+    # Embedded / IoT frameworks
+    "micropython": {
+        "packages": [],
+        "pip_packages": ["micropython", "mpremote"],
+        "config_files": [],
+        "indicators": ["py/pyconfig.h", "py/micropython.h", "ports/"]
+    },
+    # C/C++ build systems (not frameworks per se, but useful to detect)
+    "make": {
+        "packages": [],
+        "config_files": ["Makefile", "makefile", "GNUmakefile"],
         "indicators": []
+    },
+    # Nim
+    "nim": {
+        "packages": [],
+        "config_files": ["nimble.toml"],
+        "indicators": [".nimble"]
+    },
+    # Elixir/Phoenix
+    "phoenix": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["lib/__*_web.ex", "config/config.exs"]
+    },
+    # Ruby on Rails
+    "rails": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["app/controllers/", "app/models/", "config/routes.rb"]
     },
 }
 
@@ -396,9 +421,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_deno": False,
-        "has_nestjs": False,
-        "nestjs_platform": None,
-        "nestjs_features": [],
+        "has_micropython": False,
+        "has_c": False,
+        "has_cpp": False,
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -505,41 +530,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_golang"] = True
                     elif fw_name == "deno":
                         detected["has_deno"] = True
-                    elif fw_name == "nestjs":
-                        detected["has_nestjs"] = True
                     break
-
-        # NestJS sub-framework and feature detection from packages
-        if detected.get("has_nestjs"):
-            if "@nestjs/platform-express" in all_deps:
-                detected["nestjs_platform"] = "express"
-            elif "@nestjs/platform-fastify" in all_deps:
-                detected["nestjs_platform"] = "fastify"
-            else:
-                detected["nestjs_platform"] = "express"  # default platform
-            _NESTJS_FEATURE_PACKAGES = {
-                "@nestjs/microservices": "microservices",
-                "@nestjs/websockets": "websockets",
-                "@nestjs/graphql": "graphql",
-                "@nestjs/grpc": "grpc",
-                "@nestjs/passport": "authentication",
-                "@nestjs/jwt": "authentication",
-                "@nestjs/swagger": "openapi",
-                "@nestjs/schedule": "scheduling",
-                "@nestjs/bull": "queues",
-                "@nestjs/bullmq": "queues",
-                "@nestjs/event-emitter": "events",
-                "@nestjs/cqrs": "cqrs",
-                "@nestjs/typeorm": "typeorm",
-                "@nestjs/prisma": "prisma",
-                "@nestjs/mongoose": "mongoose",
-                "@nestjs/sequelize": "sequelize",
-                "@nestjs/config": "config",
-            }
-            for pkg, feature in _NESTJS_FEATURE_PACKAGES.items():
-                if pkg in all_deps:
-                    detected["nestjs_features"].append(feature)
-            detected["nestjs_features"] = sorted(set(detected["nestjs_features"]))
 
         # Detect CSS preprocessor
         if "sass" in all_deps or "node-sass" in all_deps:
@@ -573,8 +564,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "nestjs":
-                    detected["has_nestjs"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -894,46 +883,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if detected["has_tailwind"]:
                 break
 
-    # 6a. Detect NestJS from decorator patterns in TypeScript files
-    if not detected.get("has_nestjs"):
-        _NESTJS_DECORATORS = {'@Controller', '@Module', '@Injectable', '@Get', '@Post',
-                              '@Put', '@Delete', '@Patch', '@Options', '@All'}
-        _nestjs_hits = 0
-        for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
-                continue
-            for f in files:
-                if not f.endswith(('.ts', '.tsx')):
-                    continue
-                try:
-                    fpath = os.path.join(root, f)
-                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
-                        content = fh.read(8192)  # Read first 8KB
-                        for dec in _NESTJS_DECORATORS:
-                            if dec in content:
-                                _nestjs_hits += 1
-                                if _nestjs_hits >= 2:
-                                    break
-                    if _nestjs_hits >= 2:
-                        break
-                except IOError:
-                    pass
-            if _nestjs_hits >= 2:
-                break
-        if _nestjs_hits >= 2:
-            if "nestjs" not in detected["frameworks"]:
-                detected["frameworks"].append("nestjs")
-            detected["has_nestjs"] = True
-            if not detected["nestjs_platform"]:
-                detected["nestjs_platform"] = "express"  # default
-            if not detected["nestjs_features"]:
-                detected["nestjs_features"] = []
-
     # 6b. Detect Go web frameworks from go.mod content
     # Only flag gin/echo/etc if the dependency actually appears in go.mod,
     # NOT just because go.mod exists (every Go project has go.mod).
@@ -959,27 +908,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
-    # Languages that have fallback regex-based parsers are NOT unsupported.
-    # Only list languages that truly lack any parser support.
+    # 7. Detect unsupported languages and C/C++ presence
+    # Note: C/C++ have fallback parser support, so they are NOT listed as unsupported.
+    # Go also has fallback parser support and is not listed as unsupported.
+    # Only truly unsupported languages (no parser at all) are listed here.
     UNSUPPORTED_MARKERS = {
-        # All languages below have fallback parsers in CodeLens v7.1+
-        # They are kept here for detection purposes but won't appear
-        # as "unsupported" in scan output (filtered by scan.py's _build_lang_note).
         "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
-        "elixir": ["mix.exs"],
-        "go": ["go.mod"],
         "scala": ["build.sbt"],
-        "nim": ["nimble"],
-        "dart": ["pubspec.yaml"],
+        "haskell": ["stack.yaml", "cabal.file"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -987,6 +927,66 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if lang not in detected["unsupported_langs"]:
                     detected["unsupported_langs"].append(lang)
                 break
+
+    # 7b. Detect C/C++ source code presence (these have fallback parser support)
+    # Count C/C++ files to set has_c / has_cpp flags
+    c_count = 0
+    cpp_count = 0
+    for root, dirs, files in os.walk(workspace):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip or '.codelens' in root:
+            continue
+        for f in files:
+            ext = os.path.splitext(f)[1].lower()
+            if ext in {'.c', '.h'}:
+                c_count += 1
+            elif ext in {'.cpp', '.cxx', '.cc', '.hpp', '.hxx'}:
+                cpp_count += 1
+        # Early exit once we have enough counts to determine presence
+        if c_count > 50 and cpp_count > 50:
+            break
+
+    if c_count > 10:
+        detected["has_c"] = True
+        if "c" not in detected["frameworks"]:
+            detected["frameworks"].append("c")
+    if cpp_count > 10:
+        detected["has_cpp"] = True
+        if "cpp" not in detected["frameworks"]:
+            detected["frameworks"].append("cpp")
+
+    # 7c. Detect MicroPython — combination of Python + C codebase with
+    # distinctive directory structure (py/, ports/) or pyproject.toml reference
+    if not detected["has_micropython"]:
+        # Check pyproject.toml for micropython reference
+        pyproject_path = os.path.join(workspace, "pyproject.toml")
+        if os.path.exists(pyproject_path):
+            try:
+                with open(pyproject_path, 'r', encoding='utf-8') as f:
+                    pyproject_content = f.read().lower()
+                if 'micropython' in pyproject_content or 'mpremote' in pyproject_content:
+                    detected["has_micropython"] = True
+                    if "micropython" not in detected["frameworks"]:
+                        detected["frameworks"].append("micropython")
+            except IOError:
+                pass
+
+        # Check for MicroPython source tree structure
+        if not detected["has_micropython"]:
+            mp_indicators = [
+                os.path.exists(os.path.join(workspace, "py", "micropython.h")),
+                os.path.exists(os.path.join(workspace, "py", "pyconfig.h")),
+                os.path.isdir(os.path.join(workspace, "ports")),
+            ]
+            # If at least 2 of 3 indicators match, it's likely MicroPython
+            if sum(mp_indicators) >= 2:
+                detected["has_micropython"] = True
+                if "micropython" not in detected["frameworks"]:
+                    detected["frameworks"].append("micropython")
 
     return detected
 
@@ -1013,9 +1013,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "monorepo_tools": fw.get("monorepo_tools", []),
         "lockfile": fw.get("lockfile"),
         "has_rust_backend": fw.get("has_rust_backend", False),
-        "has_nestjs": fw.get("has_nestjs", False),
-        "nestjs_platform": fw.get("nestjs_platform"),
-        "nestjs_features": fw.get("nestjs_features", []),
     }
 
     # Adjust paths based on framework
@@ -1083,36 +1080,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                         if os.path.isdir(tauri_dir):
                             rel = os.path.relpath(tauri_dir, workspace)
                             config["backend_paths"].append(rel + "/src/")
-                except OSError:
-                    pass
-
-    # NestJS: add NestJS-specific paths
-    if fw.get("has_nestjs"):
-        config["backend_paths"].extend(["src/", "src/modules/", "src/controllers/", "src/providers/", "src/services/"])
-        if fw.get("nestjs_platform") == "fastify":
-            pass  # same path structure, just different runtime
-        # Monorepo sub-apps with NestJS
-        for app_dir in ('apps', 'packages', 'services'):
-            app_path = os.path.join(workspace, app_dir)
-            if os.path.isdir(app_path):
-                try:
-                    for entry in os.listdir(app_path):
-                        entry_base = os.path.join(app_path, entry)
-                        if not os.path.isdir(entry_base):
-                            continue
-                        pkg_json = os.path.join(entry_base, "package.json")
-                        if os.path.isfile(pkg_json):
-                            try:
-                                with open(pkg_json, 'r', encoding='utf-8') as pf:
-                                    sub_pkg = json.load(pf)
-                                sub_deps = {}
-                                sub_deps.update(sub_pkg.get("dependencies", {}))
-                                sub_deps.update(sub_pkg.get("devDependencies", {}))
-                                if "@nestjs/core" in sub_deps or "@nestjs/common" in sub_deps:
-                                    rel = os.path.relpath(entry_base, workspace)
-                                    config["backend_paths"].append(rel + "/src/")
-                            except (json.JSONDecodeError, IOError):
-                                pass
                 except OSError:
                     pass
 

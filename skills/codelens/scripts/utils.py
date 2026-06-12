@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "7.0.1"
+CODELENS_VERSION = "7.0.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -405,38 +405,50 @@ GENERATED_FILE_PATTERNS = frozenset({
 
 
 def is_bundled_file(rel_path: str) -> bool:
-    """Check if a relative file path looks like a bundled/compiled output file.
+    """Check if a file path looks like a bundled, compiled, or generated artifact.
 
-    Detects files that are build artifacts rather than source code:
-    - Files in dist/, build/, out/, .output/ directories
-    - Files with bundled extensions (.bundle.js, .chunk.js, .global.js)
-    - Minified files (.min.js, .min.css)
-    - Declaration files (.d.ts)
+    Detects files that should be skipped during code analysis because they
+    are produced by build tools, bundlers, or compilers — not written by humans.
+
+    Checks both directory segments and filename patterns:
+    - Directory segments: dist/, build/, out/, .output/, .nuxt/, .next/
+    - Filename patterns: .min.js, .min.css, .bundle.js, .chunk.js, .global.js,
+      .d.ts, .d.ts.map, vendor-*.js, vendors~*.js
 
     Args:
-        rel_path: Relative path from workspace root (e.g., 'dist/app.bundle.js')
+        rel_path: Relative file path from workspace root (e.g., 'dist/app.min.js')
 
     Returns:
-        True if the file appears to be bundled/compiled output.
+        True if the file appears to be a bundled/generated artifact.
     """
     normalized = rel_path.replace('\\', '/')
+
+    # Check directory segments for build output directories
     parts = normalized.split('/')
+    bundled_dirs = frozenset({
+        'dist', 'build', 'out', '.output', '.nuxt', '.next',
+        'storybook-static', '.storybook',
+    })
+    for part in parts[:-1]:  # Skip the filename itself
+        if part.lower() in bundled_dirs:
+            return True
 
-    # Check if file is in a known build output directory
-    bundled_dirs = frozenset({'dist', 'build', 'out', '.output', '.cache', 'storybook-static'})
-    if any(p in bundled_dirs for p in parts):
-        return True
-
-    # Check file extension patterns
+    # Check filename patterns
     lower = normalized.lower()
-    bundled_suffixes = (
-        '.bundle.js', '.chunk.js', '.global.js',
-        '.min.js', '.min.css',
-        '.d.ts', '.d.ts.map',
-        '.map',
+    bundled_patterns = (
+        '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+        '.global.js', '.global.css', '.d.ts', '.d.ts.map',
+        '.d.mts', '.d.cts',
     )
-    if lower.endswith(bundled_suffixes):
-        return True
+    for pattern in bundled_patterns:
+        if lower.endswith(pattern):
+            return True
+
+    # Webpack/Vite vendor chunks: vendors~*.js, vendor-*.js
+    filename = parts[-1].lower()
+    if filename.startswith('vendors~') or filename.startswith('vendor-'):
+        if filename.endswith('.js') or filename.endswith('.css'):
+            return True
 
     return False
 

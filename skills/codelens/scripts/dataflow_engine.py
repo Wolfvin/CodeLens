@@ -504,9 +504,34 @@ def trace_dataflow(
                     flow["in_test_file"] = True
                 else:
                     flow["in_test_file"] = False
+                    # Set severity from source/sink severity if not already set
+                    if "severity" not in flow or not flow.get("severity"):
+                        src_sev = flow.get("source", {}).get("severity", "medium")
+                        snk_sev = flow.get("sink", {}).get("severity", "medium")
+                        # Take the higher severity
+                        sev_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+                        flow["severity"] = src_sev if sev_rank.get(src_sev, 0) >= sev_rank.get(snk_sev, 0) else snk_sev
                 violations.append(flow)
         else:
             untraced_sources.append(flow["source"])
+
+    # Add convenience fields at top-level for each violation
+    for v in violations:
+        if "source_type" not in v:
+            v["source_type"] = v.get("source", {}).get("source_type", "unknown")
+        if "sink_type" not in v:
+            v["sink_type"] = v.get("sink", {}).get("sink_type", "unknown")
+        if "source_file" not in v:
+            v["source_file"] = v.get("source", {}).get("file", "")
+        if "sink_file" not in v:
+            v["sink_file"] = v.get("sink", {}).get("file", "")
+
+    # Same for safe_paths
+    for sp in safe_paths:
+        if "source_type" not in sp:
+            sp["source_type"] = sp.get("source", {}).get("source_type", "unknown")
+        if "sink_type" not in sp:
+            sp["sink_type"] = sp.get("sink", {}).get("sink_type", "unknown")
 
     # ─── Compute risk ──────────────────────────────────
     risk = _compute_dataflow_risk(violations)
