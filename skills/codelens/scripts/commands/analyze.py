@@ -425,17 +425,20 @@ def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
 
 
 def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
-    from envcheck_engine import audit_environment
-    env = audit_environment(workspace)
-    issues = env.get("stats", {}).get("total_issues", 0)
-    if issues == 0:
+    from envcheck_engine import check_env_vars
+    env = check_env_vars(workspace)
+    stats = env.get("stats", {})
+    total_vars = stats.get("total_vars", 0)
+    missing_fallback = len(env.get("required_without_fallback", []))
+    issues_count = missing_fallback + len(env.get("missing_from_example", []))
+    if issues_count == 0 and total_vars == 0:
         return None
     return {
         "category": "env_issues",
         "label": "Environment Issues",
-        "total": issues,
-        "severity": "medium",
-        "top_items": env.get("issues", [])[:max_items],
+        "total": issues_count,
+        "severity": "high" if missing_fallback > 0 else "medium",
+        "top_items": env.get("required_without_fallback", [])[:max_items],
         "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
         "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
     }

@@ -908,8 +908,6 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     unsupported = fw.get("unsupported_langs", [])
     if not unsupported:
         return None
-    supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade",
-                 "ruby", "elixir", "dart", "swift", "scala", "shell", "go", "java", "kotlin", "c", "cpp", "csharp", "lua"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -931,9 +929,12 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
         "ocaml": "OCaml",
         "zig": "Zig",
         "nim": "Nim",
+        "erlang": "Erlang",
+        "fortran": "Fortran",
+        "gdscript": "GDScript",
     }
     parts = [lang_names.get(l, l) for l in unsupported]
-    return f"Detected {', '.join(parts)} source files — these languages are not yet supported by tree-sitter parsers. Analysis will be limited to frontend assets (JS/TS/CSS/HTML) and any supported backend code."
+    return f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS)."
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:

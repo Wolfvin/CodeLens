@@ -93,6 +93,35 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
                         "ids": len(frontend.get("ids", [])) if isinstance(frontend.get("ids"), list) else frontend.get("ids", 0)
                     }
                 }
+                # v6.4: Load files_scanned from summary.json for language/architecture detection
+                summary_path = os.path.join(workspace, '.codelens', 'summary.json')
+                if os.path.isfile(summary_path):
+                    try:
+                        with open(summary_path, 'r', encoding='utf-8') as sf:
+                            summary_data = json.load(sf)
+                            if 'files_by_language' in summary_data:
+                                # Reconstruct files_scanned from files_by_language
+                                # The keys in summary.json are raw scan keys (e.g., 'c_cpp', 'lua')
+                                # or outline language names (e.g., 'python', 'javascript')
+                                lang_reverse = {
+                                    "html": "html", "css": "css", "javascript": "js_backend",
+                                    "tsx": "tsx", "rust": "rust", "python": "python",
+                                    "vue": "vue", "svelte": "svelte", "java": "java",
+                                    "kotlin": "kotlin", "c_cpp": "c_cpp", "go": "go",
+                                    "lua": "lua", "csharp": "csharp", "php": "php",
+                                    "blade": "blade", "ruby": "ruby", "elixir": "elixir",
+                                    "dart": "dart", "swift": "swift", "scala": "scala",
+                                    "shell": "shell", "gdscript": "gdscript",
+                                    "haskell": "haskell", "nim": "nim", "r": "r",
+                                }
+                                files_scanned = {}
+                                for lang_name, count in summary_data['files_by_language'].items():
+                                    key = lang_reverse.get(lang_name, lang_name)
+                                    files_scanned[key] = count
+                                if files_scanned:
+                                    scan_result["files_scanned"] = files_scanned
+                    except (json.JSONDecodeError, IOError):
+                        pass
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
@@ -234,6 +263,8 @@ def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) 
         },
         "identity": identity,
         "frameworks": frameworks,
+        "languages": _extract_languages(scan_result),
+        "architecture": _detect_architecture(workspace, scan_result),
         "structure": {
             "directory_map": directory_map,
             "entrypoints": entrypoints,
@@ -527,8 +558,57 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # v6.4: Try CMakeLists.txt — detect C/C++ projects
+    c_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8') as f:
+                cmake_content = f.read()
+            # Extract project name and version from CMakeLists.txt
+            # Common patterns: project(Name VERSION x.y.z), project(Name), PROJECT_NAME
+            proj_match = re.search(r'project\s*\(\s*(\w[\w-]*)', cmake_content)
+            ver_match = re.search(r'project\s*\([^)]*VERSION\s+(\d+\.\d+[\d.]*)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1).lower()
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            else:
+                # Try CMake set() version variables: set(PROJ_VERSION_MAJOR X), etc.
+                maj = re.search(r'set\s*\(\s*\w*VERSION_MAJOR\s+(\d+)\)', cmake_content)
+                min_ = re.search(r'set\s*\(\s*\w*VERSION_MINOR\s+(\d+)\)', cmake_content)
+                pat = re.search(r'set\s*\(\s*\w*VERSION_PATCH\s+(\d+)\)', cmake_content)
+                if maj and min_:
+                    version = f"{maj.group(1)}.{min_.group(1)}"
+                    if pat:
+                        version += f".{pat.group(1)}"
+                    identity["version"] = version
+            # Classify C/C++ project type
+            cmake_lower = cmake_content.lower()
+            src_dir = os.path.join(workspace, 'src')
+            has_lua = os.path.isdir(os.path.join(workspace, 'runtime', 'lua')) or any(
+                f.endswith('.lua') for root, _, files in os.walk(workspace)
+                for f in files[:20]  # Sample first 20 files per dir
+            )
+            if has_lua:
+                c_type = "c-lua-application"
+            elif any(kw in cmake_lower for kw in ('gtk', 'qt', 'sdl', 'opengl', 'vulkan')):
+                c_type = "c-gui-application"
+            elif any(kw in cmake_lower for kw in ('grpc', 'protobuf', 'protobuf')):
+                c_type = "c-service"
+            elif any(kw in cmake_lower for kw in ('test', 'benchmark')):
+                c_type = "c-library"
+            elif os.path.isdir(src_dir) and sum(
+                1 for f in os.listdir(src_dir) if f.endswith(('.c', '.h', '.cpp', '.hpp'))
+            ) > 3:
+                c_type = "c-application"
+            else:
+                c_type = "c-project"
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, c_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
@@ -537,6 +617,8 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
+        if c_type:
+            type_parts.append("c")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
@@ -563,6 +645,139 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["type"] += "-monorepo"
 
     return identity
+
+
+def _extract_languages(scan_result: Dict[str, Any]) -> Dict[str, int]:
+    """Extract language distribution from scan result.
+
+    Returns a dict mapping language name to file count,
+    sorted by count descending.
+    """
+    files_scanned = scan_result.get("files_scanned", {})
+    # Map scan keys to human-readable language names
+    lang_map = {
+        "html": "HTML",
+        "css": "CSS",
+        "js_frontend": "JavaScript",
+        "js_backend": "JavaScript",
+        "tsx": "TypeScript (TSX)",
+        "rust": "Rust",
+        "python": "Python",
+        "vue": "Vue",
+        "svelte": "Svelte",
+        "java": "Java",
+        "kotlin": "Kotlin",
+        "c_cpp": "C/C++",
+        "go": "Go",
+        "lua": "Lua",
+        "csharp": "C#",
+        "php": "PHP",
+        "blade": "Blade",
+        "ruby": "Ruby",
+        "elixir": "Elixir",
+        "dart": "Dart",
+        "swift": "Swift",
+        "scala": "Scala",
+        "shell": "Shell/Bash",
+        "gdscript": "GDScript",
+        "haskell": "Haskell",
+        "nim": "Nim",
+        "r": "R",
+    }
+    # Aggregate by language name (e.g., js_frontend + js_backend → JavaScript)
+    merged: Dict[str, int] = {}
+    for key, count in files_scanned.items():
+        if count > 0:
+            name = lang_map.get(key, key)
+            merged[name] = merged.get(name, 0) + count
+    # Sort by count descending
+    return dict(sorted(merged.items(), key=lambda x: x[1], reverse=True))
+
+
+def _detect_architecture(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect project architecture from directory structure and scan data.
+
+    Identifies common patterns like MVC, monorepo, microservices,
+    client-server, plugin-based, etc.
+    """
+    arch = {
+        "pattern": "unknown",
+        "description": "",
+        "key_directories": [],
+    }
+
+    # Check key directories
+    src_dir = os.path.join(workspace, 'src')
+    has_src = os.path.isdir(src_dir)
+
+    # Collect top-level directories
+    top_dirs = set()
+    try:
+        for entry in os.listdir(workspace):
+            if os.path.isdir(os.path.join(workspace, entry)) and not entry.startswith('.'):
+                top_dirs.add(entry)
+    except OSError:
+        pass
+
+    # Detect patterns
+    files_scanned = scan_result.get("files_scanned", {})
+    has_frontend = any(files_scanned.get(k, 0) > 0 for k in ("html", "css", "js_frontend", "tsx", "vue", "svelte"))
+    has_backend = any(files_scanned.get(k, 0) > 0 for k in ("js_backend", "rust", "python", "java", "go", "c_cpp", "lua", "php", "ruby", "elixir", "dart", "swift", "scala", "kotlin", "csharp"))
+
+    if has_src:
+        src_subdirs = set()
+        try:
+            for entry in os.listdir(src_dir):
+                if os.path.isdir(os.path.join(src_dir, entry)):
+                    src_subdirs.add(entry)
+        except OSError:
+            pass
+
+        # Client-server pattern (e.g., src/client/ + src/server/)
+        if {'client', 'server'} & src_subdirs:
+            arch["pattern"] = "client-server"
+            arch["description"] = "Separate client and server code directories"
+            arch["key_directories"] = sorted(src_subdirs)
+        # MVC / layered pattern
+        elif {'controllers', 'models', 'views'} & src_subdirs or {'routes', 'controllers', 'services'} & src_subdirs:
+            arch["pattern"] = "mvc"
+            arch["description"] = "Model-View-Controller or layered architecture"
+            arch["key_directories"] = sorted(src_subdirs)
+        # C/C++ core with extension/plugin layer (e.g., src/nvim/ + runtime/lua/)
+        elif files_scanned.get('c_cpp', 0) > 50 and files_scanned.get('lua', 0) > 50:
+            arch["pattern"] = "core-plugin"
+            arch["description"] = "Core C/C++ implementation with Lua/plugin extension layer"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif 'api' in src_subdirs and 'core' in src_subdirs:
+            arch["pattern"] = "core-api"
+            arch["description"] = "Core engine with API layer"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif has_frontend and has_backend:
+            arch["pattern"] = "fullstack"
+            arch["description"] = "Full-stack application with frontend and backend"
+            arch["key_directories"] = sorted(src_subdirs)
+        elif has_backend:
+            arch["pattern"] = "backend"
+            arch["description"] = "Backend application/service"
+            arch["key_directories"] = sorted(src_subdirs)
+        else:
+            arch["pattern"] = "source-tree"
+            arch["description"] = "Source code organized under src/"
+            arch["key_directories"] = sorted(src_subdirs)
+    elif 'runtime' in top_dirs and files_scanned.get('c_cpp', 0) > 50:
+        arch["pattern"] = "core-runtime"
+        arch["description"] = "Core engine with runtime/extension layer"
+        arch["key_directories"] = sorted(top_dirs)
+    elif has_frontend and has_backend:
+        arch["pattern"] = "fullstack-flat"
+        arch["description"] = "Full-stack application with flat structure"
+        arch["key_directories"] = sorted(top_dirs)
+    elif 'apps' in top_dirs or 'packages' in top_dirs:
+        arch["pattern"] = "monorepo"
+        arch["description"] = "Monorepo with apps/ and/or packages/ directories"
+        arch["key_directories"] = sorted(top_dirs)
+
+    return arch
 
 
 def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, str]:

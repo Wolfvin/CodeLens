@@ -93,6 +93,30 @@ def compute_summary(workspace, outline_data, scan_result):
         for cls in inner.get('classes', []):
             total_functions += len(cls.get('methods', []))
 
+    # v6.4: Merge scan_result's files_scanned into files_by_language for
+    # more accurate language distribution (includes fallback parser languages)
+    scan_files = scan_result.get('files_scanned', {})
+    if scan_files:
+        # Map scan keys to language names matching outline format
+        scan_lang_names = {
+            "html": "html", "css": "css", "js_frontend": "javascript",
+            "js_backend": "javascript", "tsx": "tsx", "rust": "rust",
+            "python": "python", "vue": "vue", "svelte": "svelte",
+            "java": "java", "kotlin": "kotlin", "c_cpp": "c_cpp",
+            "go": "go", "lua": "lua", "csharp": "csharp", "php": "php",
+            "blade": "blade", "ruby": "ruby", "elixir": "elixir",
+            "dart": "dart", "swift": "swift", "scala": "scala",
+            "shell": "shell", "gdscript": "gdscript", "haskell": "haskell",
+            "nim": "nim", "r": "r",
+        }
+        # Only add languages from scan that aren't already covered by outline
+        outline_langs = set(files_by_lang.keys())
+        for scan_key, count in scan_files.items():
+            if count > 0:
+                lang_name = scan_lang_names.get(scan_key, scan_key)
+                if lang_name not in outline_langs:
+                    files_by_lang[lang_name] = files_by_lang.get(lang_name, 0) + count
+
     be_nodes = scan_result.get('backend', {}).get('nodes', 0)
     be_edges = scan_result.get('backend', {}).get('edges', 0)
     fe_classes = scan_result.get('frontend', {}).get('classes', 0)
@@ -389,7 +413,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.4.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -429,4 +453,56 @@ def is_generated_file(filename: str) -> bool:
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
+    return False
+
+
+# ─── Bundled File Detection ─────────────────────────────────
+
+_BUNDLED_DIR_SEGMENTS = frozenset({
+    'dist', 'build', 'out', 'bundle', 'bundled', 'compiled',
+    'vendor', 'node_modules', '.output', 'lib-dist',
+})
+
+_BUNDLED_FILENAME_SUFFIXES = (
+    '.bundle.js', '.bundle.min.js', '.chunk.js', '.chunk.min.js',
+    '.global.js', '.global.min.js', '.umd.js', '.umd.min.js',
+    '.esm.js', '.esm.min.js', '.cjs.js', '.cjs.min.js',
+    '.nocompile.js', '.pack.js',
+)
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file path looks like a bundled, compiled, or vendored file.
+
+    Detects:
+    - Files inside bundled output directories (dist/, build/, vendor/, etc.)
+    - Files with bundled filename suffixes (.bundle.js, .chunk.js, .umd.js, etc.)
+    - Minified files (.min.js, .min.css)
+
+    Args:
+        rel_path: Relative file path from workspace root,
+                  e.g. 'dist/app.bundle.js' or 'src/utils.js'
+
+    Returns:
+        True if the file appears to be a bundled/compiled artifact.
+    """
+    if not rel_path:
+        return False
+
+    # Check directory segments — if any path component is a known bundled dir
+    parts = rel_path.replace('\\', '/').split('/')
+    for part in parts[:-1]:  # Skip the filename itself
+        if part in _BUNDLED_DIR_SEGMENTS:
+            return True
+
+    # Check filename suffixes
+    lower = rel_path.lower()
+    for suffix in _BUNDLED_FILENAME_SUFFIXES:
+        if lower.endswith(suffix):
+            return True
+
+    # Minified files
+    if lower.endswith('.min.js') or lower.endswith('.min.css'):
+        return True
+
     return False

@@ -889,17 +889,24 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
-    # Note: Go was previously listed here but now has fallback parser support.
-    # It is no longer listed as unsupported.
+    # 7. Detect unsupported languages
+    # Languages with working fallback parsers are NOT listed as unsupported,
+    # even though they lack tree-sitter grammars. The fallback parsers provide
+    # good-enough extraction for functions, classes, imports, and calls.
+    _LANGS_WITH_FALLBACK = {
+        "java", "kotlin", "c", "cpp", "csharp", "swift", "ruby",
+        "go", "lua", "php", "shell", "elixir", "dart", "scala",
+        "r", "haskell", "nim", "gdscript",
+    }
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
-        "csharp": [".csproj", ".sln"],
-        "swift": ["Package.swift", "Package.resolved"],
-        "ruby": ["Gemfile", "Rakefile"],
+        "perl": ["cpanfile", "Makefile.PL", "Build.PL"],
+        "ocaml": ["dune", "dune-project"],
+        "clojure": ["deps.edn", "project.clj"],
+        "fsharp": [".fsproj"],
+        "zig": ["build.zig"],
+        "erlang": ["rebar.config", "erlang.mk"],
+        "fortran": ["Makefile"],
+        "haskell": ["stack.yaml", "cabal.project"],  # haskell has a fallback parser but may miss advanced features
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:

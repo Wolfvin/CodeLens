@@ -40,6 +40,16 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.4 — Tested on neovim/neovim (3.8K files, C+Lua CMake project)
+
+- **Critical: `is_bundled_file` missing from `utils.py`**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) crashed on import. Added `is_bundled_file()` with directory segment detection (dist/, build/, vendor/) and bundled filename suffix detection (.bundle.js, .chunk.js, .umd.js, etc.).
+- **Critical: `audit_environment` ImportError in analyze**: Wrong function name — fixed to use `check_env_vars`.
+- **C/C++ no longer listed as "unsupported"**: Fallback parsers for C, C++, Java, Kotlin, C#, Swift, Ruby, Go, Lua, PHP, Shell, Elixir, Dart, Scala, R, Haskell, Nim, GDScript were working but languages were incorrectly listed as unsupported. Only truly unsupported languages (Zig, OCaml, Perl, Clojure, F#, Erlang, Fortran) are now listed.
+- **CMakeLists.txt identity detection**: Handbook now parses CMakeLists.txt for project name (`project(Name)`), version (`project(Name VERSION x.y.z)` and `set(VERSION_MAJOR/MINOR/PATCH)`), and classifies project type (c-lua-application, c-gui-application, c-service, c-library, c-application, c-project).
+- **Languages field in handbook**: New `languages` key with accurate language distribution including fallback parser languages (e.g., `{"Lua": 816, "C/C++": 506}`).
+- **Architecture detection in handbook**: New `architecture` key with pattern detection (core-plugin, client-server, mvc, core-api, fullstack, monorepo, etc.) and key directories listing.
+- **`compute_summary` includes fallback parser languages**: `files_by_language` in `summary.json` now includes C/C++, Lua, Go, Java, etc. from `scan_result.files_scanned`.
+
 ## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 
 - **Large repo timeout fixes**: `missing_refs` O(n²) typo detection now time-budgeted (15s cap, 2-char prefix filtering, 500K comparison cap, pre-built lookup dict). `analyze` command gets `--timeout` (default 300s) with per-engine time budget and graceful degradation (skips engines when <20% budget remains). `handbook` command gets `--timeout` (default 120s) with per-engine skip and `partial: true` output flag.
