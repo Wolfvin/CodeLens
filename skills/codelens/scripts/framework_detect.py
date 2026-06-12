@@ -26,8 +26,9 @@ FRAMEWORK_SIGNATURES = {
         "indicators": ["use client", "use server", "getServerSideProps", "getStaticProps"]
     },
     "remix": {
-        "packages": ["@remix-run/react"],
-        "config_files": ["remix.config.js"],
+        "packages": ["@remix-run/react", "@remix-run/node", "@remix-run/server-runtime"],
+        "config_files": ["remix.config.js", "remix.config.ts"],
+        "name_prefixes": ["@remix-run/"],
         "indicators": []
     },
     "astro": {
@@ -241,9 +242,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_remix": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "is_monorepo": False,
+        "monorepo_tools": [],
     }
 
     # 1. Check package.json (root + monorepo sub-packages)
@@ -264,6 +268,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["module_system"] = "esm"
                 else:
                     detected["module_system"] = "cjs"
+
+            # Check package name prefixes (e.g., @remix-run/* in monorepo packages)
+            pkg_name = pkg.get("name", "")
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                for prefix in sig.get("name_prefixes", []):
+                    if pkg_name.startswith(prefix):
+                        detected["frameworks"].append(fw_name)
+                        if fw_name == "remix":
+                            detected["has_react"] = True
+                        break
         except (json.JSONDecodeError, IOError):
             pass
 
@@ -290,6 +306,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "remix":
+                        detected["has_remix"] = True
+                        detected["has_react"] = True  # Remix is React-based
                     break
 
         # Detect CSS preprocessor
@@ -591,6 +610,59 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_golang"] = True
                 break
 
+    # 8. Detect monorepo structure
+    _MONOREPO_INDICATORS = {
+        "turbo.json": "turborepo",
+        "pnpm-workspace.yaml": "pnpm-workspace",
+        "lerna.json": "lerna",
+        "nx.json": "nx",
+    }
+    for indicator_file, tool_name in _MONOREPO_INDICATORS.items():
+        if os.path.isfile(os.path.join(workspace, indicator_file)):
+            detected["is_monorepo"] = True
+            if tool_name not in detected["monorepo_tools"]:
+                detected["monorepo_tools"].append(tool_name)
+
+    # Check for Cargo workspace monorepo
+    cargo_toml_path = os.path.join(workspace, 'Cargo.toml')
+    if os.path.isfile(cargo_toml_path):
+        try:
+            with open(cargo_toml_path, 'r', encoding='utf-8') as f:
+                cargo_content = f.read()
+            if '[workspace]' in cargo_content:
+                detected["is_monorepo"] = True
+                if "cargo-workspace" not in detected["monorepo_tools"]:
+                    detected["monorepo_tools"].append("cargo-workspace")
+        except IOError:
+            pass
+
+    # Check for Rust crate directories with multiple Cargo.toml (Rust monorepo)
+    for crate_dir_name in ('crates', 'ext'):
+        crate_dir = os.path.join(workspace, crate_dir_name)
+        if os.path.isdir(crate_dir):
+            sub_crates = 0
+            try:
+                for entry in os.listdir(crate_dir):
+                    sub_cargo = os.path.join(crate_dir, entry, 'Cargo.toml')
+                    if os.path.isfile(sub_cargo):
+                        sub_crates += 1
+            except OSError:
+                pass
+            if sub_crates >= 2:
+                detected["is_monorepo"] = True
+                if "cargo-workspace" not in detected["monorepo_tools"]:
+                    detected["monorepo_tools"].append("cargo-workspace")
+
+    # Check for monorepo with multiple sub-package.json files
+    if not detected["is_monorepo"] and len(pkg_files) > 3:
+        detected["is_monorepo"] = True
+        if "pnpm-workspace" not in detected["monorepo_tools"] and os.path.isfile(
+            os.path.join(workspace, "pnpm-workspace.yaml")
+        ):
+            detected["monorepo_tools"].append("pnpm-workspace")
+        if not detected["monorepo_tools"]:
+            detected["monorepo_tools"].append("multi-package")
+
     return detected
 
 
@@ -625,6 +697,11 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw["has_react"]:
         config["jsx_mode"] = True
         config["frontend_paths"].extend(["src/components/", "src/views/"])
+
+    if fw.get("has_remix"):
+        config["jsx_mode"] = True
+        config["frontend_paths"].extend(["app/", "src/app/", "app/routes/"])
+        config["backend_paths"].extend(["app/", "src/app/"])
 
     if fw["has_vue"]:
         config["vue_mode"] = True

@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v6.3 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -31,16 +31,25 @@ description: >
   global state management tracking, environment variable auditing, debug code leak detection,
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
+  v6.3 adds: Bug fix for write_output_files/perf-hint TypeError, Remix framework detection via name_prefixes,
+  monorepo detection in detect_frameworks(), api-map test file filtering, outline engine max_files support.
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
   Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v6.3
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v5.8 — Tested on denoland/deno (5,448 files, Rust+TS polyglot monorepo)
+## What's New in v6.3 — Tested on fastapi/fastapi (1130 Python files), tauri-apps/tauri (431 Rust+TS polyglot), remix-run/remix (1375 TS monorepo)
+
+- **Bug fix: `write_output_files()` TypeError**: `get_workspace_outline()` now accepts `max_files` parameter. Previously, `scan` and `handbook` commands silently failed to generate outline.json and summary.json because of a mismatched keyword argument. Both files are now correctly generated.
+- **Bug fix: `perf-hint` command crash**: `detect_perf_hints()` now accepts `max_files` parameter. Previously crashed with `TypeError: detect_perf_hints() got an unexpected keyword argument 'max_files'`.
+- **Remix framework detection**: Added `@remix-run/node` and `@remix-run/server-runtime` to Remix package detection. Added `name_prefixes` scanning for monorepo packages (e.g., `@remix-run/*` package names in their own monorepo). Added `has_remix` flag. Remix is now correctly detected in both user projects and the Remix monorepo itself.
+- **Monorepo detection in `detect_frameworks()`**: Added `is_monorepo` and `monorepo_tools` to `detect_frameworks()` return value. Previously only `handbook` computed monorepo status, causing `summary` to always report `is_monorepo: false`. Now consistent across all commands.
+- **API map test file filtering**: `api-map` now skips test files (`.test.ts`, `.spec.js`, etc.) and test directories (`/test/`, `/tests/`, `/__tests__/`). Previously, mock routes in test files were reported as real API endpoints.
+- **`get_workspace_outline()` truncation**: Added `max_files` parameter with default 5000 and truncation tracking. Returns `truncated` and `max_files` fields to indicate when output was capped.
 
 - **Rust framework detection**: `detect_frameworks()` now parses `Cargo.toml` for dependencies and detects `rust`, `tokio`, `actix-web`, `axum`, `warp`, `rocket`, `deno_core`. Also scans workspace members' `Cargo.toml` in `crates/`, `ext/`, `libs/`, `packages/`.
 - **Rust HTTP route extraction**: `api-map` now detects routes from Rust web frameworks: actix-web (`#[get]`/`#[post]` attributes, `web::resource()`), axum (`.route("/path", get(handler))`), warp (`warp::path("segment")`), rocket (`#[get]`/`#[post]` attributes).
