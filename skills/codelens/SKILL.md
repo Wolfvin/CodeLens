@@ -40,6 +40,16 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
+## What's New in v6.6 — Tested on grafana/grafana (21,850 files, React+Go gRPC monorepo)
+
+- **Bugfix: `analyze` timeout on large repos**: Scan phase consumed the entire engine time budget, causing all remaining engines to be skipped. Now the engine budget resets AFTER scan completes, giving all engines the full timeout budget regardless of scan duration. Added `scan_elapsed_seconds` and `engine_elapsed_seconds` to output.
+- **Bugfix: `api-map` 68% test/mock false positives**: Routes from test files (.test.tsx), mock files (mockApi.ts, mswAPI.ts), and fixture directories were reported as production routes. Expanded mock detection patterns to include MSW handlers, fixture dirs, and common mock file naming. `analyze` now passes `production_only=True` to api-map.
+- **Bugfix: Zombie CSS `file: unknown, line: 0`**: Dead CSS classes with HTML references but no CSS definition showed `file: "unknown"`. Now falls back to HTML path when CSS list is empty.
+- **Bugfix: `dataflow` test violations inflating analyze counts**: 5,303 violations were reported but 99%+ were from test/mock files. `analyze` now only counts production violations and shows them first.
+- **Bugfix: `debug-leak` mock_data in config files**: jest.config.js, playwright.config.ts flagged as mock_data leaks. Now skipped entirely in config files.
+- **Bugfix: `state-map` markdown bracket rendering**: `[module_constant]` was consumed by markdown as a link reference, rendering as `odule_constant]`. Now brackets are escaped.
+- **Version**: 6.4.0 → 6.6.0.
+
 ## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 
 - **Bugfix: `is_bundled_file` missing from utils.py**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) were silently broken due to missing `is_bundled_file` function in `utils.py`. Now added with proper path-based and extension-based detection for minified, bundled, and dist/build output files.

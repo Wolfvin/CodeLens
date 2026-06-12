@@ -5,6 +5,28 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
 
+## [6.6.0] — 2026-06-12
+
+### Tested against grafana/grafana (21,850 files: 8,328 TSX + 5,873 Go + 448 JS + 93 Shell, React+Go gRPC monorepo)
+
+Real-world test on a massive Go+React+TypeScript polyglot monorepo with gRPC, SCSS,
+and complex monorepo structure (yarn + lerna + nx). Exposed critical false positive
+issues in api-map, dataflow, and debug-leak engines, plus a timeout bug in analyze.
+
+### Fixed
+
+- **`analyze` timeout on large repos without `--skip-scan`** (CRITICAL): The scan phase could take 60-90s on repos with 20K+ files, consuming the entire engine time budget. After scan completed, the 20% remaining-budget check would skip all remaining engines. Now resets the engine time budget AFTER scan completes, so all engines get the full budget regardless of scan duration. Added `scan_elapsed_seconds` and `engine_elapsed_seconds` to output for transparency.
+
+- **`api-map` 68% test/mock false positives**: On grafana/grafana, 183 of 270 routes (68%) were from test files (.test.tsx), mock files (mockApi.ts, mswAPI.ts), and fixture directories. These are not real production routes. Expanded test/mock detection patterns to include: `/mocks/`, `/mock/`, `/fixtures/`, `/__mocks__/`, `mockApi`, `mockServer`, `mswAPI`, `MockApi`, `.mock.`, `_mock.`, `Mock.ts`, `Mock.js`, `/handlers/`, `handlers.ts`, `handlers.js` (MSW handlers). `analyze` command now passes `production_only=True` to api-map.
+
+- **Zombie CSS `file: unknown, line: 0`**: When a CSS class had an `html` reference but empty `css` list, the dead-code engine fell back to `file: "unknown"` instead of using the HTML file path. Now falls back to `html` path when `css` list is empty, providing actionable file location info for every zombie CSS finding.
+
+- **`dataflow` test file violations inflating counts in `analyze`**: The `analyze` command reported 5,303 dataflow violations, but 99%+ were from test/mock files. Now `analyze` only counts production violations in the total (test violations still visible in `total_including_tests`), and shows production violations first in `top_items`.
+
+- **`debug-leak` mock_data false positives in config files**: jest.config.js, playwright.config.ts, and similar test config files contained legitimate test configuration patterns (testEnvironment, testRegex, testDir) that were flagged as "mock_data" leaks. Now `mock_data` detection is completely skipped in config files — these patterns are never debug leaks in their context.
+
+- **`state-map` markdown rendering broken for `[module_constant]`**: Square brackets around store types (e.g., `[module_constant]`, `[context]`, `[store]`) were consumed by markdown as link references, rendering as `odule_constant]` or silently disappearing. Now brackets are escaped as `\[module_constant\]` so they render correctly in all markdown viewers.
+
 ## [6.4.0] — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

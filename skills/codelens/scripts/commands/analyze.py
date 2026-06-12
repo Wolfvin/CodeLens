@@ -79,7 +79,7 @@ def analyze_repository(
     - Know what to fix first
     - Navigate the codebase efficiently
     """
-    start_time = time.time()
+    overall_start = time.time()
     total_budget = float(timeout)
     workspace = os.path.abspath(workspace)
 
@@ -139,6 +139,14 @@ def analyze_repository(
         except Exception as e:
             logger.warning(f"Scan phase failed: {e}")
             result["scan"] = {"error": str(e)}
+
+    # Reset start_time AFTER scan so the engine time budget is independent.
+    # The scan phase can take 30-90s on large repos; without this reset,
+    # the engine budget would be consumed by scan time, causing remaining
+    # engines to be skipped prematurely.
+    start_time = time.time()
+    scan_elapsed = start_time - overall_start
+    result["scan_elapsed_seconds"] = round(scan_elapsed, 2)
 
     # ─── Phase 2: Project Identity ───────────────────────────
 
@@ -226,7 +234,7 @@ def analyze_repository(
 
     try:
         from apimap_engine import map_api_routes
-        api = map_api_routes(workspace)
+        api = map_api_routes(workspace, production_only=True)
         result["api_map"] = {
             "total_routes": api.get("stats", {}).get("total_routes", 0),
             "routes": [
@@ -321,8 +329,10 @@ def analyze_repository(
 
     # ─── Done ─────────────────────────────────────────────────
 
-    elapsed = time.time() - start_time
-    result["elapsed_seconds"] = round(elapsed, 2)
+    engine_elapsed = time.time() - start_time
+    total_elapsed = time.time() - overall_start
+    result["engine_elapsed_seconds"] = round(engine_elapsed, 2)
+    result["elapsed_seconds"] = round(total_elapsed, 2)
     result["analysis_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
     return result
@@ -410,15 +420,20 @@ def _detect_vulns(workspace: str, max_items: int) -> Optional[Dict]:
 def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
     from dataflow_engine import trace_dataflow
     df = trace_dataflow(workspace)
-    violations = df.get("stats", {}).get("violations", 0)
-    if violations == 0:
+    all_violations = df.get("violations", [])
+    # Only count production violations (test file violations are low severity)
+    production_violations = [v for v in all_violations if not v.get("in_test_file", False)]
+    total_production = len(production_violations)
+    total_all = df.get("stats", {}).get("violations", 0)
+    if total_all == 0:
         return None
     return {
         "category": "dataflow_violations",
         "label": "Unsafe Data Flows",
-        "total": violations,
+        "total": total_production,
+        "total_including_tests": total_all,
         "severity": "high",
-        "top_items": df.get("violations", [])[:max_items],
+        "top_items": production_violations[:max_items],
         "action": "Add input sanitization and output encoding at every source→sink boundary",
         "impact": "Untainted data flows can lead to SQL injection, XSS, and command injection attacks",
     }

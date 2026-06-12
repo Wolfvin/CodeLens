@@ -933,6 +933,13 @@ def _detect_mock_data(
     if is_test_file:
         return  # Mock data is expected in test files
 
+    # v6.6: Skip mock_data detection entirely in config files.
+    # Test config files (jest.config.*, playwright.config.*, etc.) legitimately
+    # contain test-related patterns (testEnvironment, testRegex, testDir, etc.)
+    # that are never debug leaks — they're the test runner's configuration.
+    if is_config_file:
+        return
+
     for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith('//') or stripped.startswith('*') or stripped.startswith('#'):

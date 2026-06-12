@@ -1395,8 +1395,16 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
             if not re.match(r'^[a-zA-Z_]', name):
                 continue
             zombie.append({
-                "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
-                "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
+                "file": (cls.get("css") or [{}])[0].get("path",
+                         (cls.get("html") or [{}])[0].get("path", "unknown"))
+                         if (cls.get("css") and len(cls.get("css", [])) > 0) or
+                            (cls.get("html") and len(cls.get("html", [])) > 0)
+                         else "unknown",
+                "line": (cls.get("css") or [{}])[0].get("line",
+                        (cls.get("html") or [{}])[0].get("line", 0))
+                        if (cls.get("css") and len(cls.get("css", [])) > 0) or
+                           (cls.get("html") and len(cls.get("html", [])) > 0)
+                        else 0,
                 "class": name,
                 "severity": "info",
                 "message": f"CSS class '.{name}' defined but never used in HTML or JS",
