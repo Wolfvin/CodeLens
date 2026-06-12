@@ -49,6 +49,7 @@ AI-Optimized Flags (work with any command):
     --max-tokens N   Truncate output to fit within N tokens (~4 chars/token)
     --lite           Minimal output mode (command-specific: query={found,action}, smell={health_score,action}, etc.)
     --format ai      Normalized schema: {stats, items[], truncated}
+    --deep           Enable LSP-enhanced deep analysis (requires language server installed)
 
 Smart Defaults:
     - List commands auto-apply --top 20 (smell, complexity, dead-code, etc.)
@@ -712,6 +713,31 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
     return lite
 
 
+# ─── Confidence Distribution Helper ────────────────────────────
+
+def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, int]:
+    """Compute confidence distribution across all findings in a result dict."""
+    dist = {"high": 0, "medium": 0, "low": 0}
+    if not isinstance(result, dict):
+        return dist
+    for key, val in result.items():
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    c = item.get("confidence", "low")
+                    if c in dist:
+                        dist[c] += 1
+        elif isinstance(val, dict):
+            for sub_val in val.values():
+                if isinstance(sub_val, list):
+                    for item in sub_val:
+                        if isinstance(item, dict):
+                            c = item.get("confidence", "low")
+                            if c in dist:
+                                dist[c] += 1
+    return dist
+
+
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
@@ -751,6 +777,9 @@ def main():
         if "lite" not in existing_dests:
             sub.add_argument("--lite", action="store_true", default=False,
                              help="Minimal output mode for AI decision-making")
+        if "deep" not in existing_dests:
+            sub.add_argument("--deep", action="store_true", default=False,
+                             help="Enable LSP-enhanced deep analysis (requires language server)")
 
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
@@ -898,6 +927,43 @@ def main():
         # ─── Post-processing: --lite ──
         if getattr(args, 'lite', False) and isinstance(result, dict):
             result = _apply_lite(result, args.command)
+
+        # ─── Post-processing: --deep (hybrid LSP analysis) ──
+        if getattr(args, 'deep', False) and isinstance(result, dict):
+            try:
+                from hybrid_engine import HybridEngine
+                engine = HybridEngine(workspace, deep=True)
+                if engine.lsp_active:
+                    if args.command == "dead-code":
+                        items = result.get("results", {})
+                        if isinstance(items, dict):
+                            for cat, cat_items in items.items():
+                                if isinstance(cat_items, list):
+                                    items[cat] = engine.verify_dead_code(cat_items)
+                        result["deep_analysis"] = True
+                        result["confidence_distribution"] = compute_confidence_distribution_flat(result)
+                    elif args.command == "query":
+                        result = engine.enhance_query(result, getattr(args, 'name', ''))
+                        result["deep_analysis"] = True
+                    elif args.command == "impact":
+                        result = engine.enhance_impact(result, getattr(args, 'name', ''))
+                        result["deep_analysis"] = True
+                    elif args.command == "smell":
+                        findings = result.get("findings", [])
+                        if findings:
+                            result["findings"] = engine.verify_dead_code(findings)
+                        result["deep_analysis"] = True
+                        result["confidence_distribution"] = compute_confidence_distribution_flat(result)
+                    else:
+                        result["deep_analysis"] = False
+                        result["deep_analysis_hint"] = f"--deep not yet supported for {args.command}"
+                    engine.cleanup()
+                else:
+                    result["deep_analysis"] = False
+                    result["deep_analysis_hint"] = "No LSP server available. Install one (run: codelens --lsp-status)"
+            except ImportError:
+                result["deep_analysis"] = False
+                result["deep_analysis_hint"] = "Hybrid engine not available (hybrid_engine.py not found)"
 
         # ─── Post-processing: --max-tokens N ──
         max_tokens = getattr(args, 'max_tokens', None)

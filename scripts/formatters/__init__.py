@@ -138,6 +138,7 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
         "action_reason", "risk_level", "recommended_action", "fuzzy",
         "partial", "time_budget_used", "health_score",
         "identity", "frameworks_detected", "project_type",
+        "deep_analysis", "confidence", "confidence_distribution",
     ]
     for key in _META_KEYS:
         if key in data:
