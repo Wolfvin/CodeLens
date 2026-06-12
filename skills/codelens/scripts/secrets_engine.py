@@ -558,6 +558,10 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if _is_example_or_placeholder_line(line_text):
                         continue
 
+                    # Skip localhost connection strings — these are development defaults, not real secrets
+                    if _is_localhost_connection_string(raw_value):
+                        continue
+
                     # Mask the value for safe reporting
                     masked = _mask_value(raw_value)
 
@@ -571,6 +575,8 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                         "file": rel_path,
                         "line": line_num,
                         "match": masked,
+                        "value": masked,
+                        "line_content": line_text.strip(),
                         "severity": severity,
                         "category": definition["category"],
                     }
@@ -652,6 +658,10 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
             if _is_example_or_placeholder_line(line_text):
                 continue
 
+            # Skip localhost connection strings — these are development defaults, not real secrets
+            if _is_localhost_connection_string(candidate):
+                continue
+
             # Determine likely category based on context
             likely_category = _infer_category_from_value(candidate)
 
@@ -660,11 +670,16 @@ def _scan_file_entropy(content: str, rel_path: str, ext: str, is_test: bool = Fa
             if is_test:
                 severity = _reduce_severity(severity)
 
+            # Get the full line for line_content
+            line_text = lines[line_num - 1] if line_num <= len(lines) else ""
+
             finding = {
                 "type": "entropy_match",
                 "file": rel_path,
                 "line": line_num,
                 "match": masked,
+                "value": masked,
+                "line_content": line_text.strip(),
                 "severity": severity,
                 "category": likely_category,
                 "entropy": round(entropy, 2),
@@ -740,6 +755,8 @@ def _scan_env_files(workspace: str) -> List[Dict[str, Any]]:
                         "file": rel_path,
                         "line": i + 1,
                         "match": masked,
+                        "value": masked,
+                        "line_content": stripped,
                         "severity": _severity_for_category(category),
                         "category": category,
                         "env_key": key_name,
@@ -835,6 +852,21 @@ def _shannon_entropy(data: str) -> float:
     return entropy
 
 # ─── Helper Functions ──────────────────────────────────────────
+
+def _is_localhost_connection_string(value: str) -> bool:
+    """Check if a value is a localhost/loopback connection string (development default).
+
+    Local development connection strings like mongodb://localhost:27017,
+    redis://127.0.0.1:6379, amqp://localhost:5672 are NOT real secrets —
+    they are safe development defaults that pose no security risk.
+    """
+    if not value:
+        return False
+    # Check for localhost, 127.0.0.1, 0.0.0.0, or ::1 in connection strings
+    localhost_indicators = ['localhost', '127.0.0.1', '0.0.0.0', '::1']
+    value_lower = value.lower()
+    return any(ind in value_lower for ind in localhost_indicators)
+
 
 def _mask_value(value: str) -> str:
     """Mask a secret value, showing only the first 4 characters.

@@ -263,6 +263,12 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
+    # NestJS (TypeScript backend framework)
+    "nestjs": {
+        "packages": ["@nestjs/core", "@nestjs/common"],
+        "config_files": ["nest-cli.json"],
+        "indicators": []
+    },
 }
 
 
@@ -390,6 +396,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_symfony": False,
         "has_php": False,
         "has_deno": False,
+        "has_nestjs": False,
+        "nestjs_platform": None,
+        "nestjs_features": [],
         "is_monorepo": False,
         "monorepo_tools": [],
         "lockfile": None,
@@ -496,7 +505,41 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_golang"] = True
                     elif fw_name == "deno":
                         detected["has_deno"] = True
+                    elif fw_name == "nestjs":
+                        detected["has_nestjs"] = True
                     break
+
+        # NestJS sub-framework and feature detection from packages
+        if detected.get("has_nestjs"):
+            if "@nestjs/platform-express" in all_deps:
+                detected["nestjs_platform"] = "express"
+            elif "@nestjs/platform-fastify" in all_deps:
+                detected["nestjs_platform"] = "fastify"
+            else:
+                detected["nestjs_platform"] = "express"  # default platform
+            _NESTJS_FEATURE_PACKAGES = {
+                "@nestjs/microservices": "microservices",
+                "@nestjs/websockets": "websockets",
+                "@nestjs/graphql": "graphql",
+                "@nestjs/grpc": "grpc",
+                "@nestjs/passport": "authentication",
+                "@nestjs/jwt": "authentication",
+                "@nestjs/swagger": "openapi",
+                "@nestjs/schedule": "scheduling",
+                "@nestjs/bull": "queues",
+                "@nestjs/bullmq": "queues",
+                "@nestjs/event-emitter": "events",
+                "@nestjs/cqrs": "cqrs",
+                "@nestjs/typeorm": "typeorm",
+                "@nestjs/prisma": "prisma",
+                "@nestjs/mongoose": "mongoose",
+                "@nestjs/sequelize": "sequelize",
+                "@nestjs/config": "config",
+            }
+            for pkg, feature in _NESTJS_FEATURE_PACKAGES.items():
+                if pkg in all_deps:
+                    detected["nestjs_features"].append(feature)
+            detected["nestjs_features"] = sorted(set(detected["nestjs_features"]))
 
         # Detect CSS preprocessor
         if "sass" in all_deps or "node-sass" in all_deps:
@@ -530,6 +573,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "nestjs":
+                    detected["has_nestjs"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -849,6 +894,46 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             if detected["has_tailwind"]:
                 break
 
+    # 6a. Detect NestJS from decorator patterns in TypeScript files
+    if not detected.get("has_nestjs"):
+        _NESTJS_DECORATORS = {'@Controller', '@Module', '@Injectable', '@Get', '@Post',
+                              '@Put', '@Delete', '@Patch', '@Options', '@All'}
+        _nestjs_hits = 0
+        for root, dirs, files in os.walk(workspace):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
+                continue
+            for f in files:
+                if not f.endswith(('.ts', '.tsx')):
+                    continue
+                try:
+                    fpath = os.path.join(root, f)
+                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as fh:
+                        content = fh.read(8192)  # Read first 8KB
+                        for dec in _NESTJS_DECORATORS:
+                            if dec in content:
+                                _nestjs_hits += 1
+                                if _nestjs_hits >= 2:
+                                    break
+                    if _nestjs_hits >= 2:
+                        break
+                except IOError:
+                    pass
+            if _nestjs_hits >= 2:
+                break
+        if _nestjs_hits >= 2:
+            if "nestjs" not in detected["frameworks"]:
+                detected["frameworks"].append("nestjs")
+            detected["has_nestjs"] = True
+            if not detected["nestjs_platform"]:
+                detected["nestjs_platform"] = "express"  # default
+            if not detected["nestjs_features"]:
+                detected["nestjs_features"] = []
+
     # 6b. Detect Go web frameworks from go.mod content
     # Only flag gin/echo/etc if the dependency actually appears in go.mod,
     # NOT just because go.mod exists (every Go project has go.mod).
@@ -918,6 +1003,9 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         "monorepo_tools": fw.get("monorepo_tools", []),
         "lockfile": fw.get("lockfile"),
         "has_rust_backend": fw.get("has_rust_backend", False),
+        "has_nestjs": fw.get("has_nestjs", False),
+        "nestjs_platform": fw.get("nestjs_platform"),
+        "nestjs_features": fw.get("nestjs_features", []),
     }
 
     # Adjust paths based on framework
@@ -985,6 +1073,36 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                         if os.path.isdir(tauri_dir):
                             rel = os.path.relpath(tauri_dir, workspace)
                             config["backend_paths"].append(rel + "/src/")
+                except OSError:
+                    pass
+
+    # NestJS: add NestJS-specific paths
+    if fw.get("has_nestjs"):
+        config["backend_paths"].extend(["src/", "src/modules/", "src/controllers/", "src/providers/", "src/services/"])
+        if fw.get("nestjs_platform") == "fastify":
+            pass  # same path structure, just different runtime
+        # Monorepo sub-apps with NestJS
+        for app_dir in ('apps', 'packages', 'services'):
+            app_path = os.path.join(workspace, app_dir)
+            if os.path.isdir(app_path):
+                try:
+                    for entry in os.listdir(app_path):
+                        entry_base = os.path.join(app_path, entry)
+                        if not os.path.isdir(entry_base):
+                            continue
+                        pkg_json = os.path.join(entry_base, "package.json")
+                        if os.path.isfile(pkg_json):
+                            try:
+                                with open(pkg_json, 'r', encoding='utf-8') as pf:
+                                    sub_pkg = json.load(pf)
+                                sub_deps = {}
+                                sub_deps.update(sub_pkg.get("dependencies", {}))
+                                sub_deps.update(sub_pkg.get("devDependencies", {}))
+                                if "@nestjs/core" in sub_deps or "@nestjs/common" in sub_deps:
+                                    rel = os.path.relpath(entry_base, workspace)
+                                    config["backend_paths"].append(rel + "/src/")
+                            except (json.JSONDecodeError, IOError):
+                                pass
                 except OSError:
                     pass
 

@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "7.0.0"
+CODELENS_VERSION = "7.1.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -428,5 +428,32 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
         return True
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
+        return True
+    return False
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file path looks like a bundled/compiled artifact that should be skipped.
+
+    Detects dist/, build/, and bundled file patterns that are not meaningful
+    for code quality analysis.
+
+    Args:
+        rel_path: Relative file path from workspace root.
+
+    Returns:
+        True if the file appears to be bundled/compiled.
+    """
+    parts = rel_path.replace('\\', '/').split('/')
+    # Skip files in dist/ or build/ directories
+    if 'dist' in parts or 'build' in parts or 'out' in parts:
+        return True
+    lower = rel_path.lower()
+    # Skip bundled/compiled file patterns
+    if '.bundle.' in lower or '.chunk.' in lower or '.global.' in lower:
+        return True
+    if lower.endswith('.min.js') or lower.endswith('.min.css'):
+        return True
+    if lower.endswith('.d.ts'):
         return True
     return False

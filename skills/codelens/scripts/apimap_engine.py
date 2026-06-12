@@ -18,6 +18,8 @@ Framework Detection & Route Extraction:
 12. tRPC      — router definitions, procedure chains
 13. oRPC      — procedure chains, router objects
 14. SvelteKit — file-based routes (+page, +server, +layout, +error)
+15. NestJS    — @Controller, @Get/@Post/..., @Query/@Mutation (GraphQL),
+               @GrpcMethod, @MessagePattern/@EventPattern (microservices)
 
 Per-route extraction: method, path, handler_name, file, line,
                       middleware_chain, request_type, response_type
@@ -42,6 +44,53 @@ SOURCE_EXTENSIONS = {
 }
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+# NestJS HTTP method decorators
+NESTJS_HTTP_DECORATORS = {
+    "Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All",
+}
+
+# NestJS decorator definition file path patterns (these define the decorators,
+# not use them — they should be excluded from route detection)
+NESTJS_DECORATOR_DEF_PATTERNS = [
+    # Core decorator definition files
+    '/decorators/http/request-mapping.decorator.ts',
+    '/decorators/http/route-params.decorator.ts',
+    '/decorators/http/http-code.decorator.ts',
+    '/decorators/http/redirect.decorator.ts',
+    '/decorators/http/header.decorator.ts',
+    '/decorators/http/sse.decorator.ts',
+    '/decorators/http/render.decorator.ts',
+    '/decorators/http/create-route-param-metadata.decorator.ts',
+    '/decorators/http/index.ts',
+    '/decorators/controller.decorator.ts',
+    '/microservices/decorators/message-pattern.decorator.ts',
+    '/microservices/decorators/event-pattern.decorator.ts',
+    '/microservices/decorators/grpc-service.decorator.ts',
+    '/microservices/decorators/client.decorator.ts',
+    '/microservices/decorators/payload.decorator.ts',
+    '/microservices/decorators/ctx.decorator.ts',
+    '/microservices/decorators/index.ts',
+    '/graphql/decorators/',
+    # Test files for decorator definitions (not actual routes)
+    '/test/decorators/',
+    # Broad patterns for common NestJS library internals
+    '/common/decorators/',
+    '/core/router/interfaces/',
+]
+
+# Patterns that indicate a file is a decorator factory definition, not a route consumer
+NESTJS_DECORATOR_FACTORY_SIGNATURES = [
+    r'export\s+const\s+(Get|Post|Put|Delete|Patch|Options|Head|All)\s*=',
+    r'export\s+function\s+(Get|Post|Put|Delete|Patch|Options|Head|All)\s*\(',
+    r'export\s+const\s+(Controller|Query|Mutation|Subscription)\s*=',
+    r'export\s+function\s+(Controller|Query|Mutation|Subscription)\s*\(',
+    r'export\s+const\s+(GrpcMethod|GrpcStreamMethod|GrpcStreamCall)\s*=',
+    r'export\s+const\s+(MessagePattern|EventPattern)\s*=',
+    r'createMappingDecorator',
+    r'createRouteParamDecorator',
+    r'createPipesRouteParamDecorator',
+]
 
 # Valid HTTP methods in uppercase (for validation of extracted method names)
 VALID_HTTP_METHODS_UPPER = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS", "ALL"}
@@ -147,6 +196,8 @@ def map_api_routes(
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
+                '/sample/', '/samples/',
+                '/integration/', '/e2e/',
             ])
 
             try:
@@ -224,6 +275,13 @@ def map_api_routes(
                     frameworks_detected.add("grpc")
                     routes.extend(grpc_routes)
 
+            # ─── NestJS ─────────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                nestjs_routes = _extract_nestjs_routes(content, rel_path)
+                if nestjs_routes:
+                    frameworks_detected.add("nestjs")
+                    routes.extend(nestjs_routes)
+
             # ─── tRPC ─────────────────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 trpc_routes = _extract_trpc_routes(content, rel_path)
@@ -286,11 +344,17 @@ def map_api_routes(
     for route in routes:
         route_file = route.get("file", "")
         if "source" not in route:
-            route["source"] = "test" if any(x in route_file for x in [
+            # Check for test/example/sample/integration paths
+            # Note: paths like 'sample/' or 'integration/' can appear at the start
+            # of rel_path (no leading /), so we check both forms
+            is_test = any(x in route_file for x in [
                 '/tests/', '/test/', '/__tests__/', '/spec/',
                 '/conftest', 'test_', '_test.', '.test.', '.spec.',
                 '/examples/', '/example/',
-            ]) else "production"
+                '/sample/', '/samples/',
+                '/integration/', '/e2e/',
+            ]) or route_file.startswith(('sample/', 'samples/', 'integration/', 'e2e/', 'example/', 'examples/'))
+            route["source"] = "test" if is_test else "production"
 
     # Attach middleware to routes
     for mw in global_middleware:
@@ -845,6 +909,439 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
                     "file": rel_path,
                     "line": i + 1,
                 })
+
+    return middleware
+
+
+# ─── NestJS Routes ──────────────────────────────────────────────
+
+def _is_nestjs_decorator_definition(content: str, rel_path: str) -> bool:
+    """Check if this file is a NestJS decorator factory definition file.
+
+    These files define the decorator functions themselves (e.g., `export const Get = ...`)
+    rather than using them as route handlers. They should be excluded from route detection
+    to avoid false positives.
+    """
+    # Check by file path patterns
+    for pattern in NESTJS_DECORATOR_DEF_PATTERNS:
+        if pattern in rel_path:
+            return True
+
+    # Check by content signatures — if the file exports the decorator factories
+    for sig_pattern in NESTJS_DECORATOR_FACTORY_SIGNATURES:
+        if re.search(sig_pattern, content):
+            return True
+
+    return False
+
+
+def _extract_nestjs_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract routes from NestJS TypeScript/JavaScript files.
+
+    Detects:
+    - HTTP routes: @Controller('path') + @Get/@Post/@Put/@Delete/@Patch/@Options/@Head/@All
+    - GraphQL resolvers: @Resolver() + @Query/@Mutation/@Subscription (from @nestjs/graphql)
+    - gRPC methods: @GrpcMethod/@GrpcStreamMethod/@GrpcStreamCall (from @nestjs/microservices)
+    - Microservice patterns: @MessagePattern/@EventPattern (from @nestjs/microservices)
+
+    Filters out decorator definition files (e.g., packages/common/decorators/) to avoid
+    false positives from the decorator factory implementations themselves.
+    """
+    routes: List[Dict[str, Any]] = []
+
+    # ─── Skip decorator definition files ────────────────────────
+    if _is_nestjs_decorator_definition(content, rel_path):
+        return routes
+
+    # ─── Detect NestJS imports ──────────────────────────────────
+    has_nestjs_common = bool(re.search(
+        r'(?:from\s+[\'"]@nestjs/common[\'"]|import\s+.*@nestjs/common)',
+        content
+    ))
+    has_nestjs_microservices = bool(re.search(
+        r'(?:from\s+[\'"]@nestjs/microservices[\'"]|import\s+.*@nestjs/microservices)',
+        content
+    ))
+    has_nestjs_graphql = bool(re.search(
+        r'(?:from\s+[\'"]@nestjs/graphql[\'"]|import\s+.*@nestjs/graphql)',
+        content
+    ))
+
+    if not (has_nestjs_common or has_nestjs_microservices or has_nestjs_graphql):
+        return routes
+
+    # ─── Detect @Controller() decorators and extract base paths ─
+    # A file can have multiple controllers, so track all of them with their
+    # line positions so we can match method decorators to the right controller.
+    controller_bases: List[Dict[str, Any]] = []  # [{path, start_line, end_line}]
+
+    for ctrl_m in re.finditer(
+        r'@Controller\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
+        content
+    ):
+        ctrl_path = ctrl_m.group(1) or ""
+        ctrl_line = content[:ctrl_m.start()].count('\n') + 1
+
+        # Find the class body to know the controller's scope
+        # Look for the class opening brace after the @Controller decorator
+        class_match = re.search(
+            r'class\s+(\w+)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w,\s]+\s*)?\{',
+            content[ctrl_m.end():ctrl_m.end() + 500]
+        )
+        if class_match:
+            class_name = class_match.group(1)
+            class_start_offset = ctrl_m.end() + class_match.end()
+            # Find matching closing brace for the class body
+            depth = 1
+            pos = class_start_offset
+            while pos < len(content) and depth > 0:
+                if content[pos] == '{':
+                    depth += 1
+                elif content[pos] == '}':
+                    depth -= 1
+                pos += 1
+            class_end_offset = pos
+
+            controller_bases.append({
+                'path': ctrl_path,
+                'start': ctrl_m.start(),
+                'end': class_end_offset,
+                'class_name': class_name,
+                'line': ctrl_line,
+            })
+        else:
+            # Fallback: controller scope extends to next @Controller or end of file
+            controller_bases.append({
+                'path': ctrl_path,
+                'start': ctrl_m.start(),
+                'end': len(content),
+                'class_name': 'AnonymousController',
+                'line': ctrl_line,
+            })
+
+    # ─── Extract HTTP method routes (@Get, @Post, etc.) ────────
+    if has_nestjs_common and controller_bases:
+        for ctrl in controller_bases:
+            ctrl_prefix = ctrl['path']
+            ctrl_content = content[ctrl['start']:ctrl['end']]
+
+            for method_m in re.finditer(
+                r'@(Get|Post|Put|Delete|Patch|Options|Head|All)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
+                ctrl_content
+            ):
+                decorator_name = method_m.group(1)
+                method_path = method_m.group(2) or ""
+                http_method = decorator_name.upper()
+
+                # Calculate absolute position in full content
+                abs_pos = ctrl['start'] + method_m.end()
+
+                # Find the handler method name — look for the method definition
+                # after the decorator
+                handler_name = _find_nestjs_handler_name(content, abs_pos)
+                line_num = content[:ctrl['start'] + method_m.start()].count('\n') + 1
+
+                # Construct full path: controller prefix + method path
+                full_path = _normalize_path('/' + ctrl_prefix + '/' + method_path)
+
+                # Detect middleware from nearby decorators (e.g., @UseGuards)
+                mw_chain = _extract_nestjs_middleware(content, ctrl['start'] + method_m.start(), rel_path, line_num)
+
+                routes.append({
+                    "method": http_method,
+                    "path": full_path,
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": mw_chain,
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "nestjs",
+                })
+
+    # ─── Extract GraphQL resolvers (@Query, @Mutation, @Subscription) ──
+    if has_nestjs_graphql:
+        # Find @Resolver() decorated classes
+        resolver_bases: List[Dict[str, Any]] = []
+        for res_m in re.finditer(
+            r'@Resolver\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
+            content
+        ):
+            resolver_name = res_m.group(1) or ""
+            res_line = content[:res_m.start()].count('\n') + 1
+
+            class_match = re.search(
+                r'class\s+(\w+)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w,\s]+\s*)?\{',
+                content[res_m.end():res_m.end() + 500]
+            )
+            if class_match:
+                class_name = class_match.group(1)
+                class_start_offset = res_m.end() + class_match.end()
+                depth = 1
+                pos = class_start_offset
+                while pos < len(content) and depth > 0:
+                    if content[pos] == '{':
+                        depth += 1
+                    elif content[pos] == '}':
+                        depth -= 1
+                    pos += 1
+                resolver_bases.append({
+                    'name': resolver_name,
+                    'start': res_m.start(),
+                    'end': pos,
+                    'class_name': class_name,
+                    'line': res_line,
+                })
+
+        for resolver in resolver_bases:
+            resolver_content = content[resolver['start']:resolver['end']]
+
+            # @Query('fieldName') or @Query()
+            for qm in re.finditer(
+                r'@(Query|Mutation|Subscription)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`])?\s*\)',
+                resolver_content
+            ):
+                gql_type = qm.group(1).upper()  # QUERY, MUTATION, SUBSCRIPTION
+                field_name = qm.group(2) or ""
+
+                abs_pos = resolver['start'] + qm.end()
+                handler_name = _find_nestjs_handler_name(content, abs_pos)
+
+                # If no explicit field name, use the handler method name
+                if not field_name:
+                    field_name = handler_name
+
+                line_num = content[:resolver['start'] + qm.start()].count('\n') + 1
+
+                # Detect middleware from nearby decorators (e.g., @UseGuards)
+                mw_chain = _extract_nestjs_middleware(content, resolver['start'] + qm.start(), rel_path, line_num)
+
+                routes.append({
+                    "method": gql_type,
+                    "path": f"{resolver['name']}.{field_name}" if resolver['name'] else field_name,
+                    "handler_name": handler_name,
+                    "file": rel_path,
+                    "line": line_num,
+                    "middleware_chain": mw_chain,
+                    "request_type": None,
+                    "response_type": None,
+                    "framework": "nestjs",
+                })
+
+    # ─── Extract gRPC methods (@GrpcMethod, @GrpcStreamMethod, @GrpcStreamCall) ──
+    if has_nestjs_microservices:
+        for grpc_m in re.finditer(
+            r'@(GrpcMethod|GrpcStreamMethod|GrpcStreamCall)\s*\(\s*(?:[\'"`]([^\'"`]*)[\'"`]\s*(?:,\s*[\'"`]([^\'"`]*)[\'"`])?)?\s*\)',
+            content
+        ):
+            decorator_name = grpc_m.group(1)
+            service_name = grpc_m.group(2) or ""
+            method_name_hint = grpc_m.group(3) or ""
+
+            abs_pos = grpc_m.end()
+            handler_name = _find_nestjs_handler_name(content, abs_pos)
+
+            # If method name not specified in decorator, use the handler name
+            grpc_method_name = method_name_hint or handler_name
+
+            line_num = content[:grpc_m.start()].count('\n') + 1
+
+            route_path = f"/{service_name}/{grpc_method_name}" if service_name else f"/{grpc_method_name}"
+
+            routes.append({
+                "method": "GRPC",
+                "path": route_path,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nestjs",
+            })
+
+        # ─── Extract microservice patterns (@MessagePattern, @EventPattern) ──
+        for msg_m in re.finditer(
+            r'@(MessagePattern|EventPattern)\s*\(\s*(?:([\'"`][^\'"`]+[\'"`])|(\{[^}]+\}))?\s*\)',
+            content
+        ):
+            decorator_name = msg_m.group(1)
+            string_pattern = msg_m.group(2)
+            object_pattern = msg_m.group(3)
+
+            abs_pos = msg_m.end()
+            handler_name = _find_nestjs_handler_name(content, abs_pos)
+            line_num = content[:msg_m.start()].count('\n') + 1
+
+            # Extract pattern name
+            pattern_name = ""
+            if string_pattern:
+                pattern_name = string_pattern.strip("'\"`")
+            elif object_pattern:
+                # Try to extract cmd or type from object pattern like { cmd: 'sum' }
+                cmd_match = re.search(r'cmd\s*:\s*[\'"`]([^\'"`]+)[\'"`]', object_pattern)
+                if cmd_match:
+                    pattern_name = cmd_match.group(1)
+                else:
+                    # Try to extract any string value
+                    val_match = re.search(r'[\'"`]([^\'"`]+)[\'"`]', object_pattern)
+                    if val_match:
+                        pattern_name = val_match.group(1)
+                    else:
+                        pattern_name = handler_name
+
+            if not pattern_name:
+                pattern_name = handler_name
+
+            method_type = "MESSAGE" if decorator_name == "MessagePattern" else "EVENT"
+
+            routes.append({
+                "method": method_type,
+                "path": pattern_name,
+                "handler_name": handler_name,
+                "file": rel_path,
+                "line": line_num,
+                "middleware_chain": [],
+                "request_type": None,
+                "response_type": None,
+                "framework": "nestjs",
+            })
+
+    return routes
+
+
+def _find_nestjs_handler_name(content: str, offset: int) -> str:
+    """Find the method name that follows a NestJS decorator.
+
+    After a decorator like @Get('path'), the next thing is the method definition.
+    Patterns include:
+      - async methodName(...) {
+      - methodName(...) {
+      - @OtherDecorator() async methodName(...) {
+      - @UseGuards(Auth) @HttpCode(200) async methodName(...) {
+    """
+    # Look ahead up to 500 characters for the method name
+    remaining = content[offset:offset + 500]
+
+    # Skip past any additional decorators that appear between the route
+    # decorator and the method definition, e.g.:
+    #   @HttpCode(200)
+    #   @UseGuards(AuthGuard)
+    #   @UsePipes(ValidationPipe)
+    #   @ApiOperation({ summary: '...' })
+    #   @ApiResponse({ ... })
+    #   @Roles('admin')
+    # We need to skip @DecoratorName(...) patterns including multi-line ones
+    # and then find the actual method name.
+
+    # Strategy: strip out all @Decorator(...) patterns, then find first word(
+    # We'll do this iteratively to handle nested parens in decorators
+    cleaned = remaining
+    # Remove @Decorator(...) patterns — handle nested parens
+    prev = None
+    while prev != cleaned:
+        prev = cleaned
+        # Match @Word(...) with possible newlines — replace with empty
+        cleaned = re.sub(
+            r'@\w+\s*\([^)]*(?:\)[^\w]*)?',  # simple @Decorator(args) 
+            ' ',
+            cleaned,
+            count=1
+        )
+    # Also handle multi-line decorator calls with nested braces/parens
+    # Simpler approach: find all word( patterns and take the first that looks like a method
+
+    # TypeScript keywords to exclude
+    TS_KEYWORDS = {
+        'constructor', 'function', 'async', 'await', 'new', 'return',
+        'if', 'else', 'for', 'while', 'switch', 'case', 'break',
+        'const', 'let', 'var', 'class', 'interface', 'type', 'export',
+        'import', 'from', 'public', 'private', 'protected', 'static',
+        'readonly', 'abstract', 'override', 'get', 'set',
+        # Common decorator names that might match before the actual method
+        'UseGuards', 'UsePipes', 'UseInterceptors', 'UseFilters',
+        'HttpCode', 'Redirect', 'Render', 'Header', 'Sse',
+        'ApiOperation', 'ApiResponse', 'ApiParam', 'ApiQuery',
+        'ApiBody', 'ApiBearerAuth', 'ApiTags', 'ApiHeader',
+        'ApiSecurity', 'ApiExcludeEndpoint', 'ApiOAuth2',
+        'ApiExtraModels', 'ApiOkResponse', 'ApiCreatedResponse',
+        'Roles', 'Permissions', 'SetMetadata',
+    }
+
+    # Find all word( patterns in the cleaned text
+    for m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', cleaned):
+        name = m.group(1)
+        if name not in TS_KEYWORDS:
+            return name
+
+    # Fallback: try the original remaining text with the same filter
+    for m in re.finditer(r'(?:async\s+)?(\w+)\s*\(', remaining):
+        name = m.group(1)
+        if name not in TS_KEYWORDS:
+            return name
+
+    return "anonymous"
+
+
+def _extract_nestjs_middleware(
+    content: str, offset: int, rel_path: str, line_num: int
+) -> List[Dict[str, Any]]:
+    """Extract middleware from NestJS decorators near a route handler.
+
+    Checks for:
+    - @UseGuards(GuardName) — auth, role-based access
+    - @UsePipes(PipeName) — validation
+    - @UseInterceptors(InterceptorName) — logging, caching, etc.
+    """
+    middleware = []
+
+    # Look at lines above the route decorator for other decorators
+    lines = content.split('\n')
+    target_line = line_num - 1  # 0-indexed
+
+    for i in range(max(0, target_line - 10), target_line + 1):
+        if i >= len(lines):
+            break
+        stripped = lines[i].strip()
+
+        # @UseGuards(AuthGuard, RolesGuard)
+        guard_m = re.match(r'@UseGuards\s*\(\s*([\w,\s]+)\s*\)', stripped)
+        if guard_m:
+            guards = [g.strip() for g in guard_m.group(1).split(',')]
+            for guard_name in guards:
+                mw_type = _classify_middleware(guard_name)
+                # Common NestJS auth guards
+                if any(x in guard_name.lower() for x in ['auth', 'jwt', 'guard', 'role', 'permission']):
+                    mw_type = "auth"
+                middleware.append({
+                    "name": guard_name,
+                    "type": mw_type,
+                    "file": rel_path,
+                    "line": i + 1,
+                })
+
+        # @UsePipes(ValidationPipe)
+        pipe_m = re.match(r'@UsePipes\s*\(\s*(\w+)\s*\)', stripped)
+        if pipe_m:
+            pipe_name = pipe_m.group(1)
+            mw_type = "validation" if any(x in pipe_name.lower() for x in ['validation', 'parse', 'validate']) else "custom"
+            middleware.append({
+                "name": pipe_name,
+                "type": mw_type,
+                "file": rel_path,
+                "line": i + 1,
+            })
+
+        # @UseInterceptors(LoggingInterceptor)
+        int_m = re.match(r'@UseInterceptors\s*\(\s*(\w+)\s*\)', stripped)
+        if int_m:
+            int_name = int_m.group(1)
+            middleware.append({
+                "name": int_name,
+                "type": "interceptor",
+                "file": rel_path,
+                "line": i + 1,
+            })
 
     return middleware
 
@@ -1748,6 +2245,17 @@ def _extract_graphql_schema(content: str, rel_path: str) -> List[Dict[str, Any]]
 def _extract_graphql_code(content: str, rel_path: str) -> List[Dict[str, Any]]:
     """Extract GraphQL resolvers from JS/TS code."""
     routes = []
+
+    # Skip NestJS decorator definition files to avoid false positives
+    # (e.g., packages/common/decorators/http/route-params.decorator.ts
+    # has `Query:` patterns that are decorator factory exports, not resolvers)
+    if _is_nestjs_decorator_definition(content, rel_path):
+        return routes
+
+    # Also skip if this file imports from @nestjs/graphql — those @Query/@Mutation
+    # decorators are handled by the NestJS parser, not the generic GraphQL one
+    if re.search(r'(?:from\s+[\'\"]@nestjs/graphql[\'\"]|import\s+.*@nestjs/graphql)', content):
+        return routes
 
     # Resolver map patterns: Query: { fieldName: (parent, args, ctx) => ... }
     for m in re.finditer(

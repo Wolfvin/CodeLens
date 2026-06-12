@@ -2,6 +2,36 @@
 
 All notable changes to CodeLens are documented here.
 
+## [7.1.0] — 2026-06-12
+
+### Tested against nestjs/nest (1673 TypeScript files, lerna monorepo, 11 packages)
+
+Real-world test on the NestJS framework itself — a decorator-based TypeScript monorepo with HTTP controllers, GraphQL resolvers, gRPC services, microservice patterns, and WebSocket gateways.
+
+### Added
+
+- NestJS framework detection (platform, 17 feature packages, decorator pattern fallback)
+- NestJS decorator-based API route detection (HTTP, GraphQL, gRPC, microservices) — 0 → 353 routes
+- NestJS DI provider state mapping (`@Module({ providers: [...] })`)
+- `is_bundled_file()` utility function (fixes 4 broken commands)
+- Localhost connection string filtering in secrets engine (17 → 1 FP)
+- Secrets findings now include `value` and `line_content` fields
+- Class method smell detection (long_fn: 22 → 85, many_params: 5 → 49)
+- TypeScript export dead code detection (`export interface/type/enum/declare`) — 0 → 476 findings
+- NestJS dataflow decorator input sources (`@Body()`, `@Param()`, etc.) — 48 production violations
+- Side-effect engine: class method detection + performance limits (0 → 286 impure)
+- Context-aware `hooks/` directory descriptions in handbook
+
+### Fixed
+
+- CRITICAL: `is_bundled_file` missing — broke ask, complexity, context, perf_hint commands
+- CRITICAL: No NestJS framework detection
+- CRITICAL: API map detected decorator definitions as routes (22 FP eliminated)
+- State map: NestJS decorators misclassified as stores
+- Handbook: `hooks/` always described as "Custom React hooks"
+- Handbook: platform-fastify detected as "express"
+- Side-effect engine: infinite timeout on large projects
+
 ## [5.9.0] — 2026-06-12
 
 ### Tested against gitlab-org/gitlab-vscode-extension (882 files: 763 TS + 82 JS + 18 Vue)
