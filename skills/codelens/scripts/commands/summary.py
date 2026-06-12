@@ -95,12 +95,17 @@ def add_args(parser):
                         help="Focus area for the summary (default: all)")
     parser.add_argument("--max-items", type=int, default=10,
                         help="Maximum items per category (default: 10)")
-    parser.add_argument("--detail", choices=["minimal", "standard", "full"],
-                        default="standard",
-                        help="Detail level: minimal (critical only), standard (critical+high), full (all)")
+    parser.add_argument("--detail", choices=["minimal", "standard", "full", "auto"],
+                        default="auto",
+                        help="Detail level: minimal (critical only), standard (critical+high), "
+                             "full (all), auto (adapts to codebase size, default)")
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
+    parser.add_argument("--write-agent-md", action="store_true",
+                        help="Write a condensed AGENT.md file to .codelens/ for AI context")
+    parser.add_argument("--max-tokens", type=int, default=8000,
+                        help="Approximate max output tokens before smart truncation (default: 8000)")
 
 
 def execute(args, workspace):
@@ -111,6 +116,8 @@ def execute(args, workspace):
         max_items=args.max_items,
         detail=args.detail,
         max_files=max_files,
+        write_agent_md=getattr(args, 'write_agent_md', False),
+        max_tokens=getattr(args, 'max_tokens', 8000),
     )
 
 
@@ -119,12 +126,40 @@ def _time_left(start: float, budget: float = 90) -> float:
     return max(0.0, budget - (time.time() - start))
 
 
+def _count_source_files(workspace: str) -> int:
+    """Quick count of source files for auto-detect sizing."""
+    SOURCE_EXTS = {'.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.vue', '.svelte',
+                   '.html', '.css', '.scss', '.java', '.kt', '.c', '.cpp', '.h', '.php', '.rb'}
+    count = 0
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in {'node_modules', '.git', 'dist', 'build',
+                                                  '__pycache__', '.codelens', 'target', 'vendor'}]
+        for f in files:
+            if any(f.endswith(ext) for ext in SOURCE_EXTS):
+                count += 1
+                if count > 5000:  # Early exit for very large repos
+                    return count
+    return count
+
+
+def _estimate_tokens(data: Any) -> int:
+    """Rough estimate of JSON token count (1 token ~ 4 chars)."""
+    try:
+        import json
+        text = json.dumps(data, default=str)
+        return len(text) // 4
+    except Exception:
+        return 0
+
+
 def generate_summary(
     workspace: str,
     focus: str = "all",
     max_items: int = 10,
-    detail: str = "standard",
+    detail: str = "auto",
     max_files: int = 5000,
+    write_agent_md: bool = False,
+    max_tokens: int = 8000,
 ) -> Dict[str, Any]:
     """
     Generate an auto-summary with prioritized, condensed output.
@@ -136,6 +171,16 @@ def generate_summary(
     start = time.time()
     skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
+
+    # ─── Auto-detect detail level based on codebase size ──────────
+    if detail == "auto":
+        file_count = _count_source_files(workspace)
+        if file_count < 100:
+            detail = "full"
+        elif file_count < 1000:
+            detail = "standard"
+        else:
+            detail = "minimal"
 
     # Severity filter based on detail level
     if detail == "minimal":
@@ -423,7 +468,93 @@ def generate_summary(
         )
     result["recommendations"] = recommendations
 
+    # ─── 7. Smart Truncation (prevent token overflow) ────────
+    estimated_tokens = _estimate_tokens(result)
+    if estimated_tokens > max_tokens:
+        # Progressively truncate: reduce max_items, then drop low-priority items
+        while _estimate_tokens(result) > max_tokens and max_items > 2:
+            max_items = max(2, max_items - 2)
+            for f in result.get("findings", []):
+                if "top_items" in f and isinstance(f["top_items"], list):
+                    f["top_items"] = f["top_items"][:max_items]
+        result["truncated_for_tokens"] = True
+        result["estimated_tokens"] = estimated_tokens
+
+    # ─── 8. Write AGENT.md (optional, for AI context) ──────
+    if write_agent_md:
+        _write_agent_md(workspace, result)
+
     return result
+
+
+def _write_agent_md(workspace: str, result: Dict[str, Any]) -> None:
+    """Write a condensed AGENT.md file to .codelens/ for AI agent context.
+
+    This produces a markdown file optimized for inclusion in AI system prompts,
+    with key information in a compact, scannable format.
+    """
+    codelens_dir = os.path.join(workspace, '.codelens')
+    os.makedirs(codelens_dir, exist_ok=True)
+    agent_md_path = os.path.join(codelens_dir, 'AGENT.md')
+
+    lines = []
+    identity = result.get("identity", {})
+    name = identity.get("name", os.path.basename(workspace))
+    lines.append(f"# {name} — CodeLens Summary")
+    lines.append("")
+
+    # Identity
+    ptype = identity.get("type", "unknown")
+    version = identity.get("version", "unknown")
+    lines.append(f"- **Type**: {ptype}")
+    lines.append(f"- **Version**: {version}")
+    if result.get("is_monorepo"):
+        lines.append("- **Monorepo**: Yes")
+    frameworks = result.get("frameworks", [])
+    if frameworks:
+        lines.append(f"- **Frameworks**: {', '.join(frameworks)}")
+    lines.append("")
+
+    # Registry stats
+    rs = result.get("registry_stats", {})
+    if rs:
+        lines.append("## Codebase Size")
+        lines.append(f"- Nodes: {rs.get('backend_nodes', 0)} | Edges: {rs.get('backend_edges', 0)} | Dead: {rs.get('dead_nodes', 0)}")
+        lines.append("")
+
+    # Priority findings
+    findings = result.get("findings", [])
+    if findings:
+        lines.append("## Priority Findings")
+        for f in findings:
+            cat = f.get("category", "")
+            total = f.get("total", 0)
+            action = f.get("action", "")
+            if total > 0:
+                lines.append(f"- **{cat}**: {total} issues — {action}")
+        lines.append("")
+
+    # Actions
+    actions = result.get("actions", [])
+    if actions:
+        lines.append("## Immediate Actions")
+        for a in actions[:5]:
+            lines.append(f"- {a}")
+        lines.append("")
+
+    # Recommendations
+    recs = result.get("recommendations", [])
+    if recs:
+        lines.append("## Recommendations")
+        for r in recs:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    try:
+        with open(agent_md_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+    except IOError:
+        logger.debug("Failed to write AGENT.md")
 
 
 register_command("summary", "Auto-summary with prioritized findings (anti-overload)", add_args, execute)

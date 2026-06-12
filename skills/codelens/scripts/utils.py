@@ -455,6 +455,46 @@ GENERATED_FILE_PATTERNS = frozenset({
 })
 
 
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a relative file path looks like a bundled/compiled file.
+
+    Covers minified files, webpack/rollup bundles, declaration files,
+    source maps, and files inside dist/build output directories.
+
+    Args:
+        rel_path: Relative path from workspace root (e.g., 'dist/app.min.js')
+
+    Returns:
+        True if the file appears to be bundled/compiled and should be skipped.
+    """
+    lower = rel_path.lower().replace('\\', '/')
+    filename = os.path.basename(lower)
+
+    # Check extension-based patterns
+    if lower.endswith('.min.js') or lower.endswith('.min.css'):
+        return True
+    if lower.endswith('.bundle.js') or lower.endswith('.chunk.js'):
+        return True
+    if lower.endswith('.d.ts') or lower.endswith('.d.ts.map'):
+        return True
+    if lower.endswith('.map'):
+        return True
+    if lower.endswith('.global.js'):
+        return True
+
+    # Check path-based patterns (dist/, build/ output directories)
+    parts = lower.split('/')
+    if any(p in ('dist', 'build', 'out', 'output', '.output', 'storybook-static')
+           for p in parts):
+        return True
+
+    # Check filename-based patterns
+    if filename in GENERATED_FILE_PATTERNS:
+        return True
+
+    return False
+
+
 def is_generated_file(filename: str) -> bool:
     """Check if a filename looks like a generated or lock file that should be skipped.
 

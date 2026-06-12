@@ -428,17 +428,22 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     from envcheck_engine import check_env_vars
     env = check_env_vars(workspace)
     stats = env.get("stats", {})
+    # Compute total issues from undocumented + required-but-missing vars
+    undocumented = stats.get("undocumented", 0)
     total_vars = stats.get("total_vars", 0)
-    missing_fallback = len(env.get("required_without_fallback", []))
-    issues_count = missing_fallback + len(env.get("missing_from_example", []))
-    if issues_count == 0 and total_vars == 0:
+    issues = undocumented  # Each undocumented var is an issue
+    if issues == 0 and total_vars == 0:
         return None
     return {
         "category": "env_issues",
         "label": "Environment Issues",
-        "total": issues_count,
-        "severity": "high" if missing_fallback > 0 else "medium",
-        "top_items": env.get("required_without_fallback", [])[:max_items],
+        "total": issues,
+        "severity": "medium",
+        "top_items": [{"name": v.get("name"), "is_required": v.get("is_required"),
+                         "has_fallback": v.get("has_fallback"),
+                         "documentation": v.get("documentation")}
+                        for v in env.get("variables", [])[:max_items]
+                        if not v.get("documentation")],
         "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
         "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
     }
@@ -647,7 +652,21 @@ def _extract_directory_structure(workspace: str, max_depth: int = 3) -> List[str
 
 
 def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
-    """Compute an overall risk score based on all findings."""
+    """Compute an overall risk score based on all findings.
+
+    Uses logarithmic scaling to prevent saturation to 0 on large projects.
+    The formula penalizes critical issues more heavily but uses log scaling
+    so that having 10x more issues doesn't mean 10x lower score.
+
+    Scoring:
+    - Start at 100
+    - Each critical issue costs log2(1 + n) * 8 points (max -25 per category)
+    - Each high issue costs log2(1 + n) * 4 points (max -15 per category)
+    - Each medium issue costs log2(1 + n) * 2 points (max -10 per category)
+    - Each low issue costs log2(1 + n) * 0.5 points (max -5 per category)
+    """
+    import math
+
     score = 100  # Start at 100, deduct for issues
 
     critical_count = 0
@@ -659,16 +678,26 @@ def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
         sev = f.get("severity", "low")
         if sev == "critical":
             critical_count += total
-            score -= min(total * 5, 30)  # Max -30 per category
+            # Logarithmic scaling: 1 issue = -8, 10 issues = -27.7, 100 issues = -53.3
+            deduction = math.log2(1 + total) * 8
+            score -= min(deduction, 25)  # Max -25 per category
         elif sev == "high":
             high_count += total
-            score -= min(total * 2, 20)
+            deduction = math.log2(1 + total) * 4
+            score -= min(deduction, 15)  # Max -15 per category
         elif sev == "medium":
             medium_count += total
-            score -= min(total, 10)
+            deduction = math.log2(1 + total) * 2
+            score -= min(deduction, 10)  # Max -10 per category
         else:
-            score -= min(total // 5, 5)
+            deduction = math.log2(1 + total) * 0.5
+            score -= min(deduction, 5)  # Max -5 per category
 
+    # Apply exponential decay when score goes below 0 to avoid
+    # immediate saturation to 0 on projects with many categories.
+    # This preserves relative differences: -10 → 72, -35 → 31, -70 → 10, -100 → 4
+    if score < 0:
+        score = round(100 * math.exp(score / 30))
     score = max(0, min(100, score))
 
     if score >= 80:

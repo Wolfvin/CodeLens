@@ -40,15 +40,17 @@ description: >
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.4 — Tested on neovim/neovim (3.8K files, C+Lua CMake project)
+## What's New in v6.4 — Tested on excalidraw/excalidraw (632 files, React+TS yarn-workspace monorepo)
 
-- **Critical: `is_bundled_file` missing from `utils.py`**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) crashed on import. Added `is_bundled_file()` with directory segment detection (dist/, build/, vendor/) and bundled filename suffix detection (.bundle.js, .chunk.js, .umd.js, etc.).
-- **Critical: `audit_environment` ImportError in analyze**: Wrong function name — fixed to use `check_env_vars`.
-- **C/C++ no longer listed as "unsupported"**: Fallback parsers for C, C++, Java, Kotlin, C#, Swift, Ruby, Go, Lua, PHP, Shell, Elixir, Dart, Scala, R, Haskell, Nim, GDScript were working but languages were incorrectly listed as unsupported. Only truly unsupported languages (Zig, OCaml, Perl, Clojure, F#, Erlang, Fortran) are now listed.
-- **CMakeLists.txt identity detection**: Handbook now parses CMakeLists.txt for project name (`project(Name)`), version (`project(Name VERSION x.y.z)` and `set(VERSION_MAJOR/MINOR/PATCH)`), and classifies project type (c-lua-application, c-gui-application, c-service, c-library, c-application, c-project).
-- **Languages field in handbook**: New `languages` key with accurate language distribution including fallback parser languages (e.g., `{"Lua": 816, "C/C++": 506}`).
-- **Architecture detection in handbook**: New `architecture` key with pattern detection (core-plugin, client-server, mvc, core-api, fullstack, monorepo, etc.) and key directories listing.
-- **`compute_summary` includes fallback parser languages**: `files_by_language` in `summary.json` now includes C/C++, Lua, Go, Java, etc. from `scan_result.files_scanned`.
+- **Bugfix: `is_bundled_file` missing from utils.py**: 4 commands (`ask`, `complexity`, `context`, `perf-hint`) were silently broken due to missing `is_bundled_file` function in `utils.py`. Now added with proper path-based and extension-based detection for minified, bundled, and dist/build output files.
+- **Bugfix: `analyze` env_issues engine ImportError**: `_detect_env()` called non-existent `audit_environment` from `envcheck_engine`. Fixed to use correct `check_env_vars()` function. The env_issues engine now runs successfully in `analyze`.
+- **Bugfix: Risk score saturation to 0**: `_compute_risk_score()` used linear deduction that immediately saturated to 0/100 on projects with multiple finding categories. Now uses logarithmic scaling (`log2(1+n)`) with per-category caps and exponential decay for negative scores, producing meaningful risk scores (e.g., 30/100 instead of 0/100 for a project with 367 critical issues).
+- **Bugfix: `dependents` workspace auto-swap**: When passing a workspace directory as the first argument to `dependents`, the auto-swap correctly updated `args.workspace` but not the `workspace` parameter passed to engine functions. Fixed by updating both.
+- **Bugfix: `ask` router specificity**: "show me the architecture" was misrouted to `context` (score 4.0) instead of `handbook` (score 3.27) because the coverage bonus favored short keyword patterns. Added a 1.5x specificity bonus for patterns matching weight-3 technical terms.
+- **Auto-detect detail level**: `summary --detail auto` (now the default) automatically adapts detail level based on codebase size: <100 files → "full", 100-1000 → "standard", >1000 → "minimal". Prevents information overload on large repos.
+- **Smart truncation**: `summary --max-tokens 8000` estimates output token count and progressively truncates `top_items` lists to stay within budget. Prevents AI agent context overflow.
+- **AGENT.md generation**: `summary --write-agent-md` writes a condensed markdown file to `.codelens/AGENT.md` optimized for AI agent system prompts. Includes identity, frameworks, priority findings, and actionable recommendations.
+- **Version**: 6.3.0 → 6.4.0.
 
 ## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 
