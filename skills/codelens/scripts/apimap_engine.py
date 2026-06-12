@@ -30,7 +30,7 @@ import os
 import re
 from typing import Dict, List, Any, Optional, Set
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
@@ -53,6 +53,21 @@ NON_ROUTER_OBJECTS = {
     "props", "state", "config", "options", "headers",
     "localStorage", "sessionStorage", "document", "window",
     "cache", "store", "db", "query", "client",
+    # v3.1: additional false-positive objects
+    "logger", "event", "context", "container", "service", "manager",
+    "repository", "axios", "fetch", "http", "https",
+    "emitter", "dispatcher", "scheduler", "workflow", "step",
+    "module", "exports", "process", "global", "env",
+    "instance", "proxy", "adapter", "connector", "handler",
+    "builder", "factory", "registry", "provider", "observer",
+    "subscription", "subscriber", "listener", "reader", "writer",
+    "stream", "buffer", "socket", "channel", "port",
+    "pipeline", "middleware", "interceptor", "guard", "pipe",
+    "validator", "transformer", "serializer", "parser", "formatter",
+    "loader", "resolver", "compiler", "bundler", "runner",
+    "tracker", "recorder", "collector", "aggregator", "reporter",
+    "notifier", "publisher", "consumer", "producer", "broker",
+    "pool", "cursor", "iterator", "generator", "enumerator",
 }
 
 # Known middleware identifiers
@@ -76,12 +91,199 @@ VALIDATION_PATTERNS = {
     "zod", "yup", "celebrate", "checkSchema",
 }
 
+# Known router variable names that are valid targets for .get()/.post() etc.
+KNOWN_ROUTER_OBJECTS = {
+    "app", "router", "server", "fastify", "hono",
+    "apiRouter", "appRouter", "rootRouter", "mainRouter",
+    "r",  # common short name for router in Express
+    "api",  # common in some frameworks
+    "route", "routes", "endpoints",
+    "web", "httpApp", "appServer",
+}
+
+# Test file directory components (checked against path parts)
+TEST_DIR_COMPONENTS = {
+    "__tests__", "test", "tests", "spec", "fixtures", "e2e",
+    "integration", "__mocks__", "__test__", "mocks",
+}
+
+# Test file name patterns (checked against filename)
+TEST_FILE_PATTERNS = re.compile(
+    r'('
+    r'\.spec\.(ts|js|tsx|jsx)$|'
+    r'\.test\.(ts|js|tsx|jsx)$|'
+    r'\.e2e\.(ts|js|tsx|jsx)$|'
+    r'\.e2e-spec\.(ts|js|tsx|jsx)$|'
+    r'\.stories\.(ts|tsx|js|jsx)$|'
+    r'\.mock\.(ts|js|tsx|jsx)$|'
+    r'test\.|tests\.|spec\.|_test\.|_spec\.'
+    r')',
+    re.IGNORECASE
+)
+
+# Path prefixes that suggest auth protection
+AUTH_PATH_PREFIXES = {
+    "/admin", "/protected", "/api/auth", "/auth", "/secure",
+    "/dashboard", "/manage", "/internal", "/private",
+}
+
+# Medusa-specific auth patterns
+MEDUSA_AUTH_PATTERNS = re.compile(
+    r'(?:requireCustomerAuthentication|requireAdminAuthentication|'
+    r'wrapVariantsWorkflow|authenticateCustomer|authenticateAdmin|'
+    r'validateSessionToken|requireAuth|ensureAuthenticated)',
+    re.IGNORECASE
+)
+
+# Auth-related import patterns
+AUTH_IMPORT_PATTERNS = re.compile(
+    r'(?:import\s+.*(?:auth|jwt|passport|session|token|oauth)|'
+    r'require\s*\(.*(?:auth|jwt|passport|session|token|oauth))',
+    re.IGNORECASE
+)
+
+# NestJS auth guard patterns
+NESTJS_AUTH_PATTERNS = re.compile(
+    r'(?:@UseGuards\s*\(\s*(?:Auth|Jwt|Session|Local|Roles)Guard|'
+    r'@(?:Auth|Jwt|Session)Decorat|'
+    r'@Roles\s*\()',
+    re.IGNORECASE
+)
+
+# Maximum number of routes to return by default
+MAX_ROUTES_DEFAULT = 500
+
+
+def _is_test_or_fixture_file(rel_path: str) -> bool:
+    """Check if a file is a test or fixture file based on path and name patterns.
+
+    Returns True for:
+    - Files matching *.spec.ts, *.test.ts, *.spec.js, *.test.js
+    - Files in directories: __tests__/, test/, tests/, spec/, fixtures/, e2e/, integration/
+    - Files matching *.e2e.ts, *.e2e-spec.ts
+    - Files matching *.stories.ts, *.stories.tsx
+    """
+    # Normalize path separators
+    norm_path = rel_path.replace('\\', '/')
+
+    # Check directory components
+    parts = norm_path.split('/')
+    for part in parts[:-1]:  # Exclude filename itself
+        if part.lower() in TEST_DIR_COMPONENTS:
+            return True
+
+    # Check filename against test patterns
+    filename = parts[-1]
+    if TEST_FILE_PATTERNS.search(filename):
+        return True
+
+    # Additional specific extension checks
+    lower_filename = filename.lower()
+    if lower_filename.endswith(('.spec.ts', '.spec.js', '.spec.tsx', '.spec.jsx',
+                                '.test.ts', '.test.js', '.test.tsx', '.test.jsx',
+                                '.e2e.ts', '.e2e.js', '.e2e-spec.ts', '.e2e-spec.js',
+                                '.stories.ts', '.stories.tsx', '.stories.js', '.stories.jsx',
+                                '.mock.ts', '.mock.js')):
+        return True
+
+    return False
+
+
+def _is_inside_test_block(content: str, offset: int) -> bool:
+    """Check if a code position appears to be inside a describe/it/test block."""
+    before = content[max(0, offset - 3000):offset]
+
+    # Find the most recent test function call
+    last_test_pos = -1
+    for pattern in [r'describe\s*\(', r'\bit\s*\(', r'\btest\s*\(',
+                    r'beforeEach\s*\(', r'afterEach\s*\(']:
+        for m in re.finditer(pattern, before):
+            pos = m.end()
+            if pos > last_test_pos:
+                last_test_pos = pos
+
+    if last_test_pos < 0:
+        return False
+
+    # Count braces from the test call to our position
+    segment = before[last_test_pos:]
+    depth = 0
+    for ch in segment:
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth < 0:
+                return False  # Block was closed before our position
+
+    return depth > 0  # Still inside the block
+
+
+def _detect_auth_protection(route: Dict, file_contents_cache: Optional[Dict[str, str]] = None) -> bool:
+    """Detect if a route is auth-protected based on various heuristics.
+
+    Checks:
+    1. Route has auth middleware in its chain
+    2. Route path starts with auth-protected prefix
+    3. Route handler/path contains auth keywords
+    4. File has NestJS auth guard patterns (if content available)
+    5. Medusa-specific auth patterns (if content available)
+    """
+    # 1. Check middleware chain for auth type
+    for mw in route.get("middleware_chain", []):
+        if mw.get("type") == "auth":
+            return True
+
+    # 2. Check path prefix
+    route_path = route.get("path", "")
+    for prefix in AUTH_PATH_PREFIXES:
+        if route_path.startswith(prefix):
+            return True
+
+    # 3. Check handler name and path for auth keywords
+    auth_keywords = {'auth', 'login', 'session', 'token', 'oauth', 'jwt', 'passport',
+                     'credential', 'identity', 'permission', 'role', 'admin', 'secure'}
+    path_lower = route_path.lower()
+    handler_lower = route.get("handler_name", "").lower()
+    if any(kw in path_lower or kw in handler_lower for kw in auth_keywords):
+        return True
+
+    # 4. Check for NestJS auth guards and Medusa patterns in content (if available)
+    if file_contents_cache:
+        rel_path = route.get("file", "")
+        content = file_contents_cache.get(rel_path, "")
+        if content:
+            line_num = route.get("line", 0)
+            if line_num > 0:
+                lines = content.split('\n')
+                # Check decorators above the route handler (up to 8 lines)
+                for i in range(max(0, line_num - 8), min(len(lines), line_num)):
+                    if NESTJS_AUTH_PATTERNS.search(lines[i]):
+                        return True
+
+            # 5. Medusa-specific patterns
+            if MEDUSA_AUTH_PATTERNS.search(content):
+                if line_num > 0:
+                    lines = content.split('\n')
+                    for i in range(max(0, line_num - 30), min(len(lines), line_num + 30)):
+                        if MEDUSA_AUTH_PATTERNS.search(lines[i]):
+                            return True
+
+            # Check for auth imports (only if path/handler also has auth hints)
+            if AUTH_IMPORT_PATTERNS.search(content):
+                if any(kw in path_lower or kw in handler_lower
+                       for kw in {'auth', 'login', 'session', 'token', 'admin'}):
+                    return True
+
+    return False
+
 
 def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    max_routes: int = MAX_ROUTES_DEFAULT
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -109,6 +311,9 @@ def map_api_routes(
     global_middleware: List[Dict] = []
     auth_protected_routes: Set[str] = set()
 
+    # Cache file contents for auth detection (only for files with routes)
+    file_contents_cache: Dict[str, str] = {}
+
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
@@ -120,23 +325,11 @@ def map_api_routes(
             if ext not in SOURCE_EXTENSIONS:
                 continue
 
-            # Skip test and spec files — they define mock routes, not real API endpoints
-            lower_name = filename.lower()
-            if lower_name.endswith(('.test.js', '.test.ts', '.test.tsx', '.test.jsx',
-                                    '.spec.js', '.spec.ts', '.spec.tsx', '.spec.jsx',
-                                    '.test.py', '_test.py', '.spec.py', '_spec.py',
-                                    '.bench.ts', '.bench.js')):
-                continue
-
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
-            # Also skip files in test-specific directories
-            if '/test/' in rel_path or '/tests/' in rel_path or '/__tests__/' in rel_path:
-                continue
-
-            # Also skip benchmark files and directories
-            if '/bench/' in rel_path or '/benchmark/' in rel_path:
+            # v3.1: Skip test and fixture files
+            if _is_test_or_fixture_file(rel_path):
                 continue
 
             try:
@@ -146,6 +339,7 @@ def map_api_routes(
                 continue
 
             files_scanned += 1
+            routes_before_file = len(routes)
 
             # ─── Express / Koa / Hono / Fastify ──────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
@@ -220,6 +414,13 @@ def map_api_routes(
                     frameworks_detected.add("orpc")
                     routes.extend(orpc_routes)
 
+            # ─── NestJS ────────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                nestjs_routes = _extract_nestjs_routes(content, rel_path)
+                if nestjs_routes:
+                    frameworks_detected.add("nestjs")
+                    routes.extend(nestjs_routes)
+
             # ─── Tauri IPC (frontend invoke calls) ────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".svelte", ".vue"}:
                 tauri_routes = _extract_tauri_ipc_routes(content, rel_path)
@@ -244,11 +445,21 @@ def map_api_routes(
                         if fw:
                             frameworks_detected.add(fw)
 
+            # Cache content for auth detection if routes were found in this file
+            if len(routes) > routes_before_file:
+                file_contents_cache[rel_path] = content
+
     # ─── SvelteKit file-based routes ─────────────────────────
     sveltekit_routes = _detect_sveltekit_routes(workspace, config)
     if sveltekit_routes:
         frameworks_detected.add("sveltekit")
         routes.extend(sveltekit_routes)
+
+    # ─── Medusa Framework file-based routes ─────────────────
+    medusa_routes = _detect_medusa_routes(workspace)
+    if medusa_routes:
+        frameworks_detected.add("medusa")
+        routes.extend(medusa_routes)
 
     # ─── Post-processing ──────────────────────────────────────
 
@@ -272,14 +483,10 @@ def map_api_routes(
                 "type": mw.get("type", "unknown"),
             })
 
-    # Detect auth-protected vs public
+    # Detect auth-protected vs public (enhanced v3.1)
     for route in routes:
-        has_auth = any(
-            mw.get("type") == "auth"
-            for mw in route.get("middleware_chain", [])
-        )
-        route["auth_protected"] = has_auth
-        if has_auth:
+        route["auth_protected"] = _detect_auth_protection(route, file_contents_cache)
+        if route["auth_protected"]:
             auth_protected_routes.add(f"{route['method']} {route['path']}")
 
     # Build route groups by path prefix
@@ -297,26 +504,46 @@ def map_api_routes(
     if path_filter:
         routes = [r for r in routes if r["path"].startswith(path_filter)]
 
-    # Stats
+    # Stats (computed before truncation so they reflect full count)
     by_method: Dict[str, int] = defaultdict(int)
     for r in routes:
         by_method[r["method"].upper()] += 1
 
+    by_framework: Dict[str, int] = defaultdict(int)
+    for r in routes:
+        fw = r.get("framework", "generic")
+        if fw == "unknown" or not fw:
+            fw = "generic"
+        by_framework[fw] += 1
+
     auth_count = sum(1 for r in routes if r.get("auth_protected"))
     public_count = len(routes) - auth_count
+
+    # Apply max_routes cap
+    truncated = False
+    omitted_count = 0
+    total_routes_count = len(routes)
+    if len(routes) > max_routes:
+        omitted_count = len(routes) - max_routes
+        routes = routes[:max_routes]
+        truncated = True
+        # Rebuild route groups with truncated list
+        route_groups = _build_route_groups(routes)
 
     # Recommendations
     recommendations = _generate_recommendations(
         routes, frameworks_detected, auth_protected_routes
     )
 
-    return {
+    result = {
         "status": "ok",
         "workspace": workspace,
         "frameworks_detected": sorted(frameworks_detected),
+        "truncated": truncated,
         "stats": {
-            "total_routes": len(routes),
+            "total_routes": total_routes_count,
             "by_method": dict(by_method),
+            "by_framework": dict(by_framework),
             "auth_protected": auth_count,
             "public": public_count,
             "files_scanned": files_scanned,
@@ -326,6 +553,9 @@ def map_api_routes(
         "middleware_map": dict(middleware_map),
         "recommendations": recommendations,
     }
+    if truncated:
+        result["message"] = f"Route list truncated: {omitted_count} routes omitted (max_routes={max_routes})"
+    return result
 
 
 # ─── JS Route Extraction ───────────────────────────────────────
@@ -342,6 +572,7 @@ def _extract_js_routes(
     is_fastify = bool(re.search(r'(?:require|import).*[\'\"]fastify[\'\"]', content))
     is_koa = bool(re.search(r'(?:require|import).*[\'\"]koa-router[\'\"]|ko[\'\"]koa[\'\"]', content))
     is_hono = bool(re.search(r'(?:require|import).*[\'\"]hono[\'\"]', content))
+    is_nestjs = bool(re.search(r'(?:from\s+[\'"]@nestjs|import\s+.*@nestjs)', content))
 
     if is_express:
         frameworks.add("express")
@@ -351,13 +582,16 @@ def _extract_js_routes(
         frameworks.add("koa")
     if is_hono:
         frameworks.add("hono")
+    if is_nestjs:
+        frameworks.add("nestjs")
 
     # Track current router variable names and prefixes
     router_vars: Dict[str, str] = {}  # var_name → prefix
 
     # Detect Router() assignments: const router = Router({ prefix: '/api' })
+    # Also: const router = express.Router({ prefix: '/api' })
     for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?(?:Router|router)\s*\(([^)]*)\)',
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:(?:\w+)\.|(?:new\s+))?(?:Router|router)\s*\(([^)]*)\)',
         content
     ):
         var_name = m.group(1)
@@ -366,6 +600,15 @@ def _extract_js_routes(
         prefix = prefix_match.group(1) if prefix_match else ""
         router_vars[var_name] = prefix
 
+    # v3.1: Detect express()/fastify()/koa()/hono() assignments
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:\w+\.)?(?:express|fastify|koa|hono)\s*\(',
+        content
+    ):
+        var_name = m.group(1)
+        if var_name not in router_vars:
+            router_vars[var_name] = ""
+
     # Detect app.route('/path') chains
     for m in re.finditer(
         r'(?:app|router|server|fastify|hono)\s*\.\s*route\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
@@ -373,6 +616,11 @@ def _extract_js_routes(
     ):
         base_path = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
+
+        # v3.1: Skip if inside a test block
+        if _is_inside_test_block(content, m.start()):
+            continue
+
         # Look for chained methods after this
         chain_start = m.end()
         chain_text = content[chain_start:chain_start + 500]
@@ -387,7 +635,7 @@ def _extract_js_routes(
                 "middleware_chain": [],
                 "request_type": None,
                 "response_type": None,
-                "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+                "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono, is_nestjs),
             })
 
     # Direct method calls: app.get('/path', ...), router.post('/path', ...)
@@ -409,6 +657,15 @@ def _extract_js_routes(
         if not route_path.startswith('/'):
             continue
 
+        # v3.1: Skip if inside a test block (describe/it/test)
+        if _is_inside_test_block(content, m.start()):
+            continue
+
+        # v3.1: For Express-style routes, validate that the object is a known router
+        # If not in router_vars and not a known router object, skip
+        if not (obj_name in router_vars or obj_name in KNOWN_ROUTER_OBJECTS):
+            continue
+
         line_num = content[:m.start()].count('\n') + 1
 
         # Apply router prefix if available
@@ -420,6 +677,10 @@ def _extract_js_routes(
 
         # Extract handler name
         handler_name = _infer_handler_name_from_args(content, m.end())
+
+        # v3.1: Skip routes where handler is just generic names that suggest non-route code
+        if handler_name in NON_ROUTER_OBJECTS:
+            continue
 
         # Detect request/response types from nearby code
         req_type, resp_type = _detect_request_response_types(content, m.start())
@@ -433,14 +694,16 @@ def _extract_js_routes(
             "middleware_chain": mw_chain,
             "request_type": req_type,
             "response_type": resp_type,
-            "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+            "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono, is_nestjs),
         })
 
     return routes
 
 
-def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
+def _detect_js_framework(is_express, is_fastify, is_koa, is_hono, is_nestjs=False) -> str:
     """Return the detected JS framework name."""
+    if is_nestjs:
+        return "nestjs"
     if is_fastify:
         return "fastify"
     if is_hono:
@@ -449,7 +712,7 @@ def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
         return "koa"
     if is_express:
         return "express"
-    return "unknown"
+    return "generic"
 
 
 def _extract_inline_middleware(
@@ -668,7 +931,161 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
                     "line": i + 1,
                 })
 
+    # v3.1: Medusa-specific auth pattern detection
+    # These patterns indicate auth middleware is applied in the file
+    for m in re.finditer(
+        r'(requireCustomerAuthentication|requireAdminAuthentication|'
+        r'wrapVariantsWorkflow|authenticateCustomer|authenticateAdmin|'
+        r'validateSessionToken)',
+        content
+    ):
+        mw_name = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        middleware.append({
+            "name": mw_name,
+            "type": "auth",
+            "scope": "global",
+            "file": rel_path,
+            "line": line_num,
+        })
+
     return middleware
+
+
+# ─── NestJS Routes ─────────────────────────────────────────────
+
+def _extract_nestjs_routes(content: str, rel_path: str) -> List[Dict[str, Any]]:
+    """Extract routes from NestJS controllers using decorators.
+
+    NestJS uses decorators on controller methods:
+      @Controller('path')  → base path
+      @Get('subpath')      → GET method route
+      @Post('subpath')     → POST method route
+      etc.
+
+    Also detects @UseGuards(AuthGuard) for auth-protected routes.
+    """
+    routes = []
+
+    # Detect NestJS patterns
+    is_nestjs = bool(re.search(
+        r'(?:from\s+[\'"]@nestjs|import\s+.*@nestjs|'
+        r'@Controller\s*\(|@Get\s*\(|@Post\s*\(|@Put\s*\(|@Delete\s*\(|@Patch\s*\()',
+        content
+    ))
+
+    if not is_nestjs:
+        return routes
+
+    # Extract @Controller('path') decorator to get base path
+    controller_path = ""
+    for m in re.finditer(r'@Controller\s*\(\s*[\'"]([^\'"]+)[\'"]', content):
+        controller_path = m.group(1)
+
+    # Also check for @Controller({ path: 'path' }) pattern
+    if not controller_path:
+        m = re.search(r'@Controller\s*\(\s*\{\s*path\s*:\s*[\'"]([^\'"]+)[\'"]', content)
+        if m:
+            controller_path = m.group(1)
+
+    # Extract @Get(), @Post(), etc. decorators
+    for m in re.finditer(
+        r'@(Get|Post|Put|Delete|Patch|Head|Options|All)\s*\(\s*(?:[\'"]([^\'"]*)[\'"])?\s*\)',
+        content
+    ):
+        http_method = m.group(1).upper()
+        route_subpath = m.group(2) or ""
+        line_num = content[:m.start()].count('\n') + 1
+
+        # Skip if inside a test block
+        if _is_inside_test_block(content, m.start()):
+            continue
+
+        # Find the handler function name (skip decorator lines)
+        remaining = content[m.end():m.end() + 300]
+        handler_name = "anonymous"
+        for rline in remaining.split('\n'):
+            stripped_line = rline.strip()
+            if not stripped_line or stripped_line.startswith('@'):
+                continue
+            # Look for method definition: async methodName() or methodName()
+            hm = re.match(r'(?:async\s+)?(\w+)\s*\(', stripped_line)
+            if hm:
+                handler_name = hm.group(1)
+                break
+
+        # Build full path
+        if route_subpath:
+            full_path = _normalize_path(controller_path + '/' + route_subpath)
+        elif controller_path:
+            full_path = _normalize_path(controller_path)
+        else:
+            full_path = "/"
+
+        # Check for auth guards in decorators between this HTTP decorator and method def
+        mw_chain = []
+        lines = content.split('\n')
+        if line_num > 0:
+            # Find the method definition line (first non-decorator, non-empty line after decorator)
+            method_line_idx = line_num  # 0-indexed, default to decorator line
+            for j in range(line_num, min(len(lines), line_num + 10)):
+                stripped_line = lines[j].strip()
+                if not stripped_line:
+                    continue
+                if not stripped_line.startswith('@'):
+                    method_line_idx = j
+                    break
+
+            # Check decorators between the HTTP decorator and method definition,
+            # plus up to 3 lines above the decorator (for class-level guards)
+            guard_start = max(0, line_num - 3)
+            guard_end = method_line_idx + 1
+            for i in range(guard_start, guard_end):
+                if i >= len(lines):
+                    break
+                # @UseGuards(AuthGuard)
+                guard_match = re.search(
+                    r'@UseGuards\s*\(\s*(\w+)',
+                    lines[i]
+                )
+                if guard_match:
+                    guard_name = guard_match.group(1)
+                    if any(kw in guard_name for kw in ('Auth', 'Jwt', 'Session', 'Local', 'Roles')):
+                        mw_chain.append({
+                            "name": guard_name,
+                            "type": "auth",
+                            "file": rel_path,
+                            "line": i + 1,
+                        })
+                    else:
+                        mw_chain.append({
+                            "name": guard_name,
+                            "type": "guard",
+                            "file": rel_path,
+                            "line": i + 1,
+                        })
+                # @Roles(...)
+                if re.search(r'@Roles\s*\(', lines[i]):
+                    mw_chain.append({
+                        "name": "Roles",
+                        "type": "auth",
+                        "file": rel_path,
+                        "line": i + 1,
+                    })
+
+        routes.append({
+            "method": http_method,
+            "path": full_path,
+            "handler_name": handler_name,
+            "file": rel_path,
+            "line": line_num,
+            "middleware_chain": mw_chain,
+            "request_type": None,
+            "response_type": None,
+            "framework": "nestjs",
+        })
+
+    return routes
 
 
 # ─── Next.js Routes ────────────────────────────────────────────
@@ -2369,5 +2786,173 @@ def _extract_rust_http_routes(content: str, rel_path: str) -> List[Dict]:
                     "request_type": "path_filter",
                     "response_type": None,
                 })
+
+    return routes
+
+
+# ─── Medusa Framework Routes ────────────────────────────────
+
+def _detect_medusa_routes(workspace: str) -> List[Dict[str, Any]]:
+    """Detect Medusa Framework file-based API routes.
+
+    Medusa uses a file-based routing system similar to Next.js App Router:
+    - Route files are named `route.ts` (or route.js) under `src/api/` directories
+    - Each file exports named HTTP method handlers: GET, POST, PUT, DELETE, PATCH
+    - Auth is determined by path prefix: /admin/ = authenticated, /store/ = may vary, /auth/ = auth-related
+    - Dynamic segments use [param] syntax (same as Next.js)
+
+    Example structure:
+        packages/medusa/src/api/admin/products/route.ts  → GET/POST /admin/products
+        packages/medusa/src/api/store/carts/[id]/route.ts → GET/PUT /store/carts/:id
+        packages/medusa/src/api/auth/[actor_type]/[auth_provider]/route.ts → POST /auth/:actor_type/:auth_provider
+    """
+    routes = []
+    workspace = os.path.abspath(workspace)
+
+    # Common Medusa API directories to search
+    search_dirs = []
+    for candidate in [
+        'src/api', 'api',
+        'packages/medusa/src/api',
+        'packages/core/*/src/api',
+    ]:
+        full = os.path.join(workspace, candidate)
+        if '*' in candidate:
+            # Glob pattern
+            import glob
+            matches = glob.glob(full)
+            search_dirs.extend(matches)
+        elif os.path.isdir(full):
+            search_dirs.append(full)
+
+    # Also search all packages/*/src/api directories
+    packages_dir = os.path.join(workspace, 'packages')
+    if os.path.isdir(packages_dir):
+        for pkg in os.listdir(packages_dir):
+            pkg_api = os.path.join(packages_dir, pkg, 'src', 'api')
+            if os.path.isdir(pkg_api) and pkg_api not in search_dirs:
+                search_dirs.append(pkg_api)
+            # Also check nested packages (e.g., packages/modules/*/src/api)
+            pkg_modules = os.path.join(packages_dir, pkg)
+            if os.path.isdir(pkg_modules) and pkg not in ('node_modules',):
+                for subpkg in os.listdir(pkg_modules):
+                    subpkg_api = os.path.join(pkg_modules, subpkg, 'src', 'api')
+                    if os.path.isdir(subpkg_api) and subpkg_api not in search_dirs:
+                        search_dirs.append(subpkg_api)
+
+    for search_dir in search_dirs:
+        for root, dirs, filenames in os.walk(search_dir):
+            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+
+            for filename in filenames:
+                if not filename.startswith('route.'):
+                    continue
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in {'.ts', '.js', '.mjs', '.cjs'}:
+                    continue
+
+                file_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(file_path, workspace)
+
+                # Skip test/fixture files
+                if _is_test_or_fixture_file(rel_path):
+                    continue
+
+                content = safe_read_file(file_path)
+                if not content:
+                    continue
+
+                # Convert file path to API route path
+                # Find the /api/ prefix in the relative path
+                api_match = re.search(r'(?:^|[/\\])api[/\\](.*)[/\\]route\.(?:ts|js|mjs|cjs)$', rel_path.replace('\\', '/'))
+                if not api_match:
+                    continue
+
+                api_path = '/' + api_match.group(1)
+                # Handle [param] → :param
+                api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
+                # Handle [...param] → :param*
+                api_path = re.sub(r':\.\.\.(\w+)', r':\1*', api_path)
+
+                # Determine auth protection based on path prefix
+                auth_protected = False
+                if re.search(r'/admin(/|$)', api_path):
+                    auth_protected = True
+                elif re.search(r'/auth(/|$)', api_path):
+                    auth_protected = True
+
+                # Check for AUTHENTICATE flag export
+                if 'AUTHTHENTICATION_FLAG' in content or 'export const AUTHTENTICATE' in content:
+                    auth_protected = True
+
+                # Check for AUTHENTICATE = true export
+                if re.search(r'export\s+const\s+AUTHTENTICATE\s*=\s*true', content):
+                    auth_protected = True
+
+                # Extract HTTP method handlers from exports
+                found_methods = set()
+
+                # Pattern 1: export const GET = async (...) => { or export async function GET(...)
+                # Also handles: export const GET = (req, res) => {
+                for m in re.finditer(
+                    r'export\s+(?:(?:const|let|var)\s+)?(?:async\s+)?(?:function\s+)?(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
+                    content
+                ):
+                    method = m.group(1).upper()
+                    line_num = content[:m.start()].count('\n') + 1
+                    found_methods.add(method)
+                    routes.append({
+                        "method": method,
+                        "path": _normalize_path(api_path),
+                        "handler_name": method,
+                        "file": rel_path,
+                        "line": line_num,
+                        "middleware_chain": [],
+                        "request_type": None,
+                        "response_type": None,
+                        "framework": "medusa",
+                        "auth_protected": auth_protected,
+                    })
+
+                # Pattern 2: export const { GET, POST } = ... (destructured)
+                for m in re.finditer(
+                    r'export\s+const\s*\{\s*([^\}]+)\}\s*=',
+                    content
+                ):
+                    for method_name in re.findall(
+                        r'(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\b',
+                        m.group(1)
+                    ):
+                        if method_name not in found_methods:
+                            method = method_name.upper()
+                            line_num = content[:m.start()].count('\n') + 1
+                            found_methods.add(method)
+                            routes.append({
+                                "method": method,
+                                "path": _normalize_path(api_path),
+                                "handler_name": method_name,
+                                "file": rel_path,
+                                "line": line_num,
+                                "middleware_chain": [],
+                                "request_type": None,
+                                "response_type": None,
+                                "framework": "medusa",
+                                "auth_protected": auth_protected,
+                            })
+
+                # If no method exports found but it's a route.ts file, add as ALL
+                if not found_methods and 'export default' in content:
+                    routes.append({
+                        "method": "ALL",
+                        "path": _normalize_path(api_path),
+                        "handler_name": "default_handler",
+                        "file": rel_path,
+                        "line": 1,
+                        "middleware_chain": [],
+                        "request_type": None,
+                        "response_type": None,
+                        "framework": "medusa",
+                        "auth_protected": auth_protected,
+                    })
 
     return routes
