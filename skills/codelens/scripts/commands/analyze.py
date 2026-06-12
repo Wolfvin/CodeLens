@@ -167,9 +167,35 @@ def analyze_repository(
     try:
         from outline_engine import get_workspace_outline
         outline = get_workspace_outline(workspace, max_files=200)
+        # v6.1: Count ALL source files in workspace, not just outlined ones.
+        # The outline engine only processes tree-sitter-supported languages,
+        # so outline.files_outlined is often much less than the real total.
+        _all_source_exts = {
+            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+            ".py", ".rs", ".vue", ".svelte", ".php", ".go",
+            ".java", ".cs", ".dart", ".lua", ".rb",
+            ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+            ".html", ".css", ".scss", ".sql", ".sh",
+            ".glsl", ".fsh", ".vsh", ".frag", ".vert",
+            ".kt", ".cmake",
+        }
+        actual_file_count = 0
+        actual_line_count = 0
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in {
+                'node_modules', '.git', 'dist', 'build', 'target',
+                '__pycache__', '.codelens', 'vendor', '.venv', 'venv',
+            } and not d.startswith('.')]
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in _all_source_exts:
+                    actual_file_count += 1
+        # Use actual count if higher than outlined count
+        total_files = max(outline.get("files_outlined", 0), actual_file_count)
+        total_lines = outline.get("total_lines", 0)
         result["architecture"] = {
-            "total_files": outline.get("files_outlined", 0),
-            "total_lines": outline.get("total_lines", 0),
+            "total_files": total_files,
+            "total_lines": total_lines,
             "directories": _extract_directory_structure(workspace),
             "entry_points": [],
             "key_modules": [],
@@ -545,9 +571,15 @@ def _detect_languages(workspace: str) -> Dict[str, int]:
         ".php": "php", ".py": "python", ".js": "javascript", ".ts": "typescript",
         ".tsx": "tsx", ".jsx": "jsx", ".rs": "rust", ".go": "golang",
         ".java": "java", ".cs": "csharp", ".rb": "ruby", ".lua": "lua",
-        ".dart": "dart", ".c": "c", ".cpp": "cpp", ".h": "c",
+        ".dart": "dart",
+        # v6.1: .h/.hpp files are C++ headers (not C) — most C++ projects have .h headers
+        ".cpp": "cpp", ".cxx": "cpp", ".cc": "cpp",
+        ".c": "c", ".h": "cpp", ".hpp": "cpp", ".hxx": "cpp",
         ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue",
         ".svelte": "svelte", ".sql": "sql", ".sh": "shell",
+        # v6.1: Shader languages
+        ".glsl": "glsl", ".fsh": "glsl", ".vsh": "glsl", ".frag": "glsl", ".vert": "glsl",
+        ".cmake": "cmake",
     }
     languages = {}
     for root, dirs, files in os.walk(workspace):
@@ -686,6 +718,17 @@ def _generate_recommendations(findings: List[Dict], result: Dict) -> List[str]:
         recs.append("Python project detected — consider adding mypy for type checking and ruff for linting")
     if "go" in langs:
         recs.append("Go project detected — run 'go vet' and 'golangci-lint run' for additional static analysis")
+    # v6.1: C++ project recommendations
+    if "cpp" in langs and langs["cpp"] > 10:
+        recs.append("C++ project detected — consider running 'clang-tidy' for linting and 'cppcheck' for static analysis")
+    if "c" in langs and langs["c"] > 10 and langs.get("cpp", 0) == 0:
+        recs.append("C project detected — consider running 'cppcheck' and 'splint' for static analysis")
+    # v6.1: Lua recommendations
+    if "lua" in langs and langs["lua"] > 5:
+        recs.append("Lua project detected — consider running 'luacheck' for linting and 'lua-language-server' for IDE support")
+    # v6.1: Game engine / shader recommendations
+    if "glsl" in langs and langs["glsl"] > 0:
+        recs.append("GLSL shaders detected — consider using 'glslangValidator' for shader validation")
 
     # Based on architecture
     fws = result.get("frameworks", [])

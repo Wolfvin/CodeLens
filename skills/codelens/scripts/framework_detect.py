@@ -148,6 +148,27 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["CMakeLists.txt"],
         "indicators": []
     },
+    # Game / native C++ frameworks
+    "sdl": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["SDL_main", "SDL_Init"]
+    },
+    "irrlicht": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["irrlicht", "IrrlichtDevice"]
+    },
+    "opengl": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["glBegin", "glGenBuffers", "glBindVertexArray"]
+    },
+    "vulkan": {
+        "packages": [],
+        "config_files": [],
+        "indicators": ["VkInstance", "vkCreateInstance"]
+    },
     # Rust frameworks
     "rust": {
         "packages": [],
@@ -521,6 +542,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
+                elif fw_name == "cmake":
+                    detected["has_cmake"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -854,11 +877,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
+    # Note v6.1: C/C++ also have fallback parsers and Lua has a fallback parser,
+    # so they are removed from unsupported. Java/Kotlin have fallback parsers too.
     UNSUPPORTED_MARKERS = {
-        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
-        "kotlin": ["build.gradle.kts"],
-        "c": ["CMakeLists.txt", "Makefile"],
-        "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
         "swift": ["Package.swift", "Package.resolved"],
         "ruby": ["Gemfile", "Rakefile"],
@@ -964,6 +985,23 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
                             config["backend_paths"].append(rel + "/src/")
                 except OSError:
                     pass
+
+    # CMake/C++ native projects: add native project paths
+    if fw.get("has_cmake") or "cmake" in fw.get("frameworks", []):
+        config["backend_paths"].extend(["src/", "lib/", "include/"])
+        # CMake projects often have build/ output directory
+        config["ignore"].extend(["build/", "cmake-build-"])
+        config["ignore"] = list(dict.fromkeys(config["ignore"]))
+
+    # Lua-scriptable projects (game engines, Neovim plugins, etc.)
+    lua_count = 0
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+        for f in files:
+            if f.endswith('.lua'):
+                lua_count += 1
+    if lua_count > 5:
+        config["backend_paths"].extend(["builtin/", "scripts/", "mods/"])
 
     # Laravel/PHP: add PHP-specific paths
     if fw.get("has_laravel") or fw.get("has_php"):

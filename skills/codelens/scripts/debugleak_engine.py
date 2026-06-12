@@ -107,6 +107,10 @@ DEBUGGER_PATTERNS = [
     (r'\bxdebug_var_dump\s*\(', "xdebug_var_dump()"),
     (r'\bexit\s*;', "exit;"),             # PHP exit (potential debugger leftover)
     (r'\bdie\s*\(\s*\)', "die()"),       # PHP die() (potential debugger leftover)
+    # v6.1: Lua debug patterns
+    (r'\bdebug\.debug\s*\(\s*\)', "debug.debug()"),  # Lua interactive debugger
+    (r'\bdebug\.traceback\s*\(\s*\)', "debug.traceback()"),  # Lua stack trace
+    (r'\bdebug\.dump\s*\(', "debug.dump()"),  # Custom debug dump
 ]
 
 # Rust logging macros from the `log` crate — these are NOT debugger statements.

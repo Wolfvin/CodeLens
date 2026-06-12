@@ -5,7 +5,7 @@ description: >
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v5.9.0 — Quick Reference
+# CodeLens v6.1.0 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -105,7 +105,7 @@ description: >
 
 ## Workspace Auto-Detect (v5.1)
 
-The `workspace` argument is now **optional** for ALL 41 commands.
+The `workspace` argument is now **optional** for ALL 45 commands.
 If omitted, CodeLens auto-detects via:
 1. Current directory (if has project markers: package.json, pyproject.toml, etc.)
 2. Parent directories (walk up to find project root)
@@ -119,7 +119,7 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 44 Commands Quick Reference
+## All 45 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|
@@ -167,6 +167,7 @@ $CLI smell             # Auto-detect → works!
 | 42 | `summary` | P0 | **Anti-overload condensed view** |
 | 43 | `binary-scan` | P1 | **Binary/Tauri/Electron RE analysis** (v5.9) |
 | 44 | `artifact-scan` | P1 | **Compiled artifact reverse engineering** (v5.9) |
+| 45 | `analyze` | P0 | **Full repository analysis: init + scan + all engines** (v6.0) |
 
 ## CLI Usage Pattern
 

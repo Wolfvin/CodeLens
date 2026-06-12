@@ -475,12 +475,50 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # v6.1: Try CMakeLists.txt — detect CMake/C++ projects
+    cmake_type = None
+    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
+    if os.path.isfile(cmake_path):
+        try:
+            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
+                cmake_content = f.read()
+            # Extract project name from cmake: project(Name VERSION X.Y.Z)
+            proj_match = re.search(r'project\s*\(\s*([^\s\)]+)', cmake_content)
+            ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
+            if proj_match:
+                identity["name"] = proj_match.group(1)
+            if ver_match:
+                identity["version"] = ver_match.group(1)
+            # Classify CMake project type
+            cmake_lower = cmake_content.lower()
+            has_lua = os.path.isdir(os.path.join(workspace, 'builtin')) or os.path.isdir(os.path.join(workspace, 'scripts'))
+            lua_count = 0
+            for root, dirs, files in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fname in files:
+                    if fname.endswith('.lua'):
+                        lua_count += 1
+            if lua_count > 10 or has_lua:
+                cmake_type = "cpp-game-engine"  # C++ with Lua scripting = likely game engine
+            elif 'qt' in cmake_lower or 'Qt5' in cmake_content or 'Qt6' in cmake_content:
+                cmake_type = "qt-desktop-app"
+            elif any(kw in cmake_lower for kw in ('opengl', 'vulkan', 'sdl', 'glfw', 'glew')):
+                cmake_type = "cpp-graphics"
+            elif 'android' in cmake_lower or os.path.isdir(os.path.join(workspace, 'android')):
+                cmake_type = "cpp-mobile-app"
+            else:
+                cmake_type = "cpp-project"
+        except Exception:
+            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
+
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type, cmake_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
+        if cmake_type:
+            type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
@@ -489,6 +527,9 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
         if python_type:
             type_parts.append("python")
+        # v6.1: Add Lua indicator for C++ projects with Lua scripting
+        if cmake_type and lua_count > 10:
+            type_parts.append("lua")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -549,6 +590,23 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
+        # v6.1: Game engine / native C++ project directory hints
+        'builtin': 'Built-in Lua/game scripts',
+        'mods': 'Game modifications / plugins',
+        'games': 'Game content packs',
+        'textures': 'Texture assets',
+        'fonts': 'Font assets',
+        'shaders': 'GPU shader programs',
+        'client': 'Client-side code',
+        'clientmods': 'Client-side modifications',
+        'irr': 'Irrlicht engine fork',
+        'android': 'Android platform support',
+        'po': 'Translation/localization files',
+        'worlds': 'Game world data',
+        'include': 'C/C++ header files',
+        'cmake': 'CMake build modules',
+        'fastlane': 'Mobile deployment automation',
+        'misc': 'Miscellaneous files',
     }
     dir_map = {}
     try:

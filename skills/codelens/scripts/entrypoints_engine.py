@@ -30,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go",
+    ".go", ".lua",  # v6.1: Added Lua support
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -92,6 +92,38 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "cpp_main_short",
+            },
+            # v6.1: WinMain (Windows GUI app entry point)
+            {
+                "regex": r'(?:int\s+)?WinMain\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "win_main",
+            },
+            # v6.1: wmain (Unicode Windows console entry point)
+            {
+                "regex": r'int\s+wmain\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "wmain_fn",
+            },
+            # v6.1: SDL_main (SDL game entry point)
+            {
+                "regex": r'(?:int\s+)?SDL_main\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "sdl_main",
+            },
+            # v6.1: DllMain (Windows DLL entry point)
+            {
+                "regex": r'(?:BOOL\s+)?DllMain\s*\(',
+                "language": {".cc", ".cpp", ".cxx", ".c"},
+                "extract": "handler",
+                "handler_group": 0,
+                "label": "dll_main",
             },
             # Go
             {
@@ -788,6 +820,46 @@ ENTRYPOINT_PATTERNS = {
             },
         ],
     },
+
+    # ═══════════════════════════════════════════════════════════
+    # 9. LUA ENTRIES — Lua script entry points (v6.1)
+    # ═══════════════════════════════════════════════════════════
+    "lua_entry": {
+        "patterns": [
+            # Lua dofile() — loads and executes a Lua file
+            {
+                "regex": r'dofile\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_dofile",
+            },
+            # Lua require() — module import (entry via side effects)
+            {
+                "regex": r'(?:local\s+\w+\s*=\s*)?require\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_require",
+            },
+            # Lua core.register_* patterns (Minetest/Luanti API)
+            {
+                "regex": r'core\.register_(?:function|chatcommand|node|tool|craftitem|entity|abm|lbm|ore|decoration|biome)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_core_register",
+            },
+            # Lua minetest.register_* patterns (legacy Minetest API)
+            {
+                "regex": r'minetest\.register_(?:function|chatcommand|node|tool|craftitem|entity|abm|lbm|ore|decoration|biome)\s*\(\s*["\']([^"\']+)["\']',
+                "language": {".lua"},
+                "extract": "handler",
+                "handler_group": 1,
+                "label": "lua_minetest_register",
+            },
+        ],
+    },
 }
 
 
@@ -815,7 +887,7 @@ def map_entrypoints(
 
     valid_types = {
         "main", "http_handler", "event_handler", "cli_command",
-        "cron_job", "worker", "module_export", "test_entry"
+        "cron_job", "worker", "module_export", "test_entry", "lua_entry"
     }
 
     if entry_type and entry_type not in valid_types:
