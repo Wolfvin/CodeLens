@@ -141,17 +141,6 @@ FRAMEWORK_SIGNATURES = {
         "config_files": ["pom.xml", "build.gradle", "build.gradle.kts"],
         "indicators": ["spring-boot"]
     },
-    # Android frameworks
-    "android": {
-        "packages": [],
-        "config_files": ["AndroidManifest.xml", "build.gradle", "build.gradle.kts"],
-        "indicators": ["app/src/main/", "androidx", "com.android.application"]
-    },
-    "android_ndk": {
-        "packages": [],
-        "config_files": ["CMakeLists.txt", "Android.mk", "Application.mk"],
-        "indicators": ["native/", "jni/", ".so"]
-    },
     # C/C++ frameworks
     "cmake": {
         "packages": [],
@@ -199,147 +188,6 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "cargo_crates": ["rocket"],
         "indicators": []
-    },
-    # v6.4: Additional Rust framework / library detection
-    "clap": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["clap"],
-        "indicators": [],
-        "category": "cli"
-    },
-    "structopt": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["structopt"],
-        "indicators": [],
-        "category": "cli"
-    },
-    "serde": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["serde"],
-        "indicators": [],
-        "category": "serialization"
-    },
-    "reqwest": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["reqwest"],
-        "indicators": [],
-        "category": "http_client"
-    },
-    "hyper": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["hyper"],
-        "indicators": [],
-        "category": "http"
-    },
-    "sqlx": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["sqlx"],
-        "indicators": [],
-        "category": "database"
-    },
-    "diesel": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["diesel"],
-        "indicators": [],
-        "category": "database"
-    },
-    "sea-orm": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["sea-orm", "sea_orm"],
-        "indicators": [],
-        "category": "database"
-    },
-    "tonic": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["tonic"],
-        "indicators": [],
-        "category": "grpc"
-    },
-    "prost": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["prost"],
-        "indicators": [],
-        "category": "grpc"
-    },
-    "tracing": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["tracing"],
-        "indicators": [],
-        "category": "logging"
-    },
-    "log": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["log"],
-        "indicators": [],
-        "category": "logging"
-    },
-    "slog": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["slog"],
-        "indicators": [],
-        "category": "logging"
-    },
-    "bevy": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["bevy"],
-        "indicators": [],
-        "category": "game_engine"
-    },
-    "egui": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["egui"],
-        "indicators": [],
-        "category": "gui"
-    },
-    "iced": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["iced"],
-        "indicators": [],
-        "category": "gui"
-    },
-    "tauri": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["tauri"],
-        "indicators": ["src-tauri/tauri.conf.json"],
-        "category": "desktop"
-    },
-    "rayon": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["rayon"],
-        "indicators": [],
-        "category": "parallelism"
-    },
-    "gix": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["gix"],
-        "indicators": [],
-        "category": "vcs"
-    },
-    "shadow-rs": {
-        "packages": [],
-        "config_files": [],
-        "cargo_crates": ["shadow-rs", "shadow_rs"],
-        "indicators": [],
-        "category": "build"
     },
     # PHP frameworks
     "laravel": {
@@ -389,6 +237,53 @@ FRAMEWORK_SIGNATURES = {
         "composer_packages": ["drupal/core"],
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
+    },
+    # v6.1: Test frameworks
+    "jest": {
+        "packages": ["jest"],
+        "config_files": ["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.cjs"],
+        "indicators": [".test.ts", ".test.js", ".spec.ts", ".spec.js"]
+    },
+    "vitest": {
+        "packages": ["vitest"],
+        "config_files": ["vitest.config.ts", "vitest.config.js", "vitest.config.mts"],
+        "indicators": []
+    },
+    "mocha": {
+        "packages": ["mocha"],
+        "config_files": [".mocharc.yml", ".mocharc.json", ".mocharc.js"],
+        "indicators": []
+    },
+    "cypress": {
+        "packages": ["cypress"],
+        "config_files": ["cypress.config.ts", "cypress.config.js", "cypress.json"],
+        "indicators": ["cypress/"]
+    },
+    "playwright_test": {
+        "packages": ["@playwright/test"],
+        "config_files": ["playwright.config.ts", "playwright.config.js"],
+        "indicators": []
+    },
+    "testing_library": {
+        "packages": ["@testing-library/react", "@testing-library/vue", "@testing-library/dom"],
+        "config_files": [],
+        "indicators": []
+    },
+    # v6.1: Documentation/development tools
+    "storybook": {
+        "packages": ["@storybook/react", "@storybook/vue", "@storybook/html", "storybook"],
+        "config_files": [".storybook/"],
+        "indicators": [".storybook/", ".story.tsx", ".stories.tsx", ".story.ts", ".stories.ts"]
+    },
+    "eslint": {
+        "packages": ["eslint"],
+        "config_files": [".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yml", "eslint.config.js", "eslint.config.mjs"],
+        "indicators": []
+    },
+    "prettier": {
+        "packages": ["prettier"],
+        "config_files": [".prettierrc", ".prettierrc.js", ".prettierrc.json", ".prettierrc.yml", "prettier.config.js"],
+        "indicators": []
     },
 }
 
@@ -445,8 +340,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
-        "has_android": False,
-        "has_android_ndk": False,
+        "has_jest": False,          # v6.1
+        "has_vitest": False,        # v6.1
+        "has_storybook": False,     # v6.1
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -496,6 +392,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "jest":
+                        detected["has_jest"] = True
+                    elif fw_name == "vitest":
+                        detected["has_vitest"] = True
+                    elif fw_name == "storybook":
+                        detected["has_storybook"] = True
                     break
 
         # Detect CSS preprocessor
@@ -742,12 +644,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     break
 
     # 5. Check file patterns (for Vue, Svelte)
-    # Also count files by language for weighting (v6.4)
-    lang_file_counts = {
-        ".php": 0, ".vue": 0, ".svelte": 0,
-        ".rs": 0, ".py": 0, ".js": 0, ".ts": 0,
-        ".go": 0, ".java": 0, ".c": 0, ".cpp": 0,
-    }
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -759,9 +655,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             continue
 
         for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in lang_file_counts:
-                lang_file_counts[ext] += 1
             if f.endswith('.vue') and not detected["has_vue"]:
                 if "vue" not in detected["frameworks"]:
                     detected["frameworks"].append("vue")
@@ -771,43 +664,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
             elif f.endswith('.php') and not detected["has_php"]:
-                # v6.4: Only flag PHP if there are meaningful PHP files (not just 1-2 test fixtures)
-                # Count first, decide after the loop
-                pass
-
-    # v6.4: File-count-weighted framework detection
-    # Only add PHP/Tailwind as framework if the project has meaningful files
-    total_source_files = sum(lang_file_counts.values())
-    if lang_file_counts[".php"] >= 3 and not detected["has_php"]:
-        if "php" not in detected["frameworks"]:
-            detected["frameworks"].append("php")
-        detected["has_php"] = True
-    elif lang_file_counts[".php"] > 0 and not detected["has_php"]:
-        # Only 1-2 PHP files — likely test fixtures, note but don't add as framework
-        pass
-
-    # v6.4: Remove frameworks that are clearly just from test fixtures
-    # If a framework was detected but has <5% of source files, it's likely noise
-    if total_source_files > 20:
-        frameworks_to_remove = []
-        for fw in detected["frameworks"]:
-            fw_file_count = 0
-            if fw == "php":
-                fw_file_count = lang_file_counts[".php"]
-            elif fw == "rust":
-                fw_file_count = lang_file_counts[".rs"]
-            elif fw == "tailwind":
-                # Tailwind is valid even with few CSS files
-                continue
-            if fw_file_count > 0 and fw_file_count / total_source_files < 0.05:
-                frameworks_to_remove.append(fw)
-        for fw in frameworks_to_remove:
-            detected["frameworks"].remove(fw)
-            if fw == "php":
-                detected["has_php"] = False
-
-    # Store file counts for downstream use
-    detected["lang_file_counts"] = lang_file_counts
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -886,17 +745,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect Android projects
-    _detect_android(workspace, detected)
-
-    # 8. Detect unsupported languages (Java, C/C++, etc.)
+    # 7. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
-    # Note: Kotlin was previously listed here but now has fallback_kotlin.py parser.
-    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
-        # "java" removed — has fallback_java.py parser
-        # "kotlin" removed — has fallback_kotlin.py parser
+        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
         "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
@@ -911,175 +765,6 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 break
 
     return detected
-
-
-def _detect_android(workspace: str, detected: Dict[str, Any]) -> None:
-    """Detect Android project and its specific frameworks/components.
-
-    Checks for:
-    - AndroidManifest.xml (in app/src/main/ or similar)
-    - build.gradle / build.gradle.kts with Android plugin
-    - Android SDK dependencies (androidx, com.android)
-    - Jetpack Compose
-    - Android Architecture Components (Room, ViewModel, LiveData)
-    - Hilt / Dagger dependency injection
-    - Android NDK / native code
-    - Zygisk / Xposed frameworks
-    """
-    # Check for AndroidManifest.xml in standard locations
-    manifest_paths = [
-        os.path.join(workspace, "app", "src", "main", "AndroidManifest.xml"),
-        os.path.join(workspace, "src", "main", "AndroidManifest.xml"),
-    ]
-    # Also search for AndroidManifest.xml anywhere in the workspace (max depth 4)
-    for root, dirs, files in os.walk(workspace):
-        # Skip ignored and deep directories
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        depth = root.replace(workspace, '').count(os.sep)
-        if depth > 4:
-            dirs.clear()
-            continue
-        if 'AndroidManifest.xml' in files:
-            manifest_paths.append(os.path.join(root, 'AndroidManifest.xml'))
-
-    has_manifest = any(os.path.exists(p) for p in manifest_paths)
-
-    # Check for build.gradle / build.gradle.kts with Android indicators
-    has_android_gradle = False
-    has_compose = False
-    has_hilt = False
-    has_room = False
-    has_viewmodel = False
-    has_zygisk = False
-    has_xposed = False
-
-    gradle_files = []
-    for gradle_name in ('build.gradle', 'build.gradle.kts'):
-        for root, dirs, files in os.walk(workspace):
-            skip = False
-            for ignore in DEFAULT_IGNORE_DIRS:
-                if ignore in root:
-                    skip = True
-                    break
-            if skip or '.codelens' in root:
-                continue
-            if gradle_name in files:
-                gradle_files.append(os.path.join(root, gradle_name))
-
-    for gf in gradle_files:
-        try:
-            with open(gf, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-
-            # Check for Android plugin
-            if re.search(r"com\.android\.application|com\.android\.library|android\s*\{", content):
-                has_android_gradle = True
-
-            # Check for Jetpack Compose
-            if re.search(r"compose\s*\{|androidx\.compose|composeOptions", content):
-                has_compose = True
-
-            # Check for Hilt
-            if re.search(r"com\.google\.dagger\.hilt|dagger\.hilt", content):
-                has_hilt = True
-
-            # Check for Room
-            if re.search(r"androidx\.room", content):
-                has_room = True
-
-            # Check for ViewModel / Lifecycle
-            if re.search(r"androidx\.lifecycle|androidx\.viewmodel", content):
-                has_viewmodel = True
-
-        except IOError:
-            pass
-
-    # Check for Zygisk / Xposed in source files
-    for root, dirs, files in os.walk(workspace):
-        skip = False
-        for ignore in DEFAULT_IGNORE_DIRS:
-            if ignore in root:
-                skip = True
-                break
-        if skip or '.codelens' in root:
-            continue
-        for fname in files:
-            if not fname.endswith(('.kt', '.java', '.cpp', '.c', '.rs')):
-                continue
-            fpath = os.path.join(root, fname)
-            try:
-                with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(8192)  # Read first 8KB
-                if 'Zygisk' in content or 'zygisk' in content:
-                    has_zygisk = True
-                if 'Xposed' in content or 'xposed' in content or 'IXposedHookLoadPackage' in content:
-                    has_xposed = True
-            except IOError:
-                pass
-
-    # Check for NDK native code
-    has_ndk = False
-    ndk_markers = ['CMakeLists.txt', 'Android.mk', 'Application.mk']
-    for marker in ndk_markers:
-        if os.path.exists(os.path.join(workspace, marker)):
-            has_ndk = True
-            break
-    if not has_ndk:
-        # Check for native/ or jni/ directories
-        for dirname in ('native', 'jni', 'cpp', 'rust'):
-            if os.path.isdir(os.path.join(workspace, dirname)):
-                # Check that it actually contains native code
-                for root, dirs, files in os.walk(os.path.join(workspace, dirname)):
-                    if any(f.endswith(('.cpp', '.c', '.h', '.rs')) for f in files):
-                        has_ndk = True
-                        break
-                if has_ndk:
-                    break
-
-    # Set detection flags
-    is_android = has_manifest or has_android_gradle
-    if is_android:
-        if "android" not in detected["frameworks"]:
-            detected["frameworks"].append("android")
-        detected["has_android"] = True
-
-        # Add sub-frameworks
-        if has_compose and "jetpack_compose" not in detected["frameworks"]:
-            detected["frameworks"].append("jetpack_compose")
-        if has_hilt and "hilt" not in detected["frameworks"]:
-            detected["frameworks"].append("hilt")
-        if has_room and "room" not in detected["frameworks"]:
-            detected["frameworks"].append("room")
-        if has_viewmodel and "viewmodel" not in detected["frameworks"]:
-            detected["frameworks"].append("viewmodel")
-        if has_zygisk and "zygisk" not in detected["frameworks"]:
-            detected["frameworks"].append("zygisk")
-        if has_xposed and "xposed" not in detected["frameworks"]:
-            detected["frameworks"].append("xposed")
-
-    if has_ndk:
-        if "android_ndk" not in detected["frameworks"]:
-            detected["frameworks"].append("android_ndk")
-        detected["has_android_ndk"] = True
-
-    # Also detect Spring Boot (from build.gradle)
-    if not is_android:
-        for gf in gradle_files:
-            try:
-                with open(gf, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                if 'spring-boot' in content or 'org.springframework' in content:
-                    if "spring" not in detected["frameworks"]:
-                        detected["frameworks"].append("spring")
-                    break
-            except IOError:
-                pass
 
 
 def get_recommended_config(workspace: str) -> Dict[str, Any]:
@@ -1170,37 +855,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
-
-    # Android: add Android-specific paths
-    if fw.get("has_android"):
-        config["backend_paths"].extend([
-            "app/src/main/java/", "app/src/main/kotlin/",
-            "app/src/main/", "app/src/",
-        ])
-        config["frontend_paths"].extend([
-            "app/src/main/res/", "app/src/main/res/layout/",
-        ])
-        # Add Gradle-specific ignores
-        config["ignore"].extend([
-            ".gradle/", ".idea/", "local.properties",
-            "app/build/", "build/",
-        ])
-
-    # Android NDK: add native code paths
-    if fw.get("has_android_ndk"):
-        config["backend_paths"].extend([
-            "native/src/", "jni/", "cpp/",
-        ])
-        # Also check for native directory structure
-        for native_dir in ('native', 'jni', 'cpp', 'rust'):
-            native_path = os.path.join(workspace, native_dir)
-            if os.path.isdir(native_path):
-                # Find src subdirectories
-                for root, dirs, files in os.walk(native_path):
-                    if 'src' in dirs:
-                        rel = os.path.relpath(os.path.join(root, 'src'), workspace)
-                        config["backend_paths"].append(rel + "/")
-                        break
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

@@ -527,6 +527,20 @@ def _detect_unused_exports(
     for names in all_imports.values():
         all_imported_names.update(names)
 
+    # v6.1: Check if this is a library project — if so, exports from src/ files
+    # are likely the public API and should not be flagged as unused.
+    is_library = False
+    pkg_path = os.path.join(workspace, 'package.json')
+    if os.path.isfile(pkg_path):
+        try:
+            with open(pkg_path, 'r', encoding='utf-8') as f:
+                pkg = json.load(f)
+            if ("main" in pkg or "module" in pkg or "exports" in pkg) and \
+               ("files" in pkg or "sideEffects" in pkg or "typings" in pkg or "types" in pkg):
+                is_library = True
+        except Exception:
+            pass
+
     unused = []
     for file_path, exports in all_exports.items():
         # Skip test files and index files (they may be entry points)
@@ -535,6 +549,10 @@ def _detect_unused_exports(
         if file_path.endswith('index.js') or file_path.endswith('index.ts'):
             continue
 
+        # v6.1: For library projects, exports from src/ are the public API.
+        # Downgrade severity from warning to info and add a note.
+        is_public_api = is_library and file_path.startswith('src/')
+
         for export in exports:
             name = export["name"]
 
@@ -542,15 +560,32 @@ def _detect_unused_exports(
             if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
                 continue
 
+            # v6.1: Skip type exports (TypeScript interfaces, types) in library projects
+            # These are part of the public API type definitions.
+            if is_public_api and export.get("type") in ("type", "interface", "typeof"):
+                continue
+
+            # v6.1: Skip known TypeScript utility type exports
+            _ts_type_pattern = re.compile(r'^(I[A-Z]|T[A-Z]|[A-Z][a-z]+State|[A-Z][a-z]+Props|[A-Z][a-z]+Return|[A-Z][a-z]+Options|Async\w+|Ref\w*)$')
+            if is_public_api and _ts_type_pattern.match(name):
+                continue
+
             if name not in all_imported_names:
+                severity = "info" if is_public_api else "warning"
+                message = f"Export '{name}' is never imported by any file"
+                suggestion = f"Remove unused export '{name}' or add import where needed."
+                if is_public_api:
+                    message = f"Export '{name}' is not imported internally (may be public API)"
+                    suggestion = f"Verify '{name}' is part of the public API. If not, remove it."
+
                 unused.append({
                     "file": file_path,
                     "line": export["line"],
                     "name": name,
                     "type": export["type"],
-                    "severity": "warning",
-                    "message": f"Export '{name}' is never imported by any file",
-                    "suggestion": f"Remove unused export '{name}' or add import where needed."
+                    "severity": severity,
+                    "message": message,
+                    "suggestion": suggestion
                 })
 
     return unused[:50]
@@ -604,6 +639,25 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
                 continue
             # Skip test fixtures and example files
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
+                continue
+            # v6.1: Skip story files — Storybook story functions are called by the
+            # Storybook runtime, not by other code. They're not dead code.
+            if any(x in file_path for x in ['/stories/', '/storybook/', '.story.', '.stories.']):
+                continue
+            # v6.1: Skip common test framework helper names (setUp, tearDown, etc.)
+            # These are called by the test framework, not by other code.
+            _test_helper_names = {
+                'setUp', 'tearDown', 'setup', 'teardown',
+                'beforeAll', 'afterAll', 'beforeEach', 'afterEach',
+                'before', 'after',
+            }
+            if name in _test_helper_names:
+                continue
+            # v6.1: Skip React component names (PascalCase) in component directories
+            # These are likely exported for external consumption.
+            if name and name[0].isupper() and any(x in file_path for x in ['/component', '/Component', '/src/']):
+                # Could be a React component — check if it's an export
+                # These are likely public API for library projects
                 continue
 
             # v6.4: Skip Rust trait implementation methods that are required by the trait.

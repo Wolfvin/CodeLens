@@ -10,8 +10,8 @@ Architecture:
 - Scans source files for known entrypoint patterns across multiple frameworks
 - Extracts metadata (HTTP method, path, handler name, schedule, etc.)
 - Builds a lightweight execution graph showing entrypoint → function call chains
-- Categorizes entrypoints into 9 types: main, http_handler, event_handler,
-  cli_command, cron_job, worker, module_export, test_entry, android_component
+- Categorizes entrypoints into 8 types: main, http_handler, event_handler,
+  cli_command, cron_job, worker, module_export, test_entry
 
 Each entrypoint includes: type, metadata (method, path, handler, schedule, etc.),
 file, line, and optionally a call chain to downstream functions.
@@ -19,7 +19,6 @@ file, line, and optionally a call chain to downstream functions.
 
 import os
 import re
-import xml.etree.ElementTree as ET
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -31,7 +30,7 @@ SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
     ".py", ".rs", ".vue", ".svelte", ".php",
     ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx",
-    ".go", ".kt", ".aidl",
+    ".go",
 }
 
 # ─── Entrypoint Pattern Definitions ───────────────────────────
@@ -79,21 +78,6 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 0,
                 "label": "rust_main_fn",
             },
-            # v6.4: Rust async main entry points — #[tokio::main], #[actix::main]
-            {
-                "regex": r'#\[tokio::main\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?async\s+fn\s+main\s*\(',
-                "language": {".rs"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "rust_tokio_main",
-            },
-            {
-                "regex": r'#\[actix::main\]\s*(?:\n\s*#\[.*\]\s*)*\n\s*(?:pub\s+)?async\s+fn\s+main\s*\(',
-                "language": {".rs"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "rust_actix_main",
-            },
             # C / C++
             {
                 "regex": r'int\s+main\s*\(\s*(?:int\s+argc\s*,\s*char\s*\*\s*argv\[\])?\s*\)',
@@ -116,30 +100,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "handler",
                 "handler_group": 0,
                 "label": "go_main_fn",
-            },
-            # Kotlin — fun main with args
-            {
-                "regex": r'fun\s+main\s*\(\s*args\s*:\s*Array\s*<\s*String\s*>\s*\)',
-                "language": {".kt"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "kotlin_main_args",
-            },
-            # Kotlin — fun main() (no args / script style)
-            {
-                "regex": r'fun\s+main\s*\(\s*\)',
-                "language": {".kt"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "kotlin_main_fn",
-            },
-            # Kotlin — companion object fun main (entry via companion)
-            {
-                "regex": r'companion\s+object\s*\{[^}]*fun\s+main\s*\(',
-                "language": {".kt"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "kotlin_companion_main",
             },
             # PHP — artisan command signatures
             {
@@ -291,7 +251,7 @@ ENTRYPOINT_PATTERNS = {
             # Spring Boot @RequestMapping family
             {
                 "regex": r'@(?:Get|Post|Put|Delete|Patch|Request)Mapping\s*\(\s*(?:value\s*=\s*)?["\']([^"\']+)["\']',
-                "language": {".java", ".kt"},  # Spring Boot is Java/Kotlin
+                "language": {".java"},  # Spring Boot is Java, not Python
                 "extract": "spring_route",
                 "label": "spring_mapping",
             },
@@ -373,49 +333,6 @@ ENTRYPOINT_PATTERNS = {
                 "extract": "cpp_crow_route",
                 "path_group": 1,
                 "label": "cpp_crow_handler",
-            },
-            # v6.4: Rust Actix-web route handlers — #[get("/path")], #[post("/path")]
-            {
-                "regex": r'#\[(get|post|put|delete|patch|head|options)\s*\(\s*"([^"]+)"\s*\)',
-                "language": {".rs"},
-                "extract": "http_route",
-                "method_group": 1,
-                "path_group": 2,
-                "label": "actix_web_route",
-            },
-            # v6.4: Rust Actix-web resource routes — web::resource("/path").to(handler)
-            {
-                "regex": r'web::resource\s*\(\s*"([^"]+)"\s*\)',
-                "language": {".rs"},
-                "extract": "rust_resource_route",
-                "path_group": 1,
-                "label": "actix_web_resource",
-            },
-            # v6.4: Rust Axum route handlers — .route("/path", get(handler))
-            {
-                "regex": r'\.route\s*\(\s*"([^"]+)"\s*,\s*(get|post|put|delete|patch|head|options|any)\s*\(',
-                "language": {".rs"},
-                "extract": "http_route_reverse",
-                "method_group": 2,
-                "path_group": 1,
-                "label": "axum_route",
-            },
-            # v6.4: Rust Rocket route handlers — #[get("/path")]
-            {
-                "regex": r'#\[(get|post|put|delete|head|options|patch)\s*=\s*"([^"]+)"',
-                "language": {".rs"},
-                "extract": "http_route",
-                "method_group": 1,
-                "path_group": 2,
-                "label": "rocket_route",
-            },
-            # v6.4: Rust Warp filter routes — warp::path("segment")
-            {
-                "regex": r'warp::path\s*\(\s*"([^"]+)"\s*\)',
-                "language": {".rs"},
-                "extract": "rust_warp_route",
-                "path_group": 1,
-                "label": "warp_filter",
             },
         ],
     },
@@ -793,15 +710,6 @@ ENTRYPOINT_PATTERNS = {
                 "handler_group": 1,
                 "label": "rust_pub_fn",
             },
-            # v6.4: Rust build.rs entry point — Cargo build script
-            {
-                "regex": r'fn\s+main\s*\(',
-                "language": {".rs"},
-                "extract": "handler",
-                "handler_group": 0,
-                "label": "rust_build_rs",
-                "filename_filter": ["build.rs"],
-            },
             # Python __all__ export list
             {
                 "regex": r'__all__\s*=\s*\[([^\]]+)\]',
@@ -876,149 +784,6 @@ ENTRYPOINT_PATTERNS = {
             },
         ],
     },
-
-    # ═══════════════════════════════════════════════════════════
-    # 9. ANDROID COMPONENTS — Android app entry points
-    # ═══════════════════════════════════════════════════════════
-    "android_component": {
-        "patterns": [
-            # Android Activity (naming convention)
-            {
-                "regex": r'class\s+(\w+Activity)\b',
-                "language": {".java", ".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "activity",
-                "label": "android_activity",
-            },
-            # Android Activity (extends AppCompatActivity)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*AppCompatActivity\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "activity",
-                "label": "android_appcompat_activity",
-            },
-            # Android Activity (extends Activity)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*Activity\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "activity",
-                "label": "android_activity_kotlin",
-            },
-            # Android Activity (Java extends)
-            {
-                "regex": r'class\s+(\w+)\s+extends\s+\w*Activity',
-                "language": {".java"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "activity",
-                "label": "android_activity_java",
-            },
-            # Android Service (naming convention)
-            {
-                "regex": r'class\s+(\w+Service)\b',
-                "language": {".java", ".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "service",
-                "label": "android_service",
-            },
-            # Android Service (extends Service)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*Service\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "service",
-                "label": "android_service_kotlin",
-            },
-            # Android Service (Java extends)
-            {
-                "regex": r'class\s+(\w+)\s+extends\s+\w*Service',
-                "language": {".java"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "service",
-                "label": "android_service_java",
-            },
-            # Android BroadcastReceiver (naming convention)
-            {
-                "regex": r'class\s+(\w+Receiver)\b',
-                "language": {".java", ".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "receiver",
-                "label": "android_receiver",
-            },
-            # Android BroadcastReceiver (extends BroadcastReceiver)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*BroadcastReceiver\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "receiver",
-                "label": "android_receiver_kotlin",
-            },
-            # Android BroadcastReceiver (Java extends)
-            {
-                "regex": r'class\s+(\w+)\s+extends\s+\w*BroadcastReceiver',
-                "language": {".java"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "receiver",
-                "label": "android_receiver_java",
-            },
-            # Android ContentProvider (naming convention)
-            {
-                "regex": r'class\s+(\w+Provider)\b',
-                "language": {".java", ".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "provider",
-                "label": "android_provider",
-            },
-            # Android ContentProvider (extends ContentProvider)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*ContentProvider\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "provider",
-                "label": "android_provider_kotlin",
-            },
-            # Android ContentProvider (Java extends)
-            {
-                "regex": r'class\s+(\w+)\s+extends\s+\w*ContentProvider',
-                "language": {".java"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "provider",
-                "label": "android_provider_java",
-            },
-            # Android Application class (extends Application)
-            {
-                "regex": r'class\s+(\w+)\s*:\s*.*Application\s*\(\)',
-                "language": {".kt"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "application",
-                "label": "android_application_kotlin",
-            },
-            # Android Application class (Java extends)
-            {
-                "regex": r'class\s+(\w+)\s+extends\s+\w*Application\b',
-                "language": {".java"},
-                "extract": "android_component",
-                "handler_group": 1,
-                "component_type": "application",
-                "label": "android_application_java",
-            },
-        ],
-    },
 }
 
 
@@ -1036,8 +801,7 @@ def map_entrypoints(
     Args:
         workspace: Absolute path to workspace
         entry_type: Optional filter: "main", "http_handler", "event_handler",
-                   "cli_command", "cron_job", "worker", "module_export", "test_entry",
-                   "android_component"
+                   "cli_command", "cron_job", "worker", "module_export", "test_entry"
         config: CodeLens config
 
     Returns:
@@ -1047,7 +811,7 @@ def map_entrypoints(
 
     valid_types = {
         "main", "http_handler", "event_handler", "cli_command",
-        "cron_job", "worker", "module_export", "test_entry", "android_component"
+        "cron_job", "worker", "module_export", "test_entry"
     }
 
     if entry_type and entry_type not in valid_types:
@@ -1068,10 +832,6 @@ def map_entrypoints(
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
-                continue
-
-            # v6.4: Skip minified files (.min.js, .min.css)
-            if '.min.js' in filename or '.min.css' in filename:
                 continue
 
             file_path = os.path.join(root, filename)
@@ -1138,10 +898,13 @@ def map_entrypoints(
                     )
                     entrypoints.extend(file_entrypoints)
 
-    # ─── Phase 1.5: Parse AndroidManifest.xml files ─────────
-    if not entry_type or entry_type == "android_component":
-        manifest_entrypoints = _parse_android_manifests(workspace)
-        entrypoints.extend(manifest_entrypoints)
+    # ─── Phase 1.5: Detect barrel files and named export entry points ──
+    # v6.1: For library projects, the main entry point is often a barrel file
+    # (index.ts/index.js) that re-exports all public API. Detect these as
+    # module_export entry points so they appear prominently.
+    if "module_export" in types_to_scan:
+        barrel_entrypoints = _detect_barrel_exports(workspace)
+        entrypoints.extend(barrel_entrypoints)
 
     # ─── Phase 2: Deduplicate ─────────────────────────────────
     entrypoints = _deduplicate_entrypoints(entrypoints)
@@ -1242,18 +1005,6 @@ def _extract_entrypoints(
                 entrypoint["method"] = _method_from_spring_label(pattern_def.get("label", ""))
                 entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
 
-            elif extract_type == "rust_resource_route":
-                path_group = pattern_def.get("path_group")
-                entrypoint["method"] = "ANY"
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
-                entrypoint["handler"] = _find_handler_name(content, line_num, ext)
-
-            elif extract_type == "rust_warp_route":
-                path_group = pattern_def.get("path_group")
-                entrypoint["method"] = "ANY"
-                entrypoint["path"] = match.group(path_group) if path_group and match.lastindex is not None and match.lastindex >= path_group else "/"
-                entrypoint["handler"] = _find_handler_name(content, line_num, ext)
-
             elif extract_type == "event_name":
                 event_group = pattern_def.get("event_group")
                 entrypoint["event"] = match.group(event_group) if event_group and match.lastindex is not None and match.lastindex >= event_group else "unknown"
@@ -1299,150 +1050,12 @@ def _extract_entrypoints(
                     # Get from next def line
                     entrypoint["command"] = _find_click_command_name(content, line_num)
 
-            elif extract_type == "android_component":
-                handler_group = pattern_def.get("handler_group")
-                component_type = pattern_def.get("component_type", "unknown")
-                entrypoint["component_type"] = component_type
-                entrypoint["handler"] = match.group(handler_group) if handler_group and match.lastindex is not None and match.lastindex >= handler_group else "unknown"
-
             results.append(entrypoint)
 
     except re.error:
         pass
 
     return results
-
-
-# ─── Android Manifest Parsing ──────────────────────────────────
-
-def _parse_android_manifests(workspace: str) -> List[Dict[str, Any]]:
-    """Parse AndroidManifest.xml files to extract declared Android components.
-
-    Extracts activity, service, receiver, and provider declarations along
-    with their intent-filter actions.
-    """
-    entrypoints: List[Dict[str, Any]] = []
-
-    # Common manifest locations
-    manifest_paths = []
-    for root, dirs, filenames in os.walk(workspace):
-        dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-        if '.codelens' in root:
-            dirs.clear()
-            continue
-        for filename in filenames:
-            if filename == 'AndroidManifest.xml':
-                manifest_paths.append(os.path.join(root, filename))
-
-    android_ns = 'http://schemas.android.com/apk/res/android'
-
-    for manifest_path in manifest_paths:
-        rel_path = os.path.relpath(manifest_path, workspace)
-
-        try:
-            tree = ET.parse(manifest_path)
-            root_elem = tree.getroot()
-        except (ET.ParseError, IOError):
-            continue
-
-        # Namespace prefix handling — some manifests use a namespace prefix
-        # for android:name etc. We try both prefixed and non-prefixed forms.
-        def _attr(name: str, elem: ET.Element) -> str:
-            """Get attribute with or without android namespace prefix."""
-            val = elem.get(f'{{{android_ns}}}{name}')
-            if val is None:
-                val = elem.get(f'android:{name}')
-            return val or ''
-
-        # Extract <activity> elements
-        for activity in root_elem.iter('activity'):
-            activity_name = _attr('name', activity)
-            if activity_name:
-                ep: Dict[str, Any] = {
-                    "type": "android_component",
-                    "file": rel_path,
-                    "line": 0,
-                    "label": "manifest_activity",
-                    "component_type": "activity",
-                    "handler": activity_name.split('.')[-1] if '.' in activity_name else activity_name,
-                    "qualified_name": activity_name,
-                }
-                # Extract intent-filter actions
-                actions = []
-                for intent_filter in activity.iter('intent-filter'):
-                    for action in intent_filter.iter('action'):
-                        action_name = _attr('name', action)
-                        if action_name:
-                            actions.append(action_name)
-                if actions:
-                    ep["intent_actions"] = actions
-                entrypoints.append(ep)
-
-        # Extract <service> elements
-        for service in root_elem.iter('service'):
-            service_name = _attr('name', service)
-            if service_name:
-                ep = {
-                    "type": "android_component",
-                    "file": rel_path,
-                    "line": 0,
-                    "label": "manifest_service",
-                    "component_type": "service",
-                    "handler": service_name.split('.')[-1] if '.' in service_name else service_name,
-                    "qualified_name": service_name,
-                }
-                actions = []
-                for intent_filter in service.iter('intent-filter'):
-                    for action in intent_filter.iter('action'):
-                        action_name = _attr('name', action)
-                        if action_name:
-                            actions.append(action_name)
-                if actions:
-                    ep["intent_actions"] = actions
-                entrypoints.append(ep)
-
-        # Extract <receiver> elements
-        for receiver in root_elem.iter('receiver'):
-            receiver_name = _attr('name', receiver)
-            if receiver_name:
-                ep = {
-                    "type": "android_component",
-                    "file": rel_path,
-                    "line": 0,
-                    "label": "manifest_receiver",
-                    "component_type": "receiver",
-                    "handler": receiver_name.split('.')[-1] if '.' in receiver_name else receiver_name,
-                    "qualified_name": receiver_name,
-                }
-                actions = []
-                for intent_filter in receiver.iter('intent-filter'):
-                    for action in intent_filter.iter('action'):
-                        action_name = _attr('name', action)
-                        if action_name:
-                            actions.append(action_name)
-                if actions:
-                    ep["intent_actions"] = actions
-                entrypoints.append(ep)
-
-        # Extract <provider> elements
-        for provider in root_elem.iter('provider'):
-            provider_name = _attr('name', provider)
-            if provider_name:
-                ep = {
-                    "type": "android_component",
-                    "file": rel_path,
-                    "line": 0,
-                    "label": "manifest_provider",
-                    "component_type": "provider",
-                    "handler": provider_name.split('.')[-1] if '.' in provider_name else provider_name,
-                    "qualified_name": provider_name,
-                }
-                authorities = _attr('authorities', provider)
-                if authorities:
-                    ep["authorities"] = authorities
-                entrypoints.append(ep)
-
-    return entrypoints
 
 
 # ─── Handler Name Extraction ───────────────────────────────────
@@ -1580,8 +1193,6 @@ def _build_execution_graph(
             key = f"event: {ep.get('event', 'unknown')}"
         elif ep["type"] == "worker":
             key = f"worker: {ep.get('name', ep.get('handler', ep.get('label', 'unknown')))}"
-        elif ep["type"] == "android_component":
-            key = f"android: {ep.get('component_type', 'unknown')} [{ep.get('handler', 'unknown')}]"
         else:
             key = f"{ep['type']}: {ep.get('handler', 'unknown')}"
 
@@ -1650,6 +1261,86 @@ def _find_called_functions(content: str, handler_name: str) -> List[str]:
                     called.append(fn_name)
 
     return called
+
+
+# ─── Barrel File Detection ────────────────────────────────────
+
+def _detect_barrel_exports(workspace: str) -> List[Dict[str, Any]]:
+    """v6.1: Detect barrel files (index.ts/index.js) that re-export the public API.
+
+    For library projects, the main entry point is often src/index.ts which
+    re-exports all hooks/components. These should be detected as module_export
+    entry points since they define the library's public interface.
+    """
+    entrypoints = []
+
+    # Check for common barrel file locations
+    barrel_candidates = [
+        os.path.join(workspace, 'src', 'index.ts'),
+        os.path.join(workspace, 'src', 'index.js'),
+        os.path.join(workspace, 'src', 'index.tsx'),
+        os.path.join(workspace, 'index.ts'),
+        os.path.join(workspace, 'index.js'),
+        os.path.join(workspace, 'lib', 'index.ts'),
+        os.path.join(workspace, 'lib', 'index.js'),
+    ]
+
+    for barrel_path in barrel_candidates:
+        if not os.path.isfile(barrel_path):
+            continue
+
+        rel_path = os.path.relpath(barrel_path, workspace)
+
+        try:
+            with open(barrel_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Count re-exports (export { ... }, export * from, export function/const)
+        re_export_count = len(re.findall(r'export\s+\*\s+from', content))
+        named_export_count = len(re.findall(r'export\s+\{', content))
+        fn_export_count = len(re.findall(r'export\s+(?:function|const|class|type|interface)\s+', content))
+
+        total_exports = re_export_count + named_export_count + fn_export_count
+
+        # Only flag as barrel if it has multiple re-exports (a real barrel file)
+        if total_exports < 2:
+            continue
+
+        # Extract exported names for metadata
+        exported_names = []
+
+        # export * from './module' — count but can't extract names
+        if re_export_count > 0:
+            exported_names.append(f"{re_export_count} re-export(s)")
+
+        # export { foo, bar } from './module'
+        for match in re.finditer(r'export\s+\{([^}]+)\}', content):
+            names = [n.strip().split(' as ')[0].strip() for n in match.group(1).split(',')]
+            exported_names.extend(names[:10])  # Limit to first 10
+
+        # export function/const/class name
+        for match in re.finditer(r'export\s+(?:function|const|class|type|interface)\s+(\w+)', content):
+            exported_names.append(match.group(1))
+
+        entrypoints.append({
+            "type": "module_export",
+            "file": rel_path,
+            "line": 1,
+            "label": "barrel_export",
+            "handler": rel_path,
+            "metadata": {
+                "is_barrel": True,
+                "total_exports": total_exports,
+                "re_exports": re_export_count,
+                "named_exports": named_export_count,
+                "fn_exports": fn_export_count,
+                "exported_names": exported_names[:30],
+            },
+        })
+
+    return entrypoints
 
 
 # ─── Deduplication ─────────────────────────────────────────────
@@ -1791,24 +1482,6 @@ def _generate_recommendations(
         recs.append(
             f"Low test-to-endpoint ratio ({test_count} tests for {http_count} endpoints). "
             f"Consider adding more API tests."
-        )
-
-    # Android components
-    android_eps = [ep for ep in entrypoints if ep["type"] == "android_component"]
-    if android_eps:
-        component_types = set(ep.get("component_type", "unknown") for ep in android_eps)
-        if "application" in component_types:
-            app_classes = [ep for ep in android_eps if ep.get("component_type") == "application"]
-            if len(app_classes) > 1:
-                recs.append(
-                    f"Found {len(app_classes)} Application class declarations. "
-                    f"Android should have exactly one Application class. "
-                    f"Consolidate into a single Application class."
-                )
-        recs.append(
-            f"Found {len(android_eps)} Android component(s) "
-            f"({', '.join(f'{t}: {sum(1 for e in android_eps if e.get('component_type') == t)}' for t in sorted(component_types))}). "
-            f"Ensure components are properly declared in AndroidManifest.xml."
         )
 
     return recs

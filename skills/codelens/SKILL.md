@@ -36,9 +36,20 @@ description: >
   Powered by tree-sitter for accurate AST-based parsing.
 ---
 
-# CodeLens v6
+# CodeLens v6.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
+
+## What's New in v6.1 — Tested on streamich/react-use (330 files, TS/TSX hooks library)
+
+- **Library project detection**: `handbook` now distinguishes `frontend-library` from `frontend-app` by checking package.json for `main`/`module`/`files`/`sideEffects` fields and absence of `start`/`dev` scripts. React hooks libraries, component libraries, and utility packages are now correctly identified.
+- **Barrel file entrypoint detection**: `entrypoints` now detects barrel files (src/index.ts) as `module_export` entry points with `is_barrel: true` metadata, including exported name counts and types. Library entry points no longer hidden behind test entries.
+- **Health score critical penalty fix**: Fixed bug where projects with critical code smells could still score 100/100. Now any critical smell guarantees at least 5 points penalty, and the penalty curve is more aggressive (3 points even for single critical in large projects).
+- **Dead code false positive reduction**: Skip Storybook story files, test helper functions (setUp, tearDown, beforeAll, etc.), React component names (PascalCase) in src/ directories. Library public API type exports (AsyncState, Ref types) no longer flagged as unused.
+- **Debug-leak false positive reduction**: `console.error` in guard/argument-validation patterns, if-condition checks, and dev-only guards now correctly skipped. `console.warn` in deprecation/unsupported/fallback patterns skipped. These are intentional runtime warnings, not debug leaks.
+- **Framework detection expansion**: Added Jest, Vitest, Mocha, Cypress, Playwright, Testing Library, Storybook, ESLint, and Prettier detection from package.json dependencies and config files.
+- **Perf-hint large_bundle barrel file skip**: `export * from` in index.ts/index.js (barrel files) no longer flagged as bundle-bloating. This is intentional for library projects. Storybook story files also excluded.
+- **Storybook stories excluded from health score**: Stories directories are now treated like test/doc directories for health score calculation — they don't penalize production code health.
 
 ## What's New in v5.8.1 — Tested on cockroachdb/cockroach (10K files, Go database)
 
