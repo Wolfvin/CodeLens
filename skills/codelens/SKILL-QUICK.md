@@ -1,11 +1,11 @@
 ---
 name: codelens
 description: >
-  CodeLens v7 Quick Reference — concise trigger map, core commands, and decision rules
+  CodeLens v6.2 Quick Reference — concise trigger map, core commands, and decision rules
   for AI agents. For complete documentation, see SKILL.md.
 ---
 
-# CodeLens v7.0 — Quick Reference
+# CodeLens v6.2 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -105,7 +105,7 @@ description: >
 
 ## Workspace Auto-Detect (v5.1)
 
-The `workspace` argument is now **optional** for ALL 41 commands.
+The `workspace` argument is now **optional** for ALL 45 commands.
 If omitted, CodeLens auto-detects via:
 1. Current directory (if has project markers: package.json, pyproject.toml, etc.)
 2. Parent directories (walk up to find project root)
@@ -119,7 +119,7 @@ $CLI query "myFunc"    # Auto-detect → works!
 $CLI smell             # Auto-detect → works!
 ```
 
-## All 44 Commands Quick Reference
+## All 45 Commands Quick Reference
 
 | # | Command | Priority | One-liner |
 |---|---------|----------|-----------|

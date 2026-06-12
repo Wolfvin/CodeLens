@@ -5,67 +5,29 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semav.org/spec/v2.0.0.html).
 
-## [6.0.0] — 2026-06-12
+## [6.2.0] — 2026-06-12
 
-### Universal Analysis — Go API Maps, Kotlin, R, Haskell, ZSH
+### Game Engine & Polyglot Release
 
-**Tested on ohmyzsh/ohmyzsh (373 shell/zsh files, 1146 nodes, 21352 edges) and syncthing/syncthing (548 Go files, 5636 nodes, 30119 edges)**
+**Tested on godotengine/godot (14,007 files, 418MB: C++/GDScript/C#/Java/Kotlin/GLSL game engine)**
 
-This release focuses on broad repo analysis improvements: Go API route extraction, three new language parsers,
-framework detection accuracy, and shell/ZSH file recognition.
+#### New Features
 
-#### Go API-Map Route Extraction (NEW)
+- **GDScript (.gd) fallback parser** (`fallback_gdscript.py`): Extracts functions, classes (class_name, inner class), signals, extends, preload/load imports, and constants from GDScript files. 690 .gd files parsed in Godot test.
+- **SCons build system detection**: Detects SConstruct files and classifies projects as `cpp-game-engine`, `cpp-graphics`, or `cpp-project` based on content analysis and GDScript file presence.
+- **Game engine framework detection**: New framework signatures for Godot (SConstruct/project.godot/.gd), Unreal (.uproject), Unity (.unity), and SCons build system. `has_godot`, `has_unreal`, `has_unity`, `has_scons` flags in detect_frameworks() output.
+- **Kotlin (.kt) as separate language category**: No longer merged with Java. Separate `kotlin` category in discover_files() and scan output. 53 .kt files correctly categorized in Godot test.
+- **Smart C++ vs Python identity**: When C++ files outnumber Python files by 5:1+ in a CMake/SCons project, Python type is downgraded to "build-scripts" indicator. Fixes Godot being misidentified as "python-project" — now correctly "cpp-game-engine".
+- **Architecture total_lines fallback**: When outline engine returns 0 lines (non-tree-sitter languages), counts lines from all source files directly. Godot: 4,691,750 lines correctly reported (was 0).
+- **Timeout protection for handbook/summary/analyze**: Time-budget aware engine execution. Sub-engines skipped gracefully with `timed_out_engines` list when approaching timeout (90s for handbook/summary, 120s for analyze).
+- **max_files propagation**: `handbook` and `analyze` commands now pass `max_files` limit to smell, dead-code, and other file-intensive engines to prevent timeout on large repos.
+- **Game engine directory hints**: Added core, servers, modules, platform, drivers, scene, editor directory descriptions in handbook output.
+- **project.godot name extraction**: Reads `config/name` from project.godot for accurate project identity in Godot projects.
 
-- **net/http**: `http.HandleFunc("/path", handler)`, `http.Handle`, `mux.HandleFunc`, `mux.Handle`
-- **Gin**: `r.GET("/path", handler)`, `r.Group("/api")` with prefix inheritance
-- **Echo**: `e.GET("/path", handler)`, `e.Group("/api")` with prefix inheritance
-- **Chi**: `r.Get("/path", handler)`, `r.Route("/path", func(r chi.Router) {...})` with recursive nesting
-- **Fiber**: `app.Get("/path", handler)`, `app.Group("/api")`
-- **httprouter**: `router.GET("/path", handler)`, `router.Handle("METHOD", "/path", handler)`
-- Go middleware extraction from route call arguments
-- Go framework detection from `go.mod` imports (gin, echo, chi, fiber, httprouter)
-- **Impact**: syncthing/syncthing had 0 detected routes → now detects all HTTP API endpoints
+#### Bug Fixes
 
-#### New Language Parsers
-
-- **Kotlin** (`fallback_kotlin.py`): data classes, sealed classes, companion objects, object declarations,
-  extension functions (with receiver type), suspend functions, infix/operator/inline modifiers,
-  type aliases, annotations, supertype extraction (skipping constructor colons),
-  coroutines (launch, async, withContext), call edges
-- **R** (`fallback_r.py`): Functions (`<-` and `=` assignment), S3 methods, S4 classes (setClass, setGeneric,
-  setMethod, setRefClass), R6 classes with inheritance, library/require/namespace imports,
-  source() file references, pipe operators (%>%, |>), Shiny UI/server patterns,
-  reactive/render functions, input$/output$ references
-- **Haskell** (`fallback_haskell.py`): Type signatures, function definitions, data types (including GADTs),
-  newtype, type aliases, type families, type classes, instance declarations,
-  module declarations, qualified imports, deriving clauses,
-  expression-only call extraction (filters parameters/bindings)
-
-#### Framework Detection Improvements
-
-- **Fixed Drupal false positive**: Changed indicators from generic "modules/", "themes/" to Drupal-specific
-  "sites/default/settings.php", "core/lib/Drupal.php" (was matching ohmyzsh etc.)
-- **Added oh-my-zsh detection**: Detects from "oh-my-zsh.sh" and "custom/plugins/"
-- **Added Kotlin detection**: .kt files now detected as "kotlin" framework (separate from Java)
-- **Added R language detection**: .R/.r files detected as "r" framework
-- **Added Haskell detection**: .hs files detected as "haskell" framework
-- **Removed Nim and Kotlin from unsupported_langs**: Both have dedicated parsers now
-- **Fixed path-segment-aware matching**: Replaced `if ignore in root` substring matching with
-  `should_ignore_dir()` from utils.py (prevents "test-target-nim" matching "target")
-
-#### File Recognition Improvements
-
-- **.zsh-theme files**: Now recognized as shell files (143 files in ohmyzsh were previously missed)
-- **.kt files**: Now routed to dedicated Kotlin parser instead of Java fallback
-- **.R/.r files**: Recognized as R language (with false-positive filtering for .editorconfig, README)
-- **.hs/.lhs files**: Recognized as Haskell
-
-#### Engine Updates
-
-- `entrypoints_engine.py`: Added .kt, .R, .r, .hs, .lhs, .nim, .nims, .lua, .zsh to SOURCE_EXTENSIONS
-- `outline_engine.py`: Added .zsh-theme, .R, .r, .hs, .lhs, .nim, .nims to language detection
-- `utils.py`: Added .kt, .R, .r, .hs, .zsh, .lua, .cs, .c, .cpp, .nim to FILE_PATH_EXTENSIONS
-- `scan.py`: Added kotlin, r_lang, haskell file categories and parsing sections
+- **Fixed handbook UnboundLocalError**: `import time` inside a try block shadowed the module-level import, causing `_time_left()` to fail with "cannot access local variable 'time'". Removed the redundant local import.
+- **Fixed identity misclassification**: SCons projects with pyproject.toml (like Godot) were classified as "python-project" because Python type took precedence. Now C++ build system types take priority over Python when C++ files dominate.
 
 ## [5.10.0] — 2026-06-12
 
@@ -132,6 +94,84 @@ Before: Only 8 Kotlin files parsed (103 nodes, 0 edges, 0 routes).
 - Updated `lang_note` supported set and language name mapping
 - Added framework-specific path configurations for Rails, Phoenix, Flutter, SwiftUI, Vapor, Spark, Akka, Play
 - File discovery: .rb, .ex, .exs, .dart, .swift, .scala, .sh, .bash, .zsh, .rake, Dockerfile, Rakefile, Gemfile, mix.exs
+
+## [6.1.0] — 2026-06-12
+
+### Tested against minetest/minetest (2,430 files: 598 C++ headers + 445 C++ + 206 Lua + 40 GLSL, CMake/C++ game engine with Lua scripting)
+
+Real-world test on a polyglot C++/Lua/GLSL voxel game engine (Luanti/Minetest). This is the first
+test on a non-web, non-API-server project — a native C++ game engine with embedded Lua scripting,
+GLSL shaders, and Android Java support. Identified and fixed major gaps in project identity detection,
+language classification, entry point detection, and tooling recommendations for native/C++ projects.
+
+### Added
+
+- **CMake project identity detection**: `_extract_project_identity()` now parses `CMakeLists.txt` for `project(Name VERSION X.Y.Z)`, extracting project name and version. Classifies CMake projects as `cpp-game-engine` (C++ + Lua scripting), `qt-desktop-app`, `cpp-graphics`, `cpp-mobile-app`, or `cpp-project` based on CMakeLists.txt content and directory structure.
+- **Lua entry point detection**: New `lua_entry` entrypoint type with 4 patterns: `dofile()`, `require()`, `core.register_*()` (Luanti/Minetest API), and `minetest.register_*()` (legacy Minetest API). These detect game mod registration, script loading, and module initialization patterns.
+- **C++ entry point detection**: Added 4 new C++ entry point patterns: `WinMain` (Windows GUI), `wmain` (Unicode console), `SDL_main` (SDL game), `DllMain` (DLL entry). These cover the most common Windows/native application entry points beyond `int main()`.
+- **Game engine directory hints**: `_build_directory_map()` now recognizes 18 new directory names common in game engines and native C++ projects: `builtin`, `mods`, `games`, `textures`, `fonts`, `shaders`, `client`, `clientmods`, `irr`, `android`, `po`, `worlds`, `include`, `cmake`, `fastlane`, `misc`, etc.
+- **GLSL shader language detection**: `_detect_languages()` now recognizes `.glsl`, `.fsh`, `.vsh`, `.frag`, `.vert` extensions as `glsl` language.
+- **CMake language detection**: `.cmake` extension recognized as `cmake` language.
+- **Game/native framework signatures**: Added 4 new framework signatures in `FRAMEWORK_SIGNATURES`: `sdl` (SDL_Init/SDL_main), `irrlicht` (IrrlichtDevice), `opengl` (glGenBuffers/glBindVertexArray), `vulkan` (VkInstance/vkCreateInstance).
+- **Lua debug leak patterns**: Added 3 new debug leak patterns for Lua: `debug.debug()`, `debug.traceback()`, `debug.dump()`.
+- **C++/Lua/GLSL tooling recommendations**: `_generate_recommendations()` now suggests `clang-tidy` + `cppcheck` for C++ projects, `luacheck` + `lua-language-server` for Lua projects, and `glslangValidator` for GLSL shaders.
+- **CMake/Lua path configuration**: `get_recommended_config()` adds `src/`, `lib/`, `include/` for CMake projects, and `builtin/`, `scripts/`, `mods/` for Lua-scriptable projects.
+- **CMake `has_cmake` flag**: Framework detection now sets `has_cmake` when CMakeLists.txt is found.
+
+### Fixed
+
+- **`.h` headers classified as C instead of C++**: `_detect_languages()` mapped `.h` → `"c"`, but most `.h` files in C++ projects are C++ headers. Now maps `.h` → `"cpp"`, `.hpp` → `"cpp"`, `.hxx` → `"cpp"`.
+- **C/C++ listed as unsupported languages**: `UNSUPPORTED_MARKERS` in `framework_detect.py` listed C and C++ as unsupported even though fallback parsers exist for both. Removed C, C++, Java, and Kotlin from `UNSUPPORTED_MARKERS` — all have working fallback parsers.
+- **Architecture `total_files` only counting tree-sitter-supported files**: `analyze` command showed `total_files: 7` for a 2430-file C++ project because `get_workspace_outline()` only processes tree-sitter-supported languages. Now counts ALL source files across all supported extensions (including .cpp, .h, .lua, .glsl, etc.) and uses `max(outlined, actual)`.
+- **Project type `unknown` for CMake/C++ projects**: `_extract_project_identity()` returned `type: "unknown"` and `version: "0.0.0"` for CMake projects because it only checked `package.json`, `pyproject.toml`, `Cargo.toml`, and `go.mod`. Now also checks `CMakeLists.txt`.
+- **Polyglot type detection missing C++**: The combined type detection (`active_types`) only checked `[js_type, python_type, rust_type, go_type]`. Now also includes `cmake_type`, producing types like `cpp-lua-polyglot` for C++ game engines with Lua scripting.
+
+## [5.9.2] — 2026-06-12
+
+### Tested against vercel/swr (254 source files: 114 TSX + 99 JS backend + 34 JS frontend, React+Next.js monorepo)
+
+Real-world test on a TypeScript/React data-fetching library. Confirmed significant false positive reduction
+across all analysis engines after targeted fixes based on SWR analysis findings.
+
+### Fixed
+
+- **Dataflow `command_exec` false positives** (79% reduction: 19 → 4 violations): `Function\s*\(` regex matched `isFunction()`, `createFunction()`, etc. Added word boundary `(?:^|[^\w.])Function\s*\(` to only match the bare JS `Function` constructor. Same fix applied to `exec(?:Sync)?\s*\(` which matched `execQuery()`, `execSql()`. These utility type-checks and database helpers are NOT command execution sinks.
+- **Smell `long_fn` reports test files** (9% critical reduction: 43 → 39): `_detect_long_functions()` did not skip test/story/fixture files. Added same `_skip_keywords` filter that `_detect_deep_nesting()` already uses (`'.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__'`). Long test blocks are expected and not actionable.
+- **A11y engine scans test files** (85% reduction: 122 → 18 issues): No test file exclusion existed in the accessibility scan loop. Added skip filter for test/spec/story/fixture files. Mock JSX in test files (`<img />` without alt, `<button>` without keyboard handler) are not real accessibility issues.
+- **Dead code `unused_vars` false positives** (94% reduction: 51 → 3): `_detect_unused_variables()` flagged exported variables as unused because it only checked single-file usage. Added `exported_names` collection (named exports, re-exports, default exports) and skip them. Also expanded `skip_names` with common patterns (`result`, `data`, `value`, `options`, `args`, `params`, `callback`, `next`, `dispatch`, `action`, `payload`).
+- **Dead code `registry_dead` test file false positives** (37% reduction: 200 → 127): `_detect_dead_from_registry()` only checked directory paths (`/test`, `/tests`), missing filename patterns like `.test.ts`, `.spec.tsx`. Added `.test.`, `.spec.`, `.e2e.`, `.stories.`, `.story.` patterns and `/__tests__/`.
+- **Module system detection wrong for TypeScript projects** (cjs → esm): `framework_detect.py` defaulted to `"cjs"` when `package.json` lacked `"type": "module"`. Many TS projects compile to ESM without this field. Added detection of `tsconfig.json` `compilerOptions.module`, `.mjs`/`.cjs` file extensions, and `exports` field with `"import"` key. Reports `"mixed"` when both ESM and CJS indicators exist.
+- **Context engine fuzzy matching too loose**: Used pure substring match sorted by shortest name. Ported scoring logic from `query.py`: exact case-insensitive match priority, active vs dead status priority, ref_count (popularity) ranking. Prevents `"use"` matching `"refuse"` and prefers the most relevant function.
+- **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
+- **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
+
+## [5.9.0] — 2026-06-12
+
+### Tested against database & XHR/network repos
+
+Real-world testing on 5 diverse open-source repositories:
+- **redis/redis** (30MB, 789 C/H files, 19,030 backend nodes) — C in-memory database
+- **axios/axios** (5.5MB, 201 JS/TS files, 436 backend nodes) — JavaScript HTTP client
+- **libuv/libuv** (7.4MB, 364 C/H files, 6,590 backend nodes) — C networking/event loop
+- **nodejs/undici** (11MB, 619 JS/TS files, 1,078 backend nodes) — Node.js HTTP/1.1 client
+- **google/leveldb** (1.9MB, 132 C++/H files, 1,557 backend nodes) — C++ key-value database
+
+### Fixed
+
+- **`binary-scan` command crash (ImportError)**: `scan_tauri_artifacts` was imported but never implemented in `utils.py`. The `binary-scan` command would always crash with `cannot import name 'scan_tauri_artifacts' from 'utils'`. Added full implementation: detects Tauri config files, IPC commands from Rust source, capabilities/permissions, sidecar binaries, updater config, WebView security settings, and deep-link schemes. Returns `None` for non-Tauri projects (graceful skip).
+- **Drupal false positive from `modules/` directory**: Redis was incorrectly detected as a Drupal project because `modules/` and `themes/` were Drupal indicators. These are too generic — many non-Drupal projects have `modules/` directories (e.g., Redis modules, Go modules). Changed Drupal indicators to `sites/default/` and `sites/all/` (Drupal-specific paths), and added `sites/default/settings.php` as a config file. Redis is no longer falsely detected as Drupal.
+- **`new ClassName()` not tracked as call edge**: JS/TS/TSX parsers only tracked `call_expression` nodes (e.g., `funcName()`) but not `new_expression` nodes (e.g., `new AxiosError()`). This caused classes that are only instantiated via `new` to appear as "dead" in dead-code analysis. AxiosError (core Axios class, used in 17+ files) had `ref_count: 0` and `status: dead`. Added `_parse_new_expression()` to all three parsers (js_backend_parser, ts_backend_parser, tsx_parser). After fix: AxiosError correctly shows `ref_count: 29` and `status: active` with 11 callers.
+- **pyproject.toml formatting error**: `description` and `readme` fields were merged on a single line, causing TOML parse failure.
+
+### Added
+
+- **HTTP/network library detection**: `detect_frameworks()` now recognizes 7 HTTP client libraries as frameworks: `axios`, `undici`, `got`, `ky`, `superagent`, `node-fetch`, `request`. Added `has_http_library` flag to detection output. Works both when the library is a dependency AND when the repo IS the library itself (checks `package.json` `name` field).
+- **`scan_tauri_artifacts()` in utils.py**: Full Tauri RE analysis — IPC command/handler mapping from Rust source, capabilities/permissions security audit, sidecar binary detection, updater configuration, WebView CSP/asset-protocol security, deep-link scheme analysis, and risk assessment summary.
+- **New framework signatures**: Added 7 HTTP library signatures with packages and `has_http_library` flag support.
+
+### Changed
+
+- **Version bump**: 5.8.1 → 5.9.0
 
 ## [5.8.1] — 2026-06-12
 

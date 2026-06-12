@@ -19,52 +19,9 @@ Usage:
 
 import os
 import time
-import signal
-import threading
 from typing import Dict, Any, List, Optional
 from commands import register_command
-from utils import logger
-
-
-# ─── Per-Engine Timeout ──────────────────────────────────────
-# Default timeout per engine in seconds. Prevents a single slow engine
-# (e.g., perf-hint on a 10K-file Rust repo) from blocking the entire
-# analyze command. Engines that exceed their timeout are skipped with
-# a warning instead of crashing the whole analysis.
-DEFAULT_ENGINE_TIMEOUT = 60  # seconds per engine
-
-# Engines that are known to be slow on large repos get a longer timeout
-_ENGINE_TIMEOUT_OVERRIDES = {
-    "code_smells": 90,
-    "perf_hints": 90,
-    "debug_leaks": 90,
-    "circular_dependencies": 90,
-}
-
-
-def _run_with_timeout(fn, timeout_seconds, category_label):
-    """Run fn() with a timeout. Returns result or None on timeout."""
-    result = [None]
-    exception = [None]
-
-    def _target():
-        try:
-            result[0] = fn()
-        except Exception as e:
-            exception[0] = e
-
-    thread = threading.Thread(target=_target, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout_seconds)
-
-    if thread.is_alive():
-        logger.warning(f"Engine '{category_label}' timed out after {timeout_seconds}s — skipping")
-        return None
-
-    if exception[0] is not None:
-        raise exception[0]
-
-    return result[0]
+from utils import logger, DEFAULT_IGNORE_DIRS
 
 
 def add_args(parser):
@@ -80,10 +37,6 @@ def add_args(parser):
                         help="Skip init+scan if registry already exists")
     parser.add_argument("--max-items", type=int, default=15,
                         help="Maximum items per category (default: 15)")
-    parser.add_argument("--engine-timeout", type=int, default=DEFAULT_ENGINE_TIMEOUT,
-                        help=f"Timeout per analysis engine in seconds (default: {DEFAULT_ENGINE_TIMEOUT})")
-    parser.add_argument("--max-files", type=int, default=5000,
-                        help="Max files to scan per engine (default: 5000, use 0 for unlimited)")
 
 
 def execute(args, workspace):
@@ -93,9 +46,12 @@ def execute(args, workspace):
         detail=args.detail,
         skip_scan=args.skip_scan,
         max_items=args.max_items,
-        engine_timeout=getattr(args, 'engine_timeout', DEFAULT_ENGINE_TIMEOUT),
-        max_files=getattr(args, 'max_files', 5000),
     )
+
+
+def _time_left(start: float, budget: float = 120) -> float:
+    """Return remaining seconds within the time budget."""
+    return max(0.0, budget - (time.time() - start))
 
 
 def analyze_repository(
@@ -104,7 +60,6 @@ def analyze_repository(
     detail: str = "standard",
     skip_scan: bool = False,
     max_items: int = 15,
-    engine_timeout: int = DEFAULT_ENGINE_TIMEOUT,
     max_files: int = 5000,
 ) -> Dict[str, Any]:
     """
@@ -121,6 +76,7 @@ def analyze_repository(
     - Navigate the codebase efficiently
     """
     start_time = time.time()
+    skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
 
     # Severity filter based on detail level
@@ -136,9 +92,7 @@ def analyze_repository(
         "workspace": workspace,
         "focus": focus,
         "detail": detail,
-        "codelens_version": "6.1",
-        "engine_timeout": engine_timeout,
-        "max_files": max_files,
+        "codelens_version": "6.0",
     }
 
     # ─── Phase 1: Ensure Registry Exists ──────────────────────
@@ -200,6 +154,22 @@ def analyze_repository(
             "version": "0.0.0",
         }
 
+    # If name is directory-based (test-repo-*) or generic, try harder
+    if result["identity"].get("name", "").startswith("test-repo-") or result["identity"].get("type") == "unknown":
+        # Try project.godot for Godot projects
+        godot_project = os.path.join(workspace, "project.godot")
+        if os.path.isfile(godot_project):
+            try:
+                with open(godot_project, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        if line.strip().startswith("config/name"):
+                            name = line.split("=", 1)[1].strip().strip('"')
+                            if name:
+                                result["identity"]["name"] = name
+                            break
+            except Exception:
+                pass
+
     # ─── Phase 3: Frameworks & Languages ─────────────────────
 
     try:
@@ -220,9 +190,55 @@ def analyze_repository(
     try:
         from outline_engine import get_workspace_outline
         outline = get_workspace_outline(workspace, max_files=200)
+        # v6.1: Count ALL source files in workspace, not just outlined ones.
+        # The outline engine only processes tree-sitter-supported languages,
+        # so outline.files_outlined is often much less than the real total.
+        _all_source_exts = {
+            ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+            ".py", ".rs", ".vue", ".svelte", ".php", ".go",
+            ".java", ".cs", ".dart", ".lua", ".rb",
+            ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+            ".html", ".css", ".scss", ".sql", ".sh",
+            ".glsl", ".fsh", ".vsh", ".frag", ".vert",
+            ".kt", ".gd", ".cmake",
+        }
+        actual_file_count = 0
+        actual_line_count = 0
+        for root, dirs, files in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in {
+                'node_modules', '.git', 'dist', 'build', 'target',
+                '__pycache__', '.codelens', 'vendor', '.venv', 'venv',
+            } and not d.startswith('.')]
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in _all_source_exts:
+                    actual_file_count += 1
+        # Use actual count if higher than outlined count
+        total_files = max(outline.get("files_outlined", 0), actual_file_count)
+        total_lines = outline.get("total_lines", 0)
+        # If total_lines is 0, count lines from all source files
+        if total_lines == 0:
+            _source_exts = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs",
+                            ".vue", ".svelte", ".php", ".go", ".java", ".cs", ".dart", ".lua",
+                            ".rb", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx",
+                            ".html", ".css", ".scss", ".sh", ".glsl", ".fsh", ".vsh",
+                            ".frag", ".vert", ".gd", ".kt", ".mm"}
+            line_count = 0
+            for root, dirs, filenames in os.walk(workspace):
+                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
+                for fname in filenames:
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in _source_exts:
+                        fpath = os.path.join(root, fname)
+                        try:
+                            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                                line_count += sum(1 for _ in f)
+                        except (IOError, OSError):
+                            pass
+            total_lines = line_count
         result["architecture"] = {
-            "total_files": outline.get("files_outlined", 0),
-            "total_lines": outline.get("total_lines", 0),
+            "total_files": total_files,
+            "total_lines": total_lines,
             "directories": _extract_directory_structure(workspace),
             "entry_points": [],
             "key_modules": [],
@@ -288,56 +304,81 @@ def analyze_repository(
     # ─── Phase 7: Findings (Prioritized) ─────────────────────
 
     findings = []
-    skipped_engines = []
 
     # --- Security ---
     if focus in ("security", "all"):
-        _run_engine(findings, "secrets", "Secrets Detection",
-                    lambda: _detect_secrets(workspace, severity_filter, max_items),
-                    engine_timeout)
-        _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
-                    lambda: _detect_vulns(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "dataflow_violations", "Data Flow Violations",
-                    lambda: _detect_dataflow(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "env_issues", "Environment Issues",
-                    lambda: _detect_env(workspace, max_items),
-                    engine_timeout)
+        if _time_left(start_time) < 5:
+            skipped_engines.append("secrets")
+        else:
+            _run_engine(findings, "secrets", "Secrets Detection",
+                        lambda: _detect_secrets(workspace, severity_filter, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("vulnerabilities")
+        else:
+            _run_engine(findings, "vulnerabilities", "CVE Vulnerabilities",
+                        lambda: _detect_vulns(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("dataflow_violations")
+        else:
+            _run_engine(findings, "dataflow_violations", "Data Flow Violations",
+                        lambda: _detect_dataflow(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("env_issues")
+        else:
+            _run_engine(findings, "env_issues", "Environment Issues",
+                        lambda: _detect_env(workspace, max_items))
 
     # --- Quality ---
     if focus in ("quality", "all"):
-        _run_engine(findings, "code_smells", "Code Smells",
-                    lambda: _detect_smells(workspace, severity_filter, max_items),
-                    engine_timeout)
-        _run_engine(findings, "debug_leaks", "Debug Code Leaks",
-                    lambda: _detect_debug(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "complexity", "Complexity Hotspots",
-                    lambda: _detect_complexity(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "dead_code", "Dead Code",
-                    lambda: _detect_dead_code(workspace, max_items),
-                    engine_timeout)
+        if _time_left(start_time) < 5:
+            skipped_engines.append("code_smells")
+        else:
+            _run_engine(findings, "code_smells", "Code Smells",
+                        lambda: _detect_smells(workspace, severity_filter, max_items, max_files))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("debug_leaks")
+        else:
+            _run_engine(findings, "debug_leaks", "Debug Code Leaks",
+                        lambda: _detect_debug(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("complexity")
+        else:
+            _run_engine(findings, "complexity", "Complexity Hotspots",
+                        lambda: _detect_complexity(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("dead_code")
+        else:
+            _run_engine(findings, "dead_code", "Dead Code",
+                        lambda: _detect_dead_code(workspace, max_items, max_files))
 
     # --- Architecture ---
     if focus in ("architecture", "all"):
-        _run_engine(findings, "circular_dependencies", "Circular Dependencies",
-                    lambda: _detect_circular(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "perf_hints", "Performance Hints",
-                    lambda: _detect_perf(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "config_drift", "Dependency Drift",
-                    lambda: _detect_config_drift(workspace, max_items),
-                    engine_timeout)
-        _run_engine(findings, "binary_artifacts", "Binary Artifacts",
-                    lambda: _detect_binaries(workspace, max_items),
-                    engine_timeout)
+        if _time_left(start_time) < 5:
+            skipped_engines.append("circular_dependencies")
+        else:
+            _run_engine(findings, "circular_dependencies", "Circular Dependencies",
+                        lambda: _detect_circular(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("perf_hints")
+        else:
+            _run_engine(findings, "perf_hints", "Performance Hints",
+                        lambda: _detect_perf(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("config_drift")
+        else:
+            _run_engine(findings, "config_drift", "Dependency Drift",
+                        lambda: _detect_config_drift(workspace, max_items))
+        if _time_left(start_time) < 5:
+            skipped_engines.append("binary_artifacts")
+        else:
+            _run_engine(findings, "binary_artifacts", "Binary Artifacts",
+                        lambda: _detect_binaries(workspace, max_items))
 
     result["findings"] = findings
     result["total_finding_categories"] = len(findings)
     result["total_issues"] = sum(f.get("total", 0) for f in findings)
+    if skipped_engines:
+        result["timed_out_engines"] = skipped_engines
 
     # ─── Phase 8: Risk Assessment ─────────────────────────────
 
@@ -363,12 +404,10 @@ def analyze_repository(
 
 # ─── Engine Runners ────────────────────────────────────────
 
-def _run_engine(findings: List[Dict], category: str, label: str, engine_fn,
-                engine_timeout: int = DEFAULT_ENGINE_TIMEOUT) -> None:
-    """Safely run an analysis engine and append findings. Uses per-engine timeout."""
-    timeout = _ENGINE_TIMEOUT_OVERRIDES.get(category, engine_timeout)
+def _run_engine(findings: List[Dict], category: str, label: str, engine_fn) -> None:
+    """Safely run an analysis engine and append findings."""
     try:
-        result = _run_with_timeout(engine_fn, timeout, category)
+        result = engine_fn()
         if result:
             findings.append(result)
     except Exception as e:
@@ -447,9 +486,9 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
+def _detect_smells(workspace: str, severity_filter: set, max_items: int, max_files: int = 5000) -> Optional[Dict]:
     from smell_engine import detect_smells
-    smell = detect_smells(workspace)
+    smell = detect_smells(workspace, max_files=max_files)
     total = smell.get("stats", {}).get("total_smells", 0)
     if total == 0:
         return None
@@ -509,9 +548,9 @@ def _detect_complexity(workspace: str, max_items: int) -> Optional[Dict]:
     }
 
 
-def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
+def _detect_dead_code(workspace: str, max_items: int, max_files: int = 5000) -> Optional[Dict]:
     from deadcode_engine import detect_dead_code
-    dc = detect_dead_code(workspace)
+    dc = detect_dead_code(workspace, max_files=max_files)
     total = dc.get("stats", {}).get("total_dead_code", 0)
     if total == 0:
         return None
@@ -613,10 +652,15 @@ def _detect_languages(workspace: str) -> Dict[str, int]:
         ".php": "php", ".py": "python", ".js": "javascript", ".ts": "typescript",
         ".tsx": "tsx", ".jsx": "jsx", ".rs": "rust", ".go": "golang",
         ".java": "java", ".cs": "csharp", ".rb": "ruby", ".lua": "lua",
-        ".dart": "dart", ".c": "c", ".cpp": "cpp", ".h": "c",
+        ".dart": "dart",
+        # v6.1: .h/.hpp files are C++ headers (not C) — most C++ projects have .h headers
+        ".cpp": "cpp", ".cxx": "cpp", ".cc": "cpp",
+        ".c": "c", ".h": "cpp", ".hpp": "cpp", ".hxx": "cpp",
         ".html": "html", ".css": "css", ".scss": "scss", ".vue": "vue",
         ".svelte": "svelte", ".sql": "sql", ".sh": "shell",
-        ".wgsl": "wgsl", ".glsl": "glsl", ".hlsl": "hlsl",
+        # v6.1: Shader languages
+        ".glsl": "glsl", ".fsh": "glsl", ".vsh": "glsl", ".frag": "glsl", ".vert": "glsl",
+        ".cmake": "cmake",
     }
     languages = {}
     for root, dirs, files in os.walk(workspace):
@@ -755,8 +799,17 @@ def _generate_recommendations(findings: List[Dict], result: Dict) -> List[str]:
         recs.append("Python project detected — consider adding mypy for type checking and ruff for linting")
     if "go" in langs:
         recs.append("Go project detected — run 'go vet' and 'golangci-lint run' for additional static analysis")
-    if "rust" in langs and langs.get("rust", 0) > 5:
-        recs.append("Rust project detected — run 'cargo clippy' for linting and 'cargo audit' for vulnerability scanning")
+    # v6.1: C++ project recommendations
+    if "cpp" in langs and langs["cpp"] > 10:
+        recs.append("C++ project detected — consider running 'clang-tidy' for linting and 'cppcheck' for static analysis")
+    if "c" in langs and langs["c"] > 10 and langs.get("cpp", 0) == 0:
+        recs.append("C project detected — consider running 'cppcheck' and 'splint' for static analysis")
+    # v6.1: Lua recommendations
+    if "lua" in langs and langs["lua"] > 5:
+        recs.append("Lua project detected — consider running 'luacheck' for linting and 'lua-language-server' for IDE support")
+    # v6.1: Game engine / shader recommendations
+    if "glsl" in langs and langs["glsl"] > 0:
+        recs.append("GLSL shaders detected — consider using 'glslangValidator' for shader validation")
 
     # Based on architecture
     fws = result.get("frameworks", [])

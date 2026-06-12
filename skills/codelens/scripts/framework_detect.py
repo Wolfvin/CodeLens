@@ -10,7 +10,7 @@ import re
 from typing import Dict, List, Any, Optional
 import logging
 _logger = logging.getLogger("codelens.framework_detect")
-from utils import DEFAULT_IGNORE_DIRS, should_ignore_dir
+from utils import DEFAULT_IGNORE_DIRS
 
 
 # Known framework signatures
@@ -235,65 +235,76 @@ FRAMEWORK_SIGNATURES = {
     "drupal": {
         "packages": [],
         "composer_packages": ["drupal/core"],
+        "config_files": ["sites/default/settings.php", "sites/default/default.settings.php"],
+        "indicators": ["sites/default/", "sites/all/"]
+    },
+    # ─── HTTP / Network Libraries ──────────────────────────────
+    "axios": {
+        "packages": ["axios"],
+        "composer_packages": [],
         "config_files": [],
-        "indicators": ["sites/default/settings.php", "core/lib/Drupal.php", "core/includes/"]
+        "indicators": []
     },
-    "oh-my-zsh": {
+    "undici": {
+        "packages": ["undici"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "got": {
+        "packages": ["got"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "ky": {
+        "packages": ["ky"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "superagent": {
+        "packages": ["superagent"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "node-fetch": {
+        "packages": ["node-fetch"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    "request": {
+        "packages": ["request"],
+        "composer_packages": [],
+        "config_files": [],
+        "indicators": []
+    },
+    # Game engines & build systems
+    "godot": {
+        "packages": [],
+        "config_files": ["SConstruct", "project.godot"],
+        "indicators": [".gd"],
+        "pip_packages": [],
+    },
+    "unreal": {
         "packages": [],
         "config_files": [],
-        "indicators": ["oh-my-zsh.sh", "custom/plugins/"]
+        "indicators": [".uproject"],
+        "pip_packages": [],
     },
-    # Ruby frameworks
-    "rails": {
-        "packages": [],
-        "config_files": ["Gemfile", "config/routes.rb", "config/application.rb"],
-        "indicators": ["app/controllers/", "app/models/", "app/views/",
-                       "db/migrate/", "config/environments/"]
-    },
-    "sinatra": {
+    "unity": {
         "packages": [],
         "config_files": [],
-        "indicators": ["sinatra"]
+        "indicators": [".unity"],
+        "pip_packages": [],
     },
-    # Elixir frameworks
-    "phoenix": {
+    "scons": {
         "packages": [],
-        "config_files": ["mix.exs", "config/config.exs"],
-        "indicators": ["lib/_web/endpoint.ex", "lib/_web/router.ex",
-                       "lib/_web/telemetry.ex"]
-    },
-    # Dart/Flutter frameworks
-    "flutter": {
-        "packages": [],
-        "config_files": ["pubspec.yaml"],
-        "indicators": ["lib/main.dart", "lib/screens/", "lib/widgets/"]
-    },
-    # Swift frameworks
-    "swiftui": {
-        "packages": [],
-        "config_files": ["Package.swift"],
-        "indicators": ["Sources/", "import SwiftUI"]
-    },
-    "vapor": {
-        "packages": [],
-        "config_files": ["Package.swift"],
-        "indicators": ["import Vapor", "Routes/", "Controllers/"]
-    },
-    # Scala frameworks
-    "akka": {
-        "packages": [],
-        "config_files": ["build.sbt"],
-        "indicators": ["import akka"]
-    },
-    "play_framework": {
-        "packages": [],
-        "config_files": ["build.sbt", "conf/application.conf"],
-        "indicators": ["import play.api", "app/controllers/"]
-    },
-    "spark": {
-        "packages": [],
-        "config_files": ["build.sbt", "pom.xml"],
-        "indicators": ["import org.apache.spark"]
+        "config_files": ["SConstruct", "Sconscript"],
+        "indicators": [],
+        "pip_packages": [],
     },
 }
 
@@ -350,14 +361,11 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
-        "has_rails": False,
-        "has_phoenix": False,
-        "has_flutter": False,
-        "has_swiftui": False,
-        "has_vapor": False,
-        "has_spark": False,
-        "has_play": False,
-        "has_akka": False,
+        "has_http_library": False,
+        "has_godot": False,
+        "has_unreal": False,
+        "has_unity": False,
+        "has_scons": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -407,7 +415,30 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name in ("axios", "undici", "got", "ky", "superagent", "node-fetch", "request"):
+                        detected["has_http_library"] = True
                     break
+
+    # 1b. Also check package.json "name" field — the repo itself IS the library.
+    #     This catches source repos like axios/axios where axios is the package name,
+    #     not a dependency.
+    _HTTP_LIBRARY_NAMES = frozenset({
+        "axios", "undici", "got", "ky", "superagent", "node-fetch",
+        "request", "needle", "bent", "make-fetch-happen", "simple-get",
+        "node-http", "phin", "wreck", "terra",
+    })
+    root_pkg_path = os.path.join(workspace, "package.json")
+    if os.path.isfile(root_pkg_path):
+        try:
+            with open(root_pkg_path, 'r', encoding='utf-8') as f:
+                root_pkg = json.load(f)
+            pkg_name = root_pkg.get("name", "")
+            if pkg_name in _HTTP_LIBRARY_NAMES:
+                if pkg_name not in detected["frameworks"]:
+                    detected["frameworks"].append(pkg_name)
+                detected["has_http_library"] = True
+        except (json.JSONDecodeError, IOError):
+            pass
 
         # Detect CSS preprocessor
         if "sass" in all_deps or "node-sass" in all_deps:
@@ -441,22 +472,10 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "rails":
-                    detected["has_rails"] = True
-                elif fw_name == "phoenix":
-                    detected["has_phoenix"] = True
-                elif fw_name == "flutter":
-                    detected["has_flutter"] = True
-                elif fw_name == "swiftui":
-                    detected["has_swiftui"] = True
-                elif fw_name == "vapor":
-                    detected["has_vapor"] = True
-                elif fw_name == "spark":
-                    detected["has_spark"] = True
-                elif fw_name == "play_framework":
-                    detected["has_play"] = True
-                elif fw_name == "akka":
-                    detected["has_akka"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "scons":
+                    detected["has_scons"] = True
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -636,8 +655,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     if not detected["has_tauri"]:
         tauri_markers = ['tauri.conf.json', 'Tauri.toml']
         for root, dirs, files in os.walk(workspace):
-            rel_root = os.path.relpath(root, workspace)
-            if should_ignore_dir(rel_root):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip or '.codelens' in root:
                 continue
             for f in files:
                 if f in tauri_markers:
@@ -651,8 +674,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         # Also check for src-tauri directory
         if not detected["has_tauri"]:
             for root, dirs, files in os.walk(workspace):
-                rel_root = os.path.relpath(root, workspace)
-                if should_ignore_dir(rel_root):
+                skip = False
+                for ignore in DEFAULT_IGNORE_DIRS:
+                    if ignore in root:
+                        skip = True
+                        break
+                if skip or '.codelens' in root:
                     continue
                 if 'src-tauri' in dirs:
                     if "tauri" not in detected["frameworks"]:
@@ -663,8 +690,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
-        rel_root = os.path.relpath(root, workspace)
-        if should_ignore_dir(rel_root):
+        skip = False
+        for ignore in DEFAULT_IGNORE_DIRS:
+            if ignore in root:
+                skip = True
+                break
+        if skip:
             continue
 
         for f in files:
@@ -680,37 +711,18 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "php" not in detected["frameworks"]:
                     detected["frameworks"].append("php")
                 detected["has_php"] = True
-            elif f.endswith('.rb'):
-                if "ruby" not in detected["frameworks"]:
-                    detected["frameworks"].append("ruby")
-                # Rails detection handled by directory indicators
-            elif f.endswith(('.ex', '.exs')):
-                if "elixir" not in detected["frameworks"]:
-                    detected["frameworks"].append("elixir")
-            elif f.endswith('.dart'):
-                if "dart" not in detected["frameworks"]:
-                    detected["frameworks"].append("dart")
-            elif f.endswith('.swift'):
-                if "swift" not in detected["frameworks"]:
-                    detected["frameworks"].append("swift")
-            elif f.endswith('.scala'):
-                if "scala" not in detected["frameworks"]:
-                    detected["frameworks"].append("scala")
-            elif f.endswith(('.sh', '.bash')):
-                if "shell" not in detected["frameworks"]:
-                    detected["frameworks"].append("shell")
-            elif f.endswith(('.zsh', '.zsh-theme')):
-                if "zsh" not in detected["frameworks"]:
-                    detected["frameworks"].append("zsh")
-            elif f.endswith('.kt'):
-                if "kotlin" not in detected["frameworks"]:
-                    detected["frameworks"].append("kotlin")
-            elif f.endswith(('.R', '.r')):
-                if "r" not in detected["frameworks"]:
-                    detected["frameworks"].append("r")
-            elif f.endswith('.hs'):
-                if "haskell" not in detected["frameworks"]:
-                    detected["frameworks"].append("haskell")
+            elif f.endswith('.gd') and not detected["has_godot"]:
+                if "godot" not in detected["frameworks"]:
+                    detected["frameworks"].append("godot")
+                detected["has_godot"] = True
+            elif f.endswith('.uproject') and not detected["has_unreal"]:
+                if "unreal" not in detected["frameworks"]:
+                    detected["frameworks"].append("unreal")
+                detected["has_unreal"] = True
+            elif f.endswith('.unity') and not detected["has_unity"]:
+                if "unity" not in detected["frameworks"]:
+                    detected["frameworks"].append("unity")
+                detected["has_unity"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -732,30 +744,26 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_laravel"] = True
                 elif fw_name == "symfony":
                     detected["has_symfony"] = True
-                elif fw_name == "rails":
-                    detected["has_rails"] = True
-                elif fw_name == "phoenix":
-                    detected["has_phoenix"] = True
-                elif fw_name == "flutter":
-                    detected["has_flutter"] = True
-                elif fw_name == "swiftui":
-                    detected["has_swiftui"] = True
-                elif fw_name == "vapor":
-                    detected["has_vapor"] = True
-                elif fw_name == "spark":
-                    detected["has_spark"] = True
-                elif fw_name == "play_framework":
-                    detected["has_play"] = True
-                elif fw_name == "akka":
-                    detected["has_akka"] = True
+                elif fw_name == "godot":
+                    detected["has_godot"] = True
+                elif fw_name == "unreal":
+                    detected["has_unreal"] = True
+                elif fw_name == "unity":
+                    detected["has_unity"] = True
+                elif fw_name == "scons":
+                    detected["has_scons"] = True
                 break
 
     # 6. Detect Tailwind from CSS content
     if not detected["has_tailwind"]:
         tailwind_indicators = ['@tailwind', '@apply']
         for root, dirs, files in os.walk(workspace):
-            rel_root = os.path.relpath(root, workspace)
-            if should_ignore_dir(rel_root):
+            skip = False
+            for ignore in DEFAULT_IGNORE_DIRS:
+                if ignore in root:
+                    skip = True
+                    break
+            if skip:
                 continue
             for f in files:
                 if f.endswith(('.css', '.scss', '.pcss')):
@@ -801,18 +809,17 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages
-    # Languages with fallback parsers are NOT listed as unsupported.
-    # Only truly unsupported languages (no parser at all) are listed here.
+    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # Note: Go was previously listed here but now has fallback parser support.
+    # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
+        "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+        "kotlin": ["build.gradle.kts"],
         "c": ["CMakeLists.txt", "Makefile"],
         "cpp": ["CMakeLists.txt", "Makefile"],
         "csharp": [".csproj", ".sln"],
-        "perl": ["cpanfile", "Makefile.PL"],
-        "clojure": ["project.clj", "deps.edn"],
-        "fsharp": [".fsproj"],
-        "ocaml": ["dune", "dune-project"],
-        "zig": ["build.zig"],
+        "swift": ["Package.swift", "Package.resolved"],
+        "ruby": ["Gemfile", "Rakefile"],
     }
     for lang, markers in UNSUPPORTED_MARKERS.items():
         for marker in markers:
@@ -912,36 +919,6 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
     if fw.get("has_symfony"):
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
-
-    # Rails: add Ruby/Rails-specific paths
-    if fw.get("has_rails"):
-        config["backend_paths"].extend(["app/controllers/", "app/models/", "app/services/",
-                                        "app/workers/", "app/mailers/", "app/channels/",
-                                        "app/helpers/", "lib/", "config/", "db/"])
-        config["frontend_paths"].extend(["app/views/", "app/assets/", "public/"])
-
-    # Phoenix: add Elixir/Phoenix-specific paths
-    if fw.get("has_phoenix"):
-        config["backend_paths"].extend(["lib/", "lib/_web/", "lib/_web/controllers/",
-                                        "lib/_web/channels/", "config/"])
-        config["frontend_paths"].extend(["priv/static/", "assets/"])
-
-    # Flutter: add Dart/Flutter-specific paths
-    if fw.get("has_flutter"):
-        config["backend_paths"].extend(["lib/", "lib/services/", "lib/models/",
-                                        "lib/providers/", "lib/repositories/"])
-        config["frontend_paths"].extend(["lib/screens/", "lib/widgets/", "lib/components/"])
-
-    # SwiftUI: add Swift-specific paths
-    if fw.get("has_swiftui") or fw.get("has_vapor"):
-        config["backend_paths"].extend(["Sources/", "Sources/App/", "Sources/App/Models/",
-                                        "Sources/App/ViewModels/", "Sources/App/Network/"])
-        config["frontend_paths"].extend(["Sources/App/Views/", "Resources/"])
-
-    # Spark/Scala: add Scala-specific paths
-    if fw.get("has_spark") or fw.get("has_akka") or fw.get("has_play"):
-        config["backend_paths"].extend(["src/main/scala/", "src/main/java/",
-                                        "src/main/resources/", "conf/"])
 
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))

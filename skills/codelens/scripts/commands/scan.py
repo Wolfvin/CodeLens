@@ -37,9 +37,8 @@ from parsers.fallback_dart_extra import parse_dart_fallback
 from parsers.fallback_swift import parse_swift_fallback
 from parsers.fallback_scala import parse_scala_fallback
 from parsers.fallback_shell import parse_shell_fallback
+from parsers.fallback_gdscript import parse_gdscript_fallback
 from parsers.fallback_kotlin import parse_kotlin_fallback
-from parsers.fallback_r import parse_r_fallback
-from parsers.fallback_haskell import parse_haskell_fallback
 
 from commands import register_command
 
@@ -517,7 +516,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
-    # Parse Java/Kotlin files
+    # Parse Java files
     java_data = []
     if files["java"]:
         for path in files["java"]:
@@ -534,6 +533,24 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
                 })
             except IOError:
                 logger.debug(f"Failed to read Java file: {path}")
+
+    # Parse Kotlin files
+    kotlin_data = []
+    if files["kotlin"]:
+        for path in files["kotlin"]:
+            if incremental and changed_files and path not in changed_files:
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                refs = parse_kotlin_fallback(content, os.path.relpath(path, workspace))
+                kotlin_data.append({
+                    "path": os.path.relpath(path, workspace),
+                    "nodes": refs.get("nodes", []),
+                    "edges": refs.get("edges", [])
+                })
+            except IOError:
+                logger.debug(f"Failed to read Kotlin file: {path}")
 
     # Parse C/C++ files
     c_cpp_data = []
@@ -733,63 +750,27 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             except IOError:
                 logger.debug(f"Failed to read Shell file: {path}")
 
-    # Parse Kotlin files
-    kotlin_data = []
-    if files["kotlin"]:
-        for path in files["kotlin"]:
+    # Parse GDScript files
+    gdscript_data = []
+    if files["gdscript"]:
+        for path in files["gdscript"]:
             if incremental and changed_files and path not in changed_files:
                 continue
             try:
                 with open(path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                refs = parse_kotlin_fallback(content, os.path.relpath(path, workspace))
-                kotlin_data.append({
+                refs = parse_gdscript_fallback(content, os.path.relpath(path, workspace))
+                gdscript_data.append({
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
             except IOError:
-                logger.debug(f"Failed to read Kotlin file: {path}")
-
-    # Parse R files
-    r_data = []
-    if files["r_lang"]:
-        for path in files["r_lang"]:
-            if incremental and changed_files and path not in changed_files:
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                refs = parse_r_fallback(content, os.path.relpath(path, workspace))
-                r_data.append({
-                    "path": os.path.relpath(path, workspace),
-                    "nodes": refs.get("nodes", []),
-                    "edges": refs.get("edges", [])
-                })
-            except IOError:
-                logger.debug(f"Failed to read R file: {path}")
-
-    # Parse Haskell files
-    haskell_data = []
-    if files["haskell"]:
-        for path in files["haskell"]:
-            if incremental and changed_files and path not in changed_files:
-                continue
-            try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                refs = parse_haskell_fallback(content, os.path.relpath(path, workspace))
-                haskell_data.append({
-                    "path": os.path.relpath(path, workspace),
-                    "nodes": refs.get("nodes", []),
-                    "edges": refs.get("edges", [])
-                })
-            except IOError:
-                logger.debug(f"Failed to read Haskell file: {path}")
+                logger.debug(f"Failed to read GDScript file: {path}")
 
 
     # All new language data combined
-    _new_lang_data = java_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + kotlin_data + r_data + haskell_data
+    _new_lang_data = java_data + kotlin_data + c_cpp_data + go_data + lua_data + csharp_data + php_data + ruby_data + elixir_data + dart_data + swift_data + scala_data + shell_data + gdscript_data
 
     # Normalize nodes: ensure 'fn' key exists for edge_resolver compatibility
     for item in _new_lang_data:
@@ -875,6 +856,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "vue": len(files["vue"]),
             "svelte": len(files["svelte"]),
             "java": len(files["java"]),
+            "kotlin": len(files["kotlin"]),
             "c_cpp": len(files["c_cpp"]),
             "go": len(files["go"]),
             "lua": len(files["lua"]),
@@ -887,12 +869,11 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
             "swift": len(files["swift"]),
             "scala": len(files["scala"]),
             "shell": len(files["shell"]),
-            "kotlin": len(files["kotlin"]),
-            "r_lang": len(files["r_lang"]),
-            "haskell": len(files["haskell"]),
+            "gdscript": len(files["gdscript"]),
         },
         "python_parsed": len(python_data),
         "java_parsed": len(java_data),
+        "kotlin_parsed": len(kotlin_data),
         "c_cpp_parsed": len(c_cpp_data),
         "go_parsed": len(go_data),
         "lua_parsed": len(lua_data),
@@ -905,9 +886,7 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "swift_parsed": len(swift_data),
         "scala_parsed": len(scala_data),
         "shell_parsed": len(shell_data),
-        "kotlin_parsed": len(kotlin_data),
-        "r_parsed": len(r_data),
-        "haskell_parsed": len(haskell_data),
+        "gdscript_parsed": len(gdscript_data),
         "frontend": {
             "classes": len(frontend_registry["classes"]),
             "ids": len(frontend_registry["ids"])
@@ -930,8 +909,7 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     if not unsupported:
         return None
     supported = {"html", "css", "javascript", "typescript", "tsx", "python", "rust", "vue", "svelte", "php", "blade",
-                 "ruby", "elixir", "dart", "swift", "scala", "shell", "go", "java", "c", "cpp", "csharp", "lua",
-                 "kotlin", "r", "haskell", "nim", "zsh"}
+                 "ruby", "elixir", "dart", "swift", "scala", "shell", "go", "java", "kotlin", "c", "cpp", "csharp", "lua"}
     lang_names = {
         "go": "Go",
         "java": "Java",
@@ -974,6 +952,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "vue": [],
         "svelte": [],
         "java": [],
+        "kotlin": [],
         "c_cpp": [],
         "go": [],
         "lua": [],
@@ -986,9 +965,7 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         "swift": [],
         "scala": [],
         "shell": [],
-        "kotlin": [],
-        "r_lang": [],
-        "haskell": [],
+        "gdscript": [],
     }
 
     for root, dirs, filenames in os.walk(workspace):
@@ -1067,11 +1044,11 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["dart"].append(file_path)
             elif ext == '.swift':
                 files["swift"].append(file_path)
+            elif ext == '.gd':
+                files["gdscript"].append(file_path)
             elif ext in ('.scala', '.sc'):
                 files["scala"].append(file_path)
             elif ext in ('.sh', '.bash', '.zsh'):
-                files["shell"].append(file_path)
-            elif ext == '.zsh-theme':
                 files["shell"].append(file_path)
             elif filename == 'Dockerfile' or filename.endswith('.Dockerfile'):
                 files["shell"].append(file_path)
@@ -1081,12 +1058,6 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["ruby"].append(file_path)
             elif filename == 'mix.exs':
                 files["elixir"].append(file_path)
-            elif ext in ('.R', '.r') and not filename.startswith('.'):
-                # R language — avoid .r as false positive (e.g., .editorconfig)
-                if ext == '.R' or (ext == '.r' and not filename.lower().startswith('readme')):
-                    files["r_lang"].append(file_path)
-            elif ext in ('.hs', '.lhs'):
-                files["haskell"].append(file_path)
 
     return files
 

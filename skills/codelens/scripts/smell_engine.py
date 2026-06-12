@@ -126,6 +126,7 @@ def detect_smells(
 
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
+    files_truncated = False
     production_files_scanned = 0
 
     for root, dirs, filenames in os.walk(workspace):
@@ -136,6 +137,7 @@ def detect_smells(
 
         for filename in filenames:
             if files_scanned >= max_files:
+                files_truncated = True
                 break
 
             ext = os.path.splitext(filename)[1].lower()
@@ -372,6 +374,7 @@ def detect_smells(
             "info": info_count,
             "health_score": health_score
         },
+        "files_truncated": files_truncated,
         "by_category": {
             cat: smells for cat, smells in all_smells.items() if smells
         },
