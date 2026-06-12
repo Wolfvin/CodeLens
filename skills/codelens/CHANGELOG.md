@@ -5,6 +5,34 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] — 2026-06-12
+
+### Tested against starship/starship (248 source files: 245 Rust + 3 HTML, Rust CLI prompt customizer)
+
+Real-world test on a Rust CLI tool with 3,098 backend nodes and 14,555 edges.
+Confirmed: 887 smells (health score 75), 200 dead items, 26 circular deps, 432 debug leaks,
+2,104 complexity results, 7 detected frameworks (rust, clap, serde, log, rayon, gix, shadow-rs), 2 secrets.
+
+### Fixed
+
+- **Rust debug-leak false positive**: `log::debug!()`, `log::info!()`, `log::warn!()`, `log::error!()`, `log::trace!()`, and `tracing::*!()` macros from the `log`/`tracing` crates were incorrectly classified as high-severity `debugger` statements. They are now classified as low-severity `debug_log` (structured logging, not a debugger). Only `dbg!()` remains as a true debugger statement. Reduced high-severity false positives from 40 → 0 on Rust projects.
+- **Rust dead code false positive**: Trait implementation methods (`Default::default`, `From::from`, `Display::fmt`, `Clone::clone`, etc.) with `ref_count == 0` were incorrectly flagged as dead code. Standard library trait impls are now correctly excluded. `#[cfg(test)]` function patterns and `build.rs` functions are also excluded.
+- **XXX in string literals**: `XXX` patterns inside string literals (e.g., test paths like `"a/xxx/yyy"`) were incorrectly flagged as code markers. Now skipped when inside quoted strings.
+
+### Added
+
+- **New `debug_log` category**: Separate from `debugger`, captures structured logging statements (Rust `log::debug!()`, `tracing::info!()`, Go `log.Debug()`) that are NOT debugger statements but may indicate debug-level logging in production code.
+- **19 new Rust crate detections**: `clap`, `structopt`, `serde`, `reqwest`, `hyper`, `sqlx`, `diesel`, `sea-orm`, `tonic`, `prost`, `tracing`, `log`, `slog`, `bevy`, `egui`, `iced`, `tauri`, `rayon`, `gix`, `shadow-rs`. Each has a `category` field (cli, database, grpc, logging, etc.).
+- **Rust `#[tokio::main]` and `#[actix::main]` entry points**: Async main entry points are now detected as `main` type entry points.
+- **Rust `build.rs` entry point**: Cargo build scripts are now detected as `module_export` type entry points with `rust_build_rs` label.
+- **Rust HTTP route detection**: Actix-web (`#[get("/path")]`), Axum (`.route("/path", get(handler))`), Rocket (`#[get = "/path"]`), Warp (`warp::path("segment")`).
+- **Rust `#[cfg(debug_assertions)]` detection**: Added to `dev_only` category in debug-leak engine.
+
+### Changed
+
+- **Version bumped to 6.4.0**: Reflects the significant Rust ecosystem improvements.
+- **`debugger` category in debug-leak**: Rust `debug!()` pattern removed from DEBUGGER_PATTERNS. Moved to new RUST_LOG_MACROS list for proper classification.
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

@@ -602,6 +602,62 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
                 continue
 
+            # v6.4: Skip Rust trait implementation methods that are required by the trait.
+            # Methods like Default::default, From::from, Display::fmt, etc. are called
+            # implicitly through the trait dispatch, so ref_count == 0 is a false positive.
+            if file_path.endswith('.rs') and impl_for:
+                # Known standard library traits whose methods are called implicitly
+                _rust_std_traits = {
+                    'Default', 'From', 'Into', 'TryFrom', 'TryInto',
+                    'Display', 'Debug', 'Fmt', 'Write',
+                    'Clone', 'Copy', 'PartialEq', 'Eq', 'PartialOrd', 'Ord',
+                    'Hash', 'Iterator', 'IntoIterator', 'FromIterator',
+                    'Add', 'Sub', 'Mul', 'Div', 'Rem', 'Not', 'Neg',
+                    'Index', 'IndexMut', 'Deref', 'DerefMut', 'Drop',
+                    'Fn', 'FnMut', 'FnOnce', 'AsRef', 'AsMut',
+                    'ToString', 'ToStr', 'Borrow', 'BorrowMut',
+                    'Serialize', 'Deserialize',  # serde traits
+                    'Read', 'Write', 'Seek',  # std::io traits
+                    'Error',  # std::error::Error
+                    'Sum', 'Product',  # iterator aggregation
+                }
+                # Skip if impl_for matches a known standard trait
+                impl_trait = impl_for.split('<')[0].split('+')[0].strip()
+                if impl_trait in _rust_std_traits:
+                    continue
+                # Also skip impl blocks where the function name matches
+                # a standard trait method pattern (e.g., "default", "from", "fmt")
+                _rust_trait_methods = {
+                    'default', 'from', 'into', 'try_from', 'try_into',
+                    'fmt', 'clone', 'hash', 'next', 'iter',
+                    'deref', 'deref_mut', 'drop', 'as_ref', 'as_mut',
+                    'to_string', 'borrow', 'borrow_mut',
+                    'read', 'write', 'seek', 'description', 'source',
+                    'call', 'call_mut', 'call_once',
+                    'add', 'sub', 'mul', 'div', 'rem', 'not', 'neg',
+                    'index', 'index_mut', 'sum', 'product',
+                    'serialize', 'deserialize',
+                }
+                if bare_name in _rust_trait_methods:
+                    continue
+
+            # v6.4: Skip Rust #[cfg(test)] module functions
+            # Functions inside #[cfg(test)] blocks are only compiled in test mode
+            # and would show as "dead" in a normal scan.
+            if file_path.endswith('.rs'):
+                # Check if the function name starts with test_ or is in a test module
+                if bare_name.startswith('test_') or bare_name.startswith('it_'):
+                    continue
+                # Check if the file is a test-only file (heuristic: file name starts with test_)
+                file_basename = os.path.basename(file_path)
+                if file_basename.startswith('test_'):
+                    continue
+
+            # v6.4: Skip Rust build.rs functions
+            # Functions in build.rs are called by the Cargo build system, not by other code.
+            if file_path.endswith('build.rs'):
+                continue
+
             # v6.3: Skip known C/C++ entry point function patterns
             # These are almost never dead code — they're called by the OS/runtime
             _c_entry_patterns = {
