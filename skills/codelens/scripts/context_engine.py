@@ -181,10 +181,16 @@ def get_symbol_context(
         # Fallback: substring/partial match (like trace does)
         fuzzy_node = None
         if exact_node is None:
+            # v5.9.2: Improved fuzzy matching with scoring (ported from query.py)
             partial_matches = [n for n in nodes if name in n.get("fn", "")]
             if partial_matches:
-                # Prefer shorter function names (closer to exact match)
-                partial_matches.sort(key=lambda n: len(n.get("fn", "")))
+                def _fuzzy_sort_key(match):
+                    fn = match.get("fn", "")
+                    is_exact_ci = 0 if fn.lower() == name.lower() else 1
+                    is_dead = 0 if match.get("status") != "dead" else 1
+                    ref_count = match.get("ref_count", 0)
+                    return (is_exact_ci, is_dead, -ref_count, len(fn))
+                partial_matches.sort(key=_fuzzy_sort_key)
                 fuzzy_node = partial_matches[0]
 
         match_node = exact_node or fuzzy_node

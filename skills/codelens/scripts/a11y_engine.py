@@ -233,6 +233,11 @@ def audit_accessibility(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # v5.9.2: Skip test/story/fixture files — a11y issues in test fixtures are not actionable
+            _skip_keywords = ['.test.', '.spec.', '.stories.', '.story.', '__tests__']
+            if any(kw in rel_path for kw in _skip_keywords):
+                continue
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()

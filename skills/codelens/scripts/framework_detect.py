@@ -310,12 +310,64 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             all_deps.update(pkg.get("devDependencies", {}))
             all_deps.update(pkg.get("peerDependencies", {}))
 
-            # Detect module system from root package.json only
+            # Detect module system from root package.json
             if pkg_path == os.path.join(workspace, "package.json"):
                 if "type" in pkg and pkg["type"] == "module":
                     detected["module_system"] = "esm"
                 else:
-                    detected["module_system"] = "cjs"
+                    # v5.9.2: Check additional ESM indicators before defaulting to cjs
+                    # Many TypeScript projects compile to ESM without "type": "module"
+                    esm_hints = 0
+                    cjs_hints = 0
+
+                    # Check tsconfig.json for module setting
+                    tsconfig_path = os.path.join(workspace, "tsconfig.json")
+                    if os.path.isfile(tsconfig_path):
+                        try:
+                            with open(tsconfig_path, 'r', encoding='utf-8') as tf:
+                                tsconfig = json.load(tf)
+                            compiler_opts = tsconfig.get("compilerOptions", {})
+                            module_setting = compiler_opts.get("module", "").lower()
+                            if module_setting in ("esnext", "es6", "es2015", "es2020", "es2022", "node16", "nodenext"):
+                                esm_hints += 2
+                            elif module_setting in ("commonjs", "amd", "system", "umd"):
+                                cjs_hints += 2
+                        except (json.JSONDecodeError, IOError):
+                            pass
+
+                    # Check for .mjs files (ESM indicator)
+                    try:
+                        for root_d, _, fnames in os.walk(workspace):
+                            if any(d in root_d.split(os.sep) for d in DEFAULT_IGNORE_DIRS):
+                                continue
+                            for fn in fnames:
+                                if fn.endswith('.mjs'):
+                                    esm_hints += 1
+                                    break
+                                elif fn.endswith('.cjs'):
+                                    cjs_hints += 1
+                                    break
+                            if esm_hints > 0 or cjs_hints > 0:
+                                break
+                    except OSError:
+                        pass
+
+                    # Check for ESM exports field (indicates ESM package)
+                    if "exports" in pkg:
+                        exports = pkg["exports"]
+                        if isinstance(exports, dict):
+                            if "import" in exports or "module" in exports:
+                                esm_hints += 2
+
+                    if esm_hints > cjs_hints:
+                        detected["module_system"] = "esm"
+                    elif cjs_hints > esm_hints:
+                        detected["module_system"] = "cjs"
+                    elif esm_hints > 0 and cjs_hints > 0:
+                        detected["module_system"] = "mixed"
+                    else:
+                        # No ESM indicators found; default to cjs per Node.js convention
+                        detected["module_system"] = "cjs"
         except (json.JSONDecodeError, IOError):
             pass
 

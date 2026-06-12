@@ -320,6 +320,12 @@ def detect_smells(
 def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect functions that are too long."""
     smells = []
+
+    # v5.9.2: Skip test/story/fixture files — long functions are expected there
+    _skip_keywords = ['.test.', '.spec.', '.fixture.', '.stories.', '.story.', '__tests__']
+    if any(kw in rel_path for kw in _skip_keywords):
+        return smells
+
     lines = content.split('\n')
 
     # Find function definitions and their line ranges
