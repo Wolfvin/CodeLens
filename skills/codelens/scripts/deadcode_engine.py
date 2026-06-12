@@ -100,13 +100,13 @@ def detect_dead_code(
             lines = content.split('\n')
 
             # ─── Unreachable Code ────────────────────────
-            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
                 if len(results["unreachable"]) < max_results:
                     unreachable = _detect_unreachable_code(content, ext, rel_path)
                     results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
-            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
+            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go", ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
                 if len(results["unused_vars"]) < max_results:
                     unused = _detect_unused_variables(content, ext, rel_path)
                     results["unused_vars"].extend(unused)

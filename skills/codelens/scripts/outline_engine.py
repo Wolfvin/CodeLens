@@ -97,7 +97,7 @@ def get_workspace_outline(
     workspace: str,
     file_filter: Optional[str] = None,
     config: Optional[Dict] = None,
-    max_files: int = 5000
+    max_files: int = 3000
 ) -> Dict[str, Any]:
     """
     Get outline for all source files in workspace.
@@ -105,11 +105,10 @@ def get_workspace_outline(
     Returns a summary-level outline (not per-function detail).
 
     Args:
-        workspace: Absolute path to workspace root.
-        file_filter: Optional file path filter.
-        config: Optional codelens config dict.
-        max_files: Maximum number of files to outline (default: 5000).
-                   Use 0 for unlimited. Prevents timeout on huge repos.
+        workspace: Absolute path to workspace.
+        file_filter: Optional substring to filter files by relative path.
+        config: Optional project config dict (for ignore paths).
+        max_files: Maximum number of files to outline (0 = unlimited).
     """
     workspace = os.path.abspath(workspace)
     ignore_dirs = set(DEFAULT_IGNORE_DIRS)
@@ -119,13 +118,13 @@ def get_workspace_outline(
 
     source_extensions = {
         '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.rs', '.py', '.go',
-        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte'
+        '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
+        '.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.lua', '.rb',
     }
 
     outlines = []
     errors = []
-    files_count = 0
-    truncated = False
+    file_count = 0
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
@@ -142,35 +141,29 @@ def get_workspace_outline(
             if filename.endswith('.d.ts') or filename.endswith('.d.tsx'):
                 continue
 
-            # Respect max_files limit (0 = unlimited)
-            if max_files > 0 and files_count >= max_files:
-                truncated = True
-                break
-
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
             if file_filter and file_filter not in rel_path:
                 continue
 
-            files_count += 1
+            if max_files > 0 and file_count >= max_files:
+                break
+
             result = get_file_outline(file_path, workspace, detail_level="minimal")
             if result["status"] == "ok":
                 outlines.append(result)
             else:
                 errors.append({"file": rel_path, "error": result.get("message", "unknown")})
-
-        if truncated:
-            break
+            file_count += 1
 
     return {
         "status": "ok",
         "workspace": workspace,
         "files_outlined": len(outlines),
-        "truncated": truncated,
-        "max_files": max_files if max_files > 0 else "unlimited",
         "outlines": outlines,
-        "errors": errors if errors else None
+        "errors": errors if errors else None,
+        "truncated": max_files > 0 and file_count >= max_files
     }
 
 

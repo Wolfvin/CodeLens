@@ -127,13 +127,15 @@ FRAMEWORK_SIGNATURES = {
     },
     "gin": {
         "packages": [],
-        "config_files": ["go.mod"],
-        "indicators": ["gin-gonic/gin"]
+        "config_files": [],
+        "indicators": [],
+        "go_mod_dep": "gin-gonic/gin"
     },
     "echo": {
         "packages": [],
-        "config_files": ["go.mod"],
-        "indicators": ["labstack/echo"]
+        "config_files": [],
+        "indicators": [],
+        "go_mod_dep": "labstack/echo"
     },
     # Java/Kotlin frameworks
     "spring": {
@@ -518,6 +520,21 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["frameworks"].append("tauri")
                     detected["has_tauri"] = True
                     break
+
+    # 4b. Check go.mod content for Go framework dependencies (Gin, Echo, etc.)
+    go_mod_path = os.path.join(workspace, "go.mod")
+    if os.path.isfile(go_mod_path):
+        try:
+            with open(go_mod_path, 'r', encoding='utf-8') as f:
+                go_mod_content = f.read()
+            for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+                if fw_name in detected["frameworks"]:
+                    continue
+                go_mod_dep = sig.get("go_mod_dep")
+                if go_mod_dep and go_mod_dep in go_mod_content:
+                    detected["frameworks"].append(fw_name)
+        except IOError:
+            logger.debug("Failed to parse go.mod", exc_info=True)
 
     # 5. Check file patterns (for Vue, Svelte)
     for root, dirs, files in os.walk(workspace):

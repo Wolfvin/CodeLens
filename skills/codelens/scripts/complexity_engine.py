@@ -33,9 +33,8 @@ from utils import DEFAULT_IGNORE_DIRS
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs",
-    ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx",
-    ".go", ".java", ".kt", ".lua", ".cs", ".php"
+    ".py", ".rs", ".go",
+    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
 }
 
 # Cyclomatic complexity thresholds
@@ -275,18 +274,10 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
         functions = _extract_py_functions(lines, content)
     elif ext == ".rs":
         functions = _extract_rs_functions(lines, content)
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        functions = _extract_c_functions(lines, content)
     elif ext == ".go":
         functions = _extract_go_functions(lines, content)
-    elif ext in {".java", ".kt"}:
-        functions = _extract_java_functions(lines, content)
-    elif ext == ".lua":
-        functions = _extract_lua_functions(lines, content)
-    elif ext == ".cs":
-        functions = _extract_cs_functions(lines, content)
-    elif ext == ".php":
-        functions = _extract_php_functions(lines, content)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        functions = _extract_c_cpp_functions(lines, content, ext)
 
     return functions
 
@@ -389,119 +380,60 @@ def _extract_rs_functions(lines: List[str], content: str) -> List[Dict]:
     return functions
 
 
-def _extract_c_functions(lines: List[str], content: str) -> List[Dict]:
-    """Extract C/C++ function definitions."""
-    functions = []
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s*(?:[\w:*&]+\s+)+(\w+)\s*\(([^)]*)\)', line)
-        if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'sizeof', 'delete'}:
-            functions.append({
-                "name": m.group(1),
-                "line": i + 1,
-                "type": "function",
-                "params_str": m.group(2),
-                "start_col": len(line) - len(line.lstrip()),
-            })
-    return functions
-
-
 def _extract_go_functions(lines: List[str], content: str) -> List[Dict]:
     """Extract Go function definitions."""
     functions = []
+
     for i, line in enumerate(lines):
-        m = re.match(r'^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(([^)]*)\)', line)
+        # Match: func Name(params) or func (receiver) Name(params)
+        m = re.match(
+            r'\s*func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)',
+            line
+        )
         if m:
+            fn_name = m.group(1)
+            # Skip init() and main() as they are entry points
             functions.append({
-                "name": m.group(1),
+                "name": fn_name,
+                "line": i + 1,
+                "type": "func",
+                "params_str": m.group(2),
+                "start_col": len(line) - len(line.lstrip()),
+            })
+
+    return functions
+
+
+def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[Dict]:
+    """Extract C/C++ function definitions."""
+    functions = []
+
+    for i, line in enumerate(lines):
+        # C/C++ function definition pattern:
+        # type name(params) {  or  type Class::name(params) {
+        # Skip common non-function patterns
+        m = re.match(
+            r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+            r'(?:[\w:*&<>,\s]+?)\s+'
+            r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?\{',
+            line
+        )
+        if m:
+            fn_name = m.group(1)
+            # Skip control flow keywords and common non-function names
+            skip_names = {'if', 'for', 'while', 'switch', 'catch', 'return',
+                         'class', 'struct', 'enum', 'union', 'namespace', 'typedef',
+                         'using', 'template', 'include', 'define', 'ifdef', 'endif'}
+            if fn_name in skip_names:
+                continue
+            functions.append({
+                "name": fn_name,
                 "line": i + 1,
                 "type": "function",
                 "params_str": m.group(2),
                 "start_col": len(line) - len(line.lstrip()),
             })
-    return functions
 
-
-def _extract_java_functions(lines: List[str], content: str) -> List[Dict]:
-    """Extract Java/Kotlin method definitions."""
-    functions = []
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s*(?:public|private|protected|static|\s)*[\w<>\[\]]+\s+(\w+)\s*\(([^)]*)\)', line)
-        if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-            functions.append({
-                "name": m.group(1),
-                "line": i + 1,
-                "type": "method",
-                "params_str": m.group(2),
-                "start_col": len(line) - len(line.lstrip()),
-            })
-    return functions
-
-
-def _extract_lua_functions(lines: List[str], content: str) -> List[Dict]:
-    """Extract Lua function definitions."""
-    functions = []
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s*(?:local\s+)?function\s+(\w+)\s*\(([^)]*)\)', line)
-        if m:
-            functions.append({
-                "name": m.group(1),
-                "line": i + 1,
-                "type": "function",
-                "params_str": m.group(2),
-                "start_col": len(line) - len(line.lstrip()),
-            })
-        else:
-            m = re.match(r'^\s*(?:local\s+)?([\w.]+)\s*=\s*function\s*\(([^)]*)\)', line)
-            if m:
-                functions.append({
-                    "name": m.group(1),
-                    "line": i + 1,
-                    "type": "function",
-                    "params_str": m.group(2),
-                    "start_col": len(line) - len(line.lstrip()),
-                })
-            else:
-                m = re.search(r'function\s+(\w+)\.(\w+)\s*\(([^)]*)\)', line)
-                if m:
-                    functions.append({
-                        "name": f"{m.group(1)}.{m.group(2)}",
-                        "line": i + 1,
-                        "type": "method",
-                        "params_str": m.group(3),
-                        "start_col": len(line) - len(line.lstrip()),
-                    })
-    return functions
-
-
-def _extract_cs_functions(lines: List[str], content: str) -> List[Dict]:
-    """Extract C# method definitions."""
-    functions = []
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s*(?:public|private|protected|internal|static|virtual|override|async|abstract|\s)*[\w<>\[\]]+\s+(\w+)\s*\(([^)]*)\)', line)
-        if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-            functions.append({
-                "name": m.group(1),
-                "line": i + 1,
-                "type": "method",
-                "params_str": m.group(2),
-                "start_col": len(line) - len(line.lstrip()),
-            })
-    return functions
-
-
-def _extract_php_functions(lines: List[str], content: str) -> List[Dict]:
-    """Extract PHP function/method definitions."""
-    functions = []
-    for i, line in enumerate(lines):
-        m = re.match(r'^\s*(?:public|private|protected|static|abstract|final|\s)*function\s+(\w+)\s*\(([^)]*)\)', line)
-        if m:
-            functions.append({
-                "name": m.group(1),
-                "line": i + 1,
-                "type": "function",
-                "params_str": m.group(2),
-                "start_col": len(line) - len(line.lstrip()),
-            })
     return functions
 
 
@@ -520,8 +452,6 @@ def _get_function_body_and_end(
 
     if ext == ".py":
         return _get_py_function_body(lines, start)
-    elif ext == ".lua":
-        return _get_lua_function_body(lines, start)
     else:
         return _get_brace_function_body(lines, start)
 
@@ -547,29 +477,6 @@ def _get_py_function_body(lines: List[str], start: int) -> Tuple[str, int]:
             break
 
         body_lines.append(line)
-
-    return '\n'.join(body_lines), start + len(body_lines)
-
-
-def _get_lua_function_body(lines: List[str], start: int) -> Tuple[str, int]:
-    """Extract Lua function body using end-keyword matching."""
-    body_lines = [lines[start]]
-    depth = 0
-
-    for i in range(start, min(start + 500, len(lines))):
-        stripped = lines[i].strip()
-        if re.match(r'(?:local\s+)?function\b', stripped):
-            depth += 1
-        elif stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
-            depth -= 1
-            if depth == 0:
-                body_lines.append(lines[i])
-                return '\n'.join(body_lines), i
-        elif re.match(r'(?:if|for|while|do)\b', stripped):
-            depth += 1
-
-        if i > start:
-            body_lines.append(lines[i])
 
     return '\n'.join(body_lines), start + len(body_lines)
 
@@ -636,18 +543,10 @@ def _compute_cyclomatic(fn_body: str, ext: str) -> int:
         decisions += _count_py_decisions(clean)
     elif ext == ".rs":
         decisions += _count_rs_decisions(clean)
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        decisions += _count_c_decisions(clean)
     elif ext == ".go":
         decisions += _count_go_decisions(clean)
-    elif ext in {".java", ".kt"}:
-        decisions += _count_java_decisions(clean)
-    elif ext == ".lua":
-        decisions += _count_lua_decisions(clean)
-    elif ext == ".cs":
-        decisions += _count_cs_decisions(clean)
-    elif ext == ".php":
-        decisions += _count_php_decisions(clean)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        decisions += _count_c_cpp_decisions(clean)
 
     return decisions + 1
 
@@ -741,103 +640,58 @@ def _count_rs_decisions(clean: str) -> int:
     return count
 
 
-def _count_c_decisions(clean: str) -> int:
-    """Count decision points in C/C++ code."""
-    count = 0
-    count += len(re.findall(r'\bif\s*\(', clean))
-    count += len(re.findall(r'\belse\s+if\s*\(', clean))
-    count += len(re.findall(r'\belse\s*\{', clean))
-    count += len(re.findall(r'\bfor\s*\(', clean))
-    count += len(re.findall(r'\bwhile\s*\(', clean))
-    count += len(re.findall(r'\bdo\s*\{', clean))
-    count += len(re.findall(r'\bcase\s+', clean))
-    count += len(re.findall(r'\bcatch\s*\(', clean))
-    count += clean.count('&&')
-    count += clean.count('||')
-    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary
-    return count
-
-
 def _count_go_decisions(clean: str) -> int:
     """Count decision points in Go code."""
     count = 0
+
+    # if statements
     count += len(re.findall(r'\bif\s+', clean))
+    # else if
     count += len(re.findall(r'\belse\s+if\s+', clean))
+    # else
     count += len(re.findall(r'\belse\s*\{', clean))
+    # for loops
     count += len(re.findall(r'\bfor\s+', clean))
+    # switch cases — each case is a decision
     count += len(re.findall(r'\bcase\s+', clean))
-    count += len(re.findall(r'\bselect\s*\{', clean))
+    # select cases — each case in a select statement
+    count += len(re.findall(r'\bcase\s+<-', clean))
+    # && and ||
     count += clean.count('&&')
     count += clean.count('||')
+
     return count
 
 
-def _count_java_decisions(clean: str) -> int:
-    """Count decision points in Java/Kotlin code."""
+def _count_c_cpp_decisions(clean: str) -> int:
+    """Count decision points in C/C++ code."""
     count = 0
+
+    # if statements
     count += len(re.findall(r'\bif\s*\(', clean))
+    # else if
     count += len(re.findall(r'\belse\s+if\s*\(', clean))
+    # else
     count += len(re.findall(r'\belse\s*\{', clean))
+    # for loops
     count += len(re.findall(r'\bfor\s*\(', clean))
+    # while loops
     count += len(re.findall(r'\bwhile\s*\(', clean))
+    # do-while
     count += len(re.findall(r'\bdo\s*\{', clean))
+    # switch cases — each case is a decision
     count += len(re.findall(r'\bcase\s+', clean))
+    # catch blocks
     count += len(re.findall(r'\bcatch\s*\(', clean))
+    # && and ||
     count += clean.count('&&')
     count += clean.count('||')
-    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary
-    return count
+    # Ternary operator
+    count += len(re.findall(r'\?\s*[^:]+\s*:', clean))
+    # Preprocessor #if (each is a decision branch)
+    count += len(re.findall(r'^\s*#\s*if\b', clean, re.MULTILINE))
+    count += len(re.findall(r'^\s*#\s*elif\b', clean, re.MULTILINE))
 
-
-def _count_lua_decisions(clean: str) -> int:
-    """Count decision points in Lua code."""
-    count = 0
-    count += len(re.findall(r'\bif\s+', clean))
-    count += len(re.findall(r'\belseif\s+', clean))
-    count += len(re.findall(r'\belse\b', clean))
-    count += len(re.findall(r'\bfor\s+', clean))
-    count += len(re.findall(r'\bwhile\s+', clean))
-    count += len(re.findall(r'\brepeat\b', clean))
-    count += clean.count(' and ')
-    count += clean.count(' or ')
-    return count
-
-
-def _count_cs_decisions(clean: str) -> int:
-    """Count decision points in C# code."""
-    count = 0
-    count += len(re.findall(r'\bif\s*\(', clean))
-    count += len(re.findall(r'\belse\s+if\s*\(', clean))
-    count += len(re.findall(r'\belse\s*\{', clean))
-    count += len(re.findall(r'\bfor\s*\(', clean))
-    count += len(re.findall(r'\bforeach\s*\(', clean))
-    count += len(re.findall(r'\bwhile\s*\(', clean))
-    count += len(re.findall(r'\bdo\s*\{', clean))
-    count += len(re.findall(r'\bcase\s+', clean))
-    count += len(re.findall(r'\bcatch\s*\(', clean))
-    count += clean.count('&&')
-    count += clean.count('||')
-    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary
-    count += len(re.findall(r'\?\?', clean))  # null coalescing
-    return count
-
-
-def _count_php_decisions(clean: str) -> int:
-    """Count decision points in PHP code."""
-    count = 0
-    count += len(re.findall(r'\bif\s*\(', clean))
-    count += len(re.findall(r'\belseif\s*\(', clean))
-    count += len(re.findall(r'\belse\s*\{', clean))
-    count += len(re.findall(r'\bfor\s*\(', clean))
-    count += len(re.findall(r'\bforeach\s*\(', clean))
-    count += len(re.findall(r'\bwhile\s*\(', clean))
-    count += len(re.findall(r'\bdo\s*\{', clean))
-    count += len(re.findall(r'\bcase\s+', clean))
-    count += len(re.findall(r'\bcatch\s*\(', clean))
-    count += clean.count('&&')
-    count += clean.count('||')
-    count += len(re.findall(r'\?\s*[^.?]', clean))  # ternary
-    count += len(re.findall(r'\?\?', clean))  # null coalescing
     return count
 
 
@@ -869,10 +723,10 @@ def _compute_cognitive(fn_body: str, ext: str) -> int:
         total = _cognitive_py(lines)
     elif ext == ".rs":
         total = _cognitive_rs(lines)
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx", ".go", ".java", ".kt", ".cs", ".php"}:
-        total = _cognitive_brace(lines)
-    elif ext == ".lua":
-        total = _cognitive_lua(lines)
+    elif ext == ".go":
+        total = _cognitive_brace_based(lines)
+    elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp"}:
+        total = _cognitive_brace_based(lines)
 
     return total
 
@@ -1042,8 +896,8 @@ def _cognitive_rs(lines: List[str]) -> int:
     return total
 
 
-def _cognitive_brace(lines: List[str]) -> int:
-    """Compute cognitive complexity for C/C++/Go/Java/Kotlin/C#/PHP code (brace-based)."""
+def _cognitive_brace_based(lines: List[str]) -> int:
+    """Compute cognitive complexity for brace-based languages (Go, C/C++)."""
     total = 0
     nesting = 0
     brace_stack = []
@@ -1053,39 +907,37 @@ def _cognitive_brace(lines: List[str]) -> int:
         if not stripped:
             continue
 
-        # Control flow breaks
-        if re.search(r'\bif\s*\(', stripped):
+        # Control flow increments
+        if re.search(r'\bif\s*', stripped):
             total += 1 + nesting
-        elif re.search(r'\belse\s+if\s*\(', stripped):
+        elif re.search(r'\belse\s+if\b', stripped):
             total += 1 + nesting
-        elif re.search(r'\belse\b', stripped) and not re.search(r'\belse\s+if', stripped):
-            total += nesting  # No base increment for else
-        elif re.search(r'\bfor\b', stripped):
-            total += 1 + nesting
-        elif re.search(r'\bforeach\b', stripped):
+        elif re.search(r'\belse\s*\{', stripped) or re.search(r'\belse\s*$', stripped):
+            total += nesting
+        elif re.search(r'\bfor\s*', stripped):
             total += 1 + nesting
         elif re.search(r'\bwhile\s*\(', stripped):
             total += 1 + nesting
         elif re.search(r'\bdo\s*\{', stripped):
             total += 1 + nesting
-        elif re.search(r'\bswitch\s*\(', stripped):
+        elif re.search(r'\bswitch\s+', stripped):
             total += 1 + nesting
         elif re.search(r'\bcase\s+', stripped):
             total += 1 + nesting
         elif re.search(r'\bcatch\s*\(', stripped):
             total += 1 + nesting
+        # Go-specific: select statement
         elif re.search(r'\bselect\s*\{', stripped):
             total += 1 + nesting
 
         # Logical operators
         total += stripped.count('&&')
         total += stripped.count('||')
+        # C/C++ ternary
+        if '?' in stripped and ':' in stripped:
+            total += 1
 
-        # Ternary
-        ternary_count = len(re.findall(r'\?\s*[^.?*]', stripped))
-        total += ternary_count * (1 + nesting)
-
-        # Track nesting by counting braces
+        # Track nesting
         for ch in stripped:
             if ch == '{':
                 brace_stack.append(nesting)
@@ -1095,54 +947,6 @@ def _cognitive_brace(lines: List[str]) -> int:
                     nesting = brace_stack.pop()
                 elif nesting > 0:
                     nesting -= 1
-
-    return total
-
-
-def _cognitive_lua(lines: List[str]) -> int:
-    """Compute cognitive complexity for Lua code."""
-    total = 0
-    nesting = 0
-    depth_stack = []
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        # Control flow breaks
-        if re.search(r'\bif\s+', stripped):
-            total += 1 + nesting
-            nesting += 1
-            depth_stack.append('if')
-        elif re.search(r'\belseif\s+', stripped):
-            total += 1 + nesting
-        elif re.search(r'\belse\b', stripped):
-            total += nesting  # No base increment for else
-        elif re.search(r'\bfor\s+', stripped):
-            total += 1 + nesting
-            nesting += 1
-            depth_stack.append('for')
-        elif re.search(r'\bwhile\s+', stripped):
-            total += 1 + nesting
-            nesting += 1
-            depth_stack.append('while')
-        elif re.search(r'\brepeat\b', stripped):
-            total += 1 + nesting
-            nesting += 1
-            depth_stack.append('repeat')
-
-        # 'end' decreases nesting
-        if stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
-            if depth_stack:
-                depth_stack.pop()
-                nesting = max(0, nesting - 1)
-            elif nesting > 0:
-                nesting -= 1
-
-        # Logical operators
-        total += stripped.count(' and ')
-        total += stripped.count(' or ')
 
     return total
 
@@ -1221,79 +1025,6 @@ def _count_params(params_str: str, ext: str) -> int:
         # Remove mut keyword
         params_str = re.sub(r'\bmut\s+', '', params_str)
 
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        # Remove type info from C/C++ params — keep only param names
-        # Pattern: type name or type *name or type &name
-        params_str = re.sub(r'\b(?:const|volatile|unsigned|signed|long|short|struct|enum|class|typename|virtual|static|inline|extern|mutable|register)\b\s*', '', params_str)
-        # Remove type patterns like "int x" -> "x"
-        cleaned_params = []
-        for p in params_str.split(','):
-            p = p.strip()
-            if not p:
-                continue
-            # Take the last word as the param name (after type and pointer/ref)
-            parts = p.split()
-            if parts:
-                name = parts[-1].lstrip('*&')
-                cleaned_params.append(name if name else p)
-        params = [p.strip() for p in cleaned_params if p.strip()]
-        return len(params)
-
-    elif ext == ".go":
-        # Go params: name type, name type — keep names
-        cleaned_params = []
-        for p in params_str.split(','):
-            p = p.strip()
-            if not p:
-                continue
-            parts = p.split()
-            # Take the first word as the param name
-            if parts and not parts[0].startswith('...'):
-                cleaned_params.append(parts[0])
-            elif parts:
-                cleaned_params.append(parts[0].lstrip('.'))
-        params = [p.strip() for p in cleaned_params if p.strip()]
-        return len(params)
-
-    elif ext in {".java", ".kt"}:
-        # Java/Kotlin: type name — keep name
-        params_str = re.sub(r'\b(?:final|var|val)\b\s*', '', params_str)
-        cleaned_params = []
-        for p in params_str.split(','):
-            p = p.strip()
-            if not p:
-                continue
-            parts = p.split()
-            if parts:
-                cleaned_params.append(parts[-1])
-        params = [p.strip() for p in cleaned_params if p.strip()]
-        return len(params)
-
-    elif ext == ".lua":
-        # Lua: simple param names, remove self
-        params_str = re.sub(r'\bself\s*,?\s*', '', params_str)
-        params = [p.strip() for p in params_str.split(',') if p.strip()]
-        return len(params)
-
-    elif ext == ".cs":
-        # C#: [ref/out/in] type name — keep name
-        params_str = re.sub(r'\b(?:ref|out|in|params|this)\b\s*', '', params_str)
-        cleaned_params = []
-        for p in params_str.split(','):
-            p = p.strip()
-            if not p:
-                continue
-            parts = p.split()
-            if parts:
-                cleaned_params.append(parts[-1])
-        params = [p.strip() for p in cleaned_params if p.strip()]
-        return len(params)
-
-    elif ext == ".php":
-        # PHP: type $name or $name — count $-prefixed names
-        params = re.findall(r'\$\w+', params_str)
-        return len(params)
-
     # Count comma-separated items
     params = [p.strip() for p in params_str.split(',') if p.strip()]
     return len(params)
@@ -1308,8 +1039,6 @@ def _compute_max_nesting(fn_body: str, ext: str) -> int:
 
     if ext == ".py":
         return _max_nesting_python(clean)
-    elif ext == ".lua":
-        return _max_nesting_lua(clean)
     else:
         return _max_nesting_brace(clean)
 
@@ -1336,32 +1065,6 @@ def _max_nesting_python(clean: str) -> int:
 
         depth = len(prev_indents) - 1
         max_depth = max(max_depth, depth)
-
-    return max_depth
-
-
-def _max_nesting_lua(clean: str) -> int:
-    """Compute max nesting depth for Lua using keyword tracking."""
-    lines = clean.split('\n')
-    max_depth = 0
-    current_depth = 0
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        # Increase depth for block-starting keywords
-        if re.match(r'(?:local\s+)?function\b', stripped):
-            current_depth += 1
-            max_depth = max(max_depth, current_depth)
-        elif re.match(r'(?:if|for|while|do)\b', stripped):
-            current_depth += 1
-            max_depth = max(max_depth, current_depth)
-
-        # Decrease depth for 'end'
-        if stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
-            current_depth = max(0, current_depth - 1)
 
     return max_depth
 
@@ -1554,14 +1257,6 @@ def _remove_strings(code: str, ext: str) -> str:
         result = re.sub(r'r"(?:#*)"[^"]*"(?:#*)"', 'r""', result)
         result = re.sub(r"r'(?:#*)'[^']*'(?:#*)'", "r''", result)
 
-    # PHP heredoc/nowdoc
-    if ext == ".php":
-        result = re.sub(r'<<<[\'"]?(\w+)[\'"]?[^;]*;\s*\1;?', '<<<HEREDOC', result, flags=re.DOTALL)
-
-    # C/C++ raw strings
-    if ext in {".cpp", ".cc", ".cxx", ".hxx"}:
-        result = re.sub(r'R"([^()]*)\\([^()]*)\\"', 'R""', result)
-
     return result
 
 
@@ -1574,15 +1269,9 @@ def _remove_comments(code: str, ext: str) -> str:
     result = re.sub(r'/\*[\s\S]{0,50000}?\*/', '', result)
 
     # Line comments
-    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs",
-              ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx",
-              ".go", ".java", ".kt", ".cs", ".php"}:
+    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".rs"}:
         result = re.sub(r'//.*$', '', result, flags=re.MULTILINE)
     elif ext == ".py":
         result = re.sub(r'#.*$', '', result, flags=re.MULTILINE)
-    elif ext == ".lua":
-        result = re.sub(r'--.*$', '', result, flags=re.MULTILINE)
-        # Lua block comments: --[[ ... ]]
-        result = re.sub(r'--\[\[[\s\S]{0,50000}?\]\]', '', result)
 
     return result

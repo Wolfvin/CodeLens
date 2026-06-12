@@ -48,7 +48,7 @@ def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> di
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace)
+        outline_data = get_workspace_outline(workspace, max_files=max_files)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -149,29 +149,21 @@ def should_ignore_dir(rel_root: str) -> bool:
 
 
 def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[str]:
-    """Read a file safely with size limit, encoding handling, and binary detection.
+    """Read a file safely with size limit and encoding handling.
 
     Args:
         file_path: Absolute path to the file.
         max_size: Maximum file size in bytes. Files larger than this are skipped.
 
     Returns:
-        File content as string, or None if the file cannot be read, is too large,
-        or appears to be a binary file (contains null bytes in the first 8KB).
+        File content as string, or None if the file cannot be read or is too large.
     """
     try:
         file_size = os.path.getsize(file_path)
         if file_size > max_size:
             return None
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read()
-        # Binary file detection: if the content contains null bytes,
-        # it's almost certainly a binary file (e.g., .pyc, .wasm, .exe)
-        # that was read as text. Check the first 8KB for efficiency.
-        check_region = content[:8192]
-        if '\x00' in check_region:
-            return None
-        return content
+            return f.read()
     except (IOError, OSError):
         return None
 
@@ -397,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.2.0"
+CODELENS_VERSION = "6.1.0"
 
 
 # ─── Generated File Detection ───────────────────────────────

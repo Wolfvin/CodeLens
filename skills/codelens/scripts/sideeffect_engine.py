@@ -83,6 +83,12 @@ SIDE_EFFECT_PATTERNS = {
             r"warp::",
             r"actix_web::",
             r"tonic::",
+            # ── Go network side effects ──
+            r"http\.(?:Get|Post|Head|Do|NewRequest)",
+            r"net/http\.",
+            r"httputil\.",
+            r"json\.NewDecoder\(.*resp\.Body",
+            r"io\.ReadAll\(.*Body\)",
         ],
         "label": "network_request",
         "severity": "high"
@@ -108,6 +114,14 @@ SIDE_EFFECT_PATTERNS = {
             r"fs::(?:read|write|create|remove|rename|copy|canonicalize|metadata|File)",
             r"tokio::fs::",
             r"tokio::io::",
+            # ── Go IO side effects ──
+            r"os\.(?:Create|Open|OpenFile|ReadFile|WriteFile|Remove|Rename|Mkdir|ReadDir)",
+            r"fmt\.(?:Print|Fprint|Sprint|Fprintf|Printf|Println|Fprintln)",
+            r"log\.(?:Print|Fatal|Panic|Printf|Fatalf|Panicf)",
+            r"io\.(?:Copy|ReadAll|ReadFile|WriteFile|Pipe|CopyBuffer)",
+            r"ioutil\.",
+            r"os/exec\.",
+            r"exec\.Command",
         ],
         "label": "io_operation",
         "severity": "low"
@@ -131,6 +145,10 @@ SIDE_EFFECT_PATTERNS = {
             r"nanoid\s*\(",
             r"rand::",
             r"rand::Rng",
+            # ── Go random side effects ──
+            r"math/rand\.",
+            r"crypto/rand\.",
+            r"rand\.(?:Int|Float|Shuffle|Perm|Read|Seed)",
         ],
         "label": "non_deterministic",
         "severity": "low"
@@ -151,6 +169,13 @@ SIDE_EFFECT_PATTERNS = {
             r"tokio::spawn",
             r"std::thread::spawn",
             r"\.await",
+            # ── Go external side effects ──
+            r"go\s+\w+\(",  # goroutine launch
+            r"database/sql\.",
+            r"sql\.(?:Open|Query|Exec|Prepare|Begin)",
+            r"redis\.",
+            r"mongo\.",
+            r"grpc\.",
         ],
         "label": "external_service",
         "severity": "high"
@@ -437,6 +462,16 @@ def _extract_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
             m = re.match(r'\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', line)
             if m:
                 functions.append({"name": m.group(1), "line": i + 1, "async": "async" in line})
+
+    elif ext == ".go":
+        for i, line in enumerate(lines):
+            # Match Go function: func (r *Receiver) Name(...) or func Name(...)
+            m = re.match(r'\s*func\s+(?:\([^)]+\)\s+)?(\w+)', line)
+            if m:
+                fn_name = m.group(1)
+                # Skip init() and main() — they're entry points, not regular functions
+                if fn_name not in ('init', 'main'):
+                    functions.append({"name": fn_name, "line": i + 1, "async": False})
 
     return functions
 

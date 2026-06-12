@@ -19,19 +19,17 @@ Each smell gets a severity (info, warning, critical) and refactoring suggestion.
 
 import os
 import re
-import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
-from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file, time_budget_expired
+from utils import DEFAULT_IGNORE_DIRS, safe_read_file, is_generated_file
 
 
 # ─── Configuration ─────────────────────────────────────────────
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".vue", ".svelte",
-    ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx",
-    ".go", ".java", ".kt", ".lua", ".cs", ".php"
+    ".py", ".rs", ".go", ".vue", ".svelte",
+    ".c", ".cpp", ".cxx", ".cc", ".h", ".hpp",
 }
 
 # Thresholds
@@ -46,8 +44,6 @@ LARGE_FILE_LINES_CRITICAL = 1000
 GOD_CLASS_METHODS = 20
 GOD_CLASS_METHODS_CRITICAL = 35
 MAX_FILE_SIZE = 500 * 1024  # 500KB
-MAX_FILES = 5000              # Max files to scan before stopping
-SMELL_TIMEOUT_SEC = 120       # Global timeout for smell detection
 
 
 def detect_smells(
@@ -87,7 +83,6 @@ def detect_smells(
     all_smells: Dict[str, List[Dict]] = {cat: [] for cat in valid_categories}
     files_scanned = 0
     production_files_scanned = 0
-    start_time = time.time()
 
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
@@ -95,15 +90,7 @@ def detect_smells(
             dirs.clear()
             continue
 
-        # Global timeout check — stop scanning if budget exceeded
-        if time_budget_expired(start_time, SMELL_TIMEOUT_SEC):
-            break
-
         for filename in filenames:
-            # File count cap — prevent scanning enormous repos indefinitely
-            if files_scanned >= MAX_FILES:
-                break
-
             ext = os.path.splitext(filename)[1].lower()
             if ext not in SOURCE_EXTENSIONS:
                 continue
@@ -359,50 +346,6 @@ def _detect_long_functions(content: str, ext: str, rel_path: str) -> List[Dict]:
                 if m:
                     fn_starts.append((i, m.group(1)))
 
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*(?:[\w:*&]+\s+)+(\w+)\s*\(', line)
-            if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'sizeof', 'delete'}:
-                fn_starts.append((i, m.group(1)))
-
-    elif ext == ".go":
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(', line)
-            if m:
-                fn_starts.append((i, m.group(1)))
-
-    elif ext in {".java", ".kt"}:
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*(?:public|private|protected|static|\s)*[\w<>\[\]]+\s+(\w+)\s*\(', line)
-            if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-                fn_starts.append((i, m.group(1)))
-
-    elif ext == ".lua":
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*(?:local\s+)?function\s+(\w+)', line)
-            if m:
-                fn_starts.append((i, m.group(1)))
-            else:
-                m = re.match(r'^\s*(?:local\s+)?([\w.]+)\s*=\s*function\s*\(', line)
-                if m:
-                    fn_starts.append((i, m.group(1)))
-                else:
-                    m = re.search(r'function\s+(\w+)\.(\w+)', line)
-                    if m:
-                        fn_starts.append((i, f"{m.group(1)}.{m.group(2)}"))
-
-    elif ext == ".cs":
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*(?:public|private|protected|internal|static|virtual|override|async|abstract|\s)*[\w<>\[\]]+\s+(\w+)\s*\(', line)
-            if m and m.group(1) not in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-                fn_starts.append((i, m.group(1)))
-
-    elif ext == ".php":
-        for i, line in enumerate(lines):
-            m = re.match(r'^\s*(?:public|private|protected|static|abstract|final|\s)*function\s+(\w+)\s*\(', line)
-            if m:
-                fn_starts.append((i, m.group(1)))
-
     # Calculate function lengths
     for idx, (start, name) in enumerate(fn_starts):
         # Find end of function
@@ -446,23 +389,8 @@ def _find_function_end(lines: List[str], start: int, ext: str) -> int:
             if current_indent <= base_indent and stripped:
                 return i
         return len(lines)
-    elif ext == ".lua":
-        # Lua: function ends at matching 'end' keyword
-        depth = 0
-        for i in range(start, min(start + 300, len(lines))):
-            stripped = lines[i].strip()
-            if re.match(r'(?:local\s+)?function\b', stripped):
-                depth += 1
-            elif stripped == 'end' or stripped.startswith('end ') or stripped.startswith('end)') or stripped.startswith('end,'):
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-            # Also handle if/for/while/do blocks that add depth
-            elif re.match(r'(?:if|for|while|do)\b', stripped):
-                depth += 1
-        return min(start + 300, len(lines))
     else:
-        # JS/TS/Rust/C/C++/Go/Java/C#/PHP: count braces
+        # JS/TS/Rust: count braces
         brace_count = 0
         for i in range(start, min(start + 300, len(lines))):
             for ch in lines[i]:
@@ -518,12 +446,9 @@ def _detect_deep_nesting(content: str, ext: str, rel_path: str) -> List[Dict]:
         if ext == ".py":
             # Python: 4 spaces per level
             level = indent // 4
-        elif ext in {".rs", ".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx", ".go", ".java", ".kt", ".cs", ".php"}:
-            # Rust/C/C++/Go/Java/Kotlin/C#/PHP: 4 spaces per level
+        elif ext == ".rs":
+            # Rust: 4 spaces per level
             level = indent // 4
-        elif ext == ".lua":
-            # Lua: typically 2 spaces or tabs per level
-            level = indent // 2
         else:
             # JS/TS: 2 spaces per level
             level = indent // 2
@@ -662,189 +587,6 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
                     "severity": "warning",
                     "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
                     "suggestion": "Consider using a builder pattern or struct."
-                })
-
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        for m in re.finditer(r'(?:[\w:*&]+\s+)+(\w+)\s*\(([^)]*)\)', content):
-            fn_name = m.group(1)
-            if fn_name in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'sizeof', 'delete'}:
-                continue
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use a struct to group related parameters."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider grouping parameters into a struct."
-                })
-
-    elif ext == ".go":
-        for m in re.finditer(r'func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(([^)]*)\)', content):
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use an options struct for grouping parameters."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider using an options struct."
-                })
-
-    elif ext in {".java", ".kt"}:
-        for m in re.finditer(r'(?:public|private|protected|static|\s)*[\w<>\[\]]+\s+(\w+)\s*\(([^)]*)\)', content):
-            fn_name = m.group(1)
-            if fn_name in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-                continue
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use a parameter object or builder pattern."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider grouping parameters into a data class."
-                })
-
-    elif ext == ".lua":
-        for m in re.finditer(r'(?:local\s+)?function\s+\w+\s*\(([^)]*)\)', content):
-            params_str = m.group(1).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip() and p.strip() != 'self']
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use a table to group related parameters."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider passing a table instead of many arguments."
-                })
-
-    elif ext == ".cs":
-        for m in re.finditer(r'(?:public|private|protected|internal|static|virtual|override|async|abstract|\s)*[\w<>\[\]]+\s+(\w+)\s*\(([^)]*)\)', content):
-            fn_name = m.group(1)
-            if fn_name in {'if', 'for', 'while', 'switch', 'catch', 'return', 'case', 'new', 'throw'}:
-                continue
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use a record or parameter object."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider grouping parameters into a record class."
-                })
-
-    elif ext == ".php":
-        for m in re.finditer(r'(?:public|private|protected|static|abstract|final|\s)*function\s+(\w+)\s*\(([^)]*)\)', content):
-            params_str = m.group(2).strip()
-            if not params_str:
-                continue
-            params = [p.strip() for p in params_str.split(',') if p.strip()]
-            param_count = len(params)
-
-            if param_count >= TOO_MANY_PARAMS_CRITICAL:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "critical",
-                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
-                    "suggestion": "Use an array or DTO class for grouping."
-                })
-            elif param_count >= TOO_MANY_PARAMS:
-                line_num = content[:m.start()].count('\n') + 1
-                smells.append({
-                    "file": rel_path,
-                    "line": line_num,
-                    "param_count": param_count,
-                    "severity": "warning",
-                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
-                    "suggestion": "Consider passing an associative array or object."
                 })
 
     return smells
@@ -1181,161 +923,6 @@ def _detect_god_objects(content: str, ext: str, rel_path: str) -> List[Dict]:
                 "message": f"Impl block for '{impl_match.group(1)}' has {method_count} methods",
                 "suggestion": "Split into multiple impl blocks or traits."
             })
-        elif impl_match and method_count >= GOD_CLASS_METHODS:
-            smells.append({
-                "file": rel_path,
-                "impl_for": impl_match.group(1),
-                "method_count": method_count,
-                "severity": "warning",
-                "message": f"Impl block for '{impl_match.group(1)}' has {method_count} methods",
-                "suggestion": "Consider splitting into multiple impl blocks or traits."
-            })
-
-    elif ext in {".c", ".cpp", ".h", ".hpp", ".cc", ".cxx", ".hxx"}:
-        # Count methods in C++ classes
-        class_match = re.search(r'class\s+(\w+)', content)
-        if class_match:
-            method_count = len(re.findall(r'(?:[\w:*&]+\s+)+(\w+)\s*\([^)]*\)\s*(?:const)?\s*\{', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Split into smaller, focused classes."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Consider extracting some methods into helper classes."
-                })
-
-    elif ext == ".go":
-        # Count methods on Go struct types
-        struct_matches = re.findall(r'type\s+(\w+)\s+struct', content)
-        for struct_name in struct_matches:
-            method_count = len(re.findall(rf'func\s*\(\w+\s+\*?{re.escape(struct_name)}\)\s+\w+', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "struct": struct_name,
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Struct '{struct_name}' has {method_count} methods",
-                    "suggestion": "Split into smaller structs with focused interfaces."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "struct": struct_name,
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Struct '{struct_name}' has {method_count} methods",
-                    "suggestion": "Consider extracting some methods into separate types."
-                })
-
-    elif ext in {".java", ".kt"}:
-        # Count methods in Java/Kotlin classes
-        class_match = re.search(r'(?:public|private|protected)?\s*(?:class|interface)\s+(\w+)', content)
-        if class_match:
-            method_count = len(re.findall(r'(?:public|private|protected|static|\s)*[\w<>\[\]]+\s+(\w+)\s*\([^)]*\)\s*\{', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Split into smaller, focused classes."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Consider extracting some methods into helper classes."
-                })
-
-    elif ext == ".cs":
-        # Count methods in C# classes
-        class_match = re.search(r'(?:public|private|protected|internal)?\s*(?:class|struct|interface)\s+(\w+)', content)
-        if class_match:
-            method_count = len(re.findall(r'(?:public|private|protected|internal|static|virtual|override|async|abstract|\s)*[\w<>\[\]]+\s+(\w+)\s*\([^)]*\)\s*\{', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Split into smaller, focused classes."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Consider extracting some methods into partial classes."
-                })
-
-    elif ext == ".php":
-        # Count methods in PHP classes
-        class_match = re.search(r'(?:abstract|final|\s)*class\s+(\w+)', content)
-        if class_match:
-            method_count = len(re.findall(r'(?:public|private|protected|static|abstract|final|\s)*function\s+\w+', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Split into smaller, focused classes or traits."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "class": class_match.group(1),
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Class '{class_match.group(1)}' has {method_count} methods",
-                    "suggestion": "Consider extracting some methods into traits or helper classes."
-                })
-
-    elif ext == ".lua":
-        # Count methods in Lua tables (table.method = function or function table.method)
-        table_match = re.search(r'(\w+)\s*=\s*\{', content)
-        if table_match:
-            table_name = table_match.group(1)
-            method_count = len(re.findall(rf'function\s+{re.escape(table_name)}\.\w+', content))
-            method_count += len(re.findall(rf'{re.escape(table_name)}\.\w+\s*=\s*function', content))
-            if method_count >= GOD_CLASS_METHODS_CRITICAL:
-                smells.append({
-                    "file": rel_path,
-                    "table": table_name,
-                    "method_count": method_count,
-                    "severity": "critical",
-                    "message": f"Table '{table_name}' has {method_count} methods",
-                    "suggestion": "Split into smaller, focused modules."
-                })
-            elif method_count >= GOD_CLASS_METHODS:
-                smells.append({
-                    "file": rel_path,
-                    "table": table_name,
-                    "method_count": method_count,
-                    "severity": "warning",
-                    "message": f"Table '{table_name}' has {method_count} methods",
-                    "suggestion": "Consider splitting into separate modules."
-                })
 
     return smells
 
