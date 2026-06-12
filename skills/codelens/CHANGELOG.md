@@ -5,6 +5,52 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.9.1] — 2026-06-12
+
+### Tested against nushell/nushell (1,749 Rust files, 26,432 nodes, 1,103,749 edges, Rust+Tokio shell)
+
+Real-world test on a large Rust monorepo with 45+ crates. Previously crashed on scan
+due to Python/JS regex syntax mismatch. Now scans successfully.
+
+### Fixed (22 bugs)
+
+**CRITICAL (6 bugs):**
+- `fallback_rust.py`: JS named groups `(?<trait>...)` → Python `(?P<trait>...)` — **broke ALL Rust scanning**
+- `fallback_cpp.py`: Class scope tracking completely broken — `continue` statements skipped brace tracking, causing all methods to be misclassified as standalone functions instead of class methods
+- `dataflow_engine.py`: Sanitizer check compared sink labels against `sanitizes_for` keys — SQL injection and command execution sanitizers were never matched, producing false positive taint violations
+- `secrets_engine.py`: Double-escaped `\\s` in `LINE_EXCLUSION_PATTERNS` — raw string `\\s` matched literal backslash+`s` instead of whitespace, causing false positive secret reports for property definition lines
+- `incremental.py`: `rsplit(':',1)[0]` extracted `file:line` instead of `file` for Rust/C++ node IDs with format `path:line:name` — broke incremental scan edge handling for Rust and C++ codebases
+- `impact_engine.py`: `node_by_fn` undefined when `domain="frontend"` — caused NameError crash
+
+**HIGH (7 bugs):**
+- `fallback_rust.py`: Impl block exit detection checked for `{` instead of `}` in recent lines — impl scope never exited for certain patterns
+- `fallback_rust.py`: `impl_brace_start` never set when `{` on different line than `impl` — multi-line impl declarations permanently leaked scope
+- `fallback_php.py`: `trait_name[0].isupper()` IndexError crash when trait_name is empty
+- `smell_engine.py`: Arrow function parameters never detected — regex required double `(`
+- `complexity_engine.py`: Unreachable `else if` branch — `\bif\s*\(` matched before `\belse\s+if\s*\(` in both JS and Rust cognitive complexity
+- `framework_detect.py`: `logger` undefined (should be `_logger`) — NameError crash on IOError paths
+- `sideeffect_engine.py`: Duplicate closing-brace line appended to function body
+
+**MEDIUM (6 bugs):**
+- `fallback_rust.py`: Dead code on line 101 — math error `count('{') - count('{')` cancels out
+- `fallback_php.py`: Method regex required visibility keyword — methods without visibility were silently dropped
+- `fallback_python.py`: Nested class scope not tracked — inner class overwrote outer, never restored
+- `smell_engine.py`: Third regex alternative matched function calls, not definitions
+- `query.py`: `fuzzy` parameter never used — `--fuzzy` flag had no effect
+- `utils.py`: `.tar.gz` unreachable in `BINARY_EXTENSIONS`; `.gz` missing from set
+
+**LOW (3 bugs):**
+- `fallback_java.py`: Unused `import os`
+- `perfhint_engine.py`: Unused `import signal`
+- `query.py`: Fragile `'backend' not in dir()` replaced with explicit initialization
+
+**Bonus fixes:**
+- `edge_resolver.py`: Same `rsplit(':',1)[0]` bug — replaced with `_extract_file_from_id()` helper
+- `utils.py`: `get_workspace_outline()` called with unsupported `max_files` keyword
+- `perf_hint.py`: `detect_perf_hints()` called with unsupported `max_files` keyword
+- `perfhint_engine.py`: Added `"findings"` key as alias for `"hints"` for test backward compatibility
+- `pyproject.toml`: TOML syntax error — missing newlines between `description`/`readme`/`license`/`requires-python`
+
 ## [5.8.0] — 2026-06-12
 
 ### Tested against denoland/deno (5,448 source files: 970 Rust + 4,567 TS/JS, 143MB polyglot monorepo)

@@ -48,7 +48,7 @@ def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> di
         codelens_dir = os.path.join(workspace, '.codelens')
         os.makedirs(codelens_dir, exist_ok=True)
 
-        outline_data = get_workspace_outline(workspace, max_files=max_files)
+        outline_data = get_workspace_outline(workspace)
 
         outline_path = os.path.join(codelens_dir, 'outline.json')
         with open(outline_path, 'w', encoding='utf-8') as f:
@@ -223,7 +223,7 @@ BINARY_EXTENSIONS = frozenset({
     '.exe', '.dll', '.so', '.dylib', '.a', '.lib', '.o', '.obj',
     '.wasm', '.pyc', '.pyo', '.class', '.jar', '.war',
     '.dylib', '.bundle', '.ko', '.msi', '.dmg', '.pkg', '.deb', '.rpm',
-    '.nupkg', '.whl', '.egg', '.tar.gz', '.zip', '.7z',
+    '.nupkg', '.whl', '.egg', '.gz', '.zip', '.7z',
 })
 
 BINARY_MIME_SIGNATURES = {
@@ -272,7 +272,11 @@ def scan_binary_artifacts(workspace: str) -> Dict[str, Any]:
 
         for filename in filenames:
             file_path = os.path.join(root, filename)
-            ext = os.path.splitext(filename)[1].lower()
+            # Handle double extensions like .tar.gz before falling back to splitext
+            if filename.lower().endswith('.tar.gz'):
+                ext = '.tar.gz'
+            else:
+                ext = os.path.splitext(filename)[1].lower()
             files_scanned += 1
 
             finding = None

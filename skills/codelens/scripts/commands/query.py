@@ -63,6 +63,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     if limit is None:
         limit = 20
 
+    backend = None  # Initialize; will be loaded lazily when needed
+
     # ─── File path lookup ─────────────────────────────
     if is_file_path(query_name) and domain in (None, "backend"):
         backend = load_backend_registry(workspace)
@@ -146,7 +148,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
                 })
 
     if domain in (None, "backend"):
-        backend = load_backend_registry(workspace)
+        if backend is None:
+            backend = load_backend_registry(workspace)
 
         # Exact match search
         for node in backend.get("nodes", []):
@@ -311,11 +314,11 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
             worst_action = "LIST_FIRST"
 
-    # Fuzzy/substring match in backend (always try when exact match fails)
+    # Fuzzy/substring match in backend when enabled or when no exact match found
     # Only search backend if domain allows it, and load registry only when needed
-    if domain in (None, "backend"):
+    if domain in (None, "backend") and (fuzzy or total_matches == 0):
         # backend may already be loaded; only load if not already
-        if 'backend' not in dir():
+        if backend is None:
             backend = load_backend_registry(workspace)
         query_lower = query_name.lower()
         fuzzy_matches = []

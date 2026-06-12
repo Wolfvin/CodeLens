@@ -619,9 +619,10 @@ def _cognitive_js(lines: List[str]) -> int:
             continue
 
         # Increment for control flow breaks
-        if re.search(r'\bif\s*\(', stripped):
+        # Check 'else if' BEFORE 'if' — else-if lines also match \bif\s*\(
+        if re.search(r'\belse\s+if\s*\(', stripped):
             total += 1 + nesting
-        elif re.search(r'\belse\s+if\s*\(', stripped):
+        elif re.search(r'\bif\s*\(', stripped):
             total += 1 + nesting
         elif re.search(r'\belse\s*', stripped) and not re.search(r'\belse\s+if', stripped):
             # else doesn't get the +1 base increment, only nesting
@@ -735,9 +736,9 @@ def _cognitive_rs(lines: List[str]) -> int:
         if not stripped:
             continue
 
-        if re.search(r'\bif\s+', stripped):
+        if re.search(r'\belse\s+if\s+', stripped):
             total += 1 + nesting
-        elif re.search(r'\belse\s+if\s+', stripped):
+        elif re.search(r'\bif\s+', stripped):
             total += 1 + nesting
         elif re.search(r'\belse\s*\{', stripped):
             total += nesting

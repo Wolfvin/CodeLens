@@ -39,6 +39,9 @@ def analyze_impact(
     risk = "low"
     recommendations = []
 
+    # Initialize structures that may not be set for all domains
+    node_by_fn = {}
+
     # ─── Backend Impact ─────────────────────────────────
     if domain in ("backend", "auto"):
         from registry import load_backend_registry

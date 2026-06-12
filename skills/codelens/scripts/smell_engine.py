@@ -498,14 +498,40 @@ def _detect_many_params(content: str, ext: str, rel_path: str) -> List[Dict]:
     smells = []
 
     if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-        for m in re.finditer(
-            r'(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(|(?:async\s+)?\w+\s*\()\s*\(([^)]*)\)',
-            content
-        ):
+        # Function declarations: function name(params)
+        for m in re.finditer(r'function\s+\w+\s*\(([^)]*)\)', content):
             params_str = m.group(1).strip()
             if not params_str:
                 continue
-            # Count parameters (handle destructuring, rest params, default values)
+            params = [p.strip() for p in params_str.split(',') if p.strip()]
+            param_count = len(params)
+
+            if param_count >= TOO_MANY_PARAMS_CRITICAL:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "critical",
+                    "message": f"Function has {param_count} parameters (critical threshold: {TOO_MANY_PARAMS_CRITICAL})",
+                    "suggestion": "Use an options object or builder pattern."
+                })
+            elif param_count >= TOO_MANY_PARAMS:
+                line_num = content[:m.start()].count('\n') + 1
+                smells.append({
+                    "file": rel_path,
+                    "line": line_num,
+                    "param_count": param_count,
+                    "severity": "warning",
+                    "message": f"Function has {param_count} parameters (threshold: {TOO_MANY_PARAMS})",
+                    "suggestion": "Consider grouping related parameters into an object."
+                })
+
+        # Arrow functions: const/let/var name = (params) =>
+        for m in re.finditer(r'(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(([^)]*)\)\s*=>', content):
+            params_str = m.group(1).strip()
+            if not params_str:
+                continue
             params = [p.strip() for p in params_str.split(',') if p.strip()]
             param_count = len(params)
 

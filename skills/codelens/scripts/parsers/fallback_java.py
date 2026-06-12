@@ -4,7 +4,6 @@ Extracts classes, methods, imports, and annotations from Java/Kotlin source file
 when tree-sitter-java is not available.
 """
 
-import os
 import re
 from typing import Dict, List, Any
 

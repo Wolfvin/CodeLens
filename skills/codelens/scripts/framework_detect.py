@@ -362,7 +362,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         if pkg_name:
                             pip_deps.add(pkg_name)
         except IOError:
-            logger.debug("Failed to parse requirements.txt", exc_info=True)
+            _logger.debug("Failed to parse requirements.txt", exc_info=True)
 
     # 3b. pyproject.toml
     pyproject_path = os.path.join(workspace, "pyproject.toml")
@@ -377,7 +377,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             for m in re.finditer(r'["\']([a-zA-Z0-9_-]+)[><=!~]', content):
                 pip_deps.add(m.group(1).lower())
         except IOError:
-            logger.debug("Failed to parse pyproject.toml", exc_info=True)
+            _logger.debug("Failed to parse pyproject.toml", exc_info=True)
 
     # 3c. Check pip deps against framework signatures
     for fw_name, sig in FRAMEWORK_SIGNATURES.items():
