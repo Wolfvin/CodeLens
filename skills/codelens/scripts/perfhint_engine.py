@@ -58,6 +58,7 @@ TEST_INDICATORS = [
     '.test.', '.spec.', '__tests__', 'test/', 'tests/',
     'spec/', 'specs/', 'fixtures/', '__mocks__',
     '.stories.', '.story.',
+    'stories/', 'storybook/',  # v6.1: Storybook files are not production code
 ]
 
 # ─── Performance Hint Pattern Definitions ──────────────────────
@@ -577,6 +578,14 @@ def _scan_file_hints(
     for cat_name, cat_def in categories.items():
         # Category-level extension gating
         if not _category_applies_to_file(cat_name, ext):
+            continue
+
+        # v6.1: Skip large_bundle detection for barrel files (index.ts/index.js)
+        # Barrel re-exports are intentional for library projects and not a perf issue.
+        is_barrel_file = rel_path.endswith('/index.ts') or rel_path.endswith('/index.js') or \
+                         rel_path.endswith('/index.tsx') or rel_path.endswith('/index.mjs') or \
+                         rel_path.endswith('/index.cjs')
+        if cat_name == "large_bundle" and is_barrel_file:
             continue
 
         for pattern_def in cat_def["patterns"]:

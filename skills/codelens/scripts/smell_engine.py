@@ -258,17 +258,27 @@ def detect_smells(
         base_score = 8
 
     # Critical penalty: based on critical count per production file (capped)
+    # v6.1: Fixed — any critical smells should always reduce health below 95
     critical_per_file = prod_critical / score_files
-    if critical_per_file <= 1:
+    if prod_critical == 0:
         critical_penalty = 0
-    elif critical_per_file <= 5:
+    elif critical_per_file <= 0.01:
+        critical_penalty = 3  # Even a single critical in a large project hurts
+    elif critical_per_file <= 1:
         critical_penalty = 5
-    elif critical_per_file <= 10:
+    elif critical_per_file <= 5:
         critical_penalty = 10
-    elif critical_per_file <= 20:
+    elif critical_per_file <= 10:
         critical_penalty = 15
+    elif critical_per_file <= 20:
+        critical_penalty = 20
     else:
-        critical_penalty = min(25, int(critical_per_file * 0.5))
+        critical_penalty = min(35, int(critical_per_file * 0.5))
+
+    # v6.1: Absolute minimum penalty if any critical smells exist
+    # A project with critical code smells should never score 95+
+    if prod_critical > 0 and critical_penalty < 5:
+        critical_penalty = 5
 
     # Critical ratio adjustment: fewer criticals relative to total = healthier
     critical_ratio = prod_critical / max(prod_smells, 1)
@@ -1213,6 +1223,7 @@ def _is_docs_or_example(rel_path: str) -> bool:
         '/tests/', '/test/', '/__tests__/', '/spec/',
         '/fixtures/', '/fixture/',
         '/migrations/',
+        '/stories/', '/storybook/',  # v6.1: Storybook stories are not production code
     ]
     # Also match paths that START with these directory names
     # (no leading slash in rel_path, e.g., "tests/foo.py" or "docs_src/bar.py")
@@ -1224,6 +1235,7 @@ def _is_docs_or_example(rel_path: str) -> bool:
         'tests/', 'test/', '__tests__/', 'spec/',
         'fixtures/', 'fixture/',
         'migrations/',
+        'stories/', 'storybook/',  # v6.1: Storybook stories are not production code
     ]
     return (any(indicator in normalized for indicator in docs_indicators) or
             any(rel_path.startswith(indicator) for indicator in start_indicators))

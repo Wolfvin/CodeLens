@@ -305,12 +305,43 @@ def _detect_console_logs(
                 # Also skip if it's in a dedicated error-handling utility
                 if re.search(r'(logError|handleError|reportError|onError)', context):
                     continue
+                # v6.1: Skip console.error in guard/argument-validation patterns
+                # These are intentional runtime validation errors, not debug leaks.
+                # Pattern: console.error('X has to be a number, got ' + typeof Y)
+                # Pattern: console.error('initialValue must be...', ...)
+                # Also check next 2 lines for multi-line console.error calls
+                next_lines_start = i + 1
+                next_lines_end = min(len(lines), i + 3)
+                multi_line_context = stripped + '\n' + '\n'.join(lines[next_lines_start:next_lines_end])
+                if re.search(r"(has to be|must be|is required|got |invalid|expected )", multi_line_context, re.IGNORECASE):
+                    continue
+                # v6.1: Skip console.error inside if-conditions that check validity
+                # Pattern: if (condition) console.error(...)
+                if re.search(r'if\s*\(.+\)\s*console\.error\s*\(', stripped):
+                    continue
+                # Also check: if the previous non-empty line is an if-condition, this
+                # console.error is inside a guard block — legitimate runtime validation
+                prev_line = lines[i - 1].strip() if i > 0 else ""
+                if prev_line.startswith('if ') or prev_line.startswith('if('):
+                    # Check if it's a type/validity check (typeof, instanceof, etc.)
+                    if re.search(r'(typeof|instanceof|===|!==|>|<|>=|<=)', prev_line):
+                        continue
+                # v6.1: Skip console.error in development-only guards
+                # Pattern: if (process.env.NODE_ENV === 'development') console.error(...)
+                context_start2 = max(0, i - 1)
+                context2 = '\n'.join(lines[context_start2:i + 1])
+                if re.search(r"process\.env\.NODE_ENV\s*===?\s*['\"]development['\"]", context2):
+                    continue
 
             # console.warn in catch blocks is also somewhat legitimate
             if label == "console.warn":
                 context_start = max(0, i - 2)
                 context = '\n'.join(lines[context_start:i + 1])
                 if re.search(r'\bcatch\s*\(', context):
+                    continue
+                # v6.1: Skip console.warn in deprecation/warning patterns
+                # These are intentional user-facing warnings, not debug leaks.
+                if re.search(r"(deprecated|unsupported|not recommended|falling back|fallback)", stripped, re.IGNORECASE):
                     continue
 
             severity = "medium"

@@ -898,6 +898,14 @@ def map_entrypoints(
                     )
                     entrypoints.extend(file_entrypoints)
 
+    # ─── Phase 1.5: Detect barrel files and named export entry points ──
+    # v6.1: For library projects, the main entry point is often a barrel file
+    # (index.ts/index.js) that re-exports all public API. Detect these as
+    # module_export entry points so they appear prominently.
+    if "module_export" in types_to_scan:
+        barrel_entrypoints = _detect_barrel_exports(workspace)
+        entrypoints.extend(barrel_entrypoints)
+
     # ─── Phase 2: Deduplicate ─────────────────────────────────
     entrypoints = _deduplicate_entrypoints(entrypoints)
 
@@ -1253,6 +1261,86 @@ def _find_called_functions(content: str, handler_name: str) -> List[str]:
                     called.append(fn_name)
 
     return called
+
+
+# ─── Barrel File Detection ────────────────────────────────────
+
+def _detect_barrel_exports(workspace: str) -> List[Dict[str, Any]]:
+    """v6.1: Detect barrel files (index.ts/index.js) that re-export the public API.
+
+    For library projects, the main entry point is often src/index.ts which
+    re-exports all hooks/components. These should be detected as module_export
+    entry points since they define the library's public interface.
+    """
+    entrypoints = []
+
+    # Check for common barrel file locations
+    barrel_candidates = [
+        os.path.join(workspace, 'src', 'index.ts'),
+        os.path.join(workspace, 'src', 'index.js'),
+        os.path.join(workspace, 'src', 'index.tsx'),
+        os.path.join(workspace, 'index.ts'),
+        os.path.join(workspace, 'index.js'),
+        os.path.join(workspace, 'lib', 'index.ts'),
+        os.path.join(workspace, 'lib', 'index.js'),
+    ]
+
+    for barrel_path in barrel_candidates:
+        if not os.path.isfile(barrel_path):
+            continue
+
+        rel_path = os.path.relpath(barrel_path, workspace)
+
+        try:
+            with open(barrel_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except IOError:
+            continue
+
+        # Count re-exports (export { ... }, export * from, export function/const)
+        re_export_count = len(re.findall(r'export\s+\*\s+from', content))
+        named_export_count = len(re.findall(r'export\s+\{', content))
+        fn_export_count = len(re.findall(r'export\s+(?:function|const|class|type|interface)\s+', content))
+
+        total_exports = re_export_count + named_export_count + fn_export_count
+
+        # Only flag as barrel if it has multiple re-exports (a real barrel file)
+        if total_exports < 2:
+            continue
+
+        # Extract exported names for metadata
+        exported_names = []
+
+        # export * from './module' — count but can't extract names
+        if re_export_count > 0:
+            exported_names.append(f"{re_export_count} re-export(s)")
+
+        # export { foo, bar } from './module'
+        for match in re.finditer(r'export\s+\{([^}]+)\}', content):
+            names = [n.strip().split(' as ')[0].strip() for n in match.group(1).split(',')]
+            exported_names.extend(names[:10])  # Limit to first 10
+
+        # export function/const/class name
+        for match in re.finditer(r'export\s+(?:function|const|class|type|interface)\s+(\w+)', content):
+            exported_names.append(match.group(1))
+
+        entrypoints.append({
+            "type": "module_export",
+            "file": rel_path,
+            "line": 1,
+            "label": "barrel_export",
+            "handler": rel_path,
+            "metadata": {
+                "is_barrel": True,
+                "total_exports": total_exports,
+                "re_exports": re_export_count,
+                "named_exports": named_export_count,
+                "fn_exports": fn_export_count,
+                "exported_names": exported_names[:30],
+            },
+        })
+
+    return entrypoints
 
 
 # ─── Deduplication ─────────────────────────────────────────────

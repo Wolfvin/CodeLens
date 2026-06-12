@@ -303,10 +303,31 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
             identity["version"] = pkg.get("version", identity["version"])
             identity["description"] = pkg.get("description", "")
             deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            # v6.1: Detect library vs application from package.json fields
+            # Libraries have: main, module, types, files, sideEffects
+            # and typically no "scripts.start" or "scripts.dev"
+            is_library = (
+                "main" in pkg or "module" in pkg or "exports" in pkg
+            ) and (
+                "files" in pkg or "sideEffects" in pkg
+                or "typings" in pkg or "types" in pkg
+            )
+            # Also check: if there's no "start" or "dev" script, it's likely a library
+            scripts = pkg.get("scripts", {})
+            # v6.1: Consider script purpose — "start": "yarn storybook" is NOT an app script
+            start_script = scripts.get("start", "")
+            has_app_script = (
+                ("start" in scripts and "storybook" not in start_script.lower())
+                or "dev" in scripts
+                or "serve" in scripts
+            )
+
             if "next" in deps:
                 js_type = "fullstack-web-app"
             elif "express" in deps or "fastify" in deps or "koa" in deps:
                 js_type = "backend-api"
+            elif is_library and not has_app_script:
+                js_type = "frontend-library"
             elif "react" in deps or "vue" in deps or "svelte" in deps:
                 js_type = "frontend-app"
             else:

@@ -238,6 +238,53 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
+    # v6.1: Test frameworks
+    "jest": {
+        "packages": ["jest"],
+        "config_files": ["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.cjs"],
+        "indicators": [".test.ts", ".test.js", ".spec.ts", ".spec.js"]
+    },
+    "vitest": {
+        "packages": ["vitest"],
+        "config_files": ["vitest.config.ts", "vitest.config.js", "vitest.config.mts"],
+        "indicators": []
+    },
+    "mocha": {
+        "packages": ["mocha"],
+        "config_files": [".mocharc.yml", ".mocharc.json", ".mocharc.js"],
+        "indicators": []
+    },
+    "cypress": {
+        "packages": ["cypress"],
+        "config_files": ["cypress.config.ts", "cypress.config.js", "cypress.json"],
+        "indicators": ["cypress/"]
+    },
+    "playwright_test": {
+        "packages": ["@playwright/test"],
+        "config_files": ["playwright.config.ts", "playwright.config.js"],
+        "indicators": []
+    },
+    "testing_library": {
+        "packages": ["@testing-library/react", "@testing-library/vue", "@testing-library/dom"],
+        "config_files": [],
+        "indicators": []
+    },
+    # v6.1: Documentation/development tools
+    "storybook": {
+        "packages": ["@storybook/react", "@storybook/vue", "@storybook/html", "storybook"],
+        "config_files": [".storybook/"],
+        "indicators": [".storybook/", ".story.tsx", ".stories.tsx", ".story.ts", ".stories.ts"]
+    },
+    "eslint": {
+        "packages": ["eslint"],
+        "config_files": [".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yml", "eslint.config.js", "eslint.config.mjs"],
+        "indicators": []
+    },
+    "prettier": {
+        "packages": ["prettier"],
+        "config_files": [".prettierrc", ".prettierrc.js", ".prettierrc.json", ".prettierrc.yml", "prettier.config.js"],
+        "indicators": []
+    },
 }
 
 
@@ -293,6 +340,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_jest": False,          # v6.1
+        "has_vitest": False,        # v6.1
+        "has_storybook": False,     # v6.1
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -342,6 +392,12 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         detected["has_electron"] = True
                     elif fw_name == "golang":
                         detected["has_golang"] = True
+                    elif fw_name == "jest":
+                        detected["has_jest"] = True
+                    elif fw_name == "vitest":
+                        detected["has_vitest"] = True
+                    elif fw_name == "storybook":
+                        detected["has_storybook"] = True
                     break
 
         # Detect CSS preprocessor
