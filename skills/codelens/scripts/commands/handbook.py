@@ -29,30 +29,45 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=5000,
                         help="Maximum number of files to scan (default: 5000). "
                              "Prevents timeout on very large repos.")
+    parser.add_argument("--timeout", type=int, default=120,
+                        help="Total time budget in seconds for handbook generation (default: 120). "
+                             "Remaining engines are skipped when budget is nearly exhausted.")
 
 
 def execute(args, workspace):
     max_files = getattr(args, 'max_files', 5000)
-    return cmd_handbook(workspace, max_files=max_files)
+    timeout = getattr(args, 'timeout', 120)
+    return cmd_handbook(workspace, max_files=max_files, time_budget=timeout)
 
 
-def _time_left(start: float, budget: float = 90) -> float:
-    """Return remaining seconds within the time budget."""
-    return max(0.0, budget - (time.time() - start))
-
-
-def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
+def cmd_handbook(workspace: str, max_files: int = 5000, time_budget: int = 120) -> Dict[str, Any]:
     """
     Generate a comprehensive project handbook for AI agents.
     Aggregates data from multiple engines into one output.
     Also writes .codelens/handbook.json and .codelens/AGENT.md.
     max_files caps the scan file count to prevent timeout on huge repos.
+    time_budget sets a total wall-clock budget (seconds). When less than 15s
+    remain, remaining engines are skipped and partial=True is set in output.
     """
-    start = time.time()
-    skipped_engines: List[str] = []
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
     ensure_codelens_dir(workspace)
+
+    start_time = time.monotonic()
+    engines_skipped: List[str] = []
+
+    def _remaining() -> float:
+        """Return remaining seconds before budget expires."""
+        return time_budget - (time.monotonic() - start_time)
+
+    def _should_skip(engine_name: str) -> bool:
+        """Check if we should skip an engine due to time budget."""
+        if _remaining() < 15:
+            engines_skipped.append(engine_name)
+            logger.warning(f"Skipping {engine_name}: time budget nearly exhausted "
+                           f"({time_budget - (time.monotonic() - start_time):.1f}s remaining)")
+            return True
+        return False
 
     # 1. Identity — extract from package.json / pyproject.toml / README
     identity = _extract_project_identity(workspace)
@@ -81,7 +96,10 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         except Exception:
             logger.warning("Scan result loading failed", exc_info=True)
     if scan_result is None:
-        scan_result = cmd_scan(workspace)
+        if _should_skip('scan'):
+            scan_result = {"status": "skipped"}
+        else:
+            scan_result = cmd_scan(workspace)
 
     # 3. Generate output files (outline.json, summary.json)
     try:
@@ -90,21 +108,23 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         logger.warning("Failed to write output files", exc_info=True)
 
     # 4. Frameworks
-    try:
-        fw_result = detect_frameworks(workspace)
-        frameworks = fw_result.get("frameworks", [])
-    except Exception:
-        logger.warning("Framework detection failed", exc_info=True)
-        frameworks = config.get("frameworks", [])
-
-    # 5. Health (from smell engine)
-    smell_result = {}
-    if _time_left(start) < 5:
-        skipped_engines.append("smell")
-        health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0, "skipped": True}
+    frameworks = config.get("frameworks", [])
+    if _should_skip('frameworks'):
+        pass  # keep default from config
     else:
         try:
-            smell_result = detect_smells(workspace, max_files=max_files)
+            fw_result = detect_frameworks(workspace)
+            frameworks = fw_result.get("frameworks", [])
+        except Exception:
+            logger.warning("Framework detection failed", exc_info=True)
+
+    # 5. Health (from smell engine)
+    health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
+    if _should_skip('smell'):
+        pass
+    else:
+        try:
+            smell_result = detect_smells(workspace)
             health = {
                 "score": smell_result.get("stats", {}).get("health_score", 0),
                 "smells_count": smell_result.get("stats", {}).get("total_smells", 0),
@@ -113,27 +133,25 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
             }
         except Exception:
             logger.warning("Health detection failed", exc_info=True)
-            health = {"score": 0, "smells_count": 0, "critical": 0, "warning": 0}
 
     # 6. Entrypoints
-    if _time_left(start) < 5:
-        skipped_engines.append("entrypoints")
-        entrypoints = []
+    entrypoints = []
+    if _should_skip('entrypoints'):
+        pass
     else:
         try:
-            ep_result = map_entrypoints(workspace)
+            ep_result = map_entrypoints(workspace, exclude_tests=True)
             entrypoints = [
                 {"type": e.get("type"), "file": e.get("file"), "line": e.get("line"), "label": e.get("label")}
                 for e in ep_result.get("entrypoints", [])[:30]
             ]
         except Exception:
             logger.warning("Entrypoint mapping failed", exc_info=True)
-            entrypoints = []
 
     # 7. API Routes
-    if _time_left(start) < 5:
-        skipped_engines.append("apimap")
-        api_routes = []
+    api_routes = []
+    if _should_skip('apimap'):
+        pass
     else:
         try:
             api_result = map_api_routes(workspace)
@@ -143,12 +161,11 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
             ]
         except Exception:
             logger.warning("API route mapping failed", exc_info=True)
-            api_routes = []
 
     # 8. State management
-    if _time_left(start) < 5:
-        skipped_engines.append("statemap")
-        state_stores = []
+    state_stores = []
+    if _should_skip('statemap'):
+        pass
     else:
         try:
             state_result = map_state(workspace)
@@ -158,32 +175,25 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
             ]
         except Exception:
             logger.warning("State management mapping failed", exc_info=True)
-            state_stores = []
 
-    # 9. Risks (circular deps, dead code, secrets)
+    # 9. Risks (circular deps, dead code, secrets, vulnscan)
     risks = []
-    if _time_left(start) < 5:
-        skipped_engines.append("circular")
-    else:
+    if not _should_skip('circular'):
         try:
             circ_result = detect_circular(workspace)
             for chain in circ_result.get("chains", [])[:5]:
                 risks.append({"type": "circular_dep", "description": f"{' → '.join(chain.get('path', []))}"})
         except Exception:
             logger.warning("Circular dependency detection failed", exc_info=True)
-    if _time_left(start) < 5:
-        skipped_engines.append("dead_code")
-    else:
+    if not _should_skip('deadcode'):
         try:
-            dead_result = detect_dead_code(workspace, max_files=max_files)
+            dead_result = detect_dead_code(workspace)
             dead_count = dead_result.get("stats", {}).get("total_dead", 0)
             if dead_count > 0:
                 risks.append({"type": "dead_code", "count": dead_count})
         except Exception:
             logger.warning("Dead code detection failed", exc_info=True)
-    if _time_left(start) < 5:
-        skipped_engines.append("secrets")
-    else:
+    if not _should_skip('secrets'):
         try:
             secrets_result = detect_secrets(workspace)
             secrets_count = secrets_result.get("stats", {}).get("total_secrets", 0)
@@ -191,9 +201,7 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
                 risks.append({"type": "secrets", "count": secrets_count})
         except Exception:
             logger.warning("Secrets detection failed", exc_info=True)
-    if _time_left(start) < 5:
-        skipped_engines.append("vulnscan")
-    else:
+    if not _should_skip('vulnscan'):
         try:
             vuln_result = scan_vulnerabilities(workspace)
             vuln_count = vuln_result.get("stats", {}).get("total_vulnerabilities", 0)
@@ -206,11 +214,12 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
     directory_map = _build_directory_map(workspace, config)
 
     # 11. Quick reference from summary
-    try:
-        summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
-    except Exception:
-        logger.warning("Summary computation failed", exc_info=True)
-        summary = {}
+    summary = {}
+    if not _should_skip('summary'):
+        try:
+            summary = compute_summary(workspace, get_workspace_outline(workspace), scan_result)
+        except Exception:
+            logger.warning("Summary computation failed", exc_info=True)
 
     # 12. Conventions
     conventions = _detect_conventions(workspace)
@@ -247,10 +256,12 @@ def cmd_handbook(workspace: str, max_files: int = 5000) -> Dict[str, Any]:
         "files_by_language": summary.get("files_by_language", {})
     }
 
-    # Add timeout info if any engines were skipped
-    if skipped_engines:
-        handbook["timed_out"] = True
-        handbook["timed_out_engines"] = skipped_engines
+    # Add partial metadata if any engines were skipped due to time budget
+    if engines_skipped:
+        handbook["partial"] = True
+        handbook["time_budget_used"] = round(time.monotonic() - start_time, 2)
+        handbook["time_budget_total"] = time_budget
+        handbook["engines_skipped"] = engines_skipped
 
     # Write handbook.json
     codelens_dir = os.path.join(workspace, '.codelens')
@@ -516,117 +527,20 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
-    # Check for SCons build system (SConstruct file)
-    scons_type = None
-    gd_count = 0
-    scons_path = os.path.join(workspace, 'SConstruct')
-    if os.path.isfile(scons_path):
-        try:
-            with open(scons_path, 'r', encoding='utf-8', errors='ignore') as f:
-                scons_content = f.read()
-            # SConstruct files often define project name
-            name_match = re.search(r'project_name\s*=\s*["\']([^"\']+)["\']', scons_content) or \
-                         re.search(r'["\']([^"\']+)["\'].*application', scons_content)
-            if name_match:
-                identity["name"] = name_match.group(1)
-            # Detect Godot Engine specifically
-            scons_lower = scons_content.lower()
-            gd_count = 0
-            for root, dirs, files in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                for fname in files:
-                    if fname.endswith('.gd'):
-                        gd_count += 1
-
-            if 'godot' in scons_lower or gd_count > 50:
-                scons_type = "cpp-game-engine"
-            elif 'pygame' in scons_lower or 'sdl' in scons_lower:
-                scons_type = "cpp-game-engine"
-            elif any(kw in scons_lower for kw in ('opengl', 'vulkan', 'directx', 'gpu')):
-                scons_type = "cpp-graphics"
-            else:
-                scons_type = "cpp-project"
-        except Exception:
-            logger.warning("SConstruct parsing failed", exc_info=True)
-
-    # v6.1: Try CMakeLists.txt — detect CMake/C++ projects
-    cmake_type = None
-    cmake_path = os.path.join(workspace, 'CMakeLists.txt')
-    if os.path.isfile(cmake_path):
-        try:
-            with open(cmake_path, 'r', encoding='utf-8', errors='ignore') as f:
-                cmake_content = f.read()
-            # Extract project name from cmake: project(Name VERSION X.Y.Z)
-            proj_match = re.search(r'project\s*\(\s*([^\s\)]+)', cmake_content)
-            ver_match = re.search(r'project\s*\([^)]*VERSION\s+([\d.]+)', cmake_content)
-            if proj_match:
-                identity["name"] = proj_match.group(1)
-            if ver_match:
-                identity["version"] = ver_match.group(1)
-            # Classify CMake project type
-            cmake_lower = cmake_content.lower()
-            has_lua = os.path.isdir(os.path.join(workspace, 'builtin')) or os.path.isdir(os.path.join(workspace, 'scripts'))
-            lua_count = 0
-            for root, dirs, files in os.walk(workspace):
-                dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-                for fname in files:
-                    if fname.endswith('.lua'):
-                        lua_count += 1
-            if lua_count > 10 or has_lua:
-                cmake_type = "cpp-game-engine"  # C++ with Lua scripting = likely game engine
-            elif 'qt' in cmake_lower or 'Qt5' in cmake_content or 'Qt6' in cmake_content:
-                cmake_type = "qt-desktop-app"
-            elif any(kw in cmake_lower for kw in ('opengl', 'vulkan', 'sdl', 'glfw', 'glew')):
-                cmake_type = "cpp-graphics"
-            elif 'android' in cmake_lower or os.path.isdir(os.path.join(workspace, 'android')):
-                cmake_type = "cpp-mobile-app"
-            else:
-                cmake_type = "cpp-project"
-        except Exception:
-            logger.warning("CMakeLists.txt parsing failed", exc_info=True)
-
-    # v6.2: When both C++ (CMake/SCons) and Python types exist, check which is dominant
-    if (cmake_type or scons_type) and python_type:
-        cpp_exts = {'.c', '.cpp', '.h', '.hpp', '.cc', '.cxx', '.hxx'}
-        py_exts = {'.py'}
-        cpp_count = 0
-        py_count = 0
-        for root, dirs, filenames in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
-            for fname in filenames:
-                ext = os.path.splitext(fname)[1].lower()
-                if ext in cpp_exts:
-                    cpp_count += 1
-                elif ext in py_exts:
-                    py_count += 1
-        # If C++ dominates, downgrade Python to "build-scripts" indicator
-        if cpp_count > py_count * 5:
-            python_type = "python-build-scripts"
-
     # v6: Combined type detection — handle polyglot projects
-    active_types = [t for t in [cmake_type, scons_type, rust_type, go_type, js_type, python_type] if t is not None and t != "python-build-scripts"]
+    active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
     if len(active_types) >= 2:
         # Polyglot project — build a combined type string
         type_parts = []
-        if cmake_type:
-            type_parts.append("cpp")
-        if scons_type:
-            type_parts.append("cpp")
         if rust_type:
             type_parts.append("rust")
         if go_type:
             type_parts.append("go")
         if js_type:
             type_parts.append("typescript" if "typescript" in (js_type or "") else "js")
-        if python_type and python_type != "python-build-scripts":
+        if python_type:
             type_parts.append("python")
-        # v6.1: Add Lua indicator for C++ projects with Lua scripting
-        if cmake_type and lua_count > 10:
-            type_parts.append("lua")
-        # Add GDScript indicator for C++/SCons projects with GDScript files
-        if (cmake_type or scons_type) and gd_count > 10:
-            type_parts.append("gdscript")
         identity["type"] = "-".join(type_parts) + "-monorepo" if identity["is_monorepo"] else "-".join(type_parts) + "-polyglot"
     elif len(active_types) == 1:
         identity["type"] = active_types[0]
@@ -687,31 +601,6 @@ def _build_directory_map(workspace: str, config: Dict[str, Any]) -> Dict[str, st
         'mini-services': 'Microservices',
         'parsers': 'Parsers',
         'engines': 'Analysis engines',
-        # v6.1: Game engine / native C++ project directory hints
-        'builtin': 'Built-in Lua/game scripts',
-        'mods': 'Game modifications / plugins',
-        'games': 'Game content packs',
-        'textures': 'Texture assets',
-        'fonts': 'Font assets',
-        'shaders': 'GPU shader programs',
-        'client': 'Client-side code',
-        'clientmods': 'Client-side modifications',
-        'irr': 'Irrlicht engine fork',
-        'android': 'Android platform support',
-        'po': 'Translation/localization files',
-        'worlds': 'Game world data',
-        'include': 'C/C++ header files',
-        'cmake': 'CMake build modules',
-        'fastlane': 'Mobile deployment automation',
-        'misc': 'Miscellaneous files',
-        # v6.2: Game engine / Godot project directory hints
-        'core': 'Core engine modules',
-        'servers': 'Engine server subsystems',
-        'modules': 'Engine extension modules',
-        'platform': 'Platform-specific implementations',
-        'drivers': 'Hardware driver wrappers',
-        'scene': 'Scene tree and nodes',
-        'editor': 'Editor application code',
     }
     dir_map = {}
     try:

@@ -9,6 +9,7 @@ Cross-validates frontend registry entries to find mismatches:
 
 import os
 import re
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 
@@ -123,23 +124,52 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
                 "message": f"ID '#{name}' referenced in JS but not defined in HTML"
             })
 
-    # ─── Typo Detection ─────────────────────────────────
+    # ─── Typo Detection (time-budgeted, prefix-filtered) ────────
+    TYPE_TIME_BUDGET = 15.0  # seconds
+    TYPE_MAX_COMPARISONS = 500_000
+    TYPE_MIN_NAME_LEN = 4
+    TYPE_PREFIX_LEN = 2
+
     all_class_names = set()
+    cls_lookup = {}  # name -> cls dict, avoids repeated next() scans
     for cls in frontend.get("classes", []):
         all_class_names.add(cls["name"])
+        cls_lookup[cls["name"]] = cls
 
-    dead_classes = {cls["name"] for cls in frontend.get("classes", []) if cls["status"] == "dead"}
+    dead_classes = {name for name, cls in cls_lookup.items() if cls["status"] == "dead"}
     active_classes = all_class_names - dead_classes
 
-    # Check if a dead class is similar to an active class (likely typo)
+    # Build prefix index for active classes (first N chars → set of names)
+    prefix_index: Dict[str, set] = defaultdict(set)
+    for name in active_classes:
+        if len(name) >= TYPE_MIN_NAME_LEN:
+            prefix_index[name[:TYPE_PREFIX_LEN]].add(name)
+
+    typo_truncated = False
+    comparisons = 0
+    deadline = time.monotonic() + TYPE_TIME_BUDGET
+
     for dead_name in dead_classes:
-        for active_name in active_classes:
+        if len(dead_name) < TYPE_MIN_NAME_LEN:
+            continue
+        prefix = dead_name[:TYPE_PREFIX_LEN]
+        candidates = prefix_index.get(prefix, set())
+        if not candidates:
+            continue
+        for active_name in candidates:
+            comparisons += 1
+            if comparisons > TYPE_MAX_COMPARISONS:
+                typo_truncated = True
+                break
+            if time.monotonic() > deadline:
+                typo_truncated = True
+                break
             distance = _levenshtein_distance(dead_name, active_name)
-            if 0 < distance <= 2 and len(dead_name) > 3 and len(active_name) > 3:
-                # Also check prefix similarity
+            if 0 < distance <= 2 and len(active_name) >= TYPE_MIN_NAME_LEN:
+                # Also check prefix/suffix similarity
                 if dead_name[:3] == active_name[:3] or dead_name[-3:] == active_name[-3:]:
-                    dead_cls = next(c for c in frontend.get("classes", []) if c["name"] == dead_name)
-                    active_cls = next(c for c in frontend.get("classes", []) if c["name"] == active_name)
+                    dead_cls = cls_lookup[dead_name]
+                    active_cls = cls_lookup[active_name]
                     issues["possible_typos"].append({
                         "dead_name": dead_name,
                         "active_name": active_name,
@@ -148,15 +178,36 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
                         "active_locations": [f"{r['path']}:{r['line']}" for r in active_cls.get("css", []) + active_cls.get("js", [])],
                         "message": f"'{dead_name}' (dead) might be a typo of '{active_name}' (active)"
                     })
+        if typo_truncated:
+            break
 
-    # Total counts
+    # ─── Per-category truncation (max 200 items each) ───────────
+    MAX_PER_CATEGORY = 200
+    truncated_counts = {}
+    for cat in list(issues.keys()):
+        actual = len(issues[cat])
+        truncated_counts[cat] = actual
+        if actual > MAX_PER_CATEGORY:
+            issues[cat] = issues[cat][:MAX_PER_CATEGORY]
+
+    # Total counts (after truncation for issues, before for truncated_counts)
     total_issues = sum(len(v) for v in issues.values())
 
-    return {
+    # ─── Build flat findings list ────────────────────────────────
+    findings = []
+    for cat, items in issues.items():
+        for item in items:
+            entry = {"category": cat}
+            entry.update(item)
+            findings.append(entry)
+
+    result = {
         "status": "ok",
         "workspace": workspace,
         "total_issues": total_issues,
         "issues": issues,
+        "findings": findings,
+        "truncated_counts": truncated_counts,
         "stats": {
             "css_no_html": len(issues["css_no_html"]),
             "html_no_css": len(issues["html_no_css"]),
@@ -165,6 +216,11 @@ def detect_missing_refs(workspace: str) -> Dict[str, Any]:
             "possible_typos": len(issues["possible_typos"])
         }
     }
+
+    if typo_truncated:
+        result["typo_truncated"] = True
+
+    return result
 
 
 def _is_likely_tailwind(class_name: str) -> bool:

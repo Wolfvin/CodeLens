@@ -342,6 +342,27 @@ def map_state(
     all_exports_by_file: Dict[str, List[Dict]] = defaultdict(list)
     all_consumers: Dict[str, List[Dict]] = defaultdict(list)
 
+    # ─── Detect if React is actually used in this project ─────────
+    # Prevents false positives: Vue/Pinia projects may have createContext()
+    # calls that are NOT React's createContext.
+    has_react = False
+    try:
+        from framework_detect import detect_frameworks
+        fw = detect_frameworks(workspace)
+        has_react = fw.get("has_react", False) or "react" in fw.get("frameworks", [])
+    except Exception:
+        # Fallback: check package.json for react dependency
+        pkg_path = os.path.join(workspace, "package.json")
+        if os.path.exists(pkg_path):
+            try:
+                import json
+                with open(pkg_path, 'r', encoding='utf-8') as f:
+                    pkg = json.load(f)
+                deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+                has_react = "react" in deps or "react-dom" in deps
+            except Exception:
+                pass
+
     for root, dirs, filenames in os.walk(workspace):
         dirs[:] = [d for d in dirs if d not in DEFAULT_IGNORE_DIRS and not d.startswith('.')]
         if '.codelens' in root:
@@ -381,7 +402,9 @@ def map_state(
                     state_flow.extend(redux_results["flow"])
 
             # ─── React Context ────────────────────────────────
-            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+            # Only extract React Context if the project actually uses React.
+            # Vue/Pinia projects may use createContext() from non-React libraries.
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"} and has_react:
                 ctx_results = _extract_react_context(content, rel_path)
                 if ctx_results["stores"]:
                     frameworks_detected.add("react_context")
@@ -964,18 +987,44 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
     - <ContextName.Provider value={...}> provision
     - Custom hook wrappers: const useFoo = () => useContext(FooContext)
     - Variable exports matching *Context naming convention
+
+    IMPORTANT: Only matches createContext/useContext when the file actually
+    imports from React. This prevents false positives in Vue/Pinia projects
+    that have their own createContext utilities.
     """
     stores = []
     flow = []
 
+    # ─── Verify this file uses React before matching createContext ───
+    # Must have an import from 'react' to consider this file as using React Context.
+    # Patterns matched:
+    #   import { createContext } from 'react'
+    #   import { useContext, createContext } from "react"
+    #   import React, { createContext } from 'react'
+    #   import * as React from 'react'  (then React.createContext used)
+    has_react_import = bool(re.search(
+        r'(?:import\s+.*\bcreateContext\b.*from\s+[\'"]react[\'"]'
+        r'|import\s+.*\buseContext\b.*from\s+[\'"]react[\'"]'
+        r'|import\s+\*\s+as\s+React\s+from\s+[\'"]react[\'"]'
+        r'|import\s+React\s*(?:,\s*\{[^}]*\})?\s*from\s+[\'"]react[\'"]'
+        r'|from\s+[\'"]react[\'"]\s*;?\s*$)',
+        content,
+        re.MULTILINE
+    ))
+
     # createContext — named pattern: const FooContext = createContext()
     # v6.2: Also handles generic type params: const FooContext = createContext<Type>(null)
+    # v6.3: Only match if file imports from React (prevents Vue false positives)
     for m in re.finditer(
         r'(?:const|let|var)\s+(\w+Context)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
         content
     ):
         ctx_name = m.group(1)
         line_num = content[:m.start()].count('\n') + 1
+
+        # Skip if file doesn't import from React
+        if not has_react_import:
+            continue
 
         stores.append({
             "name": ctx_name,
@@ -998,6 +1047,7 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
     # createContext — variable assignment without "Context" suffix
     # e.g., const ProxiesContext = createContext()
     # v6.2: Also handles generic type params: const Foo = createContext<Type>(null)
+    # v6.3: Only match if file imports from React (prevents Vue false positives)
     for m in re.finditer(
         r'(?:const|let|var)\s+(\w+)\s*=\s*createContext\s*(?:<[^>]*>)?\s*\(',
         content
@@ -1007,6 +1057,10 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
         if ctx_name.endswith('Context') or ctx_name.endswith('Provider'):
             continue
         line_num = content[:m.start()].count('\n') + 1
+
+        # Skip if file doesn't import from React
+        if not has_react_import:
+            continue
 
         stores.append({
             "name": ctx_name,
@@ -1027,28 +1081,32 @@ def _extract_react_context(content: str, rel_path: str) -> Dict[str, Any]:
         })
 
     # useContext(ContextName) or useContext(Name)
-    for m in re.finditer(r'useContext\s*\(\s*(\w+)\s*\)', content):
-        ctx_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        flow.append({
-            "from": rel_path,
-            "action": f"useContext({ctx_name})",
-            "to": ctx_name,
-            "file": rel_path,
-            "type": "read",
-        })
+    # v6.3: Also guard with React import check
+    if has_react_import:
+        for m in re.finditer(r'useContext\s*\(\s*(\w+)\s*\)', content):
+            ctx_name = m.group(1)
+            line_num = content[:m.start()].count('\n') + 1
+            flow.append({
+                "from": rel_path,
+                "action": f"useContext({ctx_name})",
+                "to": ctx_name,
+                "file": rel_path,
+                "type": "read",
+            })
 
     # <ContextName.Provider value={...}>
-    for m in re.finditer(r'<(\w+(?:Context)?)\.Provider\s+value\s*=\s*\{', content):
-        ctx_name = m.group(1)
-        line_num = content[:m.start()].count('\n') + 1
-        flow.append({
-            "from": rel_path,
-            "action": f"<{ctx_name}.Provider>",
-            "to": ctx_name,
-            "file": rel_path,
-            "type": "provide",
-        })
+    # v6.3: Also guard with React import check (JSX implies React)
+    if has_react_import:
+        for m in re.finditer(r'<(\w+(?:Context)?)\.Provider\s+value\s*=\s*\{', content):
+            ctx_name = m.group(1)
+            line_num = content[:m.start()].count('\n') + 1
+            flow.append({
+                "from": rel_path,
+                "action": f"<{ctx_name}.Provider>",
+                "to": ctx_name,
+                "file": rel_path,
+                "type": "provide",
+            })
 
     return {"stores": stores, "flow": flow}
 

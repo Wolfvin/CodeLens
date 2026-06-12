@@ -1,7 +1,7 @@
 ---
 name: codelens
 description: >
-  CodeLens v6.2 — Live Codebase Reference Intelligence (Tree-sitter Edition).
+  CodeLens v6 — Live Codebase Reference Intelligence (Tree-sitter Edition).
   MUST activate this skill EVERY TIME you are about to create, edit, or delete HTML class/id,
   CSS selector, JSX className, or function in Rust/JS/TS/Python. Use before writing new code
   that involves id, class, className, or function name — to prevent collision,
@@ -32,41 +32,24 @@ description: >
   cyclomatic/cognitive complexity scoring, ReDoS-vulnerable regex auditing, accessibility auditing.
   v5 adds: dependency vulnerability scanning (CVE database + npm/cargo/pip audit), performance anti-pattern detection (N+1, sync blocking, memory leaks, expensive renders, large bundles), deep CSS analysis (unused variables, orphan keyframes, specificity wars, duplicate properties, z-index abuse).
   v6 adds: monorepo-aware framework detection (turborepo, pnpm-workspace, nx), accurate god object detection (class/impl body scoping), API route false positive elimination, CSS specificity false positive fix, dead code from registry cross-reference, state map constant/component filtering, polyglot project identity.
-  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS, Lua, C/C++, GLSL, GDScript, Kotlin.
+  Supports: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Tailwind CSS, SCSS.
   Powered by tree-sitter for accurate AST-based parsing.
-  Fallback parsers for: Java, Kotlin, C/C++, Go, Lua, C#, PHP, GDScript, Dart, Swift, Scala, Ruby, Elixir, Shell.
 ---
 
-# CodeLens v6.2
+# CodeLens v6
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
-## What's New in v6.2 — The "Game Engine & Polyglot" Release
+## What's New in v6.3 — Tested on n8n-io/n8n (20K+ files, Vue+TS pnpm/turborepo monorepo)
 
-- **GDScript (.gd) support**: Full GDScript fallback parser with function, class, signal, extends, preload/load extraction. 690 .gd files parsed in Godot test.
-- **SCons build system detection**: Detects SConstruct files, classifies as `cpp-game-engine` (with GDScript), `cpp-graphics`, or `cpp-project`.
-- **Game engine framework detection**: Detects Godot (SConstruct/project.godot/.gd), Unreal (.uproject), Unity (.unity), SCons build system.
-- **Kotlin (.kt) as separate language**: No longer merged with Java. Separate parsing with existing Kotlin fallback parser.
-- **Smart C++ vs Python identity**: When C++ files outnumber Python 5:1+ in a CMake/SCons project, Python is classified as "build-scripts" not the main language. Fixes Godot being misidentified as "python-project".
-- **Architecture total_lines fallback**: When outline engine returns 0 lines (non-tree-sitter languages), counts lines from all source files directly. Godot: 4,691,750 lines correctly reported.
-- **Timeout protection for handbook/summary/analyze**: Time-budget aware engine execution. Sub-engines skipped gracefully with `timed_out_engines` list when approaching timeout.
-- **max_files propagation**: `handbook` and `analyze` now pass `max_files` limit to smell, dead-code, and other file-intensive engines.
-- **Game engine directory hints**: Added core, servers, modules, platform, drivers, scene, editor directory descriptions.
-- **project.godot name extraction**: Reads `config/name` from project.godot for accurate project identity.
-- **Tested on godotengine/godot** (14,007 files, 418MB: C++/GDScript/C#/Java/Kotlin/GLSL game engine).
-
-## What's New in v6.1 — The "Analyze Everything, Even Games" Release
-
-- **CMake/C++ project identity**: Parses `CMakeLists.txt` for project name/version. Classifies as `cpp-game-engine`, `qt-desktop-app`, `cpp-graphics`, `cpp-mobile-app`, or `cpp-project`.
-- **Lua entry points**: New `lua_entry` type with `dofile()`, `require()`, `core.register_*()` and `minetest.register_*()` patterns for game mod detection.
-- **C++ entry points**: Added `WinMain`, `wmain`, `SDL_main`, `DllMain` patterns for Windows/native applications.
-- **GLSL shader language detection**: `.glsl`, `.fsh`, `.vsh`, `.frag`, `.vert` files recognized.
-- **Removed C/C++/Java/Kotlin from unsupported languages**: All have working fallback parsers.
-- **Fixed `.h` files classified as C instead of C++**: Now correctly counted as C++ headers.
-- **Game engine directory hints**: 18 new directory descriptions for game engine projects.
-- **C++/Lua/GLSL tooling recommendations**: clang-tidy, cppcheck, luacheck, glslangValidator.
-- **Fixed architecture total_files**: Was only counting tree-sitter-supported languages; now counts all source files.
-- **Tested on minetest/minetest** (2,430 files: C++/Lua/GLSL game engine).
+- **Large repo timeout fixes**: `missing_refs` O(n²) typo detection now time-budgeted (15s cap, 2-char prefix filtering, 500K comparison cap, pre-built lookup dict). `analyze` command gets `--timeout` (default 300s) with per-engine time budget and graceful degradation (skips engines when <20% budget remains). `handbook` command gets `--timeout` (default 120s) with per-engine skip and `partial: true` output flag.
+- **api-map tauri false positive fix**: Removed overly broad `invoke\s*\(` pattern from tauri import detection. Many non-Tauri projects (AWS Lambda, gRPC, n8n workflow nodes) use `invoke()` calls that were falsely detected as Tauri IPC. Now only matches explicit `@tauri-apps/api` imports.
+- **state-map react_context false positive fix**: `react_context` detection now requires actual React dependency (`has_react` check via framework_detect or package.json). Vue/Pinia projects no longer produce `react_context` false positives. File-level import check also added: `createContext` must come from a React import.
+- **entrypoints `--exclude-tests` flag**: New `--exclude-tests` flag on the `entrypoints` command filters out `test_entry` type from scanning. Reduces n8n entrypoints from 71K (98% test entries) to 1.6K production entries. `test_entry` output also capped at 100 items max. Analyze command passes `exclude_tests=True` by default.
+- **smell god_object JS/TS brace-depth tracking**: Replaced naive regex that counted ALL function-like patterns in the entire file (10-30x inflation) with proper brace-depth tracking like Rust impl blocks. Now only counts methods inside actual `class { }` body blocks. Example: `N8NStartupError` went from 87 false methods to 3 actual methods.
+- **missing_refs output improvements**: Per-category truncation (max 200 items), `truncated_counts` for actual totals, `findings` flat list for consistency with other engines, `typo_truncated` flag when time budget expires.
+- **analyze graceful degradation**: Skipped engines report `skipped: true` with `skip_reason` and `action` (suggests running individually). `skipped_engines` summary in output. Per-engine `elapsed_seconds` timing.
+- **Version**: 5.9.2 → 6.3.0.
 
 ## What's New in v6.0 — The "Analyze Everything" Release
 
