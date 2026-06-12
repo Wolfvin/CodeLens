@@ -756,8 +756,8 @@ def _compute_risk_score(findings: List[Dict], result: Dict) -> Dict[str, Any]:
     # immediate saturation to 0 on projects with many categories.
     # This preserves relative differences: -10 → 72, -35 → 31, -70 → 10, -100 → 4
     if score < 0:
-        score = round(100 * math.exp(score / 30))
-    score = max(0, min(100, score))
+        score = round(100 * math.exp(score / 30), 1)
+    score = max(0, min(100, round(score, 1)))
 
     if score >= 80:
         level = "low"
