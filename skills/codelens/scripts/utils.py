@@ -389,7 +389,7 @@ def _identify_signature(sig: bytes) -> Optional[str]:
 
 # ─── Version ────────────────────────────────────────────────
 
-CODELENS_VERSION = "6.3.0"
+CODELENS_VERSION = "6.4.0"
 
 
 # ─── Generated File Detection ───────────────────────────────
@@ -402,6 +402,53 @@ GENERATED_FILE_PATTERNS = frozenset({
     # Generated/build output
     '.d.ts',  # TypeScript declaration files (auto-generated)
 })
+
+
+def is_bundled_file(rel_path: str) -> bool:
+    """Check if a file is a bundled, minified, or generated output file.
+
+    These files are typically build artifacts that should be skipped during
+    code analysis (complexity, performance hints, etc.) because they are
+    not hand-written source code.
+
+    Checks:
+    1. Whether the path contains dist/build/vendor bundle output directories
+    2. Whether the filename matches known bundled extensions
+       (.min.js, .min.css, .map, .bundle.js, .chunk.js, .d.ts)
+    3. Whether filename ends with .global.js or similar bundled-file patterns
+
+    Args:
+        rel_path: Relative path from workspace root.
+
+    Returns:
+        True if the file appears to be a bundled/generated output file.
+    """
+    # Normalize path separators
+    normalized = rel_path.replace('\\', '/')
+    parts = normalized.split('/')
+
+    # Check if any path segment indicates a build output directory
+    bundle_dirs = {'dist', 'build', 'out', 'vendor', 'bundle', 'bundles',
+                   '.output', '.nuxt', '.next', 'storybook-static'}
+    for part in parts[:-1]:  # Skip the filename itself
+        if part in bundle_dirs:
+            return True
+
+    # Check the filename against known bundled extensions
+    filename = parts[-1].lower()
+    for ext in DEFAULT_IGNORE_EXTENSIONS:
+        if filename.endswith(ext):
+            return True
+
+    # Check for common bundled-file naming patterns
+    if '.global.js' in filename or '.global.min.js' in filename:
+        return True
+    if '.umd.' in filename or '.cjs.' in filename or '.esm.' in filename:
+        # Only if also minified
+        if '.min.' in filename:
+            return True
+
+    return False
 
 
 def is_generated_file(filename: str) -> bool:
@@ -430,3 +477,92 @@ def is_generated_file(filename: str) -> bool:
     if lower.endswith('.lock') or lower.endswith('.lock.yml') or lower.endswith('.lock.yaml'):
         return True
     return False
+
+
+def scan_tauri_artifacts(workspace: str) -> Optional[Dict[str, Any]]:
+    """Scan workspace for Tauri-specific artifacts and configuration.
+
+    Analyzes:
+    1. tauri.conf.json for IPC commands, permissions, and security config
+    2. Cargo.toml for Tauri dependencies and sidecar configs
+    3. WebView security settings (CSP, asset protocol)
+
+    Args:
+        workspace: Absolute path to workspace
+
+    Returns:
+        Dict with Tauri analysis results, or None if no Tauri artifacts found.
+    """
+    import json as _json
+
+    workspace = os.path.abspath(workspace)
+
+    # Find tauri.conf.json — could be in root or src-tauri/
+    tauri_conf_paths = [
+        os.path.join(workspace, "src-tauri", "tauri.conf.json"),
+        os.path.join(workspace, "tauri.conf.json"),
+    ]
+
+    tauri_conf = None
+    tauri_conf_path = None
+    for conf_path in tauri_conf_paths:
+        if os.path.isfile(conf_path):
+            tauri_conf_path = conf_path
+            try:
+                with open(conf_path, 'r', encoding='utf-8') as f:
+                    tauri_conf = _json.load(f)
+                break
+            except (json.JSONDecodeError, IOError):
+                pass
+
+    if tauri_conf is None:
+        return None
+
+    result = {
+        "status": "ok",
+        "tauri_conf_path": os.path.relpath(tauri_conf_path, workspace),
+        "security": {},
+        "ipc_commands": [],
+        "sidecars": [],
+    }
+
+    # Extract security settings
+    security = tauri_conf.get("security", {})
+    if security:
+        csp = security.get("csp", None)
+        asset_protocol = security.get("assetProtocol", {})
+        result["security"] = {
+            "csp_configured": csp is not None,
+            "csp_value": csp if csp else "not_set",
+            "asset_protocol_enable": asset_protocol.get("enable", False),
+            "asset_protocol_scope": asset_protocol.get("scope", []),
+        }
+
+    # Extract IPC commands from Tauri plugins
+    plugins = tauri_conf.get("plugins", {})
+    if plugins:
+        for plugin_name, plugin_conf in plugins.items():
+            if isinstance(plugin_conf, dict) and "commands" in plugin_conf:
+                for cmd in plugin_conf["commands"]:
+                    result["ipc_commands"].append({
+                        "plugin": plugin_name,
+                        "command": cmd,
+                    })
+
+    # Extract sidecar configs
+    bundle = tauri_conf.get("bundle", {})
+    external_bin = bundle.get("externalBin", [])
+    if external_bin:
+        result["sidecars"] = external_bin
+
+    # Check for dangerous patterns
+    warnings = []
+    if result["security"].get("asset_protocol_enable") is True:
+        warnings.append("Asset protocol is enabled — ensure scope is restricted")
+    if result["security"].get("csp_configured") is False:
+        warnings.append("No CSP configured — consider adding Content-Security-Policy")
+    if result["sidecars"]:
+        warnings.append(f"Found {len(result['sidecars'])} sidecar binaries — verify their source and integrity")
+    result["warnings"] = warnings
+
+    return result

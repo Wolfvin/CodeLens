@@ -23,7 +23,7 @@ import os
 import time
 from typing import Dict, Any, List, Optional
 from commands import register_command
-from utils import logger
+from utils import logger, CODELENS_VERSION
 
 
 def add_args(parser):
@@ -96,7 +96,7 @@ def analyze_repository(
         "workspace": workspace,
         "focus": focus,
         "detail": detail,
-        "codelens_version": "6.0",
+        "codelens_version": CODELENS_VERSION,
         "time_budget_seconds": total_budget,
     }
 
@@ -425,17 +425,20 @@ def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
 
 
 def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
-    from envcheck_engine import audit_environment
-    env = audit_environment(workspace)
-    issues = env.get("stats", {}).get("total_issues", 0)
-    if issues == 0:
+    from envcheck_engine import check_env_vars
+    env = check_env_vars(workspace)
+    total_vars = env.get("stats", {}).get("total_vars", 0)
+    required_no_fallback = env.get("required_without_fallback", [])
+    # Count actual issues: required vars without fallback are the real risk
+    issues = len(required_no_fallback)
+    if issues == 0 and total_vars == 0:
         return None
     return {
         "category": "env_issues",
         "label": "Environment Issues",
-        "total": issues,
-        "severity": "medium",
-        "top_items": env.get("issues", [])[:max_items],
+        "total": issues if issues > 0 else total_vars,
+        "severity": "high" if issues > 0 else "medium",
+        "top_items": required_no_fallback[:max_items] if required_no_fallback else env.get("variables", [])[:max_items],
         "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
         "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
     }

@@ -1,5 +1,26 @@
 # CodeLens Changelog
 
+## v6.4.0 — 2026-06-12
+
+### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)
+
+### Fixed (4)
+
+- **CRITICAL: `is_bundled_file` missing from `utils.py`** — `complexity_engine.py` and `perfhint_engine.py` imported `is_bundled_file` from `utils`, but the function never existed. This caused `ImportError` during command registration, silently breaking `complexity`, `perf-hint`, `ask`, and `context` commands (4 of 45 commands non-functional). Added `is_bundled_file()` to `utils.py`.
+- **CRITICAL: `analyze` command env check used wrong API** — `_detect_env()` called `audit_environment()` which doesn't exist — the correct function is `check_env_vars()`. Also used wrong return keys. The `env_issues` category was always skipped in analysis output.
+- **`analyze` command hardcoded version** — Output showed `codelens_version: "6.0"` instead of using `CODELENS_VERSION` constant.
+- **`pyproject.toml` formatting error** — Missing newlines caused TOML parse failure.
+
+### Added (7)
+
+- **Python tooling framework detection** — Added 7 new Python framework signatures: `pytest`, `poetry`, `setuptools`, `tox`, `sphinx`, `nox`, `hatch`. Added `has_pytest`, `has_poetry`, `has_python` flags.
+- **Pipfile dependency parsing** — Now parses `[packages]` and `[dev-packages]` sections.
+- **Improved pyproject.toml Poetry dependency parsing** — Section-aware TOML parsing for Poetry and PEP 621 dependency formats.
+- **Python project identity fallback** — Detects Python projects from `requirements.txt`, `setup.py`/`setup.cfg`, and `.py` file existence. No more `type: "unknown"` for pure Python repos.
+- **`scan_tauri_artifacts()` implementation** — Parses `tauri.conf.json` for IPC commands, security settings, sidecar binaries, and warns about dangerous patterns.
+- **Command import error logging level** — Changed from `WARNING` to `ERROR` so broken command modules are more discoverable.
+- **`.py` file detection in framework walk** — Added Python file detection alongside `.vue`, `.svelte`, `.php`.
+
 ## v5.9.0 — 2026-06-12
 
 ### Tested against readest/readest (1,244 files: 1,177 TSX + 40 Rust, Tauri V2 + Next.js 16 ebook reader)

@@ -33,6 +33,6 @@ for fname in sorted(os.listdir(_commands_dir)):
         try:
             importlib.import_module(f'.{fname[:-3]}', package='commands')
         except Exception as e:
-            logging.getLogger('codelens').warning(
+            logging.getLogger('codelens').error(
                 f"Failed to import command module '{fname}': {e}"
             )

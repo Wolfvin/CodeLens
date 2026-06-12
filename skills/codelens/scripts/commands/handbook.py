@@ -527,6 +527,33 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         except Exception:
             logger.warning("go.mod parsing failed", exc_info=True)
 
+    # Fallback: detect Python from requirements.txt, setup.py, or .py files
+    if python_type is None:
+        req_path = os.path.join(workspace, 'requirements.txt')
+        setup_py_path = os.path.join(workspace, 'setup.py')
+        setup_cfg_path = os.path.join(workspace, 'setup.cfg')
+        if os.path.isfile(req_path):
+            # Analyze requirements.txt content to classify
+            try:
+                with open(req_path, 'r', encoding='utf-8') as f:
+                    req_content = f.read().lower()
+                if any(fw in req_content for fw in ('fastapi', 'flask', 'django', 'starlette', 'sanic', 'aiohttp')):
+                    python_type = "backend-api"
+                elif any(fw in req_content for fw in ('pytest', 'tox', 'nox', 'hypothesis')):
+                    python_type = "python-test-suite"
+                else:
+                    python_type = "python-project"
+            except Exception:
+                python_type = "python-project"
+        elif os.path.isfile(setup_py_path) or os.path.isfile(setup_cfg_path):
+            python_type = "python-library"
+        else:
+            # Check if any .py files exist (shallow scan — top-level only)
+            for entry in os.listdir(workspace):
+                if entry.endswith('.py'):
+                    python_type = "python-project"
+                    break
+
     # v6: Combined type detection — handle polyglot projects
     active_types = [t for t in [js_type, python_type, rust_type, go_type] if t is not None]
 
