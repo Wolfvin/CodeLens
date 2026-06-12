@@ -460,12 +460,24 @@ def _extract_project_identity(workspace: str) -> Dict[str, Any]:
         try:
             with open(pyproject_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            name_match = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
-            ver_match = re.search(r'version\s*=\s*["\']([^"\']+)["\']', content)
+            # Extract fields from the [project] section specifically.
+            # Find the [project] section content (up to the next section or EOF).
+            project_section = ""
+            project_match = re.search(r'^\[project\]\s*\n(.*?)(?=^\[|\Z)', content, re.MULTILINE | re.DOTALL)
+            if project_match:
+                project_section = project_match.group(1)
+            else:
+                # Fallback: search the whole file (for flat pyproject.toml without sections)
+                project_section = content
+            name_match = re.search(r'^name\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
+            ver_match = re.search(r'^version\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
+            desc_match = re.search(r'^description\s*=\s*["\']([^"\']+)["\']', project_section, re.MULTILINE)
             if name_match:
                 identity["name"] = name_match.group(1)
             if ver_match:
                 identity["version"] = ver_match.group(1)
+            if desc_match and not identity["description"]:
+                identity["description"] = desc_match.group(1)
             if "fastapi" in content or "flask" in content or "django" in content:
                 python_type = "backend-api"
             elif "pytest" in content:

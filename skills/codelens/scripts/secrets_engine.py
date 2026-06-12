@@ -565,6 +565,14 @@ def _scan_file_patterns(content: str, rel_path: str, ext: str, is_test: bool = F
                     if _is_localhost_connection_string(raw_value):
                         continue
 
+                    # Skip path values flagged as passwords (pwd="/tmp/..." means "present working directory")
+                    if _is_path_value_misclassified_as_secret(line_text, raw_value, category):
+                        continue
+
+                    # Skip URL test data (example.com, localhost, test domains in test files)
+                    if is_test and _is_url_test_data(raw_value, line_text):
+                        continue
+
                     # Mask the value for safe reporting
                     masked = _mask_value(raw_value)
 
@@ -1054,6 +1062,66 @@ def _is_credential_template_file(rel_path: str, content: str) -> bool:
         return True
 
     return False
+
+def _is_path_value_misclassified_as_secret(line_text: str, raw_value: str, category: str) -> bool:
+    """Check if a value flagged as a password/secret is actually a filesystem path.
+
+    Handles the common false positive where `pwd="/tmp/archivebox"` is flagged
+    as a password — `pwd` here means "present working directory", not a password.
+
+    Also skips values that are clearly filesystem paths when the key is `pwd`.
+    """
+    if category != "password":
+        return False
+
+    line_stripped = line_text.strip()
+
+    # Check if the key is `pwd` (present working directory, not password)
+    # Pattern: pwd="..." or pwd: "..." or pwd = "..."
+    if re.match(r'(?i)\bpwd\b\s*(?:=|:)\s*["\']', line_stripped):
+        # If the value looks like a path, it's "present working directory"
+        if _looks_like_path(raw_value):
+            return True
+
+    return False
+
+
+def _looks_like_path(value: str) -> bool:
+    """Check if a value looks like a filesystem path rather than a secret."""
+    if not value:
+        return False
+    # Absolute paths
+    if re.match(r'^/(tmp|var|home|usr|etc|opt|srv|root|mnt|dev|proc|sys|run)/', value):
+        return True
+    # Relative paths
+    if re.match(r'^\.\.?/', value):
+        return True
+    # Paths with common directory prefixes
+    if re.match(r'^~/', value):
+        return True
+    return False
+
+
+def _is_url_test_data(raw_value: str, line_text: str) -> bool:
+    """Check if a value is URL parsing test data with example/test domains.
+
+    URL test data like "http://us:pa@ex.co:42/..." contains user:pass@
+    format but with example domains — these are test fixtures, not real credentials.
+    """
+    # Check for example/test domain patterns in URL values
+    test_domain_indicators = [
+        'example.com', 'example.org', 'example.net',
+        'ex.co', 'test.com', 'test.org',
+        'localhost', '127.0.0.1', '0.0.0.0',
+        'httpbin.org', 'mocky.io', 'postman-echo.com',
+    ]
+    value_lower = raw_value.lower()
+    line_lower = line_text.lower()
+    for domain in test_domain_indicators:
+        if domain in value_lower or domain in line_lower:
+            return True
+    return False
+
 
 def _reduce_severity(severity: str) -> str:
     """Reduce severity level for findings in test files.

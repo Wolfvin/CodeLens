@@ -53,6 +53,34 @@ CONFIG_FILE_PATTERNS = {
     "nuxt.config.", "vue.config.",
 }
 
+# v7.0: Django/CLI file patterns — print() in these files is legitimate CLI output,
+# not a debug leak. Django management commands, Click/argparse CLI entry points,
+# and files in cli/ directories regularly use print() for user-facing output.
+CLI_FILE_PATTERNS = {
+    "/cli/",              # e.g., archivebox/cli/
+    "/management/commands/",  # Django management commands
+    "/commands/",         # Generic CLI commands directory
+    "/bin/",              # CLI binary scripts
+}
+
+# Content patterns that indicate a file is a CLI entry point
+CLI_CONTENT_PATTERNS = [
+    r'@click\.command\s*\(',
+    r'@click\.group\s*\(',
+    r'click\.command\s*\(',
+    r'argparse\.ArgumentParser\s*\(',
+    r'ArgumentParser\s*\(',
+    r'sys\.argv',
+    r'__command__\s*=',
+]
+
+# v7.0: Django settings/config file patterns — these files often contain many
+# commented-out configuration options that are intentional, not debug code.
+DJANGO_SETTINGS_PATTERNS = {
+    "settings.py", "settings/", "settings_",   # Django settings modules
+    "config.py", "config/", "conf.py", "conf/",  # Config modules
+}
+
 # Performance limits for large codebases
 MAX_FILES_PER_RUN = 5000  # v5.8: Increased from 3000 to handle large repos
 
@@ -279,6 +307,15 @@ def detect_debug_leaks(
             is_test_file = any(p in rel_path for p in TEST_FILE_PATTERNS)
             # v6.2: Check if this is a config file
             is_config_file = any(p in rel_path for p in CONFIG_FILE_PATTERNS)
+            # v7.0: Check if this is a CLI file (print() is legitimate output)
+            is_cli_file = any(p in rel_path for p in CLI_FILE_PATTERNS)
+            if not is_cli_file and ext == ".py":
+                for cli_pat in CLI_CONTENT_PATTERNS:
+                    if re.search(cli_pat, content):
+                        is_cli_file = True
+                        break
+            # v7.0: Check if this is a Django settings/config file
+            is_settings_file = any(p in rel_path for p in DJANGO_SETTINGS_PATTERNS)
             lines = content.split('\n')
 
             # ─── console_log ──────────────────────────────
@@ -287,7 +324,7 @@ def detect_debug_leaks(
 
             # ─── print_statement ──────────────────────────
             if "print_statement" in categories:
-                _detect_print_statements(lines, rel_path, ext, is_test_file, is_config_file, leaks)
+                _detect_print_statements(lines, rel_path, ext, is_test_file, is_config_file, is_cli_file, leaks)
 
             # ─── debugger ─────────────────────────────────
             if "debugger" in categories:
@@ -299,7 +336,7 @@ def detect_debug_leaks(
 
             # ─── commented_code ───────────────────────────
             if "commented_code" in categories:
-                _detect_commented_code(lines, rel_path, ext, is_test_file, is_config_file, leaks)
+                _detect_commented_code(lines, rel_path, ext, is_test_file, is_config_file, is_settings_file, leaks)
 
             # ─── test_skip ────────────────────────────────
             if "test_skip" in categories:
@@ -447,7 +484,8 @@ def _detect_console_logs(
 
 
 def _detect_print_statements(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool,
+    is_config_file: bool, is_cli_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect print(), pprint(), echo, fmt.Println, println! statements."""
     for i, line in enumerate(lines):
@@ -479,6 +517,18 @@ def _detect_print_statements(
                     break
             if is_cli_output:
                 continue
+
+            # v7.0: In Django/CLI files, print() is the standard output mechanism.
+            # Django management commands and Click CLI apps use print() for user-facing
+            # output — this is not a debug leak. Only flag if the line contains
+            # debug-specific patterns (debug, todo, fixme, hack, temp, etc.).
+            if is_cli_file and ext == ".py" and label in ("print()", "pprint()", "pprint.pprint()"):
+                has_debug_pattern = bool(re.search(
+                    r'\bdebug\b|\bdbg\b|\btodo\b|\bfixme\b|\bhack\b|\btemp\b|\btrace\b|\bdump\b',
+                    stripped, re.IGNORECASE
+                ))
+                if not has_debug_pattern:
+                    continue  # Legitimate CLI output, not a debug leak
 
             # In Python, skip if it's inside __main__ block or a CLI entry point
             if ext == ".py":
@@ -516,9 +566,16 @@ def _detect_print_statements(
                 severity = "info"
                 should_remove = False
 
+            # v7.0: In CLI files with debug patterns, downgrade severity
+            if is_cli_file:
+                severity = "low"
+                should_remove = False
+
             message = f"Debug print statement: {label}"
             if is_config_file:
                 message += " (in config file — not production code)"
+            elif is_cli_file:
+                message += " (in CLI file — likely legitimate output)"
 
             leaks.append({
                 "category": "print_statement",
@@ -702,7 +759,8 @@ def _detect_todo_fixme(
 
 
 def _detect_commented_code(
-    lines: List[str], rel_path: str, ext: str, is_test_file: bool, is_config_file: bool, leaks: List[Dict]
+    lines: List[str], rel_path: str, ext: str, is_test_file: bool,
+    is_config_file: bool, is_settings_file: bool, leaks: List[Dict]
 ) -> None:
     """Detect 3+ consecutive commented lines that look like code."""
     comment_prefix = _get_comment_prefix(ext)
@@ -724,8 +782,12 @@ def _detect_commented_code(
             i += 1
         block_end = i
 
-        # Need at least 3 consecutive commented lines (5 for Go — too many false positives from godoc)
+        # Need at least 3 consecutive commented lines
+        # (5 for Go — too many false positives from godoc)
+        # (5 for Django settings/config files — commented-out config options are intentional)
         min_initial = 5 if ext == ".go" else 3
+        if is_settings_file and ext == ".py":
+            min_initial = 5
         if block_end - block_start < min_initial:
             continue
 
@@ -739,7 +801,14 @@ def _detect_commented_code(
 
         # v5.8.1: Go projects use multi-line comments heavily for godoc,
         # so require a higher threshold (3 instead of 2) to avoid false positives.
-        threshold = 3 if ext == ".go" else 2
+        # v7.0: Django settings files also need higher threshold (3 instead of 2)
+        # because commented-out config options often look like code (assignments).
+        if ext == ".go":
+            threshold = 3
+        elif is_settings_file and ext == ".py":
+            threshold = 3
+        else:
+            threshold = 2
 
         if code_score >= threshold:
             severity = "low"
@@ -753,9 +822,17 @@ def _detect_commented_code(
                 severity = "info"
                 should_remove = False
 
+            # v7.0: In Django settings files, downgrade severity — commented-out
+            # config options are intentional, not debug code
+            if is_settings_file:
+                severity = "info"
+                should_remove = False
+
             message = f"{block_end - block_start} commented lines (code score: {code_score})"
             if is_config_file:
                 message += " (in config file — not production code)"
+            elif is_settings_file:
+                message += " (in settings file — likely intentional config comments)"
 
             leaks.append({
                 "category": "commented_code",
