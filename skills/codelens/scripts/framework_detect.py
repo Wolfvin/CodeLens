@@ -189,6 +189,31 @@ FRAMEWORK_SIGNATURES = {
         "cargo_crates": ["rocket"],
         "indicators": []
     },
+    # PHP frameworks
+    "laravel": {
+        "packages": [],
+        "composer_packages": ["laravel/framework"],
+        "config_files": ["artisan"],
+        "indicators": ["app/Http/Kernel.php", "app/Http/Middleware/", "routes/web.php", "routes/api.php"]
+    },
+    "symfony": {
+        "packages": [],
+        "composer_packages": ["symfony/framework-bundle"],
+        "config_files": ["symfony.lock"],
+        "indicators": ["config/bundles.php", "src/Kernel.php"]
+    },
+    "wordpress": {
+        "packages": [],
+        "composer_packages": ["johnpbloch/wordpress"],
+        "config_files": ["wp-config.php"],
+        "indicators": ["wp-includes/", "wp-admin/"]
+    },
+    "drupal": {
+        "packages": [],
+        "composer_packages": ["drupal/core"],
+        "config_files": [],
+        "indicators": ["modules/", "themes/"]
+    },
 }
 
 
@@ -241,6 +266,8 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_electron": False,
         "has_golang": False,
         "has_rust": False,
+        "has_php": False,
+        "has_laravel": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
         "module_system": None
@@ -500,7 +527,45 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_tauri"] = True
                     break
 
-    # 5. Check file patterns (for Vue, Svelte)
+    # 5. Check PHP/composer.json for framework detection
+    composer_deps = set()
+    composer_path = os.path.join(workspace, "composer.json")
+    if os.path.exists(composer_path):
+        if "php" not in detected["frameworks"]:
+            detected["frameworks"].append("php")
+        detected["has_php"] = True
+
+        try:
+            with open(composer_path, 'r', encoding='utf-8') as f:
+                composer = json.load(f)
+            composer_deps.update(composer.get("require", {}).keys())
+            composer_deps.update(composer.get("require-dev", {}).keys())
+        except (json.JSONDecodeError, IOError):
+            pass
+
+        # Match composer deps against framework signatures
+        for fw_name, sig in FRAMEWORK_SIGNATURES.items():
+            if fw_name in detected["frameworks"]:
+                continue
+            composer_pkgs = sig.get("composer_packages", [])
+            for pkg_name in composer_pkgs:
+                if pkg_name.lower() in {d.lower() for d in composer_deps}:
+                    detected["frameworks"].append(fw_name)
+                    if fw_name == "laravel":
+                        detected["has_laravel"] = True
+                    break
+
+    # 5b. Also check for artisan file (Laravel) and other PHP markers
+    if not detected["has_php"]:
+        php_markers = ['composer.json', 'index.php', 'artisan']
+        for marker in php_markers:
+            if os.path.exists(os.path.join(workspace, marker)):
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
+                break
+
+    # 5. Check file patterns (for Vue, Svelte, PHP)
     for root, dirs, files in os.walk(workspace):
         # Skip ignored dirs
         skip = False
@@ -520,6 +585,14 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                 if "svelte" not in detected["frameworks"]:
                     detected["frameworks"].append("svelte")
                 detected["has_svelte"] = True
+            elif f.endswith('.blade.php') and not detected["has_laravel"]:
+                if "laravel" not in detected["frameworks"]:
+                    detected["frameworks"].append("laravel")
+                detected["has_laravel"] = True
+            elif f.endswith('.php') and not detected["has_php"]:
+                if "php" not in detected["frameworks"]:
+                    detected["frameworks"].append("php")
+                detected["has_php"] = True
 
     # 5b. Check directory/file indicators (for Django, Flask, FastAPI source trees)
     # Some frameworks have distinctive directory structures even when they're the
@@ -537,6 +610,9 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                     detected["has_fastapi"] = True
                 elif fw_name == "flask":
                     detected["has_flask"] = True
+                elif fw_name == "laravel":
+                    detected["has_laravel"] = True
+                    detected["has_php"] = True
                 break
 
     # 6. Detect Tailwind from CSS content

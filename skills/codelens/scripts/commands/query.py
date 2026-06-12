@@ -148,9 +148,10 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     if domain in (None, "backend"):
         backend = load_backend_registry(workspace)
 
-        # Exact match search
+        # Exact match search — check both 'fn' and 'name' fields
         for node in backend.get("nodes", []):
-            if node["fn"] == query_name:
+            node_name = node.get("fn", "") or node.get("name", "")
+            if node_name == query_name:
                 if file_filter and file_filter not in node.get("file", ""):
                     continue
                 backend_matches.append(node)
@@ -311,9 +312,9 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
         if a == "LIST_FIRST" and worst_action not in ("STOP", "ASK"):
             worst_action = "LIST_FIRST"
 
-    # Fuzzy/substring match in backend (always try when exact match fails)
+    # Fuzzy/substring match in backend (only when exact match fails)
     # Only search backend if domain allows it, and load registry only when needed
-    if domain in (None, "backend"):
+    if total_matches == 0 and domain in (None, "backend"):
         # backend may already be loaded; only load if not already
         if 'backend' not in dir():
             backend = load_backend_registry(workspace)
