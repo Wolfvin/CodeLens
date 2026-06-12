@@ -76,12 +76,20 @@ VALIDATION_PATTERNS = {
     "zod", "yup", "celebrate", "checkSchema",
 }
 
+# Source directory classification patterns for route origin tagging
+SOURCE_CLASSIFICATION = {
+    "generated": ["generated/", ".next/", "dist/", "build/", "out/"],
+    "test": ["test/", "tests/", "__tests__/", "spec/", "__test__/"],
+    "example": ["examples/", "example/", "examples-app/", "demo/", "demos/"],
+}
+
 
 def map_api_routes(
     workspace: str,
     method: Optional[str] = None,
     path_filter: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    filter_source: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Map all API routes in the workspace, detecting framework and extracting
@@ -92,6 +100,8 @@ def map_api_routes(
         method: Optional HTTP method filter (GET, POST, etc.)
         path_filter: Optional path prefix filter (e.g., '/api/users')
         config: CodeLens config dict
+        filter_source: Optional source filter - "all" (default, include everything),
+                       "core" (only core routes), "production" (exclude test routes)
 
     Returns:
         Dict with frameworks_detected, stats, routes, route_groups,
@@ -264,12 +274,25 @@ def map_api_routes(
                 "type": mw.get("type", "unknown"),
             })
 
-    # Detect auth-protected vs public
+    # ─── Classify route sources ──────────────────────────────
+    for route in routes:
+        route["source"] = _classify_route_source(route.get("file", ""))
+
+    # ─── Detect auth-protected vs public ──────────────────────
+    # Check for Next.js middleware.ts auth patterns at workspace level
+    nextjs_middleware_auth = _scan_nextjs_middleware_auth(workspace)
+
     for route in routes:
         has_auth = any(
             mw.get("type") == "auth"
             for mw in route.get("middleware_chain", [])
         )
+        # Preserve auth_protected set by framework-specific extraction (e.g., Next.js)
+        if not has_auth and route.get("auth_protected"):
+            has_auth = True
+        # If Next.js middleware has auth, mark all nextjs routes as auth-protected
+        if not has_auth and nextjs_middleware_auth and route.get("framework") == "nextjs":
+            has_auth = True
         route["auth_protected"] = has_auth
         if has_auth:
             auth_protected_routes.add(f"{route['method']} {route['path']}")
@@ -288,6 +311,13 @@ def map_api_routes(
 
     if path_filter:
         routes = [r for r in routes if r["path"].startswith(path_filter)]
+
+    # Apply source filter
+    if filter_source and filter_source != "all":
+        if filter_source == "core":
+            routes = [r for r in routes if r.get("source") == "core"]
+        elif filter_source == "production":
+            routes = [r for r in routes if r.get("source") not in ("test", "generated")]
 
     # Stats
     by_method: Dict[str, int] = defaultdict(int)
@@ -665,10 +695,152 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
 
 # ─── Next.js Routes ────────────────────────────────────────────
 
+def _extract_nextjs_handler_name(content: str) -> str:
+    """Extract the handler function name from a Next.js Pages Router API route.
+
+    Looks for:
+    - export default function NAME / export default async function NAME
+    - const NAME = (req, res) => ... / const NAME = async (req, res) => ...
+    - const NAME = function(req, res) { ... }
+    - export default NAME (variable re-export of a named identifier)
+
+    Falls back to "default_handler" only if no name can be found.
+    """
+    # export default function NAME / export default async function NAME
+    m = re.search(r'export\s+default\s+(?:async\s+)?function\s+(\w+)', content)
+    if m:
+        return m.group(1)
+
+    # const NAME = async (req, res) => / const NAME = (req, res) =>
+    m = re.search(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(?\s*req\s*,\s*res\s*\)?\s*=>',
+        content
+    )
+    if m:
+        return m.group(1)
+
+    # const NAME = async function(req, res) { ... } / const NAME = function(req, res) { ... }
+    m = re.search(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(?req',
+        content
+    )
+    if m:
+        return m.group(1)
+
+    # export default NAME — named re-export of a previously defined identifier
+    m = re.search(r'export\s+default\s+(\w+)\s*;?\s*$', content, re.MULTILINE)
+    if m:
+        name = m.group(1)
+        # Verify this name is actually defined somewhere in the file
+        if re.search(
+            rf'(?:function\s+{re.escape(name)}\b|(?:const|let|var)\s+{re.escape(name)}\s*=)',
+            content
+        ):
+            return name
+
+    return "default_handler"
+
+
+def _detect_nextjs_auth_patterns(content: str) -> bool:
+    """Detect auth-related patterns in a Next.js route file content.
+
+    Checks for:
+    - getSession / getServerSession from next-auth
+    - withAuth / withPageAuthRequired wrappers
+    - getToken from next-auth/jwt
+    - req.headers.authorization / req.headers['authorization']
+    - req.headers.cookie with session/token verification
+    """
+    # next-auth session helpers
+    if re.search(r'\b(?:getSession|getServerSession)\b', content):
+        return True
+
+    # next-auth wrappers
+    if re.search(r'\bwithAuth\b|\bwithPageAuthRequired\b', content):
+        return True
+
+    # next-auth/jwt
+    if re.search(r'\bgetToken\b', content):
+        return True
+
+    # Authorization header checks (Pages Router style)
+    if re.search(
+        r'req\.headers\.authorization|req\.headers\[\s*[\'"]authorization[\'"]\s*\]',
+        content
+    ):
+        return True
+
+    # Authorization header checks (App Router style — request.headers.get)
+    if re.search(
+        r'request\.headers\.get\s*\(\s*[\'"]authorization[\'"]\s*\)',
+        content
+    ):
+        return True
+
+    # Cookie-based auth with session/token verification
+    if re.search(r'req\.headers\.cookie|req\.headers\[\s*[\'"]cookie[\'"]\s*\]', content):
+        if re.search(r'\b(?:session|token|verify|decrypt|parse)\b', content, re.IGNORECASE):
+            return True
+
+    # App Router cookie usage with auth intent
+    if re.search(r'cookies\s*\(\s*\)', content):
+        if re.search(r'\b(?:session|token|auth)\b', content, re.IGNORECASE):
+            return True
+
+    return False
+
+
+def _scan_nextjs_middleware_auth(workspace: str) -> bool:
+    """Scan Next.js middleware.ts/js files for auth patterns.
+
+    Checks the project root and src/ directory for middleware files.
+    Returns True if any auth-related patterns are detected.
+    """
+    auth_indicators = [
+        r'\bgetSession\b',
+        r'\bgetServerSession\b',
+        r'\bwithAuth\b',
+        r'\bwithPageAuthRequired\b',
+        r'\bgetToken\b',
+        r'\.headers\.get\s*\(\s*[\'"]authorization[\'"]\s*\)',
+        r'\bcookies?\s*\(\s*\)',
+        r'\bNextResponse\s*\.\s*redirect',       # common auth redirect pattern
+        r'\bauth\b.*\bprotect\w*\b',
+    ]
+
+    for middleware_name in [
+        'middleware.ts', 'middleware.js',
+        'src/middleware.ts', 'src/middleware.js',
+    ]:
+        middleware_path = os.path.join(workspace, middleware_name)
+        if os.path.isfile(middleware_path):
+            try:
+                with open(middleware_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                for pattern in auth_indicators:
+                    if re.search(pattern, content):
+                        return True
+            except IOError:
+                pass
+
+    return False
+
+
 def _extract_nextjs_routes(
     content: str, rel_path: str, root: str, workspace: str
 ) -> List[Dict[str, Any]]:
-    """Extract Next.js API routes from pages/api/* or app/api/*/route.ts."""
+    """Extract Next.js API routes from pages/api/* or app/api/*/route.ts.
+
+    For Pages Router (pages/api/*):
+    - Extracts the handler function name (not generic "default_handler")
+    - Detects HTTP methods via req.method checks inside the handler
+    - Detects auth patterns (next-auth, authorization headers, cookies)
+
+    For App Router (app/api/*/route.ts):
+    - Detects named HTTP method exports (GET, POST, etc.)
+    - Detects destructured and const exports
+    - Detects auth patterns in route handlers
+    """
     routes = []
 
     # pages/api/* pattern
@@ -688,7 +860,13 @@ def _extract_nextjs_routes(
 
         # Default export = handler for all methods
         if re.search(r'export\s+default\s+', content):
-            # Detect specific method handlers
+            # Extract the actual handler function name
+            handler_name = _extract_nextjs_handler_name(content)
+
+            # Detect auth patterns in this route
+            has_auth = _detect_nextjs_auth_patterns(content)
+
+            # Detect specific method handlers via req.method checks
             for method_match in re.finditer(
                 r'(?:req\.method\s*===?\s*[\'"](\w+)[\'"]|case\s+[\'"](\w+)[\'"])',
                 content
@@ -702,26 +880,28 @@ def _extract_nextjs_routes(
                 routes.append({
                     "method": http_method,
                     "path": _normalize_path(api_path),
-                    "handler_name": "default_handler",
+                    "handler_name": handler_name,
                     "file": rel_path,
                     "line": line_num,
                     "middleware_chain": [],
                     "request_type": None,
                     "response_type": None,
                     "framework": "nextjs",
+                    "auth_protected": has_auth,
                 })
 
             if not routes:
                 routes.append({
                     "method": "ALL",
                     "path": _normalize_path(api_path),
-                    "handler_name": "default_handler",
+                    "handler_name": handler_name,
                     "file": rel_path,
                     "line": 1,
                     "middleware_chain": [],
                     "request_type": None,
                     "response_type": None,
                     "framework": "nextjs",
+                    "auth_protected": has_auth,
                 })
 
     # app/api/*/route.ts pattern — exported GET, POST, etc.
@@ -732,6 +912,9 @@ def _extract_nextjs_routes(
         api_path = api_path.replace('\\', '/')
         api_path = re.sub(r'\[([^\]]+)\]', r':\1', api_path)
         api_path = re.sub(r':\.\.\.(\w+)', r':\1*', api_path)
+
+        # Detect auth patterns in this route
+        has_auth = _detect_nextjs_auth_patterns(content)
 
         # Pattern 1: export async function GET / POST / etc.
         for m in re.finditer(
@@ -750,6 +933,7 @@ def _extract_nextjs_routes(
                 "request_type": None,
                 "response_type": None,
                 "framework": "nextjs",
+                "auth_protected": has_auth,
             })
 
         # Pattern 2: export const { GET, POST } = handler() (destructured exports)
@@ -774,6 +958,7 @@ def _extract_nextjs_routes(
                     "request_type": None,
                     "response_type": None,
                     "framework": "nextjs",
+                    "auth_protected": has_auth,
                 })
 
         # Pattern 3: export const GET = ... / export const POST = ... (individual const exports)
@@ -793,6 +978,7 @@ def _extract_nextjs_routes(
                 "request_type": None,
                 "response_type": None,
                 "framework": "nextjs",
+                "auth_protected": has_auth,
             })
 
     return routes
@@ -2029,6 +2215,36 @@ def _extract_orpc_router_pairs(
 
 
 # ─── Helpers ───────────────────────────────────────────────────
+
+def _classify_route_source(rel_path: str) -> str:
+    """Classify a route's source based on its file path.
+
+    Returns:
+        "core"      — routes from src/, lib/, or other main source directories
+        "example"   — routes from examples/, demo/
+        "test"      — routes from test/, tests/, __tests__/, spec/
+        "generated" — routes from generated/, .next/, dist/, build/
+    """
+    lower_path = rel_path.replace('\\', '/').lower()
+
+    # Generated paths (check first since .next can be inside other dirs)
+    for pattern in SOURCE_CLASSIFICATION["generated"]:
+        if pattern in lower_path:
+            return "generated"
+
+    # Test paths
+    for pattern in SOURCE_CLASSIFICATION["test"]:
+        if pattern in lower_path:
+            return "test"
+
+    # Example/demo paths
+    for pattern in SOURCE_CLASSIFICATION["example"]:
+        if pattern in lower_path:
+            return "example"
+
+    # Default to core
+    return "core"
+
 
 def _normalize_path(path: str) -> str:
     """Normalize a route path (ensure leading /, remove trailing /)."""

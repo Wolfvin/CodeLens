@@ -149,6 +149,47 @@ def detect_dead_code(
     if registry_dead:
         results["registry_dead"] = registry_dead[:max_results]
 
+    # v6.4: Add source classification to all findings and downgrade non-core severity
+    _TEST_EXAMPLE_PATTERNS = [
+        '/test/', '/tests/', '/__test', '/__tests__/',
+        '/example/', '/examples/', '/e2e/',
+        '/fixture/', '/fixtures/', '/mock/', '/mocks/',
+        '/stories/', '/storybook/', '/snippets/',
+    ]
+    _CONFIG_PATTERNS = [
+        '.config.js', '.config.mjs', '.config.ts',
+        'webpack.config.', 'vite.config.', 'jest.config.',
+        'tsconfig.json', 'postcss.config.', 'tailwind.config.',
+        'babel.config.', 'eslint.config.',
+    ]
+
+    def _classify_source(rel: str) -> str:
+        normalized = '/' + rel if not rel.startswith('/') else rel
+        for p in _TEST_EXAMPLE_PATTERNS:
+            if p in normalized or normalized.startswith(p.lstrip('/')):
+                return 'test'
+        for p in _CONFIG_PATTERNS:
+            if p in rel:
+                return 'config'
+        return 'core'
+
+    by_source = {"core": 0, "test": 0, "config": 0}
+    for cat, items in results.items():
+        for item in items:
+            fpath = item.get('file', '')
+            source = _classify_source(fpath)
+            item['source'] = source
+            by_source[source] = by_source.get(source, 0) + 1
+            # Downgrade severity for non-core findings
+            if source in ('test', 'config'):
+                sev = item.get('severity', 'warning')
+                if sev == 'critical':
+                    item['severity'] = 'warning'
+                    item['downgraded'] = True
+                elif sev == 'warning':
+                    item['severity'] = 'info'
+                    item['downgraded'] = True
+
     # Compute totals
     total = sum(len(v) for v in results.values())
     by_category = {k: len(v) for k, v in results.items() if v}
@@ -182,7 +223,8 @@ def detect_dead_code(
             "files_scanned": files_scanned,
             "total_dead_code": total,
             "by_category": by_category,
-            "truncated": truncated
+            "truncated": truncated,
+            "by_source": by_source
         },
         "results": {k: v for k, v in results.items() if v},
         "categories_checked": list(categories),
@@ -599,7 +641,14 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             if is_pub:
                 continue
             # Skip test fixtures and example files
-            if any(x in file_path for x in ['/test', '/tests', '/__test', '/example', '/fixture', '/mock']):
+            # v6.4: Expanded to catch examples/, e2e/, __tests__/, stories/
+            _test_example_patterns = [
+                '/test/', '/tests/', '/__test', '/__tests__/',
+                '/example/', '/examples/', '/e2e/',
+                '/fixture/', '/fixtures/', '/mock/', '/mocks/',
+                '/stories/', '/storybook/',
+            ]
+            if any(p in file_path for p in _test_example_patterns):
                 continue
 
             # v6.3: Skip known C/C++ entry point function patterns

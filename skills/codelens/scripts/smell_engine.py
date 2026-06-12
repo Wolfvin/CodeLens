@@ -195,6 +195,19 @@ def detect_smells(
         inconsistent = _detect_inconsistent_patterns(workspace)
         all_smells["inconsistent"] = inconsistent
 
+    # Add source classification and apply severity downgrade for non-core files
+    for cat in all_smells:
+        for s in all_smells[cat]:
+            source = _classify_smell_source(s.get("file", ""))
+            s["source"] = source
+            new_severity, downgraded = _downgrade_non_core_severity(
+                s.get("severity", "info"), source
+            )
+            if downgraded:
+                s["severity"] = new_severity
+                s["downgraded"] = True
+                s["message"] += f" [severity downgraded: {source} file]"
+
     # Apply severity filter
     if severity_filter:
         for cat in all_smells:
@@ -311,6 +324,13 @@ def detect_smells(
             cat: smells for cat, smells in all_smells.items() if smells
         },
         "top_priority": top_smells[:20],
+        "by_source": {
+            source: sum(
+                1 for cat in all_smells.values() for s in cat
+                if s.get("source") == source
+            )
+            for source in ("core", "test", "example", "config")
+        },
         "categories_checked": list(categories)
     }
 
@@ -1269,3 +1289,88 @@ def _is_test_or_mock_file(rel_path: str) -> bool:
 
 # _is_docs_or_example is defined above. Note: paths like "docs_src/foo.py"
 # start without a leading slash, so we also match on path-starts-with.
+
+
+def _classify_smell_source(rel_path: str) -> str:
+    """Classify a file's source category for smell reporting.
+
+    Returns one of: "core", "test", "example", "config"
+    """
+    normalized = '/' + rel_path if not rel_path.startswith('/') else rel_path
+    basename = os.path.basename(rel_path).lower()
+
+    # Config files (e.g., .config.js, webpack.config.js, tsconfig.json)
+    config_patterns = (
+        '.config.js', '.config.ts', '.config.mjs', '.config.cjs',
+        'webpack.config.', 'vite.config.', 'rollup.config.',
+        'tsconfig.json', 'jest.config.', 'babel.config.',
+        '.eslintrc', '.prettierrc', 'tailwind.config.',
+        'postcss.config.', 'next.config.', 'nuxt.config.',
+    )
+    for pattern in config_patterns:
+        if pattern in basename:
+            return "config"
+
+    # Test files (directory or filename patterns)
+    test_dir_indicators = [
+        '/tests/', '/test/', '/__tests__/', '/spec/',
+        '/e2e/', '/integration/', '/fixtures/', '/fixture/',
+        '/mocks/', '/mock/',
+    ]
+    test_start_indicators = [
+        'tests/', 'test/', '__tests__/', 'spec/',
+        'e2e/', 'integration/', 'fixtures/', 'fixture/',
+    ]
+    test_file_patterns = (
+        '.test.', '.spec.', '.e2e.', '.e2e-spec.',
+        '_test.', '_spec.', '.stories.',
+    )
+    if any(ind in normalized for ind in test_dir_indicators):
+        return "test"
+    if any(rel_path.startswith(ind) for ind in test_start_indicators):
+        return "test"
+    for pattern in test_file_patterns:
+        if pattern in basename:
+            return "test"
+
+    # Example/docs files
+    example_dir_indicators = [
+        '/examples/', '/example/', '/demo/', '/demos/',
+        '/docs/', '/doc/', '/documentation/',
+        '/docs_src/', '/snippets/',
+        '/tutorial/', '/tutorials/', '/guides/',
+    ]
+    example_start_indicators = [
+        'examples/', 'example/', 'demo/', 'demos/',
+        'docs/', 'doc/', 'documentation/',
+        'docs_src/', 'snippets/',
+        'tutorial/', 'tutorials/', 'guides/',
+    ]
+    if any(ind in normalized for ind in example_dir_indicators):
+        return "example"
+    if any(rel_path.startswith(ind) for ind in example_start_indicators):
+        return "example"
+
+    # Everything else is core source code
+    return "core"
+
+
+def _downgrade_non_core_severity(severity: str, source: str) -> Tuple[str, bool]:
+    """Downgrade severity for non-core source files.
+
+    Test and example files have different quality standards;
+    critical smells there become warnings, warnings become info.
+    Config files are kept at their original severity.
+
+    Returns:
+        (possibly_downgraded_severity, was_downgraded)
+    """
+    if source in ("core", "config"):
+        return severity, False
+
+    if severity == "critical":
+        return "warning", True
+    elif severity == "warning":
+        return "info", True
+
+    return severity, False

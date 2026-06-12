@@ -14,7 +14,9 @@ State Management Frameworks Detected:
  8. Jotai         — atom, useAtom
  9. XState        — createMachine, StateMachine
 10. Svelte Stores — writable(), readable(), derived() from svelte/store
-11. Module-level  — global variables, singletons, module.exports of stateful objects
+11. SWR           — useSWR, mutate, SWRConfig, cache (data-fetching as state)
+12. React Query   — useQuery, useMutation, QueryClientProvider, queryClient
+13. Module-level  — global variables, singletons, module.exports of stateful objects
 
 Per-state-slice extraction: name, type (store/context/atom/global),
     defined_in, consumers, actions/mutations that modify it
@@ -151,6 +153,24 @@ def _is_typescript_type_definition(content: str, var_name: str, line_idx: int) -
     if var_name.endswith(_TS_TYPE_SUFFIXES):
         return True
 
+    # SCREAMING_SNAKE_CASE names are config constants, not runtime state
+    if var_name == var_name.upper() and len(var_name) >= 3 and var_name.isalpha():
+        return True
+    if var_name == var_name.upper() and '_' in var_name:
+        return True
+
+    # Common config constant prefixes — not state stores
+    _CONFIG_PREFIXES = ('API_', 'BASE_', 'DEFAULT_', 'CONFIG_', 'ENV_', 'BUILD_',
+                        'APP_', 'SERVER_', 'DB_', 'CLIENT_', 'MIDDLEWARE_')
+    if any(var_name.startswith(p) for p in _CONFIG_PREFIXES):
+        return True
+
+    # Common config constant standalone names
+    _CONFIG_NAMES = {'VERSION', 'BUILD_ID', 'NODE_ENV', 'API_URL', 'BASE_URL',
+                     'PUBLIC_URL', 'API_ENDPOINT', 'APP_VERSION'}
+    if var_name in _CONFIG_NAMES:
+        return True
+
     return False
 
 
@@ -183,7 +203,70 @@ def _is_simple_constant(value_part: str) -> bool:
     if re.search(r'\bas\s+const\s*;?\s*$', value):
         return True
 
+    # satisfies SomeType — config/schema definition, not mutable state
+    if re.search(r'\bsatisfies\s+\w+', value):
+        return True
+
     return False
+
+
+def _classify_source(rel_path: str) -> str:
+    """Classify the source type of a file based on its path.
+
+    Returns one of: "core", "test", "example", "config"
+
+    - "core"    — from src/, lib/, or main source directories
+    - "test"    — from test/, tests/, __tests__/, or *.test.* / *.spec.* files
+    - "example" — from examples/, demo/, docs/ directories
+    - "config"  — from config files, root constants, build configs
+    """
+    # Normalize path separators
+    path = rel_path.replace('\\', '/')
+    parts = path.split('/')
+
+    # Test files/directories
+    if any(p in ('test', 'tests', '__tests__', '__test__', 'spec', 'specs') for p in parts):
+        return "test"
+    if any(x in path for x in ('.test.', '.spec.', '_test.', '_test/', '_spec.', '_spec/')):
+        return "test"
+
+    # Example/demo directories
+    if any(p in ('examples', 'example', 'demo', 'demos', 'storybook') for p in parts):
+        return "example"
+
+    # Config files
+    config_filenames = {
+        'config', 'configuration', 'settings', 'env', 'constants',
+        'webpack', 'vite', 'rollup', 'esbuild', 'babel', 'postcss',
+        'tailwind', 'jest', 'vitest', 'mocha', 'karma', 'playwright',
+        'tsconfig', 'jsconfig', 'eslint', 'eslintrc', 'prettier',
+        'prettierrc', 'stylelint', 'stylelintrc',
+        'next', 'nuxt', 'svelte', 'gatsby', 'remix', 'astro',
+    }
+    for part in parts:
+        # Strip all extensions: webpack.config.js → webpack.config → webpack
+        # tsconfig.build.json → tsconfig.build → tsconfig
+        # .eslintrc.js → eslintrc
+        base = part.split('.')[0] if '.' in part else part
+        # Handle dotfiles like .eslintrc.js, .prettierrc.json
+        if base == '' and part.startswith('.'):
+            base = part.lstrip('.').split('.')[0]
+        if base.lower() in config_filenames:
+            return "config"
+    # Also check for *.config.* pattern in filename (e.g., next.config.js)
+    for part in parts:
+        if re.match(r'^[\w.]+\.config\.', part):
+            return "config"
+    if any(p in ('config', 'configs', 'configuration') for p in parts):
+        return "config"
+
+    # Core source directories
+    if any(p in ('src', 'lib', 'app', 'packages', 'modules', 'components',
+                 'pages', 'hooks', 'utils', 'services', 'stores', 'state') for p in parts):
+        return "core"
+
+    # Default to core for anything not clearly test/example/config
+    return "core"
 
 
 def _extract_section(body: str, section_name: str) -> Optional[str]:
@@ -357,6 +440,22 @@ def map_state(
                     stores.extend(xstate_results["stores"])
                     state_flow.extend(xstate_results["flow"])
 
+            # ─── SWR ───────────────────────────────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                swr_results = _extract_swr_state(content, rel_path)
+                if swr_results["stores"]:
+                    frameworks_detected.add("swr")
+                    stores.extend(swr_results["stores"])
+                    state_flow.extend(swr_results["flow"])
+
+            # ─── React Query / TanStack Query ──────────────────
+            if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
+                rq_results = _extract_react_query_state(content, rel_path)
+                if rq_results["stores"]:
+                    frameworks_detected.add("react_query")
+                    stores.extend(rq_results["stores"])
+                    state_flow.extend(rq_results["flow"])
+
             # ─── Module-level State ────────────────────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                 global_results = _extract_js_global_state(content, rel_path)
@@ -393,6 +492,15 @@ def map_state(
     # constant like SECRET_KEY defined in several modules), merge the
     # entries instead of creating duplicates.
     stores = _deduplicate_stores(stores)
+
+    # ─── Post-processing: Classify source ──────────────────────
+    # Add a "source" field to each store based on file path.
+    for store in stores:
+        defined_in = store.get("defined_in", "")
+        store["source"] = _classify_source(defined_in)
+        # Test-sourced stores should have reduced severity
+        if store["source"] == "test":
+            store["severity"] = "low"
 
     # ─── Post-processing: Resolve consumers ──────────────────
 
@@ -513,7 +621,7 @@ def map_state(
         if not name:
             return False
         # Skip if this came from a known state management framework
-        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate'):
+        if framework in ('redux', 'mobx', 'zustand', 'recoil', 'jotai', 'pinia', 'vuex', 'xstate', 'swr', 'react_query'):
             return False
         # PascalCase name that ends with a common component suffix
         if name[0].isupper() and any(name.endswith(s) for s in _COMPONENT_SUFFIXES):
@@ -1506,6 +1614,367 @@ def _extract_xstate_state(content: str, rel_path: str) -> Dict[str, Any]:
     return {"stores": stores, "flow": flow}
 
 
+# ─── SWR ────────────────────────────────────────────────────────
+
+def _extract_swr_state(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract SWR data-fetching and cache state patterns.
+
+    Detects:
+    - useSWR(key, fetcher) → state consumer (reads from cache)
+    - useSWRInfinite(key, fetcher) → state consumer with infinite pagination
+    - useSWRMutation(key, fetcher) → state consumer with mutation
+    - mutate(key, data) → state mutation (writes to cache)
+    - SWRConfig → context provider for SWR
+    - cache operations → direct cache access (state store)
+    - Each unique SWR key represents a separate "state slice"
+    """
+    stores = []
+    flow = []
+
+    has_swr = bool(re.search(
+        r'(?:from\s+[\'"]swr[\'"]|import\s+.*\bswr\b|from\s+[\'"]@/.*swr[\'"])',
+        content
+    ))
+    if not has_swr and not re.search(r'\buseSWR(?:Infinite|Mutation)?\s*\(', content):
+        return {"stores": [], "flow": []}
+
+    # SWRConfig — context provider
+    if re.search(r'\bSWRConfig\b', content):
+        line_num_m = re.search(r'\bSWRConfig\b', content)
+        line_num = content[:line_num_m.start()].count('\n') + 1
+        stores.append({
+            "name": "SWRConfig",
+            "type": "context",
+            "framework": "swr",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+        flow.append({
+            "from": rel_path,
+            "action": "SWRConfig",
+            "to": "SWRConfig",
+            "file": rel_path,
+            "type": "provide",
+        })
+
+    # cache — direct cache access (state store)
+    # Only if SWR is imported and cache is used as an object with methods
+    if has_swr and re.search(r'\bcache\s*\.\s*(get|set|delete|clear|patch)\s*\(', content):
+        stores.append({
+            "name": "swr_cache",
+            "type": "store",
+            "framework": "swr",
+            "defined_in": rel_path,
+            "line": 1,
+            "slices": [],
+            "actions": ["set", "delete", "clear", "patch"],
+            "consumers": [],
+        })
+        for m in re.finditer(r'\bcache\s*\.\s*(get|set|delete|clear|patch)\s*\(', content):
+            action = m.group(1)
+            line_num = content[:m.start()].count('\n') + 1
+            flow.append({
+                "from": rel_path,
+                "action": f"cache.{action}()",
+                "to": "swr_cache",
+                "file": rel_path,
+                "type": "read" if action == "get" else "write",
+            })
+
+    # useSWR(key, fetcher) / useSWRInfinite / useSWRMutation → state consumer
+    swr_keys = set()
+    for m in re.finditer(
+        r'useSWR(Infinite|Mutation)?\s*\(\s*([\'"`][^\'"`]+[\'"`]|[\w.]+)',
+        content
+    ):
+        hook_variant = m.group(1) or ""  # "Infinite" or "Mutation" or ""
+        key_raw = m.group(2).strip()
+        # Extract the key value — could be a string literal or a variable
+        key_name = key_raw.strip('\'"`')
+        if not key_name or len(key_name) > 80:
+            continue
+        if key_name in _JS_KEYWORDS or key_name in _JS_BUILTIN_METHODS:
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+        swr_keys.add(key_name)
+
+        # Determine the hook type for flow classification
+        hook_type = "useSWR"
+        if hook_variant == "Infinite":
+            hook_type = "useSWRInfinite"
+        elif hook_variant == "Mutation":
+            hook_type = "useSWRMutation"
+
+        flow_type = "read"
+        if hook_type == "useSWRMutation":
+            flow_type = "read_write"
+
+        flow.append({
+            "from": rel_path,
+            "action": f"{hook_type}('{key_name}')",
+            "to": f"swr:{key_name}",
+            "file": rel_path,
+            "type": flow_type,
+        })
+
+    # Create store entries for each unique SWR key
+    for key_name in sorted(swr_keys):
+        stores.append({
+            "name": f"swr:{key_name}",
+            "type": "atom",
+            "framework": "swr",
+            "defined_in": rel_path,
+            "line": 1,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+
+    # mutate(key, data) → state mutation
+    # Only match mutate calls that appear to be SWR's mutate (not a generic function)
+    if has_swr:
+        for m in re.finditer(
+            r'(?:^|(?<=[\s,;(]))mutate\s*\(\s*([\'"`][^\'"`]+[\'"`]|[\w.]+)',
+            content,
+            re.MULTILINE
+        ):
+            key_raw = m.group(1).strip()
+            key_name = key_raw.strip('\'"`')
+            if not key_name or len(key_name) > 80:
+                continue
+            if key_name in _JS_KEYWORDS or key_name in _JS_BUILTIN_METHODS:
+                continue
+            line_num = content[:m.start()].count('\n') + 1
+            flow.append({
+                "from": rel_path,
+                "action": f"mutate('{key_name}')",
+                "to": f"swr:{key_name}",
+                "file": rel_path,
+                "type": "write",
+            })
+
+    return {"stores": stores, "flow": flow}
+
+
+# ─── React Query / TanStack Query ───────────────────────────────
+
+def _extract_react_query_state(content: str, rel_path: str) -> Dict[str, Any]:
+    """Extract React Query / TanStack Query state patterns.
+
+    Detects:
+    - useQuery(key, fetcher) → state consumer (reads from cache)
+    - useMutation(mutationFn) → state mutation
+    - useQueryClient() → access to cache/store
+    - QueryClientProvider → context provider
+    - queryClient.setQueryData() → direct state mutation
+    - Each query key represents a separate "state slice"
+    """
+    stores = []
+    flow = []
+
+    has_react_query = bool(re.search(
+        r'(?:from\s+[\'"]@tanstack/react-query[\'"]|from\s+[\'"]react-query[\'"]'
+        r'|import\s+.*(?:react-query|tanstack/react-query))',
+        content
+    ))
+    if not has_react_query and not re.search(
+        r'\buseQuery\s*\(|\buseMutation\s*\(|\buseQueryClient\s*\(\s*\)',
+        content
+    ):
+        return {"stores": [], "flow": []}
+
+    # QueryClientProvider — context provider
+    qcp_match = re.search(r'\bQueryClientProvider\b', content)
+    if qcp_match:
+        line_num = content[:qcp_match.start()].count('\n') + 1
+        stores.append({
+            "name": "QueryClientProvider",
+            "type": "context",
+            "framework": "react_query",
+            "defined_in": rel_path,
+            "line": line_num,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+        flow.append({
+            "from": rel_path,
+            "action": "QueryClientProvider",
+            "to": "QueryClientProvider",
+            "file": rel_path,
+            "type": "provide",
+        })
+
+    # useQueryClient() → store access
+    for m in re.finditer(r'\buseQueryClient\s*\(\s*\)', content):
+        line_num = content[:m.start()].count('\n') + 1
+        flow.append({
+            "from": rel_path,
+            "action": "useQueryClient()",
+            "to": "query_client",
+            "file": rel_path,
+            "type": "read",
+        })
+
+    # queryClient.setQueryData() / queryClient.removeQueries() → direct state mutation
+    for m in re.finditer(
+        r'(?:queryClient|client)\s*\.\s*(setQueryData|setQueriesData|removeQueries'
+        r'|cancelQueries|invalidateQueries|resetQueries|clear)\s*\(',
+        content
+    ):
+        action = m.group(1)
+        line_num = content[:m.start()].count('\n') + 1
+        flow.append({
+            "from": rel_path,
+            "action": f"queryClient.{action}()",
+            "to": "query_client",
+            "file": rel_path,
+            "type": "write" if action in (
+                "setQueryData", "setQueriesData", "removeQueries", "clear"
+            ) else "read",
+        })
+
+    # Create queryClient store entry if direct mutation or useQueryClient found
+    has_qc_access = bool(re.search(
+        r'(?:queryClient|client)\s*\.\s*(setQueryData|setQueriesData|removeQueries'
+        r'|cancelQueries|invalidateQueries|resetQueries|clear)\s*\(',
+        content
+    )) or bool(re.search(r'\buseQueryClient\s*\(\s*\)', content))
+    if has_qc_access:
+        already = any(s["name"] == "query_client" and s["defined_in"] == rel_path
+                       for s in stores)
+        if not already:
+            stores.append({
+                "name": "query_client",
+                "type": "store",
+                "framework": "react_query",
+                "defined_in": rel_path,
+                "line": 1,
+                "slices": [],
+                "actions": ["setQueryData", "removeQueries", "clear"],
+                "consumers": [],
+            })
+
+    # useQuery(key, fetcher) → state consumer
+    # Handle both positional and object syntax:
+    #   useQuery('key', fetcher)
+    #   useQuery({ queryKey: 'key', queryFn: fetcher })
+    #   useQuery({ queryKey: ['key', id], queryFn: fetcher })
+    query_keys = set()
+
+    # Positional syntax: useQuery('key', ...) or useQuery(["key", ...], ...)
+    for m in re.finditer(
+        r'\buseQuery\s*\(\s*([\'"`][^\'"`]+[\'"`]|\[\s*[\'"`][^\'"`]+[\'"`])',
+        content
+    ):
+        key_raw = m.group(1).strip()
+        key_name = key_raw.strip('\'"`[] \t')
+        if not key_name or len(key_name) > 80:
+            continue
+        line_num = content[:m.start()].count('\n') + 1
+        query_keys.add(key_name)
+        flow.append({
+            "from": rel_path,
+            "action": f"useQuery('{key_name}')",
+            "to": f"rq:{key_name}",
+            "file": rel_path,
+            "type": "read",
+        })
+
+    # Object syntax with queryKey: queryKey: 'key' or queryKey: ['key', ...]
+    for m in re.finditer(
+        r'queryKey\s*:\s*(?:\[([^\]]+)\]|[\'"`]([^\'"`]+)[\'"`])',
+        content
+    ):
+        key_content = (m.group(1) or m.group(2) or "").strip()
+        # Extract first string element as the key name
+        first_key = re.match(r'\s*[\'"`]([^\'"`]+)[\'"`]', key_content)
+        if first_key:
+            key_name = first_key.group(1)
+        else:
+            key_name = key_content.strip('\'"`')
+        if not key_name or len(key_name) > 80:
+            continue
+        if key_name not in query_keys:
+            query_keys.add(key_name)
+            line_num = content[:m.start()].count('\n') + 1
+            flow.append({
+                "from": rel_path,
+                "action": f"useQuery(['{key_name}', ...])",
+                "to": f"rq:{key_name}",
+                "file": rel_path,
+                "type": "read",
+            })
+
+    # Create store entries for each unique query key
+    for key_name in sorted(query_keys):
+        stores.append({
+            "name": f"rq:{key_name}",
+            "type": "atom",
+            "framework": "react_query",
+            "defined_in": rel_path,
+            "line": 1,
+            "slices": [],
+            "actions": [],
+            "consumers": [],
+        })
+
+    # useMutation(mutationFn) → state mutation
+    for m in re.finditer(r'\buseMutation\s*\(', content):
+        line_num = content[:m.start()].count('\n') + 1
+        # Try to extract the mutation function name
+        after = content[m.end():m.end() + 200]
+        fn_match = re.match(r'\s*(?:\{[^}]*mutationFn\s*:\s*)?(\w+)', after)
+        mutation_name = fn_match.group(1) if fn_match else "useMutation"
+        flow.append({
+            "from": rel_path,
+            "action": f"useMutation({mutation_name})",
+            "to": "query_client",
+            "file": rel_path,
+            "type": "write",
+        })
+
+    return {"stores": stores, "flow": flow}
+
+
+def _extract_object_body(lines: List[str], start_idx: int) -> Optional[str]:
+    """Extract the body of an object literal starting from a given line.
+
+    Used to inspect whether a module-level object has methods or only
+    literal values (for distinguishing config constants from state).
+
+    Args:
+        lines: List of source lines
+        start_idx: 0-based index of the line where the object starts
+
+    Returns:
+        The object body as a string, or None if not parseable.
+    """
+    # Find the opening brace in the start line
+    first_line = lines[start_idx] if start_idx < len(lines) else ""
+    brace_pos = first_line.find('{')
+    if brace_pos < 0:
+        return None
+
+    depth = 0
+    body_parts = []
+    for offset in range(max(0, start_idx - 1), min(len(lines), start_idx + 50)):
+        line = lines[offset]
+        for ch in line:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    body_parts.append(line)
+                    return '\n'.join(body_parts)
+        body_parts.append(line)
+    return None
+
+
 # ─── Module-level State (JS) ───────────────────────────────────
 
 def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
@@ -1700,6 +2169,37 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
             if re.match(r'^(?:export\s+)?(?:const|let|var)\s+\w+\s*:\s*(?:Readonly|Partial|Record|Pick|Omit|Required|z\.)', stripped):
                 continue
 
+            # v7: Skip `satisfies SomeType` pattern — config/schema definition, not mutable state
+            # e.g., const config = { ... } satisfies AppConfig
+            if re.search(r'\bsatisfies\s+\w+', value_part):
+                continue
+
+            # v7: Skip `as const` in value — immutable by definition
+            # e.g., const ROUTES = { ... } as const
+            if re.search(r'\bas\s+const\b', value_part):
+                continue
+
+            # v7: Skip variables with purely descriptive type annotations
+            # e.g., const X: SomeInterface = { ... }, const X: SomeType = { ... }
+            # where the type is an interface/type alias (PascalCase, not a runtime class)
+            type_annotation_match = re.match(
+                r'^(?:export\s+)?(?:const|let|var)\s+\w+\s*:\s*([A-Z]\w*)',
+                stripped
+            )
+            if type_annotation_match:
+                type_name = type_annotation_match.group(1)
+                # If the type name is not a known mutable type, it's likely
+                # a descriptive interface/type alias — not a state store
+                _MUTABLE_TYPE_NAMES = {
+                    'Map', 'Set', 'WeakMap', 'WeakSet', 'Array', 'Object',
+                    'Promise', 'Observable', 'Computed', 'State', 'Store',
+                }
+                if type_name not in _MUTABLE_TYPE_NAMES and not type_name.endswith('Store'):
+                    # It's a descriptive type — only include if the value
+                    # clearly holds runtime mutable data
+                    if not re.match(r'^(new\s|Map|Set|WeakMap|WeakSet)', value_part):
+                        continue
+
             # Only classify as state if the value looks mutable
             # Mutable patterns: object literal {}, array [], Map, Set, new SomeClass
             is_mutable = bool(re.match(r'^(\{|\[|new\s|Map|Set|WeakMap|WeakSet)', value_part))
@@ -1708,6 +2208,24 @@ def _extract_js_global_state(content: str, rel_path: str) -> Dict[str, Any]:
 
             if is_immutable:
                 continue
+
+            # v7: Even for objects, check if the object only has literal values
+            # (no methods, no functions, no nested mutable structures).
+            # A pure data object with no methods is likely a config constant.
+            # Only classify as state if it has methods, Maps, Sets, or arrays.
+            if is_mutable and value_part.startswith('{'):
+                # Check the surrounding lines for the full object body
+                obj_body = _extract_object_body(lines, i)
+                if obj_body:
+                    has_methods = bool(re.search(
+                        r'\b(?:function|=>|\(\)|\(\s*\w+\s*\)\s*=>)', obj_body
+                    ))
+                    has_mutable_data = bool(re.search(
+                        r'\b(?:new\s|Map|Set|WeakMap|WeakSet)\b', obj_body
+                    ))
+                    if not has_methods and not has_mutable_data:
+                        # Pure data object with no methods — likely a config constant
+                        continue
 
             # Classify as module_constant if it's a simple constant or has no mutations
             # module_constant = immutable constant, global = mutable state
@@ -2498,6 +3016,48 @@ def _generate_state_recommendations(
             "affected": [s["name"] for s in svelte_no_auto_sub[:10]],
             "suggestion": "Using the $storeName prefix in .svelte files enables reactive auto-subscription. "
                           "Consider using it instead of manual .subscribe() calls for simpler code.",
+        })
+
+    # Mixed SWR and React Query
+    if "swr" in frameworks and "react_query" in frameworks:
+        recommendations.append({
+            "type": "architecture",
+            "severity": "info",
+            "message": "Both SWR and React Query detected — mixing data-fetching/state libraries",
+            "suggestion": "Standardize on one data-fetching library for consistency.",
+        })
+
+    # SWR with many keys
+    swr_stores = [s for s in stores if s.get("framework") == "swr"]
+    if len(swr_stores) > 15:
+        recommendations.append({
+            "type": "architecture",
+            "severity": "info",
+            "message": f"{len(swr_stores)} SWR cache keys detected — consider key organization",
+            "affected": [s["name"] for s in swr_stores[:10]],
+            "suggestion": "Consider grouping related SWR keys under common prefixes for better cache management.",
+        })
+
+    # React Query with many keys
+    rq_stores = [s for s in stores if s.get("framework") == "react_query"]
+    if len(rq_stores) > 15:
+        recommendations.append({
+            "type": "architecture",
+            "severity": "info",
+            "message": f"{len(rq_stores)} React Query keys detected — consider key organization",
+            "affected": [s["name"] for s in rq_stores[:10]],
+            "suggestion": "Consider using query key factories to organize and manage query keys.",
+        })
+
+    # Test-sourced stores (reduced severity)
+    test_stores = [s for s in stores if s.get("source") == "test"]
+    if len(test_stores) > 5:
+        recommendations.append({
+            "type": "pattern",
+            "severity": "info",
+            "message": f"{len(test_stores)} state definitions found in test files",
+            "suggestion": "Test file state patterns are classified with reduced severity. "
+                          "Focus on refactoring state in core source files first.",
         })
 
     return recommendations

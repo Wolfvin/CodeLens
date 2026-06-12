@@ -238,6 +238,81 @@ FRAMEWORK_SIGNATURES = {
         "config_files": [],
         "indicators": ["sites/default/", "modules/", "themes/"]
     },
+    # Backend frameworks (Node.js)
+    "express": {
+        "packages": ["express"],
+        "config_files": [],
+        "indicators": []
+    },
+    "fastify": {
+        "packages": ["fastify"],
+        "config_files": [],
+        "indicators": []
+    },
+    "koa": {
+        "packages": ["koa"],
+        "config_files": [],
+        "indicators": []
+    },
+    "hono": {
+        "packages": ["hono"],
+        "config_files": [],
+        "indicators": []
+    },
+    "nestjs": {
+        "packages": ["@nestjs/core"],
+        "config_files": ["nest-cli.json"],
+        "indicators": []
+    },
+    # API layer
+    "trpc": {
+        "packages": ["@trpc/server"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Data fetching libraries
+    "swr": {
+        "packages": ["swr"],
+        "config_files": [],
+        "indicators": []
+    },
+    "react_query": {
+        "packages": ["@tanstack/react-query", "react-query"],
+        "config_files": [],
+        "indicators": []
+    },
+    # State management
+    "zustand": {
+        "packages": ["zustand"],
+        "config_files": [],
+        "indicators": []
+    },
+    "jotai": {
+        "packages": ["jotai"],
+        "config_files": [],
+        "indicators": []
+    },
+    "recoil": {
+        "packages": ["recoil"],
+        "config_files": [],
+        "indicators": []
+    },
+    "pinia": {
+        "packages": ["pinia"],
+        "config_files": [],
+        "indicators": []
+    },
+    # Build tools
+    "vite": {
+        "packages": ["vite"],
+        "config_files": ["vite.config.ts", "vite.config.js", "vite.config.mjs"],
+        "indicators": []
+    },
+    "esbuild": {
+        "packages": ["esbuild"],
+        "config_files": [],
+        "indicators": []
+    },
 }
 
 
@@ -277,6 +352,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
     workspace = os.path.abspath(workspace)
     detected = {
         "frameworks": [],
+        "dev_frameworks": [],
         "has_react": False,
         "has_vue": False,
         "has_svelte": False,
@@ -293,55 +369,99 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         "has_laravel": False,
         "has_symfony": False,
         "has_php": False,
+        "has_express": False,
+        "has_fastify": False,
+        "has_nestjs": False,
+        "has_swr": False,
+        "has_react_query": False,
+        "has_trpc": False,
+        "has_zustand": False,
+        "has_jotai": False,
+        "has_recoil": False,
+        "has_pinia": False,
+        "has_vite": False,
         "unsupported_langs": [],
         "css_preprocessor": None,
-        "module_system": None
+        "module_system": None,
+        "monorepo_tool": None,
     }
 
     # 1. Check package.json (root + monorepo sub-packages)
-    all_deps = {}
+    runtime_deps = {}  # dependencies + peerDependencies (runtime)
+    dev_deps = {}      # devDependencies only
+    all_deps = {}      # all combined (for completeness)
     pkg_files = _find_package_jsons(workspace)
+    root_pkg_data = None
 
     for pkg_path in pkg_files:
         try:
             with open(pkg_path, 'r', encoding='utf-8') as f:
                 pkg = json.load(f)
-            all_deps.update(pkg.get("dependencies", {}))
-            all_deps.update(pkg.get("devDependencies", {}))
-            all_deps.update(pkg.get("peerDependencies", {}))
+            deps = pkg.get("dependencies", {})
+            devDeps = pkg.get("devDependencies", {})
+            peerDeps = pkg.get("peerDependencies", {})
 
-            # Detect module system from root package.json only
+            runtime_deps.update(deps)
+            runtime_deps.update(peerDeps)
+            dev_deps.update(devDeps)
+            all_deps.update(deps)
+            all_deps.update(devDeps)
+            all_deps.update(peerDeps)
+
+            # Save root package.json for module system detection
             if pkg_path == os.path.join(workspace, "package.json"):
-                if "type" in pkg and pkg["type"] == "module":
-                    detected["module_system"] = "esm"
-                else:
-                    detected["module_system"] = "cjs"
+                root_pkg_data = pkg
         except (json.JSONDecodeError, IOError):
             pass
+
+    # Detect module system from root package.json
+    if root_pkg_data is not None:
+        if root_pkg_data.get("type") == "module":
+            detected["module_system"] = "esm"
+        elif "exports" in root_pkg_data and "main" in root_pkg_data:
+            detected["module_system"] = "dual"
+        else:
+            detected["module_system"] = "cjs"
+
+    def _set_framework_flag(detected: dict, fw_name: str) -> None:
+        """Set the has_<framework> flag for a detected framework."""
+        flag_map = {
+            "react": "has_react",
+            "next.js": "has_nextjs",
+            "vue": "has_vue",
+            "svelte": "has_svelte",
+            "tailwind": "has_tailwind",
+            "angular": "has_angular",
+            "tauri": "has_tauri",
+            "electron": "has_electron",
+            "golang": "has_golang",
+            "express": "has_express",
+            "fastify": "has_fastify",
+            "nestjs": "has_nestjs",
+            "swr": "has_swr",
+            "react_query": "has_react_query",
+            "trpc": "has_trpc",
+            "zustand": "has_zustand",
+            "jotai": "has_jotai",
+            "recoil": "has_recoil",
+            "pinia": "has_pinia",
+            "vite": "has_vite",
+        }
+        flag = flag_map.get(fw_name)
+        if flag:
+            detected[flag] = True
 
     if all_deps:
         for fw_name, sig in FRAMEWORK_SIGNATURES.items():
             for pkg_name in sig["packages"]:
-                if pkg_name in all_deps:
+                if pkg_name in runtime_deps:
+                    # Framework found in runtime dependencies
                     detected["frameworks"].append(fw_name)
-                    if fw_name == "react":
-                        detected["has_react"] = True
-                    elif fw_name == "next.js":
-                        detected["has_nextjs"] = True
-                    elif fw_name == "vue":
-                        detected["has_vue"] = True
-                    elif fw_name == "svelte":
-                        detected["has_svelte"] = True
-                    elif fw_name == "tailwind":
-                        detected["has_tailwind"] = True
-                    elif fw_name == "angular":
-                        detected["has_angular"] = True
-                    elif fw_name == "tauri":
-                        detected["has_tauri"] = True
-                    elif fw_name == "electron":
-                        detected["has_electron"] = True
-                    elif fw_name == "golang":
-                        detected["has_golang"] = True
+                    _set_framework_flag(detected, fw_name)
+                    break
+                elif pkg_name in dev_deps:
+                    # Framework only in devDependencies — classify as dev_framework
+                    detected["dev_frameworks"].append(fw_name)
                     break
 
         # Detect CSS preprocessor
@@ -360,22 +480,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             # Check root first
             if os.path.exists(os.path.join(workspace, cfg_file)):
                 detected["frameworks"].append(fw_name)
-                if fw_name == "tailwind":
-                    detected["has_tailwind"] = True
-                elif fw_name == "next.js":
-                    detected["has_nextjs"] = True
-                elif fw_name == "fastapi":
-                    detected["has_fastapi"] = True
-                elif fw_name == "flask":
-                    detected["has_flask"] = True
-                elif fw_name == "django":
-                    detected["has_django"] = True
-                elif fw_name == "golang":
-                    detected["has_golang"] = True
-                elif fw_name == "laravel":
-                    detected["has_laravel"] = True
-                elif fw_name == "symfony":
-                    detected["has_symfony"] = True
+                _set_framework_flag(detected, fw_name)
                 break
             # Check one level deep for monorepo (apps/*, packages/*)
             found_in_subdir = False
@@ -388,12 +493,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
                         entry_path = os.path.join(subdir_path, entry)
                         if os.path.isdir(entry_path) and os.path.exists(os.path.join(entry_path, cfg_file)):
                             detected["frameworks"].append(fw_name)
-                            if fw_name == "tailwind":
-                                detected["has_tailwind"] = True
-                            elif fw_name == "next.js":
-                                detected["has_nextjs"] = True
-                            elif fw_name == "react":
-                                detected["has_react"] = True
+                            _set_framework_flag(detected, fw_name)
                             found_in_subdir = True
                             break
                 except OSError:
@@ -622,16 +722,7 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
             indicator_path = os.path.join(workspace, indicator)
             if os.path.exists(indicator_path):
                 detected["frameworks"].append(fw_name)
-                if fw_name == "django":
-                    detected["has_django"] = True
-                elif fw_name == "fastapi":
-                    detected["has_fastapi"] = True
-                elif fw_name == "flask":
-                    detected["has_flask"] = True
-                elif fw_name == "laravel":
-                    detected["has_laravel"] = True
-                elif fw_name == "symfony":
-                    detected["has_symfony"] = True
+                _set_framework_flag(detected, fw_name)
                 break
 
     # 6. Detect Tailwind from CSS content
@@ -689,7 +780,21 @@ def detect_frameworks(workspace: str) -> Dict[str, Any]:
         except IOError:
             pass
 
-    # 7. Detect unsupported languages (Java, C/C++, etc.)
+    # 7. Detect monorepo tools
+    _MONOREPO_MARKERS = {
+        "pnpm-workspace.yaml": "pnpm",
+        "turbo.json": "turborepo",
+        "lerna.json": "lerna",
+        "nx.json": "nx",
+    }
+    monorepo_tools = []
+    for marker_file, tool_name in _MONOREPO_MARKERS.items():
+        if os.path.exists(os.path.join(workspace, marker_file)):
+            monorepo_tools.append(tool_name)
+    if monorepo_tools:
+        detected["monorepo_tool"] = "+".join(monorepo_tools)
+
+    # 8. Detect unsupported languages (Java, C/C++, etc.)
     # Note: Go was previously listed here but now has fallback parser support.
     # It is no longer listed as unsupported.
     UNSUPPORTED_MARKERS = {
@@ -800,8 +905,28 @@ def get_recommended_config(workspace: str) -> Dict[str, Any]:
         config["backend_paths"].extend(["src/", "config/", "migrations/"])
         config["frontend_paths"].extend(["templates/", "assets/"])
 
+    # Express/Fastify/Koa/Hono: add backend API paths
+    if fw.get("has_express") or fw.get("has_fastify"):
+        config["backend_paths"].extend(["src/routes/", "routes/", "src/middleware/"])
+
+    # NestJS: add module-based paths
+    if fw.get("has_nestjs"):
+        config["backend_paths"].extend(["src/modules/", "src/controllers/", "src/services/"])
+
+    # tRPC: add router paths
+    if fw.get("has_trpc"):
+        config["backend_paths"].extend(["src/trpc/", "src/server/routers/"])
+
+    # Vite: note in config (no path changes needed)
+    if fw.get("has_vite"):
+        pass  # Vite is a build tool, path conventions vary
+
     # Deduplicate paths
     config["frontend_paths"] = list(dict.fromkeys(config["frontend_paths"]))
     config["backend_paths"] = list(dict.fromkeys(config["backend_paths"]))
+
+    # Add dev_frameworks and monorepo_tool to config
+    config["dev_frameworks"] = fw.get("dev_frameworks", [])
+    config["monorepo_tool"] = fw.get("monorepo_tool")
 
     return config

@@ -231,11 +231,38 @@ def resolve_edges(
         else:
             node["status"] = "active"
 
-    # Check duplicate_define: same fn name in multiple files
-    # Sort nodes within each group by (file, line) for deterministic flagging
-    for fn_name, nodes in fn_name_to_nodes.items():
+    # Check duplicate_define: same fn name defined MULTIPLE TIMES in the SAME file
+    # Same fn name in different files is normal (e.g., Page, Layout, handler)
+    # and should NOT be flagged as duplicate.
+    # Group by (fn_name, file) to detect true duplicates within a single file.
+    _NEXTJS_CONVENTION_NAMES = {
+        # Next.js App Router page components
+        'Page', 'Layout', 'Loading', 'Error', 'NotFound', 'Template', 'Default',
+        # Next.js API route handlers
+        'handler', 'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS',
+        # Next.js middleware
+        'middleware',
+    }
+
+    # Clear any existing duplicate_define flags
+    for node in all_nodes:
+        node.pop("duplicate_define", None)
+
+    # Group by (fn_name, file) for per-file duplicate detection
+    fn_file_groups: Dict[Tuple[str, str], List[Dict]] = {}
+    for node in all_nodes:
+        key = (node.get("fn", ""), node.get("file", ""))
+        if key not in fn_file_groups:
+            fn_file_groups[key] = []
+        fn_file_groups[key].append(node)
+
+    # Flag duplicate_define only when same fn name appears 2+ times in SAME file
+    # Skip Next.js convention names entirely — they are never duplicates
+    for (fn_name, _file), nodes in fn_file_groups.items():
+        if fn_name in _NEXTJS_CONVENTION_NAMES:
+            continue
         if len(nodes) > 1:
-            sorted_nodes = sorted(nodes, key=lambda n: (n.get("file", ""), n.get("line", 0)))
+            sorted_nodes = sorted(nodes, key=lambda n: n.get("line", 0))
             for i, node in enumerate(sorted_nodes):
                 if i > 0:
                     node["duplicate_define"] = True

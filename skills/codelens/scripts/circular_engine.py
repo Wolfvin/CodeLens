@@ -108,6 +108,14 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
             "genuine_warning": warning_count,
             "likely_false_positive_info": info_count,
             "critical": critical_count
+        },
+        "by_source": {
+            source: sum(
+                1 for cat_cycles in cycles.values()
+                for c in cat_cycles
+                if c.get("source") == source
+            )
+            for source in ("core", "test_only", "test_mixed", "mixed")
         }
     }
 
@@ -212,19 +220,26 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
         if nid not in seen_self:
             seen_self.add(nid)
             node = node_by_id.get(nid, {})
-            cycles_found.append({
+            rec_file = node.get("file", "")
+            rec_source = _classify_cycle_source([rec_file])
+            rec_test_inv = "full" if _is_test_example_path(rec_file) else None
+            rec_dict = {
                 "type": "recursion",
                 "chain": [{
                     "id": nid,
                     "fn": fn_name,
-                    "file": node.get("file", ""),
+                    "file": rec_file,
                     "line": node.get("line", 0)
                 }],
                 "cycle": f"{fn_name} → {fn_name}",
                 "length": 1,
                 "severity": "info",
+                "source": rec_source,
                 "message": f"Recursive function call: {fn_name}"
-            })
+            }
+            if rec_test_inv:
+                rec_dict["test_involvement"] = rec_test_inv
+            cycles_found.append(rec_dict)
 
     return cycles_found
 
@@ -251,10 +266,61 @@ def _is_conversion_trait_fn(fn_name: str) -> bool:
     return False
 
 
-def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
+def _is_test_example_path(filepath: str) -> bool:
+    """Check if a file path is in a test or example directory."""
+    if not filepath:
+        return False
+    normalized = '/' + filepath if not filepath.startswith('/') else filepath
+    test_example_dirs = [
+        '/tests/', '/test/', '/__tests__/', '/spec/',
+        '/examples/', '/example/',
+        '/e2e/', '/integration/',
+    ]
+    test_example_starts = [
+        'tests/', 'test/', '__tests__/', 'spec/',
+        'examples/', 'example/',
+    ]
+    return (any(d in normalized for d in test_example_dirs) or
+            any(filepath.startswith(d) for d in test_example_starts))
+
+
+def _classify_cycle_source(chain_files: List[str]) -> str:
+    """Classify the source type of a cycle based on its file paths.
+
+    Returns: "core", "test_only", "test_mixed", or "mixed"
+    """
+    if not chain_files:
+        return "mixed"
+
+    is_test = [_is_test_example_path(f) for f in chain_files]
+    all_test = all(is_test)
+
+    if all_test:
+        return "test_only"
+
+    # Check if all files are in core directories (src/, lib/)
+    def _is_core_path(f: str) -> bool:
+        norm = '/' + f if not f.startswith('/') else f
+        return any(d in norm for d in ('/src/', '/lib/')) or \
+               any(f.startswith(d) for d in ('src/', 'lib/'))
+
+    all_core = all(_is_core_path(f) for f in chain_files)
+
+    if all_core:
+        return "core"
+
+    if any(is_test):
+        return "test_mixed"
+
+    return "mixed"
+
+
+def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> Tuple[str, Optional[str]]:
     """Classify a cycle's severity based on its characteristics.
 
-    Rules:
+    Rules (evaluated in order):
+    - If ALL nodes in the chain are in test/example directories, classify as 'info'
+      with test_involvement='full' — test cycles are not production concerns.
     - If ALL functions in the chain are Rust conversion trait impls (from_*/into_*/etc.),
       classify as 'info' — these are intentional bidirectional conversions, not real cycles.
     - If the cycle is very long (>8 nodes), classify as 'info' — likely a false positive
@@ -262,23 +328,36 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
     - If the cycle goes through multiple files but the function names suggest cross-class
       name collision (same name, different classes), classify as 'info' — not a real cycle.
     - Short chains (2-3 nodes) with non-conversion functions in the same file are genuine: 'warning'.
+
+    Returns:
+        (severity, test_involvement) where test_involvement is None, "partial", or "full"
     """
     fn_names = [c.get("fn", "unknown") for c in chain]
+    files = [c.get("file", "") for c in chain]
+
+    # Determine test/example involvement
+    is_test_node = [_is_test_example_path(f) for f in files]
+    all_test = all(is_test_node) and any(files)
+    any_test = any(is_test_node)
+
+    if all_test:
+        return "info", "full"
+
+    test_involvement = "partial" if any_test else None
 
     # Check if every function in the chain is a conversion trait impl
     all_conversion = all(_is_conversion_trait_fn(fn) for fn in fn_names)
     if all_conversion:
-        return "info"
+        return "info", test_involvement
 
     # Very long chains are almost always false positives from name matching
     if cycle_length > 8:
-        return "info"
+        return "info", test_involvement
 
     # Cross-class name collision detection:
     # If the cycle contains multiple functions with the SAME name but from DIFFERENT
     # files, this is likely a false positive from the edge resolver matching method
     # names across classes (e.g., async_setup in 1000+ Home Assistant components).
-    files = [c.get("file", "") for c in chain]
     unique_names = set(fn_names)
     unique_files = set(f for f in files if f)
 
@@ -299,10 +378,10 @@ def _classify_cycle_severity(chain: List[Dict], cycle_length: int) -> str:
         # name (like async_setup, update, handle) causing false edges
         for fn, fn_files in name_to_files.items():
             if len(fn_files) >= 3:
-                return "info"
+                return "info", test_involvement
 
     # Short chains with non-conversion functions are genuine cycles
-    return "warning"
+    return "warning", test_involvement
 
 
 def _format_function_cycle(cycle_path: List[str], node_by_id: Dict) -> Dict:
@@ -322,24 +401,35 @@ def _format_function_cycle(cycle_path: List[str], node_by_id: Dict) -> Dict:
     cycle_str = " → ".join(fn_names)
     cycle_length = len(cycle_path) - 1
 
-    # Classify severity using the new heuristic
-    severity = _classify_cycle_severity(chain, cycle_length)
+    # Classify severity using the heuristic (returns severity + test_involvement)
+    severity, test_involvement = _classify_cycle_severity(chain, cycle_length)
+
+    # Classify source based on chain files
+    chain_files = [c.get("file", "") for c in chain]
+    source = _classify_cycle_source(chain_files)
 
     # Build a descriptive message that explains the classification
     message = f"Circular function call: {cycle_str}"
-    if severity == "info" and all(_is_conversion_trait_fn(c.get("fn", "")) for c in chain):
+    if severity == "info" and test_involvement == "full":
+        message += " (test-only cycle, not a production concern)"
+    elif severity == "info" and all(_is_conversion_trait_fn(c.get("fn", "")) for c in chain):
         message += " (likely intentional bidirectional trait impl)"
     elif severity == "info" and cycle_length > 8:
         message += " (long chain, likely false positive from name matching)"
 
-    return {
+    result = {
         "type": "function_call_cycle",
         "chain": chain,
         "cycle": cycle_str,
         "length": cycle_length,
         "severity": severity,
+        "source": source,
         "message": message
     }
+    if test_involvement:
+        result["test_involvement"] = test_involvement
+
+    return result
 
 
 # ─── Import Chain Cycle Detection ───────────────────────
@@ -413,14 +503,27 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
                     seen_cycles.add(cycle_key)
-                    cycles_found.append({
+                    cycle_severity = "critical" if len(cycle_path) <= 2 else "warning"
+                    cycle_source = _classify_cycle_source(cycle_path)
+                    cycle_test_inv = None
+                    is_test_chain = [_is_test_example_path(f) for f in cycle_path]
+                    if all(is_test_chain) and any(cycle_path):
+                        cycle_severity = "info"
+                        cycle_test_inv = "full"
+                    elif any(is_test_chain):
+                        cycle_test_inv = "partial"
+                    cycle_dict = {
                         "type": "import_cycle",
                         "chain": cycle_path,
                         "cycle": " → ".join(cycle_path),
                         "length": len(cycle_path) - 1,
-                        "severity": "critical" if len(cycle_path) <= 2 else "warning",
+                        "severity": cycle_severity,
+                        "source": cycle_source,
                         "message": f"Circular import: {' → '.join(cycle_path)}"
-                    })
+                    }
+                    if cycle_test_inv:
+                        cycle_dict["test_involvement"] = cycle_test_inv
+                    cycles_found.append(cycle_dict)
                     if len(cycles_found) >= max_cycles:
                         stopped[0] = True
             elif color[neighbor] == WHITE:
@@ -550,14 +653,27 @@ def _detect_css_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dic
                 cycle_key = _normalize_cycle(cycle_path)
                 if cycle_key not in seen_cycles:
                     seen_cycles.add(cycle_key)
-                    cycles_found.append({
+                    cycle_source = _classify_cycle_source(cycle_path)
+                    cycle_severity = "warning"
+                    cycle_test_inv = None
+                    is_test_chain = [_is_test_example_path(f) for f in cycle_path]
+                    if all(is_test_chain) and any(cycle_path):
+                        cycle_severity = "info"
+                        cycle_test_inv = "full"
+                    elif any(is_test_chain):
+                        cycle_test_inv = "partial"
+                    cycle_dict = {
                         "type": "css_import_cycle",
                         "chain": cycle_path,
                         "cycle": " → ".join(cycle_path),
                         "length": len(cycle_path) - 1,
-                        "severity": "warning",
+                        "severity": cycle_severity,
+                        "source": cycle_source,
                         "message": f"Circular CSS @import: {' → '.join(cycle_path)}"
-                    })
+                    }
+                    if cycle_test_inv:
+                        cycle_dict["test_involvement"] = cycle_test_inv
+                    cycles_found.append(cycle_dict)
                     if len(cycles_found) >= max_cycles:
                         stopped[0] = True
             elif color[neighbor] == WHITE:

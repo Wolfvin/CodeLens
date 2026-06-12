@@ -5,6 +5,42 @@ All notable changes to CodeLens will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.0] — 2026-06-12
+
+### Tested against vercel/swr (334 source files, React data-fetching library, pnpm monorepo)
+
+Real-world test on a React Hooks library for remote data fetching. 805 backend nodes,
+11,312 edges, 14 API routes (all example), 68 state stores (SWR atoms), 43 circular deps.
+Confirmed: framework detection correctly identifies `react` as runtime dep and `next.js`/`swr`
+as dev-only frameworks. Monorepo tool (pnpm) detected. Module system: dual (ESM+CJS).
+
+### Added
+
+- **Runtime vs dev dependency classification**: `detect_frameworks()` now separates `dependencies`/`peerDependencies` (runtime) from `devDependencies` (dev). Runtime frameworks go to `frameworks`, dev-only frameworks go to new `dev_frameworks` list. Prevents false positives like SWR being classified as a Next.js project when `next` is only in devDependencies.
+- **14 new framework signatures**: Express, Fastify, Koa, Hono, NestJS (backend); tRPC (API layer); SWR, React Query/TanStack Query (data fetching); Zustand, Jotai, Recoil, Pinia (state management); Vite, esbuild (build tools).
+- **Monorepo tool detection**: New `monorepo_tool` field in framework detection output. Detects pnpm (pnpm-workspace.yaml), Turborepo (turbo.json), Lerna (lerna.json), Nx (nx.json). Multiple tools joined with "+" (e.g., "pnpm+turborepo").
+- **Module system detection improvement**: Now detects "dual" module system (both ESM and CJS support) when package.json has both `"exports"` and `"main"` fields.
+- **SWR state management detection**: `state-map` now recognizes SWR as a state management framework. Detects `useSWR`/`useSWRInfinite`/`useSWRMutation` (atom consumers), `mutate()` (mutations), `SWRConfig` (context provider), and `cache` (store). Each SWR key becomes a named state slice (e.g., `swr:/api/data`).
+- **React Query state management detection**: `state-map` detects `useQuery`/`useMutation`/`useQueryClient`/`QueryClientProvider` patterns with query key as slice name.
+- **Source classification across all engines**: Every finding in smell, circular, dead-code, perf-hint, api-map, and state-map engines now includes a `source` field: "core" (main source), "test" (test files), "example" (examples/demos), or "config" (config files). Each engine also reports `by_source` stats in output.
+- **Severity downgrade for non-core findings**: Smell engine and dead-code engine automatically downgrade severity for findings in test/example files (critical→warning, warning→info). Downgraded findings include `downgraded: true` field.
+- **Test-only cycle detection**: Circular engine classifies cycles entirely in test/example files as "info" severity instead of "warning". Adds `test_involvement` field ("full" or "partial") and `source` classification per cycle.
+- **Next.js handler name extraction**: API map now extracts actual handler function names from Next.js Pages Router routes instead of generic "default_handler".
+- **Next.js auth detection**: API map detects auth patterns in Next.js routes: `getSession`/`getServerSession` (next-auth), `req.headers.authorization`, cookie-based session checks, and middleware.ts auth scanning.
+- **API map source classification**: Routes now include `source` field ("core", "example", "test", "generated") and `filter_source` parameter to filter routes by source.
+- **`_set_framework_flag()` helper**: Refactored repetitive `if/elif` flag-setting chains in framework_detect.py into a single `flag_map` lookup for maintainability.
+
+### Fixed
+
+- **Framework detection false positive for devDependencies**: Projects with `next` only in devDependencies no longer get `has_nextjs = True`. Instead, `next.js` appears in `dev_frameworks`.
+- **`duplicate_define` false positive across files**: Functions with common names (Page, Layout, handler) in different files were incorrectly flagged as duplicates. Now only flags as duplicate when the same function name is defined multiple times in the SAME file. Next.js convention names (Page, Layout, GET, POST, etc.) are never flagged as duplicates.
+- **Dead-code engine missing examples/ directory**: The test/example filter in `_detect_dead_from_registry` only checked `/example` but not `/examples/`. Expanded to include `/examples/`, `/e2e/`, `/__tests__/`, `/stories/`, `/storybook/`.
+- **pyproject.toml syntax error**: Line 8 had `description` and `readme` merged into one line, causing pytest to crash.
+
+### Changed
+
+- **Version bump**: 5.9.1 → 6.4.0
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)
