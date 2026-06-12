@@ -121,6 +121,34 @@ across all analysis engines after targeted fixes based on SWR analysis findings.
 - **Version mismatch**: `CODELENS_VERSION` was `"5.8.1"` while `pyproject.toml` was `"5.9.1"`. Both now synced to `"5.9.2"`.
 - **`pyproject.toml` parse error**: `description` and `readme` fields were concatenated on one line. Fixed line break.
 
+## [5.9.0] — 2026-06-12
+
+### Tested against database & XHR/network repos
+
+Real-world testing on 5 diverse open-source repositories:
+- **redis/redis** (30MB, 789 C/H files, 19,030 backend nodes) — C in-memory database
+- **axios/axios** (5.5MB, 201 JS/TS files, 436 backend nodes) — JavaScript HTTP client
+- **libuv/libuv** (7.4MB, 364 C/H files, 6,590 backend nodes) — C networking/event loop
+- **nodejs/undici** (11MB, 619 JS/TS files, 1,078 backend nodes) — Node.js HTTP/1.1 client
+- **google/leveldb** (1.9MB, 132 C++/H files, 1,557 backend nodes) — C++ key-value database
+
+### Fixed
+
+- **`binary-scan` command crash (ImportError)**: `scan_tauri_artifacts` was imported but never implemented in `utils.py`. The `binary-scan` command would always crash with `cannot import name 'scan_tauri_artifacts' from 'utils'`. Added full implementation: detects Tauri config files, IPC commands from Rust source, capabilities/permissions, sidecar binaries, updater config, WebView security settings, and deep-link schemes. Returns `None` for non-Tauri projects (graceful skip).
+- **Drupal false positive from `modules/` directory**: Redis was incorrectly detected as a Drupal project because `modules/` and `themes/` were Drupal indicators. These are too generic — many non-Drupal projects have `modules/` directories (e.g., Redis modules, Go modules). Changed Drupal indicators to `sites/default/` and `sites/all/` (Drupal-specific paths), and added `sites/default/settings.php` as a config file. Redis is no longer falsely detected as Drupal.
+- **`new ClassName()` not tracked as call edge**: JS/TS/TSX parsers only tracked `call_expression` nodes (e.g., `funcName()`) but not `new_expression` nodes (e.g., `new AxiosError()`). This caused classes that are only instantiated via `new` to appear as "dead" in dead-code analysis. AxiosError (core Axios class, used in 17+ files) had `ref_count: 0` and `status: dead`. Added `_parse_new_expression()` to all three parsers (js_backend_parser, ts_backend_parser, tsx_parser). After fix: AxiosError correctly shows `ref_count: 29` and `status: active` with 11 callers.
+- **pyproject.toml formatting error**: `description` and `readme` fields were merged on a single line, causing TOML parse failure.
+
+### Added
+
+- **HTTP/network library detection**: `detect_frameworks()` now recognizes 7 HTTP client libraries as frameworks: `axios`, `undici`, `got`, `ky`, `superagent`, `node-fetch`, `request`. Added `has_http_library` flag to detection output. Works both when the library is a dependency AND when the repo IS the library itself (checks `package.json` `name` field).
+- **`scan_tauri_artifacts()` in utils.py**: Full Tauri RE analysis — IPC command/handler mapping from Rust source, capabilities/permissions security audit, sidecar binary detection, updater configuration, WebView CSP/asset-protocol security, deep-link scheme analysis, and risk assessment summary.
+- **New framework signatures**: Added 7 HTTP library signatures with packages and `has_http_library` flag support.
+
+### Changed
+
+- **Version bump**: 5.8.1 → 5.9.0
+
 ## [5.8.1] — 2026-06-12
 
 ### Tested against cockroachdb/cockroach (10,112 source files: 9,439 Go + 183 Proto, 555MB Go database)

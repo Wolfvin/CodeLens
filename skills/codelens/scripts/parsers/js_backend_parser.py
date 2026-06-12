@@ -255,6 +255,10 @@ class JSBackendParser(BaseParser):
                 call_info = self._parse_call(node, source)
                 if call_info:
                     calls.append(call_info)
+            elif node.type == 'new_expression':
+                call_info = self._parse_new_expression(node, source)
+                if call_info:
+                    calls.append(call_info)
 
         self.walk_tree(body_node, source, visit)
         return calls
@@ -317,6 +321,41 @@ class JSBackendParser(BaseParser):
                 obj_text = self.get_text(obj_node, source) if obj_node else ""
                 # But for edge resolution, use just the method name
                 return {"fn_name": method_name, "via_self": False}
+
+        return None
+
+    def _parse_new_expression(self, node: Node, source: bytes) -> Optional[Dict]:
+        """Parse a new_expression node to extract the instantiated class name.
+
+        Handles patterns like:
+        - new ClassName(args)
+        - new ClassName()
+
+        This is critical for tracking class instantiation edges, which previously
+        were missed — causing exported classes like AxiosError to appear "dead"
+        even though they are widely instantiated via `new AxiosError()`.
+        """
+        constructor_node = node.child_by_field_name('constructor')
+        if not constructor_node:
+            return None
+
+        constructor_text = self.get_text(constructor_node, source)
+
+        # Direct class instantiation: new ClassName()
+        if constructor_node.type == 'identifier':
+            name = constructor_text
+            if name in SKIP_NAMES:
+                return None
+            return {"fn_name": name, "is_instantiation": True}
+
+        # Member expression: new Namespace.ClassName()
+        if constructor_node.type == 'member_expression':
+            prop_node = constructor_node.child_by_field_name('property')
+            if prop_node:
+                class_name = self.get_text(prop_node, source)
+                if class_name in SKIP_NAMES:
+                    return None
+                return {"fn_name": class_name, "is_instantiation": True}
 
         return None
 
