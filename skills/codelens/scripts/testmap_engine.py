@@ -86,9 +86,25 @@ def map_test_coverage(
 
             is_test = any(re.search(p, rel_path) for p in TEST_FILE_PATTERNS)
 
+            # v5.10: Rust files with #[cfg(test)] modules contain inline tests.
+            # These are not in separate test files, but contain test functions
+            # that should be recognized for coverage mapping.
+            has_inline_tests = False
+            if ext == ".rs" and not is_test:
+                if re.search(r'#\[cfg\(test\)\]', content) or re.search(r'#\[test\]', content):
+                    has_inline_tests = True
+
             if is_test:
                 test_info = _parse_test_file(content, ext, rel_path)
                 test_files[rel_path] = test_info
+            elif has_inline_tests:
+                # v5.10: Split inline Rust test functions from source functions
+                source_info, inline_test_info = _split_rust_inline_tests(content, rel_path)
+                source_files[rel_path] = source_info
+                if inline_test_info.get("test_names"):
+                    # Use a synthetic test file path for inline tests
+                    inline_test_path = rel_path + "#[cfg(test)]"
+                    test_files[inline_test_path] = inline_test_info
             else:
                 source_info = _parse_source_file(content, ext, rel_path)
                 source_files[rel_path] = source_info
@@ -309,6 +325,76 @@ def _parse_test_file(content: str, ext: str, rel_path: str) -> Dict:
     }
 
 
+def _split_rust_inline_tests(content: str, rel_path: str) -> tuple:
+    """Split a Rust source file with inline #[cfg(test)] module into
+    source functions and test functions.
+
+    In Rust, it's common to write tests in the same file as the source code:
+        #[cfg(test)]
+        mod tests {
+            #[test]
+            fn test_something() { ... }
+        }
+
+    This function extracts the #[test] functions from the inline test module
+    and separates them from the production source functions.
+
+    Returns:
+        Tuple of (source_info, test_info) dicts.
+    """
+    # Parse all functions from the file
+    all_functions = []
+    test_functions = []
+    imports = []
+
+    for m in re.finditer(r'(?:pub\s+)?(?:async\s+)?fn\s+(\w+)', content):
+        all_functions.append(m.group(1))
+
+    for m in re.finditer(r'use\s+([^;]+);', content):
+        imports.append(m.group(1).strip())
+
+    # Find the #[cfg(test)] module and extract test functions from it
+    # Match #[test] annotated functions — these can be in:
+    # 1. #[cfg(test)] mod tests { ... } blocks
+    # 2. Standalone #[test] fn ... at module level (rare but valid)
+    tested_function_names = set()
+
+    # Pattern 1: #[test] functions inside #[cfg(test)] modules
+    for m in re.finditer(r'#\[test\]\s*(?:\n\s*#\[.*\]\s*)*\s*fn\s+(\w+)', content):
+        test_fn_name = m.group(1)
+        test_functions.append(test_fn_name)
+
+        # Try to extract the function being tested from the test name
+        # Common Rust convention: test_<function_name> or test_<module>_<function>
+        if test_fn_name.startswith('test_'):
+            remainder = test_fn_name[5:]  # Remove "test_" prefix
+            # Try various splits: test_read_header → "read_header" → ["read", "header"]
+            parts = remainder.split('_')
+            if parts:
+                tested_function_names.add(remainder)  # Full name after test_
+                tested_function_names.add(parts[0])    # Just first segment
+                # Also try camelCase conversion: test_read_header → readHeader
+                if len(parts) > 1:
+                    camel = parts[0] + ''.join(p.capitalize() for p in parts[1:])
+                    tested_function_names.add(camel)
+
+    # Source functions = all functions minus test functions
+    source_functions = [f for f in all_functions if f not in test_functions]
+
+    source_info = {
+        "functions": source_functions,
+        "imports": imports,
+    }
+
+    test_info = {
+        "test_names": test_functions,
+        "imports": imports,
+        "tested_functions": tested_function_names,
+    }
+
+    return source_info, test_info
+
+
 def _find_tests_for_function(
     fn_name: str,
     src_path: str,
@@ -320,6 +406,22 @@ def _find_tests_for_function(
     src_basename = os.path.splitext(os.path.basename(src_path))[0]
 
     for test_path, test_info in test_files.items():
+        # v5.10: Strategy 0: Inline Rust tests (path contains #[cfg(test)])
+        # These are inline tests in the same source file
+        if test_path.endswith('#[cfg(test)]'):
+            # The source path is the test path without the #[cfg(test)] suffix
+            inline_src_path = test_path[:-len('#[cfg(test)]')]
+            if inline_src_path == src_path:
+                # Same file inline test — check if function name matches
+                if fn_name in test_info.get("tested_functions", set()):
+                    matches.append(test_path)
+                    continue
+                for test_name in test_info.get("test_names", []):
+                    if fn_name.lower() in test_name.lower():
+                        matches.append(test_path)
+                        break
+                continue
+
         # Strategy 1: File name matching (auth.test.ts → auth.ts)
         test_basename = os.path.basename(test_path)
         # Go: precise mapping foo.go → foo_test.go (same directory)

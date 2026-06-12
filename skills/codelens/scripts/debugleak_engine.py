@@ -40,7 +40,7 @@ TEST_FILE_PATTERNS = {
 }
 
 # Performance limits for large codebases
-MAX_FILES_PER_RUN = 3000
+MAX_FILES_PER_RUN = 1500
 
 
 # ─── Category-specific Patterns ────────────────────────────────

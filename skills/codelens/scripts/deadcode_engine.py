@@ -21,7 +21,8 @@ from utils import DEFAULT_IGNORE_DIRS, logger
 
 SOURCE_EXTENSIONS = {
     ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
-    ".py", ".rs", ".go", ".vue", ".svelte", ".css", ".scss", ".less"
+    ".py", ".rs", ".vue", ".svelte", ".css", ".scss", ".less",
+    ".go", ".cc", ".cpp", ".cxx", ".c", ".h", ".hpp",
 }
 
 # Performance limits for large codebases
@@ -99,13 +100,13 @@ def detect_dead_code(
             lines = content.split('\n')
 
             # ─── Unreachable Code ────────────────────────
-            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
+            if "unreachable" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
                 if len(results["unreachable"]) < max_results:
                     unreachable = _detect_unreachable_code(content, ext, rel_path)
                     results["unreachable"].extend(unreachable)
 
             # ─── Unused Variables ────────────────────────
-            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs", ".go"}:
+            if "unused_vars" in categories and ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
                 if len(results["unused_vars"]) < max_results:
                     unused = _detect_unused_variables(content, ext, rel_path)
                     results["unused_vars"].extend(unused)
@@ -116,9 +117,6 @@ def detect_dead_code(
 
             elif ext == ".py":
                 _collect_py_exports_imports(content, rel_path, all_exports, all_imports)
-
-            elif ext == ".go":
-                _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
 
         if truncated:
             break
@@ -174,6 +172,11 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     v6: Fixed function scope tracking by using brace depth tracking instead of
     resetting in_function on every closing brace. Now only exits function scope
     when the brace depth returns to the level it was at before the function started.
+
+    v5.10: Fixed Rust match arm false positives. In Rust, each match arm ends
+    with a terminal statement (return/expression), but the next arm is a separate
+    branch and NOT unreachable. We now track match arm boundaries (comma after
+    expression or closing brace) and reset the terminal flag at each new arm.
     """
     items = []
     lines = content.split('\n')
@@ -185,6 +188,11 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
     found_terminal = False
     terminal_line = 0
     terminal_type = ""
+
+    # v5.10: Rust match arm tracking
+    in_match = False
+    match_start_depth = 0
+    last_arm_depth = 0
 
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -203,6 +211,15 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 continue
             continue
 
+        # v5.10: Track Rust match expressions
+        if ext == ".rs":
+            if re.match(r'\s*match\s+', stripped):
+                in_match = True
+                match_start_depth = brace_depth
+            # End match when we return to the depth where match started
+            if in_match and brace_depth <= match_start_depth and '{' not in stripped:
+                in_match = False
+
         # Detect function start
         if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
             if re.match(r'(?:export\s+)?(?:async\s+)?function\s+\w+', stripped):
@@ -220,18 +237,29 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 in_function = True
                 found_terminal = False
                 function_start_depth = brace_depth  # v6: record depth at function start
-        elif ext == ".go":
-            if re.match(r'(?:func\s+)\w+', stripped):
-                in_function = True
-                found_terminal = False
-                function_start_depth = brace_depth
 
         # Detect terminal statements
         if in_function:
-            if re.match(r'(?:return|throw|break|continue|panic)\s', stripped):
+            if re.match(r'(?:return|throw|break|continue)\s', stripped):
+                # v5.10: In Rust match arms, terminal statements are normal —
+                # the next arm is NOT unreachable. Skip reporting if we're in a match.
+                if ext == ".rs" and in_match:
+                    found_terminal = False  # Reset, don't flag match arm terminals
+                    continue
                 found_terminal = True
                 terminal_line = i + 1
                 terminal_type = stripped.split()[0]
+
+            # v5.10: Rust match arm separator — new arm starts after => or pattern
+            if ext == ".rs" and in_match:
+                # A new match arm pattern resets the terminal flag
+                if re.match(r'\s*[\w].*=>', stripped) or re.match(r'\s*_\s*=>', stripped):
+                    found_terminal = False
+                    continue
+                # Comma at match depth signals end of arm — next arm is not unreachable
+                if stripped.endswith(',') and brace_depth <= match_start_depth + 1:
+                    found_terminal = False
+                    continue
 
             # v6: Detect function end via brace depth — only end function when
             #     depth returns to the level before the function started.
@@ -239,6 +267,7 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
             if ext != ".py" and brace_depth < function_start_depth:
                 in_function = False
                 found_terminal = False
+                in_match = False
                 continue
 
             # Check if we're at a lower indentation (function ended in Python)
@@ -331,11 +360,26 @@ def _detect_unused_variables(content: str, ext: str, rel_path: str) -> List[Dict
             skip_names = {'_', 'e', 'err', 'error', 'self', 'cls', 'main', 'logger'}
             if var_name in skip_names or var_name.startswith('_'):
                 continue
-            # v6: Keep the ALL_CAPS skip but note that cross-file usage analysis
-            #     would be more accurate. Module-level constants are often imported
-            #     by other files — skipping avoids false positives.
-            #     TODO: Cross-file reference check for ALL_CAPS vars.
+            # Skip ALL_CAPS names — they are module-level constants often imported elsewhere
             if var_name.isupper():
+                continue
+
+            # Skip Python type aliases: names ending in "Types" or "Type" that are
+            # type alias definitions (e.g., URLTypes = ..., HeaderTypes = ...).
+            # These are used in type annotations, not as runtime variables.
+            line_text = clean_content.split('\n')[line_num - 1] if line_num <= len(clean_content.split('\n')) else ''
+            if var_name.endswith('Types') or var_name.endswith('Type'):
+                # Check if RHS contains type-related patterns
+                rhs = line_text.split('=', 1)[1].strip() if '=' in line_text else ''
+                type_indicators = ['Union', 'Optional', 'List', 'Dict', 'Tuple', 'Set',
+                                   'Callable', 'Type', 'Sequence', 'Mapping', 'Iterable',
+                                   'AsyncIterator', 'Iterator', 'Any', 'Protocol',
+                                   'typing.', 'Annotated']
+                if any(ind in rhs for ind in type_indicators):
+                    continue
+
+            # Skip TypeAlias annotations: e.g., URLTypes: TypeAlias = ...
+            if ': TypeAlias' in line_text or ': typealias' in line_text.lower():
                 continue
 
             usage_pattern = r'\b' + re.escape(var_name) + r'\b'
@@ -428,53 +472,6 @@ def _collect_py_exports_imports(
             "line": line_num
         })
 
-def _collect_go_exports_imports(
-    content: str, rel_path: str,
-    exports: Dict[str, List[Dict]], imports: Dict[str, Set[str]]
-):
-    """Collect Go exports and imports (uppercase = exported)."""
-    # Go imports
-    for m in re.finditer(r'import\s+"([^"]+)"', content):
-        imports[rel_path].add(m.group(1).split('/')[-1])
-    import_block = re.search(r'import\s*\((.*?)\)', content, re.DOTALL)
-    if import_block:
-        for m in re.finditer(r'"([^"]+)"', import_block.group(1)):
-            imports[rel_path].add(m.group(1).split('/')[-1])
-
-    # Go exports (uppercase = exported)
-    for m in re.finditer(r'^func\s+(\w+)\s*\(', content, re.MULTILINE):
-        fn_name = m.group(1)
-        if fn_name[0].isupper():
-            exports[rel_path].append({
-                "name": fn_name,
-                "type": "go_exported_func",
-                "line": content[:m.start()].count('\n') + 1
-            })
-    for m in re.finditer(r'^type\s+(\w+)\s+', content, re.MULTILINE):
-        type_name = m.group(1)
-        if type_name[0].isupper():
-            exports[rel_path].append({
-                "name": type_name,
-                "type": "go_exported_type",
-                "line": content[:m.start()].count('\n') + 1
-            })
-    for m in re.finditer(r'^var\s+(\w+)', content, re.MULTILINE):
-        var_name = m.group(1)
-        if var_name[0].isupper():
-            exports[rel_path].append({
-                "name": var_name,
-                "type": "go_exported_var",
-                "line": content[:m.start()].count('\n') + 1
-            })
-    for m in re.finditer(r'^const\s+(\w+)', content, re.MULTILINE):
-        const_name = m.group(1)
-        if const_name[0].isupper():
-            exports[rel_path].append({
-                "name": const_name,
-                "type": "go_exported_const",
-                "line": content[:m.start()].count('\n') + 1
-            })
-
 def _detect_unused_exports(
     all_exports: Dict[str, List[Dict]],
     all_imports: Dict[str, Set[str]],
@@ -550,7 +547,13 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
         # and functions in test files
         if ref_count == 0 and status == "dead":
             # Skip main functions — they're entry points, not dead code
-            if name == "main":
+            # Handle both simple "main" and qualified names like "crate::main"
+            bare_name = name.split('::')[-1] if '::' in name else name
+            if bare_name == "main":
+                continue
+            # Also skip Rust #[tokio::main] and #[actix::main] entry point functions
+            # These are async entry points that appear as "main" in the registry
+            if file_path.endswith('.rs') and name == "main":
                 continue
             # Skip pub functions — they're public API, likely used externally
             if is_pub:
@@ -582,18 +585,32 @@ def _detect_zombie_css(workspace: str) -> List[Dict]:
         logger.debug("Dead code analysis failed", exc_info=True)
         return []
 
+    # Load Tailwind detector to skip Tailwind utility classes
+    try:
+        from parsers.tailwind_detector import is_tailwind_class
+        has_tailwind_check = True
+    except ImportError:
+        has_tailwind_check = False
+
     zombie = []
 
     # CSS classes with ref_count == 0 AND no JS usage
     for cls in frontend.get("classes", []):
+        name = cls["name"]
         if cls["status"] == "dead" and not cls.get("js"):
+            # Skip Tailwind utility classes — they're framework-defined, not user-defined
+            if has_tailwind_check and is_tailwind_class(name):
+                continue
+            # Skip names that look like JS operators/expressions (e.g., '!==', '===', etc.)
+            if not re.match(r'^[a-zA-Z_]', name):
+                continue
             zombie.append({
                 "file": cls.get("css", [{}])[0].get("path", "unknown") if cls.get("css") else "unknown",
                 "line": cls.get("css", [{}])[0].get("line", 0) if cls.get("css") else 0,
-                "class": cls["name"],
+                "class": name,
                 "severity": "info",
-                "message": f"CSS class '.{cls['name']}' defined but never used in HTML or JS",
-                "suggestion": f"Remove unused CSS class '.{cls['name']}' or add to HTML/JSX."
+                "message": f"CSS class '.{name}' defined but never used in HTML or JS",
+                "suggestion": f"Remove unused CSS class '.{name}' or add to HTML/JSX."
             })
 
     return zombie[:50]

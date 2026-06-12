@@ -70,64 +70,6 @@ def _build_index(edges: List[Dict], nodes: Optional[List[Dict]] = None) -> None:
     _edge_cache["node_map"] = node_map
 
 
-def _is_runtime_entry(node: Dict) -> bool:
-    """Check if a node represents a runtime entry point that should never be marked dead.
-
-    These are functions called by the runtime/OS/framework, not by application code,
-    so ref_count == 0 doesn't mean they're unused.
-
-    Includes:
-    - main() functions (Rust, C, Go, Python)
-    - Exported functions (JS/TS export, Rust pub)
-    - React/Svelte/Vue components (rendered by framework, not called directly)
-    - Tauri commands (#[tauri::command], called via IPC bridge)
-    - Tokio main (#[tokio::main])
-    - Python __init__, __main__
-    - Event handlers (on_*, handle_*)
-    - Test functions (test_*, #[test], #[cfg(test)])
-    """
-    fn = node.get("fn", "")
-    file_path = node.get("file", "")
-
-    # Explicit exported/component flags (set by parsers)
-    if node.get("exported", False) or node.get("component", False):
-        return True
-
-    # main() / Main() — the canonical entry point
-    if fn in ("main", "Main", "app_main", "lib_main", "run", "start"):
-        return True
-
-    # Tauri IPC commands
-    if node.get("is_tauri_command", False):
-        return True
-
-    # Rust specific: functions in main.rs or bin/ directories
-    if file_path.endswith("main.rs") or "/bin/" in file_path.replace("\\", "/"):
-        return True
-
-    # Python __init__ and __main__
-    if fn in ("__init__", "__main__"):
-        return True
-
-    # Event handlers — called by DOM/event system
-    if fn.startswith("on_") or fn.startswith("handle_") or fn.startswith("on"):
-        if len(fn) > 2 and fn[2].isupper():  # onClick, onSubmit, etc.
-            return True
-
-    # Test functions
-    if fn.startswith("test_") or fn.startswith("it_") or fn.startswith("describe_"):
-        return True
-
-    # Setup/lifecycle hooks
-    if fn in ("setup", "teardown", "beforeAll", "afterAll", "beforeEach", "afterEach",
-              "mount", "unmount", "created", "mounted", "destroyed", "onMount",
-              "onDestroy", "onInit", "beforeCreate", "beforeMount", "beforeDestroy",
-              "activated", "deactivated", "render", "componentDidMount"):
-        return True
-
-    return False
-
-
 def resolve_edges(
     all_nodes: List[Dict],
     all_raw_edges: List[Dict]
@@ -268,9 +210,7 @@ def resolve_edges(
         node["ref_count"] = incoming_count.get(node["id"], 0)
         # v6: Exported functions and React components are NOT dead even with 0 ref_count.
         # Entry points, exports, and components are consumed externally (e.g., JSX <Component/>).
-        # Also: Rust main(), #[tokio::main], #[tauri::command], Python if __name__ == "__main__",
-        # and other runtime-invoked functions should not be marked dead.
-        if node["ref_count"] == 0 and not _is_runtime_entry(node):
+        if node["ref_count"] == 0 and not node.get("exported", False) and not node.get("component", False):
             node["status"] = "dead"
         else:
             node["status"] = "active"
@@ -373,119 +313,118 @@ def _to_alternate_case(name: str) -> str:
     return leading + name
 
 
-# ─── Tauri IPC Edge Resolution ─────────────────────────────────
-
 def resolve_tauri_ipc_from_apimap(
     nodes: List[Dict],
     edges: List[Dict],
     api_routes: List[Dict]
 ) -> List[Dict]:
-    """Add cross-language edges for Tauri IPC: TypeScript invoke('cmd') → Rust #[tauri::command].
+    """Add cross-language Tauri IPC edges by matching frontend invoke() calls
+    to Rust #[tauri::command] handlers.
 
-    In Tauri apps, the frontend calls Rust backend via:
-        invoke('command_name', { args })
-
-    And the Rust side declares:
+    In a Tauri app, the TypeScript frontend calls Rust backend functions via:
+        invoke('commandName', { args })
+    The Rust side defines handlers with:
         #[tauri::command]
-        fn command_name(args: Type) -> Result<...>
+        fn command_name(args: ...) -> ...
 
-    Without this resolution, Rust #[tauri::command] handlers appear "dead"
-    because no Rust code calls them directly — they're called through the
-    Tauri IPC bridge from TypeScript/JavaScript.
-
-    This function:
-    1. Finds all api_routes with framework="tauri"
-    2. For Rust #[tauri::command] handlers, matches them to frontend invoke() calls
-    3. Adds cross-language edges between frontend invoke nodes and Rust command nodes
-    4. Marks Rust command nodes with is_tauri_command=True and status="ipc_exposed"
+    This function creates synthetic edges connecting the JS invoke() call sites
+    to the Rust handler functions, so that:
+    - Rust handlers appear as "active" (not dead) in the call graph
+    - Frontend-to-backend call chains are traceable
+    - Refactoring safety analysis can see cross-language impacts
 
     Args:
-        nodes: Resolved backend nodes list
-        edges: Resolved edges list
-        api_routes: Routes from apimap_engine.map_api_routes()
+        nodes: Already-resolved node list (contains both JS and Rust nodes).
+        edges: Already-resolved edge list from resolve_edges().
+        api_routes: Route data from apimap_engine.map_api_routes().
 
     Returns:
-        Updated edges list with added IPC edges.
+        Updated edges list with new IPC cross-language edges appended.
     """
     if not api_routes:
         return edges
 
-    # Build indexes: fn_name → node, id → node
-    fn_to_nodes: Dict[str, List[Dict]] = defaultdict(list)
+    # Build lookup: Rust fn name (snake_case) → node
+    rust_nodes_by_fn: Dict[str, List[Dict]] = {}
     for node in nodes:
-        fn_to_nodes[node.get("fn", "")].append(node)
+        if node.get("language") == "rust" or node.get("file", "").endswith(".rs"):
+            fn_name = node.get("fn", "")
+            if fn_name:
+                rust_nodes_by_fn.setdefault(fn_name, []).append(node)
 
-    # Separate Rust command routes from frontend invoke routes
-    rust_commands = {}  # ipc_name → node
-    frontend_invokes = []  # list of (ipc_name, frontend_node_id)
+    # Also build camelCase → snake_case mapping for Tauri convention:
+    # JS calls invoke('getItem') → Rust handler fn get_item()
+    alt_rust_index: Dict[str, List[Dict]] = {}
+    for fn_name, node_list in rust_nodes_by_fn.items():
+        alt_key = _to_alternate_case(fn_name)
+        if alt_key != fn_name:
+            alt_rust_index.setdefault(alt_key, []).extend(node_list)
+
+    # Build lookup: JS node ID → node (for invoke() call sites)
+    js_nodes: Dict[str, Dict] = {}
+    for node in nodes:
+        if node.get("language") in ("javascript", "typescript") or \
+           node.get("file", "").endswith((".js", ".ts", ".tsx", ".jsx")):
+            js_nodes[node["id"]] = node
+
+    # Map API routes to edges
+    new_edges = list(edges)
+    existing_edge_keys = set()
+    for e in edges:
+        key = (e.get("from", ""), e.get("to", ""))
+        existing_edge_keys.add(key)
 
     for route in api_routes:
-        if route.get("framework") != "tauri":
+        # Tauri IPC routes have specific structure from apimap_engine
+        route_name = route.get("handler", route.get("name", ""))
+        if not route_name:
             continue
 
-        handler = route.get("handler", "")
-        path = route.get("path", "")
-        route_type = route.get("type", "")
-
-        if route_type == "tauri_command":
-            # This is a Rust #[tauri::command] handler
-            # Find the matching node by function name
-            fn_name = handler
-            # Also try snake_case/camelCase conversions
-            alt_name = _to_alternate_case(fn_name)
-            candidates = fn_to_nodes.get(fn_name, []) + fn_to_nodes.get(alt_name, [])
-            # Prefer Rust file nodes
-            rust_candidates = [c for c in candidates if c.get("file", "").endswith(".rs")]
-            if rust_candidates:
-                rust_commands[fn_name] = rust_candidates[0]
-                rust_commands[alt_name] = rust_candidates[0]  # Both names map to same node
-            elif candidates:
-                rust_commands[fn_name] = candidates[0]
-                rust_commands[alt_name] = candidates[0]
-
-        elif route_type == "tauri_invoke":
-            # This is a frontend invoke('command_name') call
-            # Extract command name from path like "invoke('command_name')"
-            import re
-            m = re.search(r"invoke\s*\(\s*['\"`]([\w]+)['\"`]", path)
-            if m:
-                invoke_name = m.group(1)
-                # Find the frontend node that contains this invoke call
-                source_file = route.get("file", "")
-                source_line = route.get("line", 0)
-                # Create a synthetic node ID for the frontend invoke site
-                if source_file:
-                    invoke_id = f"{source_file}:{source_line}:invoke_{invoke_name}"
-                    frontend_invokes.append((invoke_name, invoke_id, source_file, source_line))
-
-    # Add IPC edges
-    new_edges = list(edges)
-
-    for invoke_name, invoke_id, source_file, source_line in frontend_invokes:
-        # Find the matching Rust command
-        # Try exact name, then camelCase ↔ snake_case
-        rust_node = rust_commands.get(invoke_name)
+        # Find the Rust handler node
+        rust_node = None
+        # Try exact match first
+        if route_name in rust_nodes_by_fn:
+            candidates = rust_nodes_by_fn[route_name]
+            rust_node = candidates[0] if candidates else None
+        # Try snake_case ↔ camelCase match
         if not rust_node:
-            alt_name = _to_alternate_case(invoke_name)
-            rust_node = rust_commands.get(alt_name)
+            alt_key = _to_alternate_case(route_name)
+            if alt_key in rust_nodes_by_fn:
+                candidates = rust_nodes_by_fn[alt_key]
+                rust_node = candidates[0] if candidates else None
+            elif route_name in alt_rust_index:
+                candidates = alt_rust_index[route_name]
+                rust_node = candidates[0] if candidates else None
 
-        if rust_node:
-            # Add edge from frontend invoke to Rust command handler
-            ipc_edge = {
-                "from": invoke_id,
-                "to": rust_node["id"],
-                "ipc_bridge": True,
-                "ipc_type": "tauri_invoke",
-                "invoke_name": invoke_name,
-            }
-            new_edges.append(ipc_edge)
+        if not rust_node:
+            continue
 
-            # Mark the Rust node as a Tauri IPC command
-            rust_node["is_tauri_command"] = True
+        # Find JS call sites (invoke() calls) for this command
+        # Look through JS nodes for invoke('routeName') patterns
+        for js_id, js_node in js_nodes.items():
+            # Skip self-edges (a Rust node shouldn't call itself via IPC)
+            if js_node.get("file") == rust_node.get("file"):
+                continue
 
-            # If the Rust node was previously marked "dead" because no
-            # same-language code calls it, upgrade it to "ipc_exposed"
-            if rust_node.get("status") == "dead":
-                rust_node["status"] = "ipc_exposed"
+            edge_key = (js_id, rust_node["id"])
+            if edge_key in existing_edge_keys:
+                continue
+
+            # Check if this JS node's function name suggests it calls the
+            # Tauri command (heuristic: function name matches route name,
+            # or function contains invoke pattern)
+            js_fn = js_node.get("fn", "")
+            if not js_fn:
+                continue
+
+            # Match: JS function name matches the route name (camelCase or snake_case)
+            if js_fn == route_name or js_fn == _to_alternate_case(route_name):
+                new_edge = {
+                    "from": js_id,
+                    "to": rust_node["id"],
+                    "type": "tauri_ipc",
+                }
+                new_edges.append(new_edge)
+                existing_edge_keys.add(edge_key)
 
     return new_edges

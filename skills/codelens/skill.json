@@ -1,8 +1,7 @@
 {
   "name": "codelens",
-  "version": "6.0.0",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v6.0: Critical bugfixes (7 broken imports fixed: resolve_tauri_ipc, MAX_FILE_SIZE, is_generated_file, scan_binary/tauri_artifacts, time_budget_expired). Preact + @preact/signals detection. Svelte 5 runes ($state/$derived/$effect/$props). Svelte stores (writable/readable/derived). Flexible tauri.conf.json discovery (recursive). Cargo workspace.dependencies parsing. Runtime entry point detection (main/functions in main.rs no longer falsely dead). Debug-leak: console.error/warn no longer flagged as removable. .svelte import tracking in dependents. Monorepo src/ subdir support. 12 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML), workspace auto-detect.",
-  "author": "codelens",
+  "version": "5.10.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 41 commands. v5.10: Go/C++ fallback parsers, Rust match arm dead-code fix, Rust inline test detection, Rust workspace member detection in config-drift, scan+binary-scan fix, 6 broken imports fixed. v5.9: PHP/Blade support, C++/Go support, XHR/network patterns, list command. v5.8: SearchConfig/FrontendRegistryInput dataclasses, monorepo detection, SvelteKit routes, Svelte stores, framework-adaptive perf-hint. v6.1: Tauri/Remix/Astro detection, smell_engine enhanced. v5.7.2: 7 critical bugfixes. Agent-optimized: score-based ask routing, markdown formatters, semantic conventions, AGENT.md, decision trees, quality metrics. TSX backend extraction. Fuzzy file lookup. Auto-incremental scan. Shared utils. Proper logging. Registry freshness. Calibrated health score. Tree-sitter, 14 langs (JS/TS/Rust/Python/Vue/Svelte/PHP/Blade/C++/Go/Tailwind/HTML/CSS/SCSS), workspace auto-detect.",  "author": "codelens",
   "tags": [
     "code-analysis",
     "reference-tracking",
