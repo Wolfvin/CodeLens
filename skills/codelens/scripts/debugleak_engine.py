@@ -65,6 +65,24 @@ PRINT_PATTERNS = [
     (r'\blog\.Info\s*\(', "log.Info()"),
 ]
 
+# v5.9: CLI/framework output functions that are NOT debug leaks.
+# These are legitimate output mechanisms for CLI applications.
+CLI_OUTPUT_ALLOWLIST = [
+    r'\bclick\.echo\s*\(',
+    r'\bclick\.secho\s*\(',
+    r'\bclick\.style\s*\(',
+    r'\bsys\.stdout\.write\s*\(',
+    r'\bsys\.stderr\.write\s*\(',
+    r'\blogging\.\w+\s*\(',
+    r'\blogger\.\w+\s*\(',
+    r'\bconsole\.print\s*\(',     # Rich library
+    r'\bconsole\.log\s*\(',       # Rich library
+    r'\btyper\.echo\s*\(',        # Typer CLI
+    r'\bprint_error\s*\(',        # Common pattern
+    r'\bprint_warning\s*\(',      # Common pattern
+    r'\bprint_success\s*\(',      # Common pattern
+]
+
 DEBUGGER_PATTERNS = [
     (r'\bdebugger\s*;?', "debugger"),
     (r'\bbreakpoint\s*\(\s*\)', "breakpoint()"),
@@ -356,6 +374,17 @@ def _detect_print_statements(
 
             m = re.search(pattern, stripped)
             if not m:
+                continue
+
+            # v5.9: Skip CLI/framework output functions that are NOT debug leaks.
+            # e.g., click.echo() is the standard way to output in CLI apps,
+            # logging.info() is for structured logging, etc.
+            is_cli_output = False
+            for allow_pattern in CLI_OUTPUT_ALLOWLIST:
+                if re.search(allow_pattern, stripped):
+                    is_cli_output = True
+                    break
+            if is_cli_output:
                 continue
 
             # In Python, skip if it's inside __main__ block or a CLI entry point

@@ -123,6 +123,13 @@ def map_api_routes(
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
 
+            # v5.9: Detect if this file is a test/example file for route source tagging
+            is_test_file = any(x in rel_path for x in [
+                '/tests/', '/test/', '/__tests__/', '/spec/',
+                '/conftest', 'test_', '_test.', '.test.', '.spec.',
+                '/examples/', '/example/',
+            ])
+
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -244,6 +251,16 @@ def map_api_routes(
 
     # ─── Post-processing ──────────────────────────────────────
 
+    # v5.9: Tag route source (production vs test/example) based on file path
+    for route in routes:
+        route_file = route.get("file", "")
+        if "source" not in route:
+            route["source"] = "test" if any(x in route_file for x in [
+                '/tests/', '/test/', '/__tests__/', '/spec/',
+                '/conftest', 'test_', '_test.', '.test.', '.spec.',
+                '/examples/', '/example/',
+            ]) else "production"
+
     # Attach middleware to routes
     for mw in global_middleware:
         scope = mw.get("scope", "global")
@@ -296,6 +313,9 @@ def map_api_routes(
 
     auth_count = sum(1 for r in routes if r.get("auth_protected"))
     public_count = len(routes) - auth_count
+    # v5.9: Count production vs test routes
+    production_count = sum(1 for r in routes if r.get("source") == "production")
+    test_count = len(routes) - production_count
 
     # Recommendations
     recommendations = _generate_recommendations(
@@ -308,6 +328,8 @@ def map_api_routes(
         "frameworks_detected": sorted(frameworks_detected),
         "stats": {
             "total_routes": len(routes),
+            "production_routes": production_count,
+            "test_routes": test_count,
             "by_method": dict(by_method),
             "auth_protected": auth_count,
             "public": public_count,

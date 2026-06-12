@@ -1,7 +1,7 @@
 {
   "name": "codelens",
-  "version": "5.8.1",
-  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.8.1: Go project support (go.mod parsing, Go type detection, go-database/go-web-service/go-grpc-service classification), Go commented_code false positive reduction (license block skip, higher Go threshold, Go-specific code indicators), Go framework content-based detection (gin/echo/chi/fiber/mux/grpc/protobuf from go.mod), Go removed from unsupported_langs. Bugfixes: get_workspace_outline() max_files TypeError, perf-hint max_files TypeError, gin/echo false positive for non-web Go projects. Tested on cockroachdb/cockroach (10K files Go database), denoland/deno (5.4K files Rust+TS), elizaOS/eliza (5.3K files AI agent).",  "author": "codelens",
+  "version": "5.9.0",
+  "description": "MUST activate before writing/editing/deleting any class/id/function. 44 commands. v5.9.0: Python type alias filtering in state-map (TypeAlias, Union, Optional, etc.), FastAPI route false positive fix (requires_import check), api-map test route separation (source: production/test), CLI output allowlist for debug-leak (click.echo, logging, sys.stdout), HTML template skip in perf-hint inefficient_iteration, Python local package detection in config-drift (src/ layout + pyproject.toml). Tested on pallets/flask (83 Python files, Flask framework).",  "author": "codelens",
   "tags": [    "code-analysis",
     "reference-tracking",
     "dead-code",
