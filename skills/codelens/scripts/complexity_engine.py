@@ -456,19 +456,119 @@ def _extract_go_functions(lines: List[str], content: str) -> List[Dict]:
 
 
 def _extract_c_cpp_functions(lines: List[str], content: str, ext: str) -> List[Dict]:
-    """Extract C/C++ function definitions."""
+    """Extract C/C++ function definitions.
+    
+    v6.4: Handle multiple C/C++ function definition styles:
+    1. Standard: type name(params) {
+    2. Multi-line: type name(params)\n{
+    3. Type on prev line: type\nname(params)\n{  (nginx style)
+    4. Calling convention: type MACRO\nname(params)\n{
+    """
     functions = []
 
     for i, line in enumerate(lines):
-        # C/C++ function definition pattern:
-        # type name(params) {  or  type Class::name(params) {
-        # Skip common non-function patterns
+        stripped = line.strip()
+        
+        # Skip preprocessor directives and comments
+        if stripped.startswith('#') or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            continue
+        # Skip blank lines
+        if not stripped:
+            continue
+
+        # Pattern 1: Standard — type name(params) {
         m = re.match(
             r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
             r'(?:[\w:*&<>,\s]+?)\s+'
             r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?(?:->\s*[\w:*&<>,\s]+\s*)?\{',
             line
         )
+        
+        # Pattern 2: Multi-line — type name(params) with { on next line
+        if not m:
+            m = re.match(
+                r'\s*(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+                r'(?:[\w:*&<>,\s]+?)\s+'
+                r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(?:const\s*)?\s*$',
+                line
+            )
+            if m:
+                # Check if next non-blank line is {
+                for lookahead in range(i + 1, min(i + 3, len(lines))):
+                    next_stripped = lines[lookahead].strip()
+                    if not next_stripped:
+                        continue
+                    if next_stripped == '{':
+                        break  # This is a valid definition
+                    else:
+                        m = None  # Not a definition
+                        break
+                else:
+                    m = None  # No { found
+        
+        # Pattern 3 & 4: Return type on previous line, then name(params) on this line
+        # Handles: type\nname(params)\n{  and  type MACRO\nname(params)\n{
+        # The previous line should look like a C type: void, int, size_t, u_char *, etc.
+        if not m:
+            # This line looks like: name(params) or name(params) {
+            nm = re.match(r'(\w+(?:::\w+)*)\s*\(([^)]*)\)\s*(\{)?', stripped)
+            if nm:
+                fn_name = nm.group(1)
+                has_brace = nm.group(3) == '{'
+                skip_names = {'if', 'for', 'while', 'switch', 'catch', 'return',
+                             'class', 'struct', 'enum', 'union', 'namespace', 'typedef',
+                             'using', 'template', 'include', 'define', 'ifdef', 'endif',
+                             'sizeof', 'typeof'}
+                if fn_name not in skip_names and i > 0:
+                    # Check previous non-blank line for a type
+                    prev_type_line = None
+                    for prev_i in range(i - 1, max(i - 3, -1), -1):
+                        prev_stripped = lines[prev_i].strip()
+                        if not prev_stripped:
+                            continue
+                        # Skip comments and preprocessor
+                        if prev_stripped.startswith('//') or prev_stripped.startswith('/*') or prev_stripped.startswith('#'):
+                            continue
+                        prev_type_line = prev_stripped
+                        break
+                    
+                    if prev_type_line:
+                        # Previous line should look like a C/C++ type declaration
+                        # e.g., "void", "size_t", "u_char *", "static ngx_int_t", "int ngx_cdecl"
+                        is_type_line = re.match(
+                            r'^(?:static\s+|inline\s+|extern\s+|virtual\s+|constexpr\s+)*'
+                            r'(?:const\s+)?'
+                            r'[\w:*&]+\s*$',
+                            prev_type_line
+                        )
+                        if is_type_line:
+                            # It's a type on the previous line — this is a function definition
+                            if has_brace:
+                                functions.append({
+                                    "name": fn_name,
+                                    "line": i + 1,
+                                    "type": "function",
+                                    "params_str": nm.group(2),
+                                    "start_col": len(line) - len(line.lstrip()),
+                                })
+                            else:
+                                # Check for { on next line
+                                for lookahead in range(i + 1, min(i + 3, len(lines))):
+                                    next_stripped = lines[lookahead].strip()
+                                    if not next_stripped:
+                                        continue
+                                    if next_stripped == '{':
+                                        functions.append({
+                                            "name": fn_name,
+                                            "line": i + 1,
+                                            "type": "function",
+                                            "params_str": nm.group(2),
+                                            "start_col": len(line) - len(line.lstrip()),
+                                        })
+                                        break
+                                    else:
+                                        break  # Not a definition
+
         if m:
             fn_name = m.group(1)
             # Skip control flow keywords and common non-function names
