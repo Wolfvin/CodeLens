@@ -168,12 +168,16 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     return result
 
 
-def format_output(data: Any, format_type: str = "json", command: str = "") -> str:
-    """Format output data as JSON, Markdown, or AI (normalized schema)."""
+def format_output(data: Any, format_type: str = "json", command: str = "",
+                  workspace: str = "") -> str:
+    """Format output data as JSON, Markdown, AI (normalized schema), or SARIF."""
     if format_type == "ai":
         normalized = _normalize_to_ai(data, command)
         return json.dumps(normalized, indent=2, ensure_ascii=False)
     if format_type == "markdown":
         return to_markdown(data, command)
+    if format_type == "sarif":
+        from formatters.sarif import format_sarif
+        return format_sarif(data, command, workspace)
     # Default: JSON
     return json.dumps(data, indent=2, ensure_ascii=False)

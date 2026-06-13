@@ -1,6 +1,5 @@
 """Taint command — Run semantic taint analysis for vulnerability detection."""
 
-from semantic_engine import analyze_workspace
 from commands import register_command
 
 
@@ -13,11 +12,27 @@ def add_args(parser):
                         help="Include secrets engine findings as taint sources")
     parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
                         help="Filter by minimum severity")
+    parser.add_argument("--cross-file", action="store_true", default=False,
+                        help="Enable cross-file taint analysis with CFG construction")
 
 
 def execute(args, workspace):
     language = getattr(args, 'language', None)
-    result = analyze_workspace(workspace, language=language)
+    cross_file = getattr(args, 'cross_file', False)
+
+    if cross_file:
+        try:
+            from crossfile_taint_engine import analyze_cross_file_taint
+            result = analyze_cross_file_taint(workspace, language=language)
+        except ImportError:
+            # Fallback to intra-file analysis
+            from semantic_engine import analyze_workspace
+            result = analyze_workspace(workspace, language=language)
+            result["cross_file"] = False
+            result["cross_file_fallback"] = True
+    else:
+        from semantic_engine import analyze_workspace
+        result = analyze_workspace(workspace, language=language)
 
     # Optionally enhance with secrets findings
     if getattr(args, 'with_secrets', False):

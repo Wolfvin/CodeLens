@@ -792,8 +792,8 @@ def main():
         _existing_subparser_args[cmd_name] = existing_dests
 
         # Add --format to each subparser (safe: no command defines its own --format)
-        sub.add_argument("--format", "-f", choices=["json", "markdown", "ai"], default=None,
-                         help="Output format: json, markdown, or ai (normalized schema)")
+        sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif"], default=None,
+                         help="Output format: json, markdown, ai (normalized schema), or sarif (GitHub/VS Code)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
@@ -819,7 +819,7 @@ def main():
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
-    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai"], default=_default_format,
+    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif"], default=_default_format,
                         help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default)")
     parser.add_argument("--db-path", default=None,
                         help="Custom path for SQLite database (default: .codelens/codelens.db)")
@@ -848,11 +848,11 @@ def main():
         arg = sys.argv[i]
         if arg in ('-f', '--format') and i + 1 < len(sys.argv):
             next_arg = sys.argv[i + 1]
-            if next_arg in ('json', 'markdown', 'ai'):
+            if next_arg in ('json', 'markdown', 'ai', 'sarif'):
                 global_format = next_arg
-        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown', 'ai'):
+        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown', 'ai', 'sarif'):
             global_format = arg[3:]
-        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown', 'ai'):
+        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown', 'ai', 'sarif'):
             global_format = arg[9:]
         elif arg == '--top' and i + 1 < len(sys.argv):
             try:
@@ -1127,7 +1127,12 @@ def main():
             format_command = result.get("query_interpretation", {}).get("interpreted_as", "ask")
 
         # ─── Format and print output ──
-        print(format_output(result, args.format, format_command))
+        print(format_output(result, args.format, format_command, workspace))
+
+        # ─── Exit code for check command (CI quality gate) ──
+        if args.command == "check" and isinstance(result, dict):
+            if result.get("gate") == "failed":
+                sys.exit(1)
 
     except FileNotFoundError as e:
         error_result = {

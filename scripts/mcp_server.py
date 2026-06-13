@@ -804,6 +804,112 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "fix": {
+        "description": "Auto-fix issues with confidence scoring. Supports secrets masking, dead-code removal, debug-leak cleanup, and import cleanup. Uses dry-run by default — use --apply to actually modify files.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["secrets_mask", "dead_code", "debug_leak", "import_cleanup", "todo_fixme"]},
+                    "description": "Fix categories to apply (default: all)"
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Show what would be changed without modifying files (default: true)",
+                    "default": True
+                },
+                "min_confidence": {
+                    "type": "number",
+                    "description": "Minimum confidence threshold 0-1 (default: 0.5)",
+                    "default": 0.5
+                },
+                "max_risk": {
+                    "type": "string",
+                    "enum": ["safe", "moderate", "risky", "dangerous"],
+                    "description": "Maximum risk level to apply (default: risky)",
+                    "default": "risky"
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
+    "check": {
+        "description": "CI/CD quality gate. Runs multiple analysis commands and exits non-zero if quality threshold is not met. Supports SARIF output for GitHub Advanced Security integration.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "severity": {
+                    "type": "string",
+                    "enum": ["critical", "high", "medium", "low"],
+                    "description": "Minimum severity to fail the gate (default: high)",
+                    "default": "high"
+                },
+                "max_findings": {
+                    "type": "integer",
+                    "description": "Maximum allowed findings (0 = no limit, default: 0)",
+                    "default": 0
+                },
+                "health_min": {
+                    "type": "integer",
+                    "description": "Minimum health score to pass 0-100 (default: 0)",
+                    "default": 0
+                },
+                "sarif": {
+                    "type": "boolean",
+                    "description": "Also output SARIF format for GitHub Advanced Security",
+                    "default": False
+                },
+                "commands": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Commands to run for the quality gate",
+                    "default": ["secrets", "dead-code", "smell", "complexity", "debug-leak", "circular", "taint"]
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
+    "guard": {
+        "description": "Pre/post-write verification for AI agents. Use 'pre' before making changes to check safety, 'post' after to verify no new issues were introduced. The killer feature for AI-native code intelligence.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["pre", "post", "snapshot", "verify"],
+                    "description": "Guard action: pre (before write), post (after write), snapshot (save state), verify (compare with snapshot)"
+                },
+                "file": {
+                    "type": "string",
+                    "description": "File path being modified (for pre/post actions)"
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Symbol being added/modified/removed (for pre action)"
+                },
+                "change_type": {
+                    "type": "string",
+                    "enum": ["create", "modify", "delete", "rename"],
+                    "description": "Type of change (default: modify)",
+                    "default": "modify"
+                }
+            },
+            "required": ["workspace", "action"]
+        }
+    },
 }
 
 
