@@ -1,0 +1,806 @@
+# CodeLens Compliance Rules — PCI-DSS v4.0
+# Maps CodeLens security findings to PCI-DSS v4.0 requirements
+# Reference: https://www.pcisecuritystandards.org/document_library/
+
+rules:
+  # ─── Requirement 1: Network Security Controls ───────────
+
+  - id: pci-dss/req-1.2
+    name: "PCI-DSS 1.2: Network Security Controls Configuration"
+    owasp: A05:2021
+    cwe: CWE-16
+    description: "Network security controls are configured and maintained"
+    severity: high
+    framework: pci-dss
+    requirement: "1.2"
+    message: "Ensure network security controls (firewalls, NSGs) are properly configured and restrict traffic to necessary services"
+    sources:
+      - security_group
+      - firewall_rule
+      - nsg_rule
+    sinks:
+      - allow_all
+      - 0.0.0.0/0
+      - open_port
+    sanitizers:
+      - restrict_by_ip
+      - specific_port
+      - deny_all_default
+
+  - id: pci-dss/req-1.3
+    name: "PCI-DSS 1.3: Network Access Restriction"
+    owasp: A01:2021
+    cwe: CWE-284
+    description: "Access to cardholder data environment is restricted"
+    severity: high
+    framework: pci-dss
+    requirement: "1.3"
+    message: "Network access to cardholder data must be restricted — deny all unless explicitly allowed"
+    sources:
+      - flask.request
+      - django.http.request
+      - req\\.(?:body|params|query)
+    sinks:
+      - card_data
+      - payment_info
+      - PAN
+      - cardholder_data
+    sanitizers:
+      - network_segmentation
+      - access_control
+      - firewall_rule
+
+  # ─── Requirement 2: Secure Configurations ────────────────
+
+  - id: pci-dss/req-2.1
+    name: "PCI-DSS 2.1: Default Passwords Changed"
+    owasp: A07:2021
+    cwe: CWE-259
+    description: "All default passwords are changed before system installation"
+    severity: critical
+    framework: pci-dss
+    requirement: "2.1"
+    message: "Default passwords and credentials must be changed before deploying any system component"
+    sources:
+      - default_password
+      - admin/admin
+      - root/root
+      - config.DEFAULT_PASSWORD
+    sinks:
+      - login
+      - authenticate
+      - User.create
+      - db.connect
+    sanitizers:
+      - change_password
+      - generate_password
+      - secure_default
+
+  - id: pci-dss/req-2.2
+    name: "PCI-DSS 2.2: Secure Configuration Standards"
+    owasp: A05:2021
+    cwe: CWE-16
+    description: "System configuration standards are developed and maintained"
+    severity: high
+    framework: pci-dss
+    requirement: "2.2"
+    message: "Develop and maintain secure configuration standards for all system components"
+    sources:
+      - debug.*True
+      - FLASK_DEBUG
+      - settings.DEBUG
+    sinks:
+      - app.run
+      - start_server
+    sanitizers:
+      - production_config
+      - disable_debug
+      - secure_settings
+
+  # ─── Requirement 3: Protect Stored Account Data ─────────
+
+  - id: pci-dss/req-3.5
+    name: "PCI-DSS 3.5: Cryptographic Key Protection"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Cryptographic keys used for protection of stored account data are secured"
+    severity: critical
+    framework: pci-dss
+    requirement: "3.5"
+    message: "Cryptographic keys must be stored securely and protected from unauthorized access"
+    sources:
+      - encryption_key
+      - SECRET_KEY
+      - private_key
+      - api_key
+    sinks:
+      - database
+      - config_file
+      - source_code
+      - version_control
+    sanitizers:
+      - key_vault
+      - HSM
+      - kms
+      - secure_storage
+
+  - id: pci-dss/req-3.6
+    name: "PCI-DSS 3.6: Encryption Key Management"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Full documentation and implementation of key management processes"
+    severity: high
+    framework: pci-dss
+    requirement: "3.6"
+    message: "Key management procedures must include generation, distribution, storage, rotation, and destruction"
+    sources:
+      - key_generation
+      - key_rotation
+      - key_storage
+    sinks:
+      - encrypt
+      - decrypt
+      - sign
+    sanitizers:
+      - key_management_system
+      - automated_rotation
+      - secure_key_derivation
+
+  # ─── Requirement 4: Protect Data in Transit ─────────────
+
+  - id: pci-dss/req-4.1
+    name: "PCI-DSS 4.1: Strong Cryptography in Transit"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Strong cryptography and security protocols for data in transit"
+    severity: critical
+    framework: pci-dss
+    requirement: "4.1"
+    message: "All cardholder data must be encrypted during transmission over open, public networks"
+    sources:
+      - http://
+      - unencrypted_connection
+      - telnet
+      - ftp
+      - SMTP_without_TLS
+    sinks:
+      - send
+      - transmit
+      - post
+      - request
+    sanitizers:
+      - https://
+      - TLS_1.2
+      - SSL/TLS
+      - encrypt_connection
+
+  - id: pci-dss/req-4.2
+    name: "PCI-DSS 4.2: No Unencrypted PAN in Messaging"
+    owasp: A02:2021
+    cwe: CWE-319
+    description: "PAN is not sent via unencrypted messaging"
+    severity: critical
+    framework: pci-dss
+    requirement: "4.2"
+    message: "Never send unprotected PAN by end-user messaging technologies (email, SMS, chat)"
+    sources:
+      - PAN
+      - card_number
+      - payment_card
+    sinks:
+      - email
+      - SMS
+      - chat
+      - send_message
+      - mail
+    sanitizers:
+      - tokenize
+      - mask
+      - truncate
+
+  # ─── Requirement 5: Malicious Software ──────────────────
+
+  - id: pci-dss/req-5.1
+    name: "PCI-DSS 5.1: Malicious Software Protection"
+    owasp: A06:2021
+    cwe: CWE-1104
+    description: "Malicious software is prevented or detected and addressed"
+    severity: high
+    framework: pci-dss
+    requirement: "5.1"
+    message: "Deploy antivirus software and ensure it is actively running and updated"
+    sources:
+      - file_upload
+      - downloaded_content
+      - external_data
+    sinks:
+      - execute
+      - install
+      - run
+    sanitizers:
+      - virus_scan
+      - malware_check
+      - content_disposition
+
+  # ─── Requirement 6: Secure Systems and Software ─────────
+
+  - id: pci-dss/req-6.1
+    name: "PCI-DSS 6.1: Vulnerability Identification"
+    owasp: A06:2021
+    cwe: CWE-1104
+    description: "Establish process to identify and assign risk ratings to vulnerabilities"
+    severity: high
+    framework: pci-dss
+    requirement: "6.1"
+    message: "Establish a process to identify and assign risk ratings to vulnerabilities — use codelens vuln-scan for comprehensive detection"
+    sources:
+      - CVE
+      - vulnerability
+      - security_advisory
+    sinks:
+      - dependency
+      - package
+      - library
+    sanitizers:
+      - update
+      - patch
+      - upgrade
+      - vuln-scan
+
+  - id: pci-dss/req-6.2
+    name: "PCI-DSS 6.2: System Component Security"
+    owasp: A06:2021
+    cwe: CWE-1104
+    description: "Ensure all system components and software are protected from known vulnerabilities"
+    severity: high
+    framework: pci-dss
+    requirement: "6.2"
+    message: "Install critical security patches within 30 days of release — use codelens vuln-scan to check dependencies"
+    sources:
+      - requirements.txt
+      - package.json
+      - Cargo.toml
+      - go.mod
+    sinks:
+      - install
+      - deploy
+      - build
+    sanitizers:
+      - audit
+      - patch
+      - update
+
+  - id: pci-dss/req-6.3
+    name: "PCI-DSS 6.3: Secure Software Development"
+    owasp: A04:2021
+    cwe: CWE-248
+    description: "Security is included in the software development lifecycle"
+    severity: high
+    framework: pci-dss
+    requirement: "6.3"
+    message: "Develop software based on secure coding guidelines — review custom code before release"
+    sources:
+      - code_change
+      - pull_request
+      - commit
+    sinks:
+      - deploy
+      - release
+      - production
+    sanitizers:
+      - code_review
+      - security_review
+      - static_analysis
+
+  - id: pci-dss/req-6.4
+    name: "PCI-DSS 6.4: Public-Facing Web App Security"
+    owasp: A04:2021
+    cwe: CWE-20
+    description: "Public-facing web applications are protected against attacks"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.4"
+    message: "Review public-facing web apps for vulnerabilities via manual or automated testing at least annually"
+    sources:
+      - flask.request
+      - django.http.request
+      - req\\.(?:body|params|query)
+    sinks:
+      - response
+      - render
+      - execute
+    sanitizers:
+      - WAF
+      - input_validation
+      - output_encoding
+      - CSP
+
+  - id: pci-dss/req-6.5.1
+    name: "PCI-DSS 6.5.1: Injection Flaws"
+    owasp: A03:2021
+    cwe: CWE-78
+    description: "Identify and address injection flaws (SQL, OS command, LDAP, etc.)"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.1"
+    message: "Injection flaws allow untrusted data to be sent to an interpreter as part of a command or query"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - django.http.request.GET
+      - django.http.request.POST
+      - req\\.(?:body|params|query)
+    sinks:
+      - cursor.execute
+      - os.system
+      - subprocess.call
+      - db.execute
+    sanitizers:
+      - parameterized_query
+      - shlex.quote
+      - input_validation
+      - ORM
+
+  - id: pci-dss/req-6.5.2
+    name: "PCI-DSS 6.5.2: Buffer Overflows"
+    owasp: A03:2021
+    cwe: CWE-120
+    description: "Identify and address buffer overflow vulnerabilities"
+    severity: high
+    framework: pci-dss
+    requirement: "6.5.2"
+    message: "Buffer overflows allow attackers to execute arbitrary code by writing past allocated memory bounds"
+    sources:
+      - user_input
+      - network_data
+    sinks:
+      - memcpy
+      - strcpy
+      - sprintf
+      - gets
+    sanitizers:
+      - strncpy
+      - snprintf
+      - bounds_check
+      - safe_library
+
+  - id: pci-dss/req-6.5.3
+    name: "PCI-DSS 6.5.3: Insecure Cryptographic Storage"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Identify and address insecure cryptographic storage"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.3"
+    message: "Sensitive data must be encrypted at rest using strong cryptography"
+    sources:
+      - PAN
+      - cardholder_data
+      - sensitive_data
+    sinks:
+      - database
+      - file
+      - log
+      - cache
+    sanitizers:
+      - encrypt
+      - AES-256
+      - tokenize
+      - hash
+
+  - id: pci-dss/req-6.5.4
+    name: "PCI-DSS 6.5.4: Insecure Communications"
+    owasp: A02:2021
+    cwe: CWE-319
+    description: "Identify and address insecure communications"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.4"
+    message: "All communications containing sensitive data must use strong encryption"
+    sources:
+      - http://
+      - unencrypted
+      - plaintext
+    sinks:
+      - send
+      - transmit
+      - network
+    sanitizers:
+      - https://
+      - TLS_1.2+
+      - VPN
+      - mTLS
+
+  - id: pci-dss/req-6.5.5
+    name: "PCI-DSS 6.5.5: Improper Error Handling"
+    owasp: A04:2021
+    cwe: CWE-209
+    description: "Identify and address improper error handling"
+    severity: high
+    framework: pci-dss
+    requirement: "6.5.5"
+    message: "Error messages must not reveal sensitive information about the application or infrastructure"
+    sources:
+      - traceback
+      - exception
+      - err.stack
+    sinks:
+      - HttpResponse
+      - res.json
+      - res.send
+    sanitizers:
+      - generic_error
+      - log_internally
+      - sanitize_error
+
+  - id: pci-dss/req-6.5.6
+    name: "PCI-DSS 6.5.6: Broken Authentication"
+    owasp: A07:2021
+    cwe: CWE-287
+    description: "Identify and address all high-risk vulnerabilities in authentication"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.6"
+    message: "Authentication mechanisms must prevent brute force and credential stuffing attacks"
+    sources:
+      - login
+      - authenticate
+      - credentials
+    sinks:
+      - session
+      - token
+      - access
+    sanitizers:
+      - MFA
+      - rate_limit
+      - account_lockout
+      - strong_password
+
+  - id: pci-dss/req-6.5.7
+    name: "PCI-DSS 6.5.7: Broken Access Control"
+    owasp: A01:2021
+    cwe: CWE-285
+    description: "Identify and address broken access control vulnerabilities"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.7"
+    message: "Access controls must restrict authenticated users to their authorized functions and data"
+    sources:
+      - flask.request
+      - django.http.request
+      - req\\.(?:body|params|query)
+    sinks:
+      - admin_function
+      - other_user_data
+      - restricted_resource
+    sanitizers:
+      - authorization_check
+      - role_check
+      - permission_required
+      - RBAC
+
+  - id: pci-dss/req-6.5.8
+    name: "PCI-DSS 6.5.8: Cross-Site Scripting (XSS)"
+    owasp: A03:2021
+    cwe: CWE-79
+    description: "Identify and address cross-site scripting vulnerabilities"
+    severity: critical
+    framework: pci-dss
+    requirement: "6.5.8"
+    message: "XSS allows attackers to inject scripts into web pages viewed by other users"
+    sources:
+      - flask.request.args
+      - django.http.request.GET
+      - req\\.(?:body|params|query)
+      - window\\.location
+    sinks:
+      - innerHTML
+      - document.write
+      - dangerouslySetInnerHTML
+      - render_template_string
+    sanitizers:
+      - escape
+      - DOMPurify
+      - textContent
+      - Content-Security-Policy
+
+  - id: pci-dss/req-6.5.9
+    name: "PCI-DSS 6.5.9: Improper Restriction of URL Access"
+    owasp: A01:2021
+    cwe: CWE-284
+    description: "Identify and address improper URL access restrictions"
+    severity: high
+    framework: pci-dss
+    requirement: "6.5.9"
+    message: "Forceful browsing to authenticated pages must be prevented by server-side access checks"
+    sources:
+      - url_path
+      - route
+      - endpoint
+    sinks:
+      - protected_page
+      - admin_panel
+      - user_data
+    sanitizers:
+      - authenticate
+      - authorize
+      - session_check
+
+  - id: pci-dss/req-6.5.10
+    name: "PCI-DSS 6.5.10: CSRF"
+    owasp: A01:2021
+    cwe: CWE-352
+    description: "Identify and address cross-site request forgery vulnerabilities"
+    severity: high
+    framework: pci-dss
+    requirement: "6.5.10"
+    message: "CSRF attacks force authenticated users to execute unwanted actions"
+    sources:
+      - flask.request.form
+      - django.http.request.POST
+      - req\\.body
+    sinks:
+      - state_changing_action
+      - transfer
+      - delete
+      - update
+    sanitizers:
+      - csrf_token
+      - CSRFProtect
+      - SameSite
+      - Origin_check
+
+  # ─── Requirement 7: Need-to-Know Access ─────────────────
+
+  - id: pci-dss/req-7.1
+    name: "PCI-DSS 7.1: Access on Need-to-Know Basis"
+    owasp: A01:2021
+    cwe: CWE-285
+    description: "Access to system components and data is restricted to need-to-know"
+    severity: high
+    framework: pci-dss
+    requirement: "7.1"
+    message: "Limit access to the least privilege necessary — grant access only when needed for job function"
+    sources:
+      - user_role
+      - permission
+      - access_level
+    sinks:
+      - sensitive_data
+      - admin_function
+      - system_config
+    sanitizers:
+      - RBAC
+      - ABAC
+      - least_privilege
+      - role_check
+
+  # ─── Requirement 8: User Identification ─────────────────
+
+  - id: pci-dss/req-8.1
+    name: "PCI-DSS 8.1: User Identification and Authentication"
+    owasp: A07:2021
+    cwe: CWE-287
+    description: "Users are identified and authenticated before access to system components"
+    severity: critical
+    framework: pci-dss
+    requirement: "8.1"
+    message: "All users must be uniquely identified and authenticated before accessing system components"
+    sources:
+      - request
+      - session
+    sinks:
+      - protected_resource
+      - system_access
+    sanitizers:
+      - authenticate
+      - MFA
+      - SSO
+
+  - id: pci-dss/req-8.2
+    name: "PCI-DSS 8.2: Strong Authentication"
+    owasp: A07:2021
+    cwe: CWE-521
+    description: "User authentication uses strong authentication methods"
+    severity: critical
+    framework: pci-dss
+    requirement: "8.2"
+    message: "Passwords must have minimum 12 characters, or MFA is required for all access to CDE"
+    sources:
+      - user_password
+      - credentials
+    sinks:
+      - authenticate
+      - login
+      - session
+    sanitizers:
+      - MFA
+      - bcrypt
+      - argon2
+      - password_policy
+
+  - id: pci-dss/req-8.3
+    name: "PCI-DSS 8.3: Multi-Factor Authentication"
+    owasp: A07:2021
+    cwe: CWE-287
+    description: "MFA is required for all access to the CDE"
+    severity: critical
+    framework: pci-dss
+    requirement: "8.3"
+    message: "Implement multi-factor authentication for all access to cardholder data environment"
+    sources:
+      - login
+      - authenticate
+      - remote_access
+    sinks:
+      - CDE_access
+      - admin_panel
+      - console_access
+    sanitizers:
+      - MFA
+      - TOTP
+      - hardware_token
+      - push_notification
+
+  - id: pci-dss/req-8.6
+    name: "PCI-DSS 8.6: Service Account Authentication"
+    owasp: A07:2021
+    cwe: CWE-259
+    description: "Where MFA is not used, authentication is via unique credentials"
+    severity: high
+    framework: pci-dss
+    requirement: "8.6"
+    message: "Service accounts must use unique credentials — no shared or default passwords"
+    sources:
+      - service_account
+      - shared_credentials
+      - default_password
+    sinks:
+      - authenticate
+      - access_resource
+    sanitizers:
+      - unique_credentials
+      - key_based_auth
+      - managed_identity
+
+  # ─── Requirement 10: Logging and Monitoring ─────────────
+
+  - id: pci-dss/req-10.1
+    name: "PCI-DSS 10.1: Audit Logs"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Audit logs are enabled and active for all system components"
+    severity: high
+    framework: pci-dss
+    requirement: "10.1"
+    message: "Logging mechanisms must be enabled for all system components to record user access"
+    sources:
+      - user_action
+      - login
+      - data_access
+    sinks:
+      - system_component
+    sanitizers:
+      - audit_log
+      - log_event
+      - security_event
+
+  - id: pci-dss/req-10.2
+    name: "PCI-DSS 10.2: Audit Log Events"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Audit logs record specified events for all system components"
+    severity: high
+    framework: pci-dss
+    requirement: "10.2"
+    message: "Record all individual access to cardholder data, all actions by privileged users, and invalid access attempts"
+    sources:
+      - login_attempt
+      - privilege_use
+      - data_access
+      - config_change
+    sinks:
+      - audit_trail
+    sanitizers:
+      - log_event
+      - central_log
+
+  - id: pci-dss/req-10.3
+    name: "PCI-DSS 10.3: Audit Log Content"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Audit logs contain sufficient information to reconstruct events"
+    severity: medium
+    framework: pci-dss
+    requirement: "10.3"
+    message: "Each log entry must include user ID, event type, date/time, success/failure, and origin"
+    sources:
+      - event_data
+    sinks:
+      - log_entry
+    sanitizers:
+      - structured_logging
+      - log_format
+
+  - id: pci-dss/req-10.4
+    name: "PCI-DSS 10.4: Log Security"
+    owasp: A09:2021
+    cwe: CWE-532
+    description: "Audit logs are secured and reviewed"
+    severity: high
+    framework: pci-dss
+    requirement: "10.4"
+    message: "Use time-synchronization, write logs to centralized log server, and review regularly"
+    sources:
+      - audit_log
+      - security_log
+    sinks:
+      - tampered_log
+      - deleted_log
+    sanitizers:
+      - write_once_storage
+      - SIEM
+      - integrity_monitoring
+
+  # ─── Requirement 11: Regular Security Testing ───────────
+
+  - id: pci-dss/req-11.3
+    name: "PCI-DSS 11.3: Penetration Testing"
+    owasp: A04:2021
+    cwe: CWE-20
+    description: "External and internal penetration testing is performed regularly"
+    severity: medium
+    framework: pci-dss
+    requirement: "11.3"
+    message: "Perform penetration testing at least annually and after any significant change"
+    sources:
+      - application
+      - network
+      - infrastructure
+    sinks:
+      - vulnerability
+    sanitizers:
+      - penetration_test
+      - vulnerability_scan
+      - security_assessment
+
+  - id: pci-dss/req-11.5
+    name: "PCI-DSS 11.5: File Integrity Monitoring"
+    owasp: A08:2021
+    cwe: CWE-345
+    description: "Intrusion detection and/or file integrity monitoring is in place"
+    severity: high
+    framework: pci-dss
+    requirement: "11.5"
+    message: "Detect unauthorized changes to critical files using file integrity monitoring or IDS"
+    sources:
+      - config_file
+      - binary
+      - script
+    sinks:
+      - modification
+      - unauthorized_change
+    sanitizers:
+      - file_integrity_monitor
+      - checksum
+      - hash_verification
+      - tripwire
+
+  # ─── Requirement 12: Security Policies ──────────────────
+
+  - id: pci-dss/req-12.1
+    name: "PCI-DSS 12.1: Information Security Policy"
+    owasp: A04:2021
+    cwe: CWE-20
+    description: "Information security policy is established and maintained"
+    severity: medium
+    framework: pci-dss
+    requirement: "12.1"
+    message: "Establish, publish, maintain, and disseminate a security policy"
+    sources:
+      - organization
+    sinks:
+      - security_policy
+    sanitizers:
+      - documented_policy
+      - annual_review

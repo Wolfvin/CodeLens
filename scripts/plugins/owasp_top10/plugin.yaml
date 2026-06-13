@@ -1,0 +1,12 @@
+name: owasp-top10
+version: 1.0.0
+author: CodeLens Community
+description: OWASP Top 10 (2021) security rules covering all 10 risk categories — broken access control, crypto failures, injection, insecure design, misconfiguration, auth failures, integrity failures, logging gaps, and SSRF
+type: rule_pack
+rules_dir: rules/
+engines: []
+dependencies: []
+tags: [security, owasp, top10, web]
+homepage: https://owasp.org/Top10/
+license: MIT
+min_codelens_version: 5.7.0

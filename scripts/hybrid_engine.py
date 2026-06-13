@@ -196,7 +196,7 @@ class HybridEngine:
                 "line": defn_start.get("line", 0) + 1,
                 "character": defn_start.get("character", 0),
             }
-            if defn_path.endswith(file_path) or file_path.endswith(defn_path):
+            if _paths_match(defn_path, file_path):
                 result["confidence"] = CONFIDENCE_HIGH
             else:
                 result["confidence"] = CONFIDENCE_MEDIUM
@@ -366,7 +366,7 @@ class HybridEngine:
             ref_path = _uri_to_path(ref_uri) if ref_uri else ""
             ref_range = ref.get("range", {})
             ref_start = ref_range.get("start", {})
-            if ref_path.endswith(source_path) or source_path.endswith(ref_path):
+            if _paths_match(ref_path, source_path):
                 if ref_start.get("line") == source_line and ref_start.get("character") == source_char:
                     continue
             external.append(ref)
@@ -382,6 +382,26 @@ class HybridEngine:
         except Exception:
             pass
         return None, None
+
+
+def _paths_match(path_a: str, path_b: str) -> bool:
+    """Compare two file paths for equality using normalized absolute paths.
+
+    Uses os.path.samefile() when both paths exist, otherwise falls back to
+    comparing os.path.normcase(os.path.abspath(...)) to avoid false matches
+    from loose endswith() checks (e.g., 'utils.py' matching 'my_utils.py').
+    """
+    if not path_a or not path_b:
+        return False
+    try:
+        if os.path.exists(path_a) and os.path.exists(path_b):
+            return os.path.samefile(path_a, path_b)
+    except (OSError, ValueError):
+        pass
+    # Fallback: normalize and compare absolute paths
+    norm_a = os.path.normcase(os.path.abspath(path_a))
+    norm_b = os.path.normcase(os.path.abspath(path_b))
+    return norm_a == norm_b
 
 
 def create_hybrid_engine(workspace: str, deep: bool = False) -> HybridEngine:

@@ -50,23 +50,27 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
+    parser.add_argument("--plugins", nargs="*", default=None,
+                        help="Enable plugin rules: specify plugin names or 'all' for all rule_pack plugins")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
+    plugins = getattr(args, 'plugins', None)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental)
+    return cmd_scan(workspace, incremental, plugins=plugins)
 
 
-def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
     If incremental=True, only re-scan changed files.
+    If plugins is provided, load plugin rules for the scan.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -907,7 +911,34 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         all_files.extend(file_list)
     update_mtimes_cache(workspace, all_files)
 
-    return {
+    # ─── Plugin Rules Integration ──────────────────────
+    plugin_rules_data = None
+    if plugins:
+        try:
+            from plugin_system import get_plugin_manager
+            mgr = get_plugin_manager(workspace)
+            mgr.discover_plugins()
+
+            if "all" in plugins:
+                plugin_rules = mgr.get_rules()
+            else:
+                # Load only specified plugins
+                for plugin_name in plugins:
+                    mgr.load_plugin(plugin_name)
+                plugin_rules = [r for r in mgr.get_rules() if r.plugin_name in plugins]
+
+            plugin_rules_data = {
+                "total_rules": len(plugin_rules),
+                "plugins_used": list(set(r.plugin_name for r in plugin_rules)),
+                "rules_yaml": mgr.get_rules_yaml(
+                    tags=None if "all" in plugins else None
+                ),
+            }
+        except Exception as e:
+            logger.warning(f"Failed to load plugin rules: {e}")
+            plugin_rules_data = {"error": str(e)}
+
+    result = {
         "status": "ok",
         "workspace": workspace,
         "files_scanned": {
@@ -968,6 +999,12 @@ def cmd_scan(workspace: str, incremental: bool = False) -> Dict[str, Any]:
         "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
         "lang_note": _build_lang_note(fw) if fw else None,
     }
+
+    # Add plugin rules data if plugins were requested
+    if plugin_rules_data is not None:
+        result["plugins"] = plugin_rules_data
+
+    return result
 
 
 def _build_lang_note(fw: Dict) -> Optional[str]:

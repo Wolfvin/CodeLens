@@ -1,81 +1,201 @@
 # CodeLens Semantic Rules — JavaScript/TypeScript Security
-- rule: xss_dom
-  language: javascript
-  severity: critical
-  sources: ["window\\.location", "window\\.location\\.href", "location\\.search", "\\.value", "document\\.cookie", "message\\.data"]
-  sinks: ["\\.innerHTML", "\\.outerHTML", "document\\.write"]
-  sanitizers: ["textContent", "innerText", "DOMPurify", "escapeHtml", "encodeURI", "createTextNode"]
-  message: "User input flows into DOM without sanitization (XSS)"
-  cwe: CWE-79
+# Taint analysis rules: source → sink, checked against sanitizers
+# Schema normalized to match python_security.yaml (id, name, clean patterns)
 
-- rule: sql_injection_js
-  language: javascript
-  severity: critical
-  sources: ["req\\.(?:body|params|query|headers|cookies)", "request\\.(?:body|params|query)"]
-  sinks: ["\\.query\\(", "\\.execute\\(", "\\.raw\\(", "knex\\.raw\\("]
-  sanitizers: ["parameterized", "placeholder", "escape"]
-  message: "User input flows into SQL query without parameterization"
-  cwe: CWE-89
+rules:
+  - id: js/xss-dom
+    name: DOM Cross-Site Scripting
+    language: javascript
+    severity: critical
+    cwe: CWE-79
+    message: "User input flows into DOM without sanitization (XSS)"
+    sources:
+      - window.location
+      - window.location.href
+      - location.search
+      - .value
+      - document.cookie
+      - message.data
+    sinks:
+      - .innerHTML
+      - .outerHTML
+      - document.write
+    sanitizers:
+      - textContent
+      - innerText
+      - DOMPurify
+      - escapeHtml
+      - encodeURI
+      - createTextNode
 
-- rule: command_injection_js
-  language: javascript
-  severity: critical
-  sources: ["req\\.(?:body|params|query|headers|cookies)", "process\\.argv", "process\\.env\\."]
-  sinks: ["child_process\\.exec", "exec\\(", "execSync\\(", "spawn\\("]
-  sanitizers: ["execFile", "shell.*false"]
-  message: "User input flows into system command without sanitization"
-  cwe: CWE-78
+  - id: js/sql-injection
+    name: SQL Injection
+    language: javascript
+    severity: critical
+    cwe: CWE-89
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - req.cookies
+      - request.body
+      - request.params
+      - request.query
+    sinks:
+      - .query(
+      - .execute(
+      - .raw(
+      - knex.raw(
+    sanitizers:
+      - parameterized
+      - placeholder
+      - escape
 
-- rule: path_traversal_js
-  language: javascript
-  severity: critical
-  sources: ["req\\.(?:body|params|query|headers)", "process\\.argv"]
-  sinks: ["fs\\.readFile", "fs\\.readFileSync", "fs\\.writeFile", "fs\\.createReadStream"]
-  sanitizers: ["path\\.normalize", "path\\.resolve", "startsWith", "path\\.basename"]
-  message: "User input flows into file system path without validation"
-  cwe: CWE-22
+  - id: js/command-injection
+    name: Command Injection
+    language: javascript
+    severity: critical
+    cwe: CWE-78
+    message: "User input flows into system command without sanitization"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - req.cookies
+      - process.argv
+      - process.env
+    sinks:
+      - child_process.exec
+      - exec(
+      - execSync(
+      - spawn(
+    sanitizers:
+      - execFile
+      - shell
 
-- rule: prototype_pollution
-  language: javascript
-  severity: high
-  sources: ["req\\.(?:body|params|query|headers)", "JSON\\.parse"]
-  sinks: ["Object\\.assign\\(", "\\.merge\\(", "lodash\\.merge", "lodash\\.set"]
-  sanitizers: ["hasOwnProperty", "Object\\.create\\(null\\)", "Object\\.freeze"]
-  message: "User input flows into object merge without prototype protection"
-  cwe: CWE-1321
+  - id: js/path-traversal
+    name: Path Traversal
+    language: javascript
+    severity: critical
+    cwe: CWE-22
+    message: "User input flows into file system path without validation"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - process.argv
+    sinks:
+      - fs.readFile
+      - fs.readFileSync
+      - fs.writeFile
+      - fs.createReadStream
+    sanitizers:
+      - path.normalize
+      - path.resolve
+      - startsWith
+      - path.basename
 
-- rule: redos
-  language: javascript
-  severity: high
-  sources: ["req\\.(?:body|params|query|headers)", "\\.value"]
-  sinks: ["new RegExp\\(", "RegExp\\("]
-  sanitizers: ["escape", "sanitize", "re2"]
-  message: "User input flows into regular expression without validation (ReDoS risk)"
-  cwe: CWE-1333
+  - id: js/prototype-pollution
+    name: Prototype Pollution
+    language: javascript
+    severity: high
+    cwe: CWE-1321
+    message: "User input flows into object merge without prototype protection"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - JSON.parse
+    sinks:
+      - Object.assign(
+      - .merge(
+      - lodash.merge
+      - lodash.set
+    sanitizers:
+      - hasOwnProperty
+      - Object.create(null)
+      - Object.freeze
 
-- rule: ssrf_js
-  language: javascript
-  severity: high
-  sources: ["req\\.(?:body|params|query|headers)", "process\\.env\\."]
-  sinks: ["fetch\\(", "axios\\.", "http\\.get", "https\\.get"]
-  sanitizers: ["validate_url", "URL\\(", "whitelist", "allowed_domains"]
-  message: "User-controlled URL reaches HTTP request without validation"
-  cwe: CWE-918
+  - id: js/redos
+    name: Regular Expression Denial of Service
+    language: javascript
+    severity: high
+    cwe: CWE-1333
+    message: "User input flows into regular expression without validation (ReDoS risk)"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - .value
+    sinks:
+      - new RegExp(
+      - RegExp(
+    sanitizers:
+      - escape
+      - sanitize
+      - re2
 
-- rule: insecure_deserialization_js
-  language: javascript
-  severity: high
-  sources: ["req\\.(?:body|params|query)"]
-  sinks: ["eval\\(", "Function\\(", "vm\\.runInNewContext", "vm\\.Script"]
-  sanitizers: ["JSON\\.parse"]
-  message: "User input flows into code execution/deserialization"
-  cwe: CWE-502
+  - id: js/ssrf
+    name: Server-Side Request Forgery
+    language: javascript
+    severity: high
+    cwe: CWE-918
+    message: "User-controlled URL reaches HTTP request without validation"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - process.env
+    sinks:
+      - fetch(
+      - axios.
+      - http.get
+      - https.get
+    sanitizers:
+      - validate_url
+      - URL(
+      - whitelist
+      - allowed_domains
 
-- rule: xss_react
-  language: typescript
-  severity: high
-  sources: ["props\\.", "route\\.params", "useParams", "useSearchParams"]
-  sinks: ["dangerouslySetInnerHTML", "\\.innerHTML"]
-  sanitizers: ["DOMPurify", "sanitize"]
-  message: "React prop/state flows into dangerouslySetInnerHTML without sanitization"
-  cwe: CWE-79
+  - id: js/insecure-deserialization
+    name: Insecure Deserialization
+    language: javascript
+    severity: high
+    cwe: CWE-502
+    message: "User input flows into code execution/deserialization"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+    sinks:
+      - eval(
+      - Function(
+      - vm.runInNewContext
+      - vm.Script
+    sanitizers:
+      - JSON.parse
+
+  - id: ts/xss-react
+    name: React Cross-Site Scripting
+    language: typescript
+    severity: high
+    cwe: CWE-79
+    message: "React prop/state flows into dangerouslySetInnerHTML without sanitization"
+    sources:
+      - props.
+      - route.params
+      - useParams
+      - useSearchParams
+    sinks:
+      - dangerouslySetInnerHTML
+      - .innerHTML
+    sanitizers:
+      - DOMPurify
+      - sanitize

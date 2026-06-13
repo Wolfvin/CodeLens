@@ -104,8 +104,9 @@ def execute(args, workspace):
                     result = analyze_cross_file_taint(workspace)
                     for finding in result.get('findings', []):
                         all_findings.append(finding)
-                except Exception:
-                    pass  # Taint analysis is optional
+                except Exception as e:
+                    import logging
+                    logging.getLogger("codelens").warning(f"Taint analysis failed: {e}")
 
             command_results[command] = "ok"
 

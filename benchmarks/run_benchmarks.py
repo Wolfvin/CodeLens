@@ -116,8 +116,24 @@ def extract_findings(result, command):
             for cycle in cycles_data.get(ct, []):
                 if isinstance(cycle, dict):
                     chain = cycle.get("chain", cycle.get("cycle", []))
-                    findings.append({"file": chain[0] if chain else "", "line": 0,
-                                     "name": " -> ".join(str(n) for n in chain) if chain else "", "category": ct})
+                    # Extract file from first chain item (may be dict or string)
+                    first = chain[0] if chain else ""
+                    if isinstance(first, dict):
+                        fpath = first.get("file", "")
+                        fline = first.get("line", 0)
+                    else:
+                        fpath = str(first)
+                        fline = 0
+                    # Build a readable name from chain items
+                    name_parts = []
+                    for n in chain:
+                        if isinstance(n, dict):
+                            name_parts.append(n.get("fn", n.get("name", str(n))))
+                        else:
+                            name_parts.append(str(n))
+                    findings.append({"file": fpath, "line": fline,
+                                     "name": " -> ".join(name_parts) if name_parts else "",
+                                     "category": ct})
     return findings
 
 def calc_metrics(tp, fp, fn, tn=0):

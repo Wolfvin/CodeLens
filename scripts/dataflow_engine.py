@@ -788,6 +788,7 @@ def _trace_intra_file_flow(
 
     Uses heuristic: look for variable assignments, function calls, and
     string concatenations between source and sink lines.
+    Respects function boundaries — will not trace across 'def'/'function' boundaries.
     """
     full_path = os.path.join(workspace, file_path)
     if not os.path.exists(full_path):
@@ -810,6 +811,9 @@ def _trace_intra_file_flow(
     src_line = lines[source["line"] - 1].strip() if source["line"] <= len(lines) else ""
     var_name = _extract_variable_name(src_line)
 
+    # Detect the function scope that contains the source line
+    source_func_start = _find_function_start(lines, source["line"])
+
     # Scan lines between source and sink for data propagation
     start_line = source["line"]
     end_line = min(sink["line"], start_line + max_depth)
@@ -824,6 +828,12 @@ def _trace_intra_file_flow(
         # Skip empty lines and comments
         if not line or line.startswith('//') or line.startswith('#') or line.startswith('/*'):
             continue
+
+        # Skip across function boundaries — only trace within the same scope
+        func_start = _find_function_start(lines, line_num + 1)
+        if func_start is not None and source_func_start is not None and func_start != source_func_start:
+            # We've crossed into a different function — stop tracing
+            break
 
         # Check if current variable appears in this line
         if current_var and current_var in line:
@@ -860,6 +870,48 @@ def _trace_intra_file_flow(
     })
 
     return chain
+
+
+# Function boundary detection patterns
+_FUNC_DEF_PY = re.compile(r'^(\s*)def\s+\w+')
+_FUNC_DEF_JS = re.compile(r'^(\s*)(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:function|\()|(?:async\s+)?function\s+\w+)')
+_CLASS_DEF = re.compile(r'^(\s*)(?:class\s+\w+|export\s+default\s+class\s+\w+|export\s+class\s+\w+)')
+
+
+def _find_function_start(lines: List[str], target_line: int) -> Optional[int]:
+    """Find the line number where the enclosing function definition starts.
+
+    Walks backward from target_line looking for 'def' (Python) or 'function' (JS).
+    Returns the 1-based line number, or None if at module top level.
+    """
+    if target_line < 1 or target_line > len(lines):
+        return None
+
+    # Track indentation to find the enclosing scope
+    target_indent = len(lines[target_line - 1]) - len(lines[target_line - 1].lstrip())
+
+    for i in range(target_line - 1, 0, -1):
+        stripped = lines[i - 1].strip()
+        if not stripped or stripped.startswith('#') or stripped.startswith('//'):
+            continue
+
+        line_indent = len(lines[i - 1]) - len(lines[i - 1].lstrip())
+
+        # Check for function/class definition at a lower indentation
+        if line_indent < target_indent:
+            if _FUNC_DEF_PY.match(lines[i - 1]) or _FUNC_DEF_JS.match(lines[i - 1]):
+                return i
+            if _CLASS_DEF.match(lines[i - 1]):
+                # Inside a class method — keep going up to find the method def
+                target_indent = line_indent
+                continue
+
+        # Also check if the target line itself is on a def line at same indent
+        if i == target_line - 1:
+            # Skip — we already know we're on this line
+            continue
+
+    return None  # At module top level
 
 
 def _extract_variable_name(line: str) -> Optional[str]:

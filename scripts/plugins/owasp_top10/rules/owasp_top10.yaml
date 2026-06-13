@@ -1,0 +1,906 @@
+# CodeLens OWASP Top 10 (2021) Security Rules
+# Covers all 10 OWASP Top 10 categories with taint-analysis rules
+# Reference: https://owasp.org/Top10/
+
+rules:
+  # ─── A01:2021 – Broken Access Control ───────────────────
+  # CWE-284: Improper Access Control
+  # CWE-285: Improper Authorization
+  # CWE-639: Authorization Bypass Through User-Controlled Key
+
+  - id: owasp/A01/broken-access-control
+    name: "A01: Broken Access Control — Missing Authorization Check"
+    language: python
+    severity: critical
+    cwe: CWE-285
+    owasp: A01:2021
+    message: "Endpoint handler does not perform authorization check — any authenticated user may access another's data"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - flask.request.view_args
+      - django.http.request.GET
+      - django.http.request.POST
+      - request.user.id
+      - current_user.id
+    sinks:
+      - Model.objects.get
+      - query.filter
+      - session.query
+      - db.session.get
+      - collection.find_one
+      - get_object_or_404
+    sanitizers:
+      - login_required
+      - permission_required
+      - require_role
+      - is_admin
+      - check_ownership
+      - authorize
+
+  - id: owasp/A01/insecure-direct-object-reference
+    name: "A01: Insecure Direct Object Reference (IDOR)"
+    language: python
+    severity: high
+    cwe: CWE-639
+    owasp: A01:2021
+    message: "User-controlled key used to access object without ownership verification"
+    sources:
+      - flask.request.args
+      - flask.request.view_args
+      - flask.request.form
+      - django.http.request.GET
+      - django.http.request.POST
+      - req.params.id
+      - req.query.id
+      - request.user.id
+    sinks:
+      - Model.objects.get
+      - get_object_or_404
+      - db.get
+      - collection.find_one
+      - query.get
+    sanitizers:
+      - verify_ownership
+      - check_access
+      - filter_by_user
+      - authorize_resource
+
+  - id: owasp/A01/missing-function-level-access
+    name: "A01: Missing Function-Level Access Control"
+    language: javascript
+    severity: critical
+    cwe: CWE-284
+    owasp: A01:2021
+    message: "API endpoint lacks authentication/authorization middleware"
+    sources:
+      - req\\.(?:body|params|query|headers|cookies)
+      - request\\.(?:body|params|query)
+      - ctx\\.request\\.(?:body|query)
+    sinks:
+      - app\\.get
+      - app\\.post
+      - app\\.put
+      - app\\.delete
+      - router\\.get
+      - router\\.post
+      - router\\.put
+      - router\\.delete
+    sanitizers:
+      - authenticate
+      - authorize
+      - auth\\.middleware
+      - requireAuth
+      - checkPermission
+
+  # ─── A02:2021 – Cryptographic Failures ──────────────────
+  # CWE-259: Use of Hard-coded Password
+  # CWE-327: Use of a Broken or Risky Cryptographic Algorithm
+  # CWE-328: Reversible One-Way Hash
+
+  - id: owasp/A02/hardcoded-secret
+    name: "A02: Hard-coded Password or Secret"
+    language: python
+    severity: critical
+    cwe: CWE-259
+    owasp: A02:2021
+    message: "Hard-coded password, API key, or secret in source code"
+    sources:
+      - hardcoded_value
+    sinks:
+      - password
+      - secret_key
+      - api_key
+      - SECRET
+      - PRIVATE_KEY
+      - DATABASE_URL
+      - ACCESS_TOKEN
+    sanitizers:
+      - os.environ
+      - os.getenv
+      - config.from_envvar
+      - environ.get
+
+  - id: owasp/A02/weak-crypto-algorithm
+    name: "A02: Weak Cryptographic Algorithm"
+    language: python
+    severity: high
+    cwe: CWE-327
+    owasp: A02:2021
+    message: "Use of weak/deprecated cryptographic algorithm (MD5, SHA1, DES, RC4, etc.)"
+    sources:
+      - hashlib.md5
+      - hashlib.sha1
+      - Crypto.Cipher.DES
+      - Crypto.Cipher.RC4
+      - Crypto.Cipher.Blowfish
+      - crypt.crypt
+      - ssl.PROTOCOL_SSLv2
+      - ssl.PROTOCOL_SSLv23
+    sinks:
+      - encrypt
+      - hash
+      - sign
+      - digest
+    sanitizers:
+      - hashlib.sha256
+      - hashlib.sha512
+      - hashlib.blake2b
+      - Crypto.Cipher.AES
+      - nacl
+
+  - id: owasp/A02/reversible-hash
+    name: "A02: Reversible One-Way Hash"
+    language: python
+    severity: high
+    cwe: CWE-328
+    owasp: A02:2021
+    message: "Password hashed without salt or with fast hash — use bcrypt/argon2/scrypt instead"
+    sources:
+      - user_password
+      - password
+      - plaintext
+    sinks:
+      - hashlib.md5
+      - hashlib.sha1
+      - hashlib.sha256
+    sanitizers:
+      - bcrypt.hashpw
+      - argon2.PasswordHasher
+      - passlib.hash
+      - werkzeug.security.generate_password_hash
+      - django.contrib.auth.hashers
+
+  - id: owasp/A02/weak-crypto-js
+    name: "A02: Weak Cryptographic Algorithm (JavaScript)"
+    language: javascript
+    severity: high
+    cwe: CWE-327
+    owasp: A02:2021
+    message: "Use of weak cryptographic algorithm in JavaScript (MD5, SHA1, etc.)"
+    sources:
+      - crypto\\.createHash\\('md5'\\)
+      - crypto\\.createHash\\('sha1'\\)
+      - crypto\\.createCipher\\('des'
+      - crypto\\.createCipher\\('rc4'
+      - MD5\\(
+      - sha1\\(
+    sinks:
+      - encrypt
+      - hash
+      - sign
+      - digest
+    sanitizers:
+      - crypto\\.createHash\\('sha256'\\)
+      - crypto\\.createHash\\('sha512'\\)
+      - crypto\\.createCipheriv\\('aes-256'
+
+  # ─── A03:2021 – Injection ───────────────────────────────
+  # CWE-78: OS Command Injection
+  # CWE-89: SQL Injection
+  # CWE-94: Code Injection
+
+  - id: owasp/A03/sql-injection
+    name: "A03: SQL Injection"
+    language: python
+    severity: critical
+    cwe: CWE-89
+    owasp: A03:2021
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - flask.request.data
+      - django.http.request.GET
+      - django.http.request.POST
+      - input
+      - sys.stdin
+    sinks:
+      - cursor.execute
+      - db.execute
+      - connection.execute
+      - session.execute
+      - engine.execute
+      - raw_sql
+    sanitizers:
+      - parameterized_query
+      - escape_string
+      - psycopg2.sql.SQL
+      - text
+      - sqlalchemy.text
+
+  - id: owasp/A03/command-injection
+    name: "A03: OS Command Injection"
+    language: python
+    severity: critical
+    cwe: CWE-78
+    owasp: A03:2021
+    message: "User input flows into OS command without sanitization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+      - os.environ
+    sinks:
+      - os.system
+      - os.popen
+      - subprocess.call
+      - subprocess.run
+      - subprocess.Popen
+      - subprocess.check_output
+    sanitizers:
+      - shlex.quote
+      - shlex.split
+      - validate_command
+      - whitelist_command
+
+  - id: owasp/A03/code-injection
+    name: "A03: Code Injection via eval/exec"
+    language: python
+    severity: critical
+    cwe: CWE-94
+    owasp: A03:2021
+    message: "User input flows into eval() or exec() — arbitrary code execution risk"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+    sinks:
+      - eval
+      - exec
+      - compile
+    sanitizers:
+      - ast.literal_eval
+      - validate_expression
+
+  - id: owasp/A03/sql-injection-js
+    name: "A03: SQL Injection (JavaScript)"
+    language: javascript
+    severity: critical
+    cwe: CWE-89
+    owasp: A03:2021
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - req\\.(?:body|params|query|headers|cookies)
+      - request\\.(?:body|params|query)
+    sinks:
+      - \\.query\\(
+      - \\.execute\\(
+      - \\.raw\\(
+      - knex\\.raw\\(
+    sanitizers:
+      - parameterized
+      - placeholder
+      - escape
+
+  - id: owasp/A03/command-injection-js
+    name: "A03: OS Command Injection (JavaScript)"
+    language: javascript
+    severity: critical
+    cwe: CWE-78
+    owasp: A03:2021
+    message: "User input flows into system command without sanitization"
+    sources:
+      - req\\.(?:body|params|query|headers|cookies)
+      - process\\.argv
+      - process\\.env\\.
+    sinks:
+      - child_process\\.exec
+      - exec\\(
+      - execSync\\(
+      - spawn\\(
+    sanitizers:
+      - execFile
+      - shell.*false
+
+  - id: owasp/A03/no-sql-injection
+    name: "A03: NoSQL Injection"
+    language: javascript
+    severity: high
+    cwe: CWE-89
+    owasp: A03:2021
+    message: "User input flows into NoSQL query operator without sanitization"
+    sources:
+      - req\\.(?:body|params|query)
+      - request\\.(?:body|params|query)
+    sinks:
+      - \\.find\\(
+      - \\.findOne\\(
+      - \\.where\\(
+      - \\.aggregate\\(
+    sanitizers:
+      - sanitize
+      - escape
+      - ObjectID
+
+  # ─── A04:2021 – Insecure Design ─────────────────────────
+  # CWE-209: Generation of Error Message Containing Sensitive Information
+  # CWE-248: Uncaught Exception
+
+  - id: owasp/A04/information-leak-error
+    name: "A04: Sensitive Information in Error Messages"
+    language: python
+    severity: medium
+    cwe: CWE-209
+    owasp: A04:2021
+    message: "Sensitive information may leak through unhandled exception error messages"
+    sources:
+      - traceback.format_exc
+      - traceback.print_exc
+      - sys.exc_info
+      - str\\(exception\\)
+      - e\\.message
+      - e\\.args
+    sinks:
+      - flask.jsonify
+      - HttpResponse
+      - render_template
+      - response
+      - print
+    sanitizers:
+      - sanitize_error
+      - log_error
+      - generic_error_message
+
+  - id: owasp/A04/uncaught-exception
+    name: "A04: Uncaught Exception"
+    language: python
+    severity: medium
+    cwe: CWE-248
+    owasp: A04:2021
+    message: "Function lacks proper exception handling — may crash or leak information on error"
+    sources:
+      - external_input
+      - database_query
+      - file_operation
+      - network_request
+    sinks:
+      - process_data
+      - handle_request
+      - execute_operation
+    sanitizers:
+      - try
+      - except
+      - catch
+      - error_handler
+
+  - id: owasp/A04/information-leak-error-js
+    name: "A04: Sensitive Information in Error Messages (JavaScript)"
+    language: javascript
+    severity: medium
+    cwe: CWE-209
+    owasp: A04:2021
+    message: "Stack trace or sensitive info sent in HTTP error response"
+    sources:
+      - err\\.stack
+      - err\\.message
+      - error\\.stack
+      - error\\.message
+      - console\\.error
+    sinks:
+      - res\\.send
+      - res\\.json
+      - res\\.status
+      - ctx\\.body
+      - response\\.json
+    sanitizers:
+      - sanitize_error
+      - generic_message
+      - log_error
+
+  # ─── A05:2021 – Security Misconfiguration ───────────────
+  # CWE-16: Configuration
+  # CWE-611: XXE (Improper Restriction of XML External Entity Reference)
+
+  - id: owasp/A05/debug-mode-enabled
+    name: "A05: Debug Mode Enabled in Production"
+    language: python
+    severity: critical
+    cwe: CWE-16
+    owasp: A05:2021
+    message: "Debug mode is enabled — exposes interactive debugger and sensitive information"
+    sources:
+      - DEBUG.*True
+      - app\\.debug.*True
+      - FLASK_DEBUG.*1
+      - settings\\.DEBUG.*True
+    sinks:
+      - app\\.run
+      - run_server
+      - start_server
+    sanitizers:
+      - os\\.environ
+      - config\\.DEBUG
+      - settings\\.DEBUG.*False
+
+  - id: owasp/A05/xxe-vulnerability
+    name: "A05: XML External Entity (XXE) Injection"
+    language: python
+    severity: critical
+    cwe: CWE-611
+    owasp: A05:2021
+    message: "XML parser configured without disabling external entity references"
+    sources:
+      - flask.request.data
+      - flask.request.json
+      - input
+      - file_content
+      - uploaded_file
+    sinks:
+      - xml\\.etree\\.ElementTree\\.parse
+      - xml\\.etree\\.ElementTree\\.fromstring
+      - lxml\\.etree\\.parse
+      - lxml\\.etree\\.fromstring
+      - minidom\\.parse
+      - sax\\.parse
+    sanitizers:
+      - defusedxml
+      - resolve_entities.*False
+      - load_dtd.*False
+      - no_network.*True
+      - lxml\\.etree\\.XMLParser
+
+  - id: owasp/A05/cors-misconfiguration
+    name: "A05: CORS Misconfiguration"
+    language: python
+    severity: high
+    cwe: CWE-16
+    owasp: A05:2021
+    message: "Overly permissive CORS configuration allows any origin"
+    sources:
+      - flask.request
+      - django.http.request
+    sinks:
+      - Access-Control-Allow-Origin.*\\*
+      - CORS.*allow_all_origins.*True
+      - cors_after_request
+    sanitizers:
+      - allowed_origins
+      - validate_origin
+      - restrict_cors
+
+  - id: owasp/A05/xxe-javascript
+    name: "A05: XML External Entity (XXE) — JavaScript"
+    language: javascript
+    severity: critical
+    cwe: CWE-611
+    owasp: A05:2021
+    message: "XML parser may be vulnerable to XXE attacks"
+    sources:
+      - req\\.(?:body|params|query)
+      - fs\\.readFileSync
+      - uploaded_file
+    sinks:
+      - new DOMParser
+      - libxmljs\\.parseXml
+      - xml2js\\.parseString
+      - fast-xml-parser
+    sanitizers:
+      - noent.*false
+      - resolveEntities.*false
+      - sanitize_xml
+
+  - id: owasp/A05/insecure-headers
+    name: "A05: Missing Security Headers"
+    language: javascript
+    severity: medium
+    cwe: CWE-16
+    owasp: A05:2021
+    message: "Missing recommended security headers (CSP, HSTS, X-Frame-Options, etc.)"
+    sources:
+      - app\\.use
+      - router\\.
+    sinks:
+      - res\\.setHeader
+      - res\\.writeHead
+    sanitizers:
+      - helmet
+      - content-security-policy
+      - strict-transport-security
+
+  # ─── A06:2021 – Vulnerable and Outdated Components ──────
+  # Covered by vulnscan engine + OSV integration
+
+  - id: owasp/A06/outdated-dependency
+    name: "A06: Known Vulnerable Dependency"
+    language: python
+    severity: high
+    cwe: CWE-1104
+    owasp: A06:2021
+    message: "Dependency with known vulnerability detected — use codelens vuln-scan for comprehensive detection"
+    sources:
+      - requirements\\.txt
+      - package\\.json
+      - Pipfile\\.lock
+      - poetry\\.lock
+    sinks:
+      - pip\\.install
+      - npm\\.install
+    sanitizers:
+      - audit
+      - update
+      - vuln-scan
+
+  # ─── A07:2021 – Identification and Authentication Failures ──
+  # CWE-287: Improper Authentication
+  # CWE-521: Weak Password Requirements
+
+  - id: owasp/A07/weak-password-policy
+    name: "A07: Weak Password Requirements"
+    language: python
+    severity: high
+    cwe: CWE-521
+    owasp: A07:2021
+    message: "Password policy allows weak passwords — no minimum length or complexity requirements"
+    sources:
+      - flask.request.form
+      - django.http.request.POST
+      - user_input
+      - password_field
+    sinks:
+      - User\\.create
+      - User\\.set_password
+      - user\\.save
+      - db\\.insert
+      - register
+    sanitizers:
+      - validate_password
+      - check_password_strength
+      - min_length
+      - complexity_check
+      - zxcvbn
+
+  - id: owasp/A07/session-fixation
+    name: "A07: Session Fixation"
+    language: python
+    severity: high
+    cwe: CWE-287
+    owasp: A07:2021
+    message: "Session ID not regenerated after login — vulnerable to session fixation attacks"
+    sources:
+      - flask.request.cookies
+      - django.http.request.COOKIES
+      - session_id
+      - cookie
+    sinks:
+      - login
+      - authenticate
+      - session
+      - flask.session
+    sanitizers:
+      - regenerate_session
+      - session\\.regenerate
+      - new_session_id
+      - rotate_session
+
+  - id: owasp/A07/credential-in-url
+    name: "A07: Credentials in URL Query Parameters"
+    language: python
+    severity: high
+    cwe: CWE-287
+    owasp: A07:2021
+    message: "Credentials passed in URL query string — visible in logs, browser history, and referer headers"
+    sources:
+      - flask.request.args
+      - django.http.request.GET
+      - req\\.query
+    sinks:
+      - password
+      - token
+      - api_key
+      - secret
+      - credential
+    sanitizers:
+      - POST
+      - request\\.body
+      - header
+      - Authorization
+
+  - id: owasp/A07/weak-auth-js
+    name: "A07: Weak Authentication (JavaScript)"
+    language: javascript
+    severity: high
+    cwe: CWE-287
+    owasp: A07:2021
+    message: "Authentication check is bypassable or missing"
+    sources:
+      - req\\.(?:body|params|query|headers)
+    sinks:
+      - jwt\\.verify
+      - passport\\.authenticate
+      - bcrypt\\.compare
+      - compareSync
+    sanitizers:
+      - verify_token
+      - authenticate
+      - require_login
+
+  # ─── A08:2021 – Software and Data Integrity Failures ────
+  # CWE-502: Deserialization of Untrusted Data
+  # CWE-345: Insufficient Verification of Data Authenticity
+
+  - id: owasp/A08/insecure-deserialization
+    name: "A08: Insecure Deserialization"
+    language: python
+    severity: critical
+    cwe: CWE-502
+    owasp: A08:2021
+    message: "Potentially unsafe deserialization of untrusted data"
+    sources:
+      - flask.request.data
+      - flask.request.json
+      - input
+      - sys.stdin
+      - os.environ
+      - file_content
+    sinks:
+      - pickle.loads
+      - pickle.load
+      - yaml.load
+      - yaml.unsafe_load
+      - marshal.loads
+      - shelve.open
+      - dill.loads
+    sanitizers:
+      - yaml.safe_load
+      - json.loads
+      - deserialize_safe
+      - RestrictedUnpickler
+
+  - id: owasp/A08/insecure-deserialization-js
+    name: "A08: Insecure Deserialization (JavaScript)"
+    language: javascript
+    severity: critical
+    cwe: CWE-502
+    owasp: A08:2021
+    message: "User input flows into code execution/deserialization"
+    sources:
+      - req\\.(?:body|params|query)
+    sinks:
+      - eval\\(
+      - Function\\(
+      - vm\\.runInNewContext
+      - vm\\.Script
+      - new Function\\(
+    sanitizers:
+      - JSON\\.parse
+      - serialize
+      - deserialize
+
+  - id: owasp/A08/unverified-integrity
+    name: "A08: Unverified Data Integrity"
+    language: python
+    severity: high
+    cwe: CWE-345
+    owasp: A08:2021
+    message: "Data from external source used without integrity verification (signature, hash, etc.)"
+    sources:
+      - urllib\\.request\\.urlopen
+      - requests\\.get
+      - requests\\.post
+      - downloaded_file
+      - external_data
+    sinks:
+      - exec
+      - eval
+      - importlib\\.import_module
+      - __import__
+      - subprocess\\.call
+    sanitizers:
+      - verify_signature
+      - check_hash
+      - hashlib\\.sha256
+      - hmac\\.compare_digest
+      - validate_checksum
+
+  - id: owasp/A08/insecure-ci-cd
+    name: "A08: Insecure CI/CD Pipeline Configuration"
+    language: javascript
+    severity: medium
+    cwe: CWE-345
+    owasp: A08:2021
+    message: "CI/CD pipeline downloads and executes untrusted scripts without integrity checks"
+    sources:
+      - curl.*\\|.*sh
+      - wget.*\\|.*bash
+      - npx
+    sinks:
+      - child_process\\.exec
+      - execSync
+    sanitizers:
+      - verify_checksum
+      - pinned_version
+      - integrity_check
+
+  # ─── A09:2021 – Security Logging and Monitoring Failures ──
+  # CWE-532: Insertion of Sensitive Information into Log File
+  # CWE-778: Insufficient Logging
+
+  - id: owasp/A09/sensitive-data-logging
+    name: "A09: Sensitive Data Logged"
+    language: python
+    severity: high
+    cwe: CWE-532
+    owasp: A09:2021
+    message: "Secret or credential flows into logging output"
+    sources:
+      - os.environ
+      - config\\.SECRET_KEY
+      - settings\\.SECRET_KEY
+      - settings\\.DATABASE_URL
+      - API_KEY
+      - api_key
+      - secret
+      - password
+      - token
+      - credit_card
+      - ssn
+    sinks:
+      - logger\\.info
+      - logger\\.debug
+      - logger\\.warning
+      - logger\\.error
+      - print
+      - logging\\.info
+      - logging\\.debug
+    sanitizers:
+      - mask_secret
+      - redact
+      - obfuscate
+      - filter_sensitive
+
+  - id: owasp/A09/insufficient-logging
+    name: "A09: Insufficient Security Logging"
+    language: python
+    severity: medium
+    cwe: CWE-778
+    owasp: A09:2021
+    message: "Security-sensitive operations (login, access control, data changes) lack audit logging"
+    sources:
+      - login
+      - authenticate
+      - permission_check
+      - data_modification
+      - admin_action
+    sinks:
+      - return
+      - response
+    sanitizers:
+      - audit_log
+      - log_event
+      - security_log
+      - logger\\.info
+
+  - id: owasp/A09/sensitive-data-logging-js
+    name: "A09: Sensitive Data Logged (JavaScript)"
+    language: javascript
+    severity: high
+    cwe: CWE-532
+    owasp: A09:2021
+    message: "Sensitive information (passwords, tokens, PII) logged to output"
+    sources:
+      - password
+      - token
+      - api_key
+      - secret
+      - authorization
+      - cookie
+    sinks:
+      - console\\.log
+      - console\\.debug
+      - console\\.info
+      - winston\\.info
+      - bunyan\\.info
+      - pino\\.info
+      - logger\\.info
+    sanitizers:
+      - redact
+      - mask
+      - filter
+      - sanitize
+
+  # ─── A10:2021 – Server-Side Request Forgery (SSRF) ──────
+  # CWE-918: Server-Side Request Forgery
+  # CWE-941: Incorrectly Specified Destination in a Communication Channel
+
+  - id: owasp/A10/ssrf
+    name: "A10: Server-Side Request Forgery (SSRF)"
+    language: python
+    severity: high
+    cwe: CWE-918
+    owasp: A10:2021
+    message: "User-controlled URL flows into HTTP request without validation"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - user_url
+      - external_url
+    sinks:
+      - requests\\.get
+      - requests\\.post
+      - requests\\.put
+      - requests\\.delete
+      - urllib\\.request\\.urlopen
+      - http\\.client\\.HTTPConnection
+      - aiohttp\\.ClientSession
+    sanitizers:
+      - validate_url
+      - url_allowed
+      - is_internal_url
+      - safe_request
+      - deny_private_ips
+
+  - id: owasp/A10/ssrf-js
+    name: "A10: Server-Side Request Forgery (JavaScript)"
+    language: javascript
+    severity: high
+    cwe: CWE-918
+    owasp: A10:2021
+    message: "User-controlled URL reaches HTTP request without validation"
+    sources:
+      - req\\.(?:body|params|query|headers)
+      - process\\.env\\.
+    sinks:
+      - fetch\\(
+      - axios\\.
+      - http\\.get
+      - https\\.get
+      - request\\(
+      - needle
+    sanitizers:
+      - validate_url
+      - URL\\(
+      - whitelist
+      - allowed_domains
+      - isPrivateIP
+
+  - id: owasp/A10/redirect-ssrf
+    name: "A10: Open Redirect / SSRF via Redirect"
+    language: python
+    severity: high
+    cwe: CWE-941
+    owasp: A10:2021
+    message: "User-controlled redirect target may enable SSRF or phishing"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - django.http.request.GET
+      - req\\.query\\.redirect
+    sinks:
+      - redirect
+      - HttpResponseRedirect
+      - flask.redirect
+      - Response\\.redirect
+    sanitizers:
+      - is_safe_url
+      - validate_redirect
+      - allowed_redirect_domains
+      - url_has_allowed_host

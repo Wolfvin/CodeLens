@@ -42,8 +42,24 @@ def load_rules(rules_dir: str = None) -> List[Dict[str, Any]]:
                 data = yaml.safe_load(f)
             if isinstance(data, dict) and 'rules' in data:
                 for rule in data['rules']:
+                    # Normalize: accept both 'rule:' and 'id:' keys
+                    if 'rule' in rule and 'id' not in rule:
+                        rule['id'] = rule.pop('rule')
+                    # Normalize: accept both 'name:' from id if missing
+                    if 'name' not in rule:
+                        rule['name'] = rule.get('id', 'Unknown').split('/')[-1].replace('_', ' ').replace('-', ' ').title()
                     rule['_source_file'] = fname
                     rules.append(rule)
+            elif isinstance(data, list):
+                # Legacy format: top-level list of rules with 'rule:' key
+                for rule in data:
+                    if isinstance(rule, dict):
+                        if 'rule' in rule and 'id' not in rule:
+                            rule['id'] = rule.pop('rule')
+                        if 'name' not in rule:
+                            rule['name'] = rule.get('id', 'Unknown').split('/')[-1].replace('_', ' ').replace('-', ' ').title()
+                        rule['_source_file'] = fname
+                        rules.append(rule)
         except Exception as e:
             logger.warning(f"Failed to load rule file {fname}: {e}")
 
@@ -153,10 +169,7 @@ class TaintAnalyzer:
                         # Check which tainted variables are in this line
                         for var_name, source_name in tainted_vars.items():
                             if var_name in stripped and var_name not in sanitized_vars:
-                                # Tainted data reaches sink!
-                                is_sanitized = var_name in sanitized_vars
-                                confidence = "high" if not is_sanitized else "low"
-
+                                # Tainted data reaches sink — NOT sanitized
                                 findings.append({
                                     "rule_id": rule.get('id', 'unknown'),
                                     "rule_name": rule.get('name', 'Unknown'),
@@ -168,9 +181,9 @@ class TaintAnalyzer:
                                     "source": source_name,
                                     "sink": sink_name,
                                     "tainted_variable": var_name,
-                                    "sanitized": is_sanitized,
-                                    "sanitizers_found": [s for s in sanitizers if s.split('.')[-1] in stripped] if is_sanitized else [],
-                                    "confidence": confidence,
+                                    "sanitized": False,
+                                    "sanitizers_found": [],
+                                    "confidence": "high",
                                     "taint_path": f"{source_name} → {var_name} → {sink_name}",
                                 })
                             elif var_name in stripped and var_name in sanitized_vars:

@@ -16,6 +16,7 @@ purpose-built integration for AI agent coding workflows.
 import sys
 import os
 import json
+import re
 import time
 import hashlib
 from typing import Any, Dict, List, Optional
@@ -535,9 +536,6 @@ def _generate_post_recommendations(new_issues: List[Dict],
 
     return recs[:10]
 
-
-# Need re import for pattern matching
-import re
 
 register_command(
     'guard',

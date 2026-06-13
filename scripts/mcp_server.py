@@ -385,13 +385,21 @@ _TOOL_DEFINITIONS = {
         }
     },
     "dataflow": {
-        "description": "Trace data flow from source to sink. Track how data moves through the codebase.",
+        "description": "Trace data flow from source to sink. Track how user input, env vars, and other data moves through the codebase, including cross-file flow via imports. Detects unsanitized taint paths that lead to security vulnerabilities.",
         "parameters": {
             "type": "object",
             "properties": {
                 "workspace": {
                     "type": "string",
                     "description": "Path to workspace root directory"
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Filter by source type (e.g., 'user_input', 'env_var', or a variable name)"
+                },
+                "sink": {
+                    "type": "string",
+                    "description": "Filter by sink type (e.g., 'db_query', 'html_output')"
                 }
             },
             "required": ["workspace"]
@@ -908,6 +916,51 @@ _TOOL_DEFINITIONS = {
                 }
             },
             "required": ["workspace", "action"]
+        }
+    },
+    "taint": {
+        "description": "AST-based taint analysis for vulnerability detection. Tracks data flow from sources (user input, env vars) through assignments and function calls to sinks (SQL queries, command execution, HTML output), checking for sanitizers in the taint path. More precise than regex-based dataflow analysis.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "language": {
+                    "type": "string",
+                    "enum": ["python", "javascript", "typescript"],
+                    "description": "Language to analyze (auto-detected if omitted)"
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
+    "plugin": {
+        "description": "Manage CodeLens plugins. List installed plugins, install new ones from a directory or URL, and run plugin-provided analysis commands. Plugins extend CodeLens with custom rules and engines.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "install", "run", "uninstall"],
+                    "description": "Plugin action (default: list)",
+                    "default": "list"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Plugin name (for install/run/uninstall)"
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Plugin source path or URL (for install)"
+                }
+            },
+            "required": ["workspace"]
         }
     },
 }

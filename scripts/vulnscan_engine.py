@@ -1,12 +1,14 @@
 """
 Dependency Vulnerability Scanning Engine for CodeLens v5
 Detects known vulnerable packages in project dependency files using
-native audit tools, lock-file parsing, and a built-in CVE database.
+OSV.dev API, native audit tools, lock-file parsing, and a built-in CVE database.
 
 Answers: "Are there any known vulnerabilities in my dependencies?"
 Answers: "Which packages have known CVEs and need updating?"
 
 Architecture:
+- Phase 0: OSV.dev API — query real-time vulnerability data from OSV database
+           with SQLite cache and graceful offline fallback.
 - Phase 1: Native audit tools — try `npm audit --json`, `cargo audit --json`,
            `pip audit --format json`, `govulncheck ./...` if available.
 - Phase 2: Lock-file parsing — parse package-lock.json, Cargo.lock, poetry.lock,
@@ -19,6 +21,7 @@ Ecosystems supported:
 - Rust (Cargo.toml, Cargo.lock)
 - pip  (requirements.txt, Pipfile, poetry.lock)
 - Go   (go.mod, go.sum)
+- Maven, NuGet, RubyGems, Pub, Hex (via OSV.dev API)
 
 Each finding includes package, installed version, vulnerable range,
 CVE identifier, severity, title, and fix version.
@@ -32,6 +35,13 @@ import logging
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
+
+# OSV.dev integration (optional — graceful fallback if unavailable)
+try:
+    from osv_client import OSVClient, OSVQueryBuilder, OSVPackage, OSVVulnerability, ECOSYSTEM_MAP
+    _HAS_OSV = True
+except ImportError:
+    _HAS_OSV = False
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -480,6 +490,9 @@ VULN_DB: List[Dict[str, Any]] = [
     },
 ]
 
+# Date the built-in VULN_DB was last updated (used for staleness warning)
+VULN_DB_LAST_UPDATED = "2025-02-28"
+
 # Index the VULN_DB for fast lookups: (ecosystem, package_lower) -> [entries]
 _VULN_INDEX: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
 for _entry in VULN_DB:
@@ -491,12 +504,15 @@ for _entry in VULN_DB:
 def scan_vulnerabilities(
     workspace: str,
     severity: Optional[str] = None,
-    config: Optional[Dict] = None
+    config: Optional[Dict] = None,
+    offline: bool = False,
+    osv_ttl: int = 86400,
 ) -> Dict[str, Any]:
     """
     Scan dependency files for known vulnerabilities.
 
-    Uses native audit tools (npm audit, cargo audit, pip-audit, govulncheck)
+    Uses OSV.dev API (Phase 0) for real-time vulnerability data, then
+    native audit tools (npm audit, cargo audit, pip-audit, govulncheck)
     when available, with fallback to built-in CVE database + lock-file parsing.
 
     Args:
@@ -504,17 +520,34 @@ def scan_vulnerabilities(
         severity: Optional filter: "critical", "high", "medium"
         config: CodeLens config dict (supports "vulnscan.ignore" and
                 "vulnscan.skip_audit_tools" options)
+        offline: If True, skip OSV API queries (use cache only)
+        osv_ttl: Cache TTL for OSV results in seconds (default 86400 = 24h)
 
     Returns:
         Dict with findings, stats, risk level, audit availability, and recommendations
     """
     workspace = os.path.abspath(workspace)
 
+    # ─── Staleness check for built-in VULN_DB ───────────────────
+    try:
+        from datetime import date as date_type
+        db_date = date_type.fromisoformat(VULN_DB_LAST_UPDATED)
+        days_old = (date_type.today() - db_date).days
+        if days_old > 30:
+            logger.warning(
+                f"Built-in VULN_DB is {days_old} days old (last updated {VULN_DB_LAST_UPDATED}). "
+                f"Consider updating CodeLens for the latest vulnerability data, or rely on OSV.dev integration "
+                f"(which provides real-time data when available)."
+            )
+    except (ValueError, TypeError):
+        pass
+
     findings: List[Dict[str, Any]] = []
     files_scanned: List[str] = []
     audit_available: Dict[str, bool] = {}
     ignore_packages: Set[str] = set()
     skip_audit: bool = False
+    osv_stats: Optional[Dict[str, Any]] = None
 
     # Parse config
     if config:
@@ -524,6 +557,42 @@ def scan_vulnerabilities(
 
     # ─── Discover dependency files ─────────────────────────────
     dep_files = _discover_dependency_files(workspace)
+
+    # ─── Phase 0: OSV.dev API (real-time vulnerability data) ──
+    if _HAS_OSV:
+        try:
+            osv_client = OSVClient(workspace=workspace, ttl=osv_ttl, offline=offline)
+            osv_client.cache.cleanup()  # Purge expired entries
+
+            # Build package list from workspace dependency files
+            osv_packages = OSVQueryBuilder.build_from_workspace(workspace)
+
+            if osv_packages:
+                osv_vulns = osv_client.query_packages(osv_packages)
+                osv_findings = [v.to_finding() for v in osv_vulns]
+
+                # Tag OSV findings so we can prioritize them
+                for f in osv_findings:
+                    f["source"] = "osv_dev"
+
+                findings.extend(osv_findings)
+
+                osv_stats = {
+                    "packages_queried": len(osv_packages),
+                    "vulnerabilities_found": len(osv_findings),
+                    "client_stats": osv_client.get_stats(),
+                }
+                logger.info("OSV.dev: queried %d packages, found %d vulnerabilities",
+                            len(osv_packages), len(osv_findings))
+            else:
+                osv_stats = {"packages_queried": 0, "vulnerabilities_found": 0}
+                logger.debug("OSV.dev: no packages to query")
+
+        except Exception as exc:
+            logger.warning("OSV.dev integration failed, continuing with native audit: %s", exc)
+            osv_stats = {"error": str(exc)}
+    else:
+        logger.debug("OSV.dev client not available (osv_client.py not importable)")
 
     # ─── Phase 1: Native audit tools ──────────────────────────
     if not skip_audit:
@@ -647,6 +716,7 @@ def scan_vulnerabilities(
         "risk": risk,
         "findings": findings[:200],  # Cap to avoid explosion
         "audit_available": any_audit_available,
+        "osv_stats": osv_stats,
         "recommendations": recommendations,
     }
 
@@ -1821,14 +1891,28 @@ def _map_pip_audit_severity(vuln_id: str) -> str:
 # ─── Deduplication ─────────────────────────────────────────────
 
 def _deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove duplicate findings (same package, ecosystem, CVE)."""
+    """Remove duplicate findings (same package, ecosystem, CVE).
+
+    Prefer findings from OSV.dev and audit tools over built-in DB lookups.
+    OSV.dev findings are prioritized because they contain real-time data with
+    CVSS scores and more detailed information.
+    """
     seen: Set[Tuple[str, str, str]] = set()
     unique = []
 
-    # Prefer findings from audit tools over DB lookups
-    # Sort: audit sources first
-    source_priority = {"npm_audit": 0, "cargo_audit": 0, "pip_audit": 0, "govulncheck": 0,
-                       "lockfile_db": 1, "manifest_db": 2}
+    # Prefer findings from OSV.dev and audit tools over DB lookups
+    # Sort: most authoritative sources first
+    source_priority = {
+        "osv_dev": 0,          # OSV.dev API (real-time, most comprehensive)
+        "npm_audit": 1,        # Native audit tools
+        "cargo_audit": 1,
+        "pip_audit": 1,
+        "govulncheck": 1,
+        "nimble_audit": 1,
+        "lockfile_db": 2,      # Built-in DB lookups
+        "manifest_db": 3,
+        "nimble_manifest": 4,
+    }
 
     sorted_findings = sorted(
         findings,
@@ -1997,9 +2081,23 @@ def _generate_recommendations(
             )
 
     # General advice
-    recs.append(
-        "GENERAL: Regularly audit dependencies. Consider using Dependabot or Snyk "
-        "for automated vulnerability scanning in CI/CD pipelines."
-    )
+    # Check if OSV.dev data was used
+    osv_findings = [f for f in findings if f.get("source") == "osv_dev"]
+    if osv_findings:
+        recs.append(
+            "OSV.DEV: Vulnerability data sourced from OSV.dev (real-time database). "
+            "Use --offline flag to use cached data only, or --osv-ttl to adjust cache duration."
+        )
+    elif _HAS_OSV:
+        recs.append(
+            "OSV.DEV: No vulnerabilities found via OSV.dev real-time database. "
+            "Data is cached for 24h by default (use --osv-ttl to adjust)."
+        )
+    else:
+        recs.append(
+            "GENERAL: OSV.dev integration not available. For real-time vulnerability data, "
+            "ensure osv_client.py is in the scripts directory. "
+            "Consider using Dependabot or Snyk for automated scanning in CI/CD pipelines."
+        )
 
     return recs

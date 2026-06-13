@@ -1,0 +1,402 @@
+# CodeLens Compliance Rules — HIPAA Security Rule
+# Maps CodeLens security findings to HIPAA Security Rule technical safeguards
+# Reference: https://www.hhs.gov/hipaa/for-professionals/security/index.html
+# 45 CFR § 164.312 — Technical Safeguards
+
+rules:
+  # ─── § 164.312(a)(1): Access Control ────────────────────
+
+  - id: hipaa/164.312a1-access-control
+    name: "HIPAA 164.312(a)(1): Access Control — Unique User Identification"
+    owasp: A07:2021
+    cwe: CWE-287
+    description: "Implement technical policies and procedures for electronic information systems that maintain electronic protected health information (ePHI) to allow only authorized persons to access"
+    severity: critical
+    framework: hipaa
+    requirement: "164.312(a)(1)"
+    message: "Assign a unique name and/or number for identifying and tracking user identity in systems containing ePHI"
+    sources:
+      - shared_account
+      - generic_user
+      - service_account_without_id
+    sinks:
+      - ePHI_access
+      - patient_data
+      - medical_record
+    sanitizers:
+      - unique_user_id
+      - individual_authentication
+      - identity_provider
+
+  - id: hipaa/164.312a1-emergency-access
+    name: "HIPAA 164.312(a)(1): Emergency Access Procedure"
+    owasp: A01:2021
+    cwe: CWE-284
+    description: "Establish procedures for obtaining necessary ePHI during an emergency"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(a)(1)"
+    message: "Implement emergency access procedures that can be invoked when normal access is unavailable"
+    sources:
+      - emergency_access
+      - break_glass
+    sinks:
+      - ePHI
+      - patient_data
+    sanitizers:
+      - documented_procedure
+      - audit_trail
+      - time_limited_access
+
+  - id: hipaa/164.312a1-automatic-logoff
+    name: "HIPAA 164.312(a)(1): Automatic Logoff"
+    owasp: A07:2021
+    cwe: CWE-613
+    description: "Implement electronic procedures that terminate an electronic session after a predetermined time of inactivity"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(a)(1)"
+    message: "Implement automatic logoff for sessions accessing ePHI to prevent unauthorized access from unattended workstations"
+    sources:
+      - session
+      - authenticated_user
+    sinks:
+      - ePHI_access
+      - patient_record
+    sanitizers:
+      - session_timeout
+      - inactivity_logoff
+      - auto_lock
+
+  - id: hipaa/164.312a1-encryption-decryption
+    name: "HIPAA 164.312(a)(1): Encryption and Decryption of ePHI"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Implement a mechanism to encrypt and decrypt ePHI"
+    severity: critical
+    framework: hipaa
+    requirement: "164.312(a)(1)"
+    message: "Encrypt ePHI at rest using AES-256 or equivalent — never store unencrypted ePHI"
+    sources:
+      - ePHI
+      - patient_data
+      - health_record
+      - PHI
+    sinks:
+      - database
+      - file_storage
+      - backup
+      - cache
+    sanitizers:
+      - AES-256
+      - encrypt
+      - field_level_encryption
+      - transparent_data_encryption
+
+  # ─── § 164.312(b): Audit Controls ───────────────────────
+
+  - id: hipaa/164.312b-audit-controls
+    name: "HIPAA 164.312(b): Audit Controls"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Implement hardware, software, and/or procedural mechanisms that record and examine activity in information systems that contain or use ePHI"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(b)"
+    message: "Implement audit logging for all systems that create, read, update, or delete ePHI"
+    sources:
+      - ePHI_access
+      - patient_data_query
+      - medical_record_update
+    sinks:
+      - system_access
+    sanitizers:
+      - audit_log
+      - access_log
+      - SIEM
+      - tamper_proof_logging
+
+  - id: hipaa/164.312b-log-review
+    name: "HIPAA 164.312(b): Log Review and Monitoring"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Review and analyze audit logs for inappropriate activity"
+    severity: medium
+    framework: hipaa
+    requirement: "164.312(b)"
+    message: "Regularly review audit logs for unauthorized access, anomalies, and security incidents"
+    sources:
+      - audit_log
+      - access_log
+    sinks:
+      - security_incident
+      - unauthorized_access
+    sanitizers:
+      - log_analysis
+      - alerting
+      - anomaly_detection
+
+  # ─── § 164.312(c)(1): Integrity Controls ────────────────
+
+  - id: hipaa/164.312c1-integrity
+    name: "HIPAA 164.312(c)(1): Integrity Controls"
+    owasp: A08:2021
+    cwe: CWE-345
+    description: "Implement policies and procedures to protect ePHI from improper alteration or destruction"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(c)(1)"
+    message: "Ensure ePHI is not altered or destroyed in an unauthorized manner — verify data integrity"
+    sources:
+      - data_modification
+      - record_update
+      - data_transfer
+    sinks:
+      - ePHI_storage
+      - database
+    sanitizers:
+      - checksum
+      - digital_signature
+      - hash_verification
+      - write_once_medium
+
+  - id: hipaa/164.312c1-authentication-mechanism
+    name: "HIPAA 164.312(c)(1): Electronic Authentication"
+    owasp: A08:2021
+    cwe: CWE-345
+    description: "Implement electronic mechanisms to corroborate that ePHI has not been altered or destroyed"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(c)(1)"
+    message: "Use cryptographic checksums, digital signatures, or version control to verify ePHI integrity"
+    sources:
+      - ePHI
+      - medical_record
+    sinks:
+      - transmission
+      - storage
+    sanitizers:
+      - HMAC
+      - digital_signature
+      - SHA-256
+      - version_control
+
+  # ─── § 164.312(d): Person or Entity Authentication ──────
+
+  - id: hipaa/164.312d-person-authentication
+    name: "HIPAA 164.312(d): Person or Entity Authentication"
+    owasp: A07:2021
+    cwe: CWE-287
+    description: "Implement procedures to verify that a person or entity seeking access to ePHI is the one claimed"
+    severity: critical
+    framework: hipaa
+    requirement: "164.312(d)"
+    message: "Verify user identity before granting ePHI access — use multi-factor authentication where feasible"
+    sources:
+      - login_attempt
+      - access_request
+    sinks:
+      - ePHI_access
+      - patient_data
+    sanitizers:
+      - MFA
+      - biometric
+      - smart_card
+      - certificate_authentication
+      - password_plus_token
+
+  - id: hipaa/164.312d-password-auth
+    name: "HIPAA 164.312(d): Password-Based Authentication"
+    owasp: A07:2021
+    cwe: CWE-521
+    description: "If passwords are used for authentication, enforce strong password requirements"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(d)"
+    message: "Enforce minimum 8-character passwords with complexity, expiration, and lockout policies"
+    sources:
+      - user_password
+      - credentials
+    sinks:
+      - authenticate
+      - login
+    sanitizers:
+      - password_policy
+      - complexity_requirement
+      - account_lockout
+      - password_history
+
+  # ─── § 164.312(e)(1): Transmission Security ─────────────
+
+  - id: hipaa/164.312e1-transmission-security
+    name: "HIPAA 164.312(e)(1): Transmission Security"
+    owasp: A02:2021
+    cwe: CWE-319
+    description: "Implement technical security measures to guard against unauthorized access to ePHI being transmitted over an electronic communications network"
+    severity: critical
+    framework: hipaa
+    requirement: "164.312(e)(1)"
+    message: "Encrypt all ePHI transmitted over electronic networks — use TLS 1.2+ for all communications"
+    sources:
+      - ePHI
+      - patient_data
+      - health_record
+    sinks:
+      - network_transmission
+      - email
+      - API_call
+      - file_transfer
+    sanitizers:
+      - TLS_1.2
+      - HTTPS
+      - VPN
+      - end-to-end_encryption
+      - SFTP
+
+  - id: hipaa/164.312e2-encryption-negotiation
+    name: "HIPAA 164.312(e)(2)(ii): Encryption Negotiation"
+    owasp: A02:2021
+    cwe: CWE-327
+    description: "Implement a mechanism to encrypt ePHI whenever deemed appropriate"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(e)(2)(ii)"
+    message: "Ensure encryption is negotiated and enforced for all ePHI transmissions — reject unencrypted connections"
+    sources:
+      - connection_request
+      - protocol_negotiation
+    sinks:
+      - data_transmission
+    sanitizers:
+      - enforce_TLS
+      - HSTS
+      - certificate_pinning
+      - minimum_encryption_standard
+
+  - id: hipaa/164.312e2-integrity-controls-transmission
+    name: "HIPAA 164.312(e)(2)(i): Integrity Controls for Transmission"
+    owasp: A08:2021
+    cwe: CWE-345
+    description: "Implement security measures to ensure ePHI is not improperly modified during transmission"
+    severity: high
+    framework: hipaa
+    requirement: "164.312(e)(2)(i)"
+    message: "Verify integrity of ePHI during transmission — detect tampering or corruption"
+    sources:
+      - ePHI_transmission
+    sinks:
+      - received_data
+    sanitizers:
+      - message_authentication_code
+      - HMAC
+      - checksum_verification
+      - digital_signature
+
+  # ─── Additional HIPAA Safeguards ────────────────────────
+
+  - id: hipaa/breach-notification
+    name: "HIPAA: Breach Detection and Notification"
+    owasp: A09:2021
+    cwe: CWE-778
+    description: "Detect and report breaches of unsecured ePHI"
+    severity: high
+    framework: hipaa
+    requirement: "breach-notification"
+    message: "Implement systems to detect unauthorized access to ePHI and report breaches within required timeframes"
+    sources:
+      - unauthorized_access
+      - data_exfiltration
+      - anomaly
+    sinks:
+      - breach_notification
+      - HHS_reporting
+    sanitizers:
+      - IDS
+      - DLP
+      - anomaly_detection
+      - incident_response_plan
+
+  - id: hipaa/minimum-necessary
+    name: "HIPAA: Minimum Necessary Standard"
+    owasp: A01:2021
+    cwe: CWE-285
+    description: "Limit use, disclosure, and request of ePHI to minimum necessary"
+    severity: high
+    framework: hipaa
+    requirement: "minimum-necessary"
+    message: "Only access the minimum amount of ePHI necessary to accomplish the intended purpose"
+    sources:
+      - data_request
+      - query
+      - API_call
+    sinks:
+      - ePHI_response
+      - data_return
+    sanitizers:
+      - data_filtering
+      - field_limitation
+      - scope_restriction
+      - role_based_access
+
+  - id: hipaa/ba-agreement
+    name: "HIPAA: Business Associate Agreement Compliance"
+    owasp: A08:2021
+    cwe: CWE-345
+    description: "Ensure business associates implement appropriate safeguards for ePHI"
+    severity: medium
+    framework: hipaa
+    requirement: "ba-agreement"
+    message: "Verify that business associates handling ePHI have proper security controls and BA agreements"
+    sources:
+      - ePHI
+      - shared_data
+    sinks:
+      - third_party
+      - external_service
+    sanitizers:
+      - ba_agreement
+      - security_assessment
+      - compliance_verification
+
+  - id: hipaa/risk-assessment
+    name: "HIPAA: Security Risk Assessment"
+    owasp: A04:2021
+    cwe: CWE-20
+    description: "Conduct an accurate and thorough assessment of potential risks and vulnerabilities"
+    severity: medium
+    framework: hipaa
+    requirement: "risk-assessment"
+    message: "Perform regular risk assessments to identify threats and vulnerabilities to ePHI confidentiality, integrity, and availability"
+    sources:
+      - ePHI_systems
+      - network
+      - application
+    sinks:
+      - risk_register
+      - remediation_plan
+    sanitizers:
+      - risk_analysis
+      - vulnerability_scan
+      - penetration_test
+      - security_audit
+
+  - id: hipaa/workforce-security
+    name: "HIPAA: Workforce Security — Authorization and Clearance"
+    owasp: A01:2021
+    cwe: CWE-284
+    description: "Implement procedures to authorize and supervise workforce access to ePHI"
+    severity: high
+    framework: hipaa
+    requirement: "workforce-security"
+    message: "Implement clearance and authorization procedures for workforce members accessing ePHI"
+    sources:
+      - new_employee
+      - role_change
+      - termination
+    sinks:
+      - ePHI_access
+    sanitizers:
+      - access_provisioning
+      - background_check
+      - access_revocation
+      - role_based_access

@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -131,8 +132,9 @@ class PersistentRegistry:
         self._db_path = db_path or os.path.join(
             workspace, ".codelens", DB_FILENAME
         )
-        self._conn: Optional[sqlite3.Connection] = None
+        self._local = threading.local()  # Thread-local storage for connections
         self._initialized = False
+        self._init_lock = threading.Lock()
 
     # ─── Connection Management ──────────────────────────────
 
@@ -140,19 +142,31 @@ class PersistentRegistry:
     def db_path(self) -> str:
         return self._db_path
 
+    @property
+    def _conn(self) -> Optional[sqlite3.Connection]:
+        """Get the thread-local connection, if any."""
+        return getattr(self._local, 'conn', None)
+
+    @_conn.setter
+    def _conn(self, value: Optional[sqlite3.Connection]) -> None:
+        """Set the thread-local connection."""
+        self._local.conn = value
+
     def _connect(self) -> sqlite3.Connection:
-        """Get or create a database connection."""
+        """Get or create a thread-local database connection."""
         if self._conn is None:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-            self._conn = sqlite3.connect(self._db_path, timeout=10.0)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
-            self._conn.execute("PRAGMA temp_store=MEMORY")
-        if not self._initialized:
-            self._init_schema()
-            self._initialized = True
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            conn.execute("PRAGMA temp_store=MEMORY")
+            self._conn = conn
+        with self._init_lock:
+            if not self._initialized:
+                self._init_schema()
+                self._initialized = True
         return self._conn
 
     def _init_schema(self) -> None:
@@ -174,12 +188,13 @@ class PersistentRegistry:
         """Get raw connection without auto-init (for init itself)."""
         if self._conn is None:
             os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
-            self._conn = sqlite3.connect(self._db_path, timeout=10.0)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA cache_size=-64000")
-            self._conn.execute("PRAGMA temp_store=MEMORY")
+            conn = sqlite3.connect(self._db_path, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-64000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            self._conn = conn
         return self._conn
 
     def close(self) -> None:

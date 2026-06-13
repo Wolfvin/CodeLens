@@ -1,0 +1,208 @@
+{
+  "name": "codelens",
+  "displayName": "CodeLens — AI-Native Code Intelligence",
+  "description": "AI-native code analysis, security scanning, taint tracking, and auto-fix for Python, JavaScript, and TypeScript. Integrates CodeLens CLI as VS Code diagnostics with quick fixes, guard pre-save hooks, and health scoring.",
+  "version": "1.0.0",
+  "publisher": "wolfvin",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Wolfvin/CodeLens.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Wolfvin/CodeLens/issues"
+  },
+  "homepage": "https://github.com/Wolfvin/CodeLens",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Security"
+  ],
+  "keywords": [
+    "code analysis",
+    "security",
+    "code quality",
+    "taint analysis",
+    "MCP",
+    "dead code",
+    "secrets detection",
+    "complexity",
+    "code smell",
+    "auto-fix",
+    "SARIF",
+    "vulnerability"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:javascriptreact",
+    "onLanguage:typescriptreact"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codelens.scan",
+        "title": "CodeLens: Scan Workspace",
+        "category": "CodeLens",
+        "icon": "$(search)"
+      },
+      {
+        "command": "codelens.fix",
+        "title": "CodeLens: Fix Issues",
+        "category": "CodeLens",
+        "icon": "$(wand)"
+      },
+      {
+        "command": "codelens.guard",
+        "title": "CodeLens: Guard Check",
+        "category": "CodeLens",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "codelens.dashboard",
+        "title": "CodeLens: Open Dashboard",
+        "category": "CodeLens",
+        "icon": "$(graph)"
+      }
+    ],
+    "configuration": {
+      "title": "CodeLens",
+      "properties": {
+        "codelens.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to codelens.py CLI. Leave empty to auto-detect (checks workspace, ~/.codelens, then PATH).",
+          "scope": "resource",
+          "order": 1
+        },
+        "codelens.autoScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan files on save and open.",
+          "scope": "resource",
+          "order": 2
+        },
+        "codelens.minSeverity": {
+          "type": "string",
+          "default": "medium",
+          "enum": ["critical", "high", "medium", "low", "info"],
+          "enumDescriptions": [
+            "Report only critical findings",
+            "Report critical and high findings",
+            "Report critical, high, and medium findings (default)",
+            "Report all except info",
+            "Report all findings"
+          ],
+          "description": "Minimum severity level to report as diagnostics.",
+          "scope": "resource",
+          "order": 3
+        },
+        "codelens.enableGuard": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Guard pre-save checks. When enabled, CodeLens runs a safety check before each save and warns if issues are found.",
+          "scope": "resource",
+          "order": 4
+        },
+        "codelens.scanCommands": {
+          "type": "string",
+          "default": "dead-code,secrets,smell,complexity",
+          "description": "Comma-separated list of CodeLens commands to run on scan (e.g., dead-code,secrets,smell,complexity,taint,debug-leak,circular).",
+          "scope": "resource",
+          "order": 5
+        },
+        "codelens.maxFindings": {
+          "type": "number",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "Maximum number of findings to display as diagnostics.",
+          "scope": "resource",
+          "order": 6
+        },
+        "codelens.debounceMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 500,
+          "maximum": 30000,
+          "description": "Minimum milliseconds between automatic scans (debounce).",
+          "scope": "resource",
+          "order": 7
+        },
+        "codelens.fixMinConfidence": {
+          "type": "number",
+          "default": 0.8,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Minimum confidence for auto-fix suggestions (0-1).",
+          "scope": "resource",
+          "order": 8
+        }
+      }
+    },
+    "problemMatchers": [
+      {
+        "name": "codelens-sarif",
+        "label": "CodeLens SARIF",
+        "owner": "codelens",
+        "source": "CodeLens",
+        "severity": "warning",
+        "fileLocation": {
+          "relative": "${workspaceFolder}"
+        },
+        "pattern": [
+          {
+            "regexp": "^(.+):(\\d+):(\\d+):\\s+(\\w+):\\s+(.+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "severity": 4,
+            "message": 5
+          }
+        ]
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceLangId in codelens.supportedLanguages",
+          "command": "codelens.guard",
+          "group": "navigation@100"
+        },
+        {
+          "when": "resourceLangId in codelens.supportedLanguages",
+          "command": "codelens.fix",
+          "group": "navigation@101"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codelens.scan",
+        "key": "ctrl+shift+f6",
+        "mac": "cmd+shift+f6",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codelens.fix",
+        "key": "ctrl+shift+f7",
+        "mac": "cmd+shift+f7",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  },
+  "dependencies": {},
+  "scripts": {
+    "vsce:pack": "vsce package",
+    "vsce:publish": "vsce publish"
+  }
+}

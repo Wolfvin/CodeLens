@@ -1,4 +1,10 @@
-"""Taint command — Run semantic taint analysis for vulnerability detection."""
+"""Taint command — Run AST-based or semantic taint analysis for vulnerability detection.
+
+By default, uses the new AST-based taint engine (ast_taint_engine.py) with tree-sitter
+when available, falling back to the regex-based semantic_engine.py.
+Use --no-ast to force regex-based analysis.
+Use --cross-file for cross-file taint analysis with CFG construction.
+"""
 
 from commands import register_command
 
@@ -14,25 +20,50 @@ def add_args(parser):
                         help="Filter by minimum severity")
     parser.add_argument("--cross-file", action="store_true", default=False,
                         help="Enable cross-file taint analysis with CFG construction")
+    parser.add_argument("--no-ast", action="store_true", default=False,
+                        help="Disable AST-based engine and use regex-based analysis instead")
+    parser.add_argument("--ast", action="store_true", default=False,
+                        help="Explicitly request AST-based engine (default when tree-sitter available)")
 
 
 def execute(args, workspace):
     language = getattr(args, 'language', None)
     cross_file = getattr(args, 'cross_file', False)
+    no_ast = getattr(args, 'no_ast', False)
+    use_ast = getattr(args, 'ast', False)
+
+    # Determine which engine to use
+    # Default: AST engine (when tree-sitter available), unless --no-ast
+    # --ast flag explicitly requests it (same as default behavior)
+    ast_engine_available = False
+    if not no_ast:
+        try:
+            from ast_taint_engine import is_available, analyze_workspace as ast_analyze_workspace
+            ast_engine_available = is_available()
+        except ImportError:
+            ast_engine_available = False
 
     if cross_file:
         try:
             from crossfile_taint_engine import analyze_cross_file_taint
             result = analyze_cross_file_taint(workspace, language=language)
         except ImportError:
-            # Fallback to intra-file analysis
-            from semantic_engine import analyze_workspace
-            result = analyze_workspace(workspace, language=language)
-            result["cross_file"] = False
-            result["cross_file_fallback"] = True
+            # Fallback to AST or intra-file analysis
+            if ast_engine_available:
+                result = ast_analyze_workspace(workspace, language=language)
+                result["cross_file"] = False
+                result["cross_file_fallback"] = True
+            else:
+                from semantic_engine import analyze_workspace
+                result = analyze_workspace(workspace, language=language)
+                result["cross_file"] = False
+                result["cross_file_fallback"] = True
+    elif ast_engine_available:
+        result = ast_analyze_workspace(workspace, language=language)
     else:
         from semantic_engine import analyze_workspace
         result = analyze_workspace(workspace, language=language)
+        result["engine"] = "semantic_regex"
 
     # Optionally enhance with secrets findings
     if getattr(args, 'with_secrets', False):
@@ -81,6 +112,7 @@ def execute(args, workspace):
                 "file": f.get("file", ""),
                 "line": f.get("line", 0),
                 "message": f.get("message", ""),
+                "taint_path": f.get("taint_path", ""),
             })
         for f in high[:5]:
             result["actionable_items"].append({
@@ -89,9 +121,10 @@ def execute(args, workspace):
                 "file": f.get("file", ""),
                 "line": f.get("line", 0),
                 "message": f.get("message", ""),
+                "taint_path": f.get("taint_path", ""),
             })
 
     return result
 
 
-register_command("taint", "Run semantic taint analysis for vulnerability detection", add_args, execute)
+register_command("taint", "Run AST-based taint analysis for vulnerability detection", add_args, execute)

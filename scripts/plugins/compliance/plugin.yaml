@@ -1,0 +1,12 @@
+name: compliance
+version: 1.0.0
+author: CodeLens Community
+description: Compliance rule packs mapping CodeLens findings to regulatory frameworks — PCI-DSS v4.0 and HIPAA Security Rule technical safeguards
+type: rule_pack
+rules_dir: rules/
+engines: []
+dependencies: []
+tags: [compliance, pci-dss, hipaa, regulatory, audit]
+homepage: https://github.com/Wolfvin/CodeLens
+license: MIT
+min_codelens_version: 5.7.0
