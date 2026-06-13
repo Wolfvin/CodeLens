@@ -1,8 +1,44 @@
+# ─── Version Control ────────────────────────────────────────────
+.git/**
+.gitignore
+
+# ─── CI / GitHub ────────────────────────────────────────────────
+.github/**
+
+# ─── VS Code Dev ────────────────────────────────────────────────
 .vscode/**
 .vscode-test/**
-src/**
+
+# ─── Node ───────────────────────────────────────────────────────
 node_modules/**
-.gitignore
+
+# ─── Build Artifacts ────────────────────────────────────────────
+*.vsix
+
+# ─── Source Maps ────────────────────────────────────────────────
 **/*.map
+
+# ─── TypeScript Source (not needed at runtime) ──────────────────
+# Keep .js files in src/ — they are required at runtime
 **/*.ts
 tsconfig.json
+
+# ─── Test Files ─────────────────────────────────────────────────
+**/*.test.js
+**/*.spec.js
+**/__tests__/**
+test/**
+tests/**
+
+# ─── Documentation & Dev Extras ─────────────────────────────────
+docs/**
+CHANGELOG.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+.editorconfig
+.eslintrc*
+.prettierrc*
+
+# ─── Misc ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

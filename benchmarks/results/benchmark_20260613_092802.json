@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-13T09:56:23.599382+00:00",
+  "timestamp": "2026-06-13T09:27:55.260248+00:00",
   "version": "1.0.0",
   "quick_mode": false,
   "fixtures": {
@@ -19,7 +19,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.371,
+          "elapsed_seconds": 0.351,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
           "meets_target": true,
@@ -39,7 +39,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.368,
+          "elapsed_seconds": 0.348,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": true,
@@ -79,7 +79,7 @@
             "fn": 0,
             "tn": 7
           },
-          "elapsed_seconds": 0.373,
+          "elapsed_seconds": 0.353,
           "target_f1": 0.8,
           "competitor_f1": 0.78,
           "meets_target": false,
@@ -99,7 +99,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.37,
+          "elapsed_seconds": 0.346,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
           "meets_target": true,
@@ -119,7 +119,7 @@
             "fn": 0,
             "tn": 7
           },
-          "elapsed_seconds": 0.376,
+          "elapsed_seconds": 0.348,
           "target_f1": 0.75,
           "competitor_f1": 0.7,
           "meets_target": false,
@@ -139,7 +139,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.365,
+          "elapsed_seconds": 0.335,
           "target_f1": 0.9,
           "competitor_f1": 0.85,
           "meets_target": true,
@@ -163,7 +163,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.373,
+          "elapsed_seconds": 0.351,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
           "meets_target": true,
@@ -183,7 +183,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.389,
+          "elapsed_seconds": 0.363,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": false,
@@ -203,7 +203,7 @@
             "fn": 1,
             "tn": 0
           },
-          "elapsed_seconds": 0.373,
+          "elapsed_seconds": 0.349,
           "target_f1": 0.98,
           "competitor_f1": 0.95,
           "meets_target": false,
@@ -223,7 +223,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.382,
+          "elapsed_seconds": 0.358,
           "target_f1": 0.8,
           "competitor_f1": 0.78,
           "meets_target": false,
@@ -243,7 +243,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.376,
+          "elapsed_seconds": 0.359,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
           "meets_target": false,
@@ -263,7 +263,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.367,
+          "elapsed_seconds": 0.35,
           "target_f1": 0.75,
           "competitor_f1": 0.7,
           "meets_target": true,
@@ -283,7 +283,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.359,
+          "elapsed_seconds": 0.336,
           "target_f1": 0.9,
           "competitor_f1": 0.85,
           "meets_target": true,

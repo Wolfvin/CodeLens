@@ -1,0 +1,88 @@
+name: CodeLens SARIF
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # ─── Generate & Upload SARIF ───────────────────────────────────
+  sarif:
+    name: Generate SARIF for Code Scanning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install tree-sitter pyyaml
+          pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
+          pip install tree-sitter-typescript tree-sitter-rust || true
+
+      - name: Run codelens check with SARIF output
+        run: |
+          cd scripts && python codelens.py check . --format sarif > ../codelens-results.sarif
+        continue-on-error: true
+
+      - name: Validate SARIF output
+        id: validate-sarif
+        run: |
+          if [ ! -f codelens-results.sarif ]; then
+            echo "::warning::SARIF file was not generated"
+            echo "sarif_valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Validate it is valid JSON with expected SARIF structure
+          python3 -c "
+          import json, sys
+          with open('codelens-results.sarif') as f:
+              data = json.load(f)
+          if data.get('version') != '2.1.0':
+              print('::warning::SARIF version is not 2.1.0')
+              sys.exit(0)
+          runs = data.get('runs', [])
+          if not runs:
+              print('::warning::SARIF has no runs')
+              sys.exit(0)
+          driver = runs[0].get('tool', {}).get('driver', {})
+          print(f'SARIF valid: {driver.get(\"name\", \"unknown\")} v{driver.get(\"version\", \"?\")}, '
+                f'{len(runs[0].get(\"results\", []))} results')
+          " || {
+            echo "::warning::SARIF validation failed"
+            echo "sarif_valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          echo "sarif_valid=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to GitHub code scanning
+        if: steps.validate-sarif.outputs.sarif_valid == 'true'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: codelens-results.sarif
+          category: codelens
+
+      - name: Upload SARIF artifact (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelens-sarif-${{ github.run_number }}
+          path: codelens-results.sarif
+          retention-days: 30

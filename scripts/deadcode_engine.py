@@ -454,6 +454,14 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 if ext in {".rs", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
                     if not stripped.endswith(';') and not stripped.endswith('}') and not stripped.endswith(')') and not stripped.endswith(']'):
                         continue  # Not a complete return statement yet
+                # v9: Multi-line return statements in Python.
+                # If the return line has unclosed brackets/parens/braces, the
+                # expression continues on the next line — don't flag as terminal yet.
+                if ext == ".py":
+                    open_count = stripped.count('(') + stripped.count('[') + stripped.count('{')
+                    close_count = stripped.count(')') + stripped.count(']') + stripped.count('}')
+                    if open_count > close_count:
+                        continue  # Return expression continues on the next line
                 found_terminal = True
                 terminal_line = i  # 0-based: next line has i+1 > i = True
                 terminal_type = stripped.split()[0]
@@ -506,12 +514,14 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                 found_terminal = False
                 continue
 
-            # Python: if the current line is at a lower or equal indent to the
+            # Python: if the current line is at a lower indent than the
             # terminal statement, we've exited the block containing the return.
             # Code at this level is in a different branch and is reachable.
+            # Note: we use strict < (not <=) because code at the SAME indent
+            # as a return is in the same block and IS unreachable.
             if ext == ".py" and in_function and found_terminal and terminal_indent > 0:
                 current_indent = len(line) - len(line.lstrip()) if stripped else 0
-                if current_indent <= terminal_indent and stripped:
+                if current_indent < terminal_indent and stripped:
                     found_terminal = False
                     continue
 
@@ -886,14 +896,21 @@ def _collect_js_exports_imports(
             "line": content[:m.start()].count('\n') + 1
         })
 
-    # Re-exports: export { X } from ...
-    for m in re.finditer(r'export\s+\{([^}]+)\}', content):
+    # Re-exports: export { X } from ...  vs  local exports: export { X }
+    # export { X } without 'from' is a local definition being made public API.
+    # export { X } from './other' is a re-export from another module.
+    # We distinguish these because local exports should not be flagged as unused
+    # (they are intentionally public API), while re-exports from other modules
+    # may be unnecessary if nothing imports them.
+    for m in re.finditer(r'export\s+\{([^}]+)\}(\s+from\s+[\'"\w./@-]+)?', content):
+        has_from = m.group(2) is not None
+        export_type = "re_export" if has_from else "local_export"
         names = [n.strip().split(' as ')[0].strip() for n in m.group(1).split(',')]
         for name in names:
             if name:
                 exports[rel_path].append({
                     "name": name,
-                    "type": "re_export",
+                    "type": export_type,
                     "line": content[:m.start()].count('\n') + 1
                 })
 
@@ -1748,6 +1765,14 @@ def _detect_unused_exports(
 
             # Skip common entry-point exports
             if name in {'default', 'handler', 'app', 'server', 'router', 'main', 'configure', 'setup'}:
+                continue
+
+            # ─── JS/TS local export heuristic ───
+            # export { X } without 'from' exports a locally-defined symbol as
+            # public API. These are intentionally exported for external consumers
+            # and should not be flagged as unused just because no file in the
+            # current workspace imports them.
+            if export_type == "local_export":
                 continue
 
             # ─── Language-specific entry-point / framework skipping ───

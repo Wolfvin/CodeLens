@@ -1,19 +1,25 @@
-# CodeLens v7.0 — Live Codebase Reference Intelligence
+# CodeLens v8.1 — AI-Native Code Intelligence
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is a CLI tool that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, and dead code by scanning the workspace and building a real-time reference registry of every class, ID, function, and their relationships.
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 49 tools, AST-based taint analysis, and live CVE scanning.
 
 ## Features
 
-- **41 CLI Commands** — From basic scan/query to vulnerability scanning and performance hints
+- **56 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, and compliance checking
+- **MCP Server (49 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC)
+- **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
+- **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems
+- **Cross-File Call Graph** — Workspace-wide call graph with import resolution and bidirectional taint propagation
+- **Plugin System** — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery, OWASP Top 10 (36 rules) + Compliance (53 rules)
+- **VS Code Extension** — Diagnostics Provider, Code Actions, Guard hooks, Health status bar
+- **CI/CD Integration** — GitHub Actions workflows, SARIF v2.1.0 output, PR decoration
+- **Guard Command** — Pre/post-write verification designed for AI agent workflows
 - **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, SCSS
 - **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, and more
 - **Incremental Scanning** — Only re-parse changed files for speed
 - **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
-- **JSON Output** — All commands output structured JSON for easy programmatic consumption
-- **Pre-write Safety** — Check if a class/id/function already exists before creating it
-- **Impact Analysis** — Predict what breaks if you modify or delete a symbol
+- **AI-Optimized Output** — `--format ai` and `--lite` flags for token-efficient AI agent consumption
 - **Security Auditing** — Detect hardcoded secrets, data flow taint analysis, CVE scanning
 - **Quality Scoring** — Code smells, complexity metrics, dead code detection
 - **CSS Deep Analysis** — Unused variables, orphan keyframes, specificity wars, z-index abuse
@@ -161,7 +167,7 @@ codelens/
 │   ├── changelog.md            # Version changelog
 │   └── agent-integration.md    # AI agent integration guide
 └── scripts/
-    ├── codelens.py             # CLI entry point (41 commands)
+    ├── codelens.py             # CLI entry point (56 commands)
     ├── registry.py             # Registry read/write/build
     ├── base_parser.py          # Base tree-sitter parser
     ├── grammar_loader.py       # Lazy tree-sitter grammar loader
@@ -239,6 +245,50 @@ python3 scripts/codelens.py --help
 CodeLens is designed to be used by AI coding agents. The full integration guide is in [references/agent-integration.md](references/agent-integration.md).
 
 **Key principle:** Before an AI writes any new class, ID, or function, it MUST query CodeLens first to check for collisions, overwrites, and dead code.
+
+### MCP Server Integration
+
+CodeLens ships with a native MCP server (49 tools) for direct AI agent integration:
+
+```bash
+# Start MCP server
+python3 scripts/codelens.py serve
+```
+
+See `mcp_config.json` for Claude Desktop / VS Code Copilot configuration.
+
+### Guard Hooks for AI Agents
+
+```bash
+# Pre-write safety check
+codelens guard /path/to/workspace --pre --file src/new_module.py
+
+# Post-write verification
+codelens guard /path/to/workspace --post --file src/new_module.py
+```
+
+## Honest Competitive Positioning
+
+CodeLens excels in **AI-native code intelligence** — a niche where MCP integration, guard hooks, and AI-optimized output matter most. Here is an honest assessment vs established tools:
+
+| Dimension | CodeLens | SonarQube | CodeQL | Semgrep |
+|-----------|:--------:|:---------:|:------:|:-------:|
+| AI Agent Integration | **8** | 4 | 3 | 5 |
+| Frontend Breadth | **8** | 6 | 3 | 5 |
+| MCP / AI-Native Design | **9** | 2 | 2 | 3 |
+| Taint Analysis Depth | 5 | 7 | **10** | 7 |
+| CI/CD & SARIF | 5 | **10** | 7 | 8 |
+| Plugin/Rule Ecosystem | 2 | **10** | 5 | 8 |
+| IDE Integration | 4 | **9** | 8 | 9 |
+| Community & Maturity | 1 | **10** | 8 | 7 |
+| Live CVE Scanning | 7 | 9 | 3 | **8** |
+| Cross-File Analysis | 6 | 8 | **10** | 7 |
+
+**Our genuine strengths:** AI-native design, frontend analysis breadth, MCP integration, guard for AI workflows.
+
+**Where we lag:** Community ecosystem, IDE marketplace presence, deep abstract interpretation (CodeQL's domain), enterprise CI/CD integrations.
+
+**Our goal:** Be the best code intelligence tool for AI agent workflows, not a SonarQube replacement.
 
 ## Contributing
 

@@ -61,6 +61,36 @@ def detect_circular(workspace: str, domain: str = "all", max_cycles: int = MAX_C
     if domain in ("css", "all"):
         cycles["css_imports"] = _detect_css_import_cycles(workspace, max_cycles)
 
+    # ─── Deduplicate across cycle types ───────────────────
+    # If the same circular dependency is found by both function_call (module-level)
+    # and import_chain detection, keep only the import_chain version (more precise).
+    import_cycle_keys = set()
+    for cycle in cycles["import_chains"]:
+        chain = cycle.get("chain", [])
+        if isinstance(chain, list) and chain:
+            import_cycle_keys.add(_normalize_cycle(chain))
+
+    if import_cycle_keys:
+        deduped_fc = []
+        for cycle in cycles["function_calls"]:
+            chain = cycle.get("chain", [])
+            if isinstance(chain, list) and chain:
+                # Extract file paths from chain items to build a normalized key
+                file_chain = []
+                for item in chain:
+                    if isinstance(item, dict):
+                        f = item.get("file", "")
+                        if f:
+                            file_chain.append(f)
+                    else:
+                        file_chain.append(str(item))
+                if file_chain:
+                    fc_key = _normalize_cycle(file_chain)
+                    if fc_key in import_cycle_keys:
+                        continue  # Duplicate of an import_chain cycle; skip
+            deduped_fc.append(cycle)
+        cycles["function_calls"] = deduped_fc
+
     total_cycles = sum(len(v) for v in cycles.values())
 
     # Apply global cap to prevent result explosion
@@ -240,6 +270,95 @@ def _detect_function_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]
             if rec_test_inv:
                 rec_dict["test_involvement"] = rec_test_inv
             cycles_found.append(rec_dict)
+
+    # ─── Module-level cycle detection ──────────────────────────
+    # Detect cross-module circular dependencies where any function in
+    # module_A calls any function in module_B AND any function in module_B
+    # calls any function in module_A. This catches circular deps that don't
+    # form a function-level cycle (e.g., process_a_data→process_b_data→
+    # get_a_value, where get_a_value doesn't call back to process_a_data).
+    module_adj: Dict[str, set] = defaultdict(set)
+    for edge in edges:
+        from_id = edge.get("from", "")
+        to_id = edge.get("to", "")
+        if not (from_id and to_id and to_id in node_by_id
+                and edge.get("resolved", True) is not False):
+            continue
+        from_node = node_by_id.get(from_id, {})
+        to_node = node_by_id.get(to_id, {})
+        from_file = from_node.get("file", "")
+        to_file = to_node.get("file", "")
+        if from_file and to_file and from_file != to_file:
+            module_adj[from_file].add(to_file)
+
+    if module_adj and not stopped[0]:
+        # Ensure all target files are also in the color dict
+        mod_color: Dict[str, int] = {f: WHITE for f in module_adj}
+        for targets in module_adj.values():
+            for t in targets:
+                if t not in mod_color:
+                    mod_color[t] = WHITE
+        mod_stopped = [False]
+
+        def dfs_mod_cycle(node: str, path: List[str]):
+            mod_color[node] = GRAY
+            path.append(node)
+
+            for neighbor in module_adj.get(node, set()):
+                if mod_stopped[0]:
+                    break
+                if neighbor not in mod_color:
+                    continue
+                if mod_color[neighbor] == GRAY:
+                    try:
+                        cycle_start = path.index(neighbor)
+                    except ValueError:
+                        continue
+                    cycle_path = path[cycle_start:] + [neighbor]
+                    cycle_key = _normalize_cycle(cycle_path)
+                    if cycle_key not in seen_cycles:
+                        seen_cycles.add(cycle_key)
+                        chain = []
+                        for f in cycle_path:
+                            chain.append({
+                                "id": f,
+                                "fn": os.path.splitext(os.path.basename(f))[0],
+                                "file": f,
+                                "line": 0
+                            })
+                        fn_names = [c["fn"] for c in chain]
+                        cycle_str = " → ".join(fn_names)
+                        cycle_length = len(cycle_path) - 1
+                        severity, test_involvement = _classify_cycle_severity(chain, cycle_length)
+                        source = _classify_cycle_source([c.get("file", "") for c in chain])
+                        message = f"Circular function call (cross-module): {cycle_str}"
+                        cycle_detail = {
+                            "type": "function_call_cycle",
+                            "chain": chain,
+                            "cycle": cycle_str,
+                            "length": cycle_length,
+                            "severity": severity,
+                            "source": source,
+                            "message": message
+                        }
+                        if test_involvement:
+                            cycle_detail["test_involvement"] = test_involvement
+                        cycles_found.append(cycle_detail)
+                        if len(cycles_found) >= max_cycles:
+                            mod_stopped[0] = True
+                elif mod_color[neighbor] == WHITE:
+                    dfs_mod_cycle(neighbor, path)
+                    if mod_stopped[0]:
+                        break
+
+            path.pop()
+            mod_color[node] = BLACK
+
+        for f in module_adj:
+            if mod_stopped[0] or stopped[0]:
+                break
+            if mod_color[f] == WHITE:
+                dfs_mod_cycle(f, [])
 
     return cycles_found
 
@@ -568,6 +687,41 @@ def _detect_import_cycles(workspace: str, max_cycles: int = 100) -> List[Dict]:
             break
         if color.get(f, WHITE) == WHITE:
             dfs_import(f, [])
+
+    # ─── Safety net: bidirectional import pair check ────────────
+    # Catch any bidirectional import pairs (A imports B, B imports A) that
+    # the DFS may have missed due to color-state issues or early exit.
+    if not stopped[0]:
+        for f in list(import_graph.keys()):
+            for imp in import_graph[f]:
+                if imp in import_graph and f in import_graph[imp]:
+                    cycle_path = [f, imp, f]
+                    cycle_key = _normalize_cycle(cycle_path)
+                    if cycle_key not in seen_cycles:
+                        seen_cycles.add(cycle_key)
+                        cycle_severity = "critical" if len(cycle_path) <= 2 else "warning"
+                        cycle_source = _classify_cycle_source(cycle_path)
+                        cycle_test_inv = None
+                        is_test_chain = [_is_test_example_path(fp) for fp in cycle_path]
+                        if all(is_test_chain) and any(cycle_path):
+                            cycle_severity = "info"
+                            cycle_test_inv = "full"
+                        elif any(is_test_chain):
+                            cycle_test_inv = "partial"
+                        cycle_dict = {
+                            "type": "import_cycle",
+                            "chain": cycle_path,
+                            "cycle": " → ".join(cycle_path),
+                            "length": len(cycle_path) - 1,
+                            "severity": cycle_severity,
+                            "source": cycle_source,
+                            "message": f"Circular import: {' → '.join(cycle_path)}"
+                        }
+                        if cycle_test_inv:
+                            cycle_dict["test_involvement"] = cycle_test_inv
+                        cycles_found.append(cycle_dict)
+                        if len(cycles_found) >= max_cycles:
+                            stopped[0] = True
 
     return cycles_found
 

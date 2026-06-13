@@ -1,11 +1,15 @@
 {
   "name": "codelens",
-  "displayName": "CodeLens — AI-Native Code Intelligence",
+  "displayName": "CodeLens - AI-Native Code Intelligence",
   "description": "AI-native code analysis, security scanning, taint tracking, and auto-fix for Python, JavaScript, and TypeScript. Integrates CodeLens CLI as VS Code diagnostics with quick fixes, guard pre-save hooks, and health scoring.",
   "version": "1.0.0",
-  "publisher": "wolfvin",
+  "publisher": "codelens",
   "license": "MIT",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Wolfvin/CodeLens.git"
@@ -20,15 +24,18 @@
   "categories": [
     "Programming Languages",
     "Linters",
+    "Formatters",
+    "Debuggers",
     "Security"
   ],
   "keywords": [
     "code analysis",
     "security",
-    "code quality",
     "taint analysis",
-    "MCP",
     "dead code",
+    "AI",
+    "MCP",
+    "code quality",
     "secrets detection",
     "complexity",
     "code smell",
@@ -74,19 +81,49 @@
     "configuration": {
       "title": "CodeLens",
       "properties": {
+        "codelens.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the CodeLens CLI executable (codelens.py or installed binary). Leave empty to auto-detect (checks workspace, ~/.codelens, then PATH).",
+          "scope": "resource",
+          "order": 1
+        },
         "codelens.path": {
           "type": "string",
           "default": "",
-          "description": "Path to codelens.py CLI. Leave empty to auto-detect (checks workspace, ~/.codelens, then PATH).",
+          "description": "Legacy path to codelens.py CLI. Prefer codelens.cliPath instead. Leave empty to auto-detect.",
           "scope": "resource",
-          "order": 1
+          "order": 2,
+          "deprecationMessage": "Use codelens.cliPath instead."
         },
         "codelens.autoScan": {
           "type": "boolean",
           "default": true,
           "description": "Automatically scan files on save and open.",
           "scope": "resource",
-          "order": 2
+          "order": 3
+        },
+        "codelens.showHealthBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the CodeLens health status bar item with issue counts and health score.",
+          "scope": "resource",
+          "order": 4
+        },
+        "codelens.severityThreshold": {
+          "type": "string",
+          "default": "warning",
+          "enum": ["critical", "high", "warning", "low", "info"],
+          "enumDescriptions": [
+            "Report only critical findings",
+            "Report critical and high findings",
+            "Report critical, high, and warning findings (default)",
+            "Report all except info-level",
+            "Report all findings"
+          ],
+          "description": "Minimum severity level to display as diagnostics.",
+          "scope": "resource",
+          "order": 5
         },
         "codelens.minSeverity": {
           "type": "string",
@@ -99,23 +136,24 @@
             "Report all except info",
             "Report all findings"
           ],
-          "description": "Minimum severity level to report as diagnostics.",
+          "description": "Minimum severity level passed to the CodeLens CLI (maps to CLI's own severity scale). Prefer codelens.severityThreshold for VS Code display filtering.",
           "scope": "resource",
-          "order": 3
+          "order": 6,
+          "deprecationMessage": "Use codelens.severityThreshold for a simpler severity scale."
         },
         "codelens.enableGuard": {
           "type": "boolean",
           "default": false,
           "description": "Enable Guard pre-save checks. When enabled, CodeLens runs a safety check before each save and warns if issues are found.",
           "scope": "resource",
-          "order": 4
+          "order": 7
         },
         "codelens.scanCommands": {
           "type": "string",
           "default": "dead-code,secrets,smell,complexity",
           "description": "Comma-separated list of CodeLens commands to run on scan (e.g., dead-code,secrets,smell,complexity,taint,debug-leak,circular).",
           "scope": "resource",
-          "order": 5
+          "order": 8
         },
         "codelens.maxFindings": {
           "type": "number",
@@ -124,7 +162,7 @@
           "maximum": 10000,
           "description": "Maximum number of findings to display as diagnostics.",
           "scope": "resource",
-          "order": 6
+          "order": 9
         },
         "codelens.debounceMs": {
           "type": "number",
@@ -133,7 +171,7 @@
           "maximum": 30000,
           "description": "Minimum milliseconds between automatic scans (debounce).",
           "scope": "resource",
-          "order": 7
+          "order": 10
         },
         "codelens.fixMinConfidence": {
           "type": "number",
@@ -142,7 +180,7 @@
           "maximum": 1,
           "description": "Minimum confidence for auto-fix suggestions (0-1).",
           "scope": "resource",
-          "order": 8
+          "order": 11
         }
       }
     },

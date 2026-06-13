@@ -18,7 +18,7 @@ def add_args(parser):
     parser.add_argument('--health-min', type=int, default=0,
                         help='Minimum health score to pass (0-100, default: 0)')
     parser.add_argument('--sarif', action='store_true', default=False,
-                        help='Also output SARIF format for GitHub Advanced Security')
+                        help='Also embed SARIF in JSON output (prefer --format sarif for CI/CD)')
     parser.add_argument('--commands', nargs='+',
                         default=['secrets', 'dead-code', 'smell', 'complexity', 'debug-leak', 'circular', 'taint'],
                         help='Commands to run for the quality gate (default: core analysis)')
@@ -169,6 +169,7 @@ def execute(args, workspace):
         "health_score": health_score,
         "total_findings": len(all_findings),
         "relevant_findings": len(relevant_findings),
+        "findings": relevant_findings,
         "by_severity": by_severity,
         "commands_run": command_results,
         "fail_reasons": fail_reasons,

@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-06-13T09:56:23.599382+00:00",
+  "timestamp": "2026-06-13T09:27:22.805167+00:00",
   "version": "1.0.0",
-  "quick_mode": false,
+  "quick_mode": true,
   "fixtures": {
     "clean_app": {
       "commands": {
@@ -19,7 +19,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.371,
+          "elapsed_seconds": 0.4,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
           "meets_target": true,
@@ -39,7 +39,7 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.368,
+          "elapsed_seconds": 0.392,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": true,
@@ -59,30 +59,10 @@
             "fn": 0,
             "tn": 1
           },
-          "elapsed_seconds": 0.372,
+          "elapsed_seconds": 0.392,
           "target_f1": 0.98,
           "competitor_f1": 0.95,
           "meets_target": true,
-          "beats_competitor": false
-        },
-        "smell": {
-          "description": "Code smells",
-          "expected_count": 0,
-          "found_count": 2,
-          "metrics": {
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "fpr": 0.2222,
-            "tp": 0,
-            "fp": 2,
-            "fn": 0,
-            "tn": 7
-          },
-          "elapsed_seconds": 0.373,
-          "target_f1": 0.8,
-          "competitor_f1": 0.78,
-          "meets_target": false,
           "beats_competitor": false
         },
         "debug-leak": {
@@ -99,49 +79,9 @@
             "fn": 0,
             "tn": 8
           },
-          "elapsed_seconds": 0.37,
+          "elapsed_seconds": 0.388,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
-          "meets_target": true,
-          "beats_competitor": false
-        },
-        "perf-hint": {
-          "description": "Performance hints",
-          "expected_count": 0,
-          "found_count": 1,
-          "metrics": {
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "fpr": 0.125,
-            "tp": 0,
-            "fp": 1,
-            "fn": 0,
-            "tn": 7
-          },
-          "elapsed_seconds": 0.376,
-          "target_f1": 0.75,
-          "competitor_f1": 0.7,
-          "meets_target": false,
-          "beats_competitor": false
-        },
-        "circular": {
-          "description": "Circular deps",
-          "expected_count": 0,
-          "found_count": 0,
-          "metrics": {
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "fpr": 0.0,
-            "tp": 0,
-            "fp": 0,
-            "fn": 0,
-            "tn": 8
-          },
-          "elapsed_seconds": 0.365,
-          "target_f1": 0.9,
-          "competitor_f1": 0.85,
           "meets_target": true,
           "beats_competitor": false
         }
@@ -163,7 +103,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.373,
+          "elapsed_seconds": 0.395,
           "target_f1": 0.85,
           "competitor_f1": 0.82,
           "meets_target": true,
@@ -183,7 +123,7 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.389,
+          "elapsed_seconds": 0.38,
           "target_f1": 0.95,
           "competitor_f1": 0.9,
           "meets_target": false,
@@ -203,29 +143,9 @@
             "fn": 1,
             "tn": 0
           },
-          "elapsed_seconds": 0.373,
+          "elapsed_seconds": 0.366,
           "target_f1": 0.98,
           "competitor_f1": 0.95,
-          "meets_target": false,
-          "beats_competitor": false
-        },
-        "smell": {
-          "description": "Code smells",
-          "expected_count": 10,
-          "found_count": 19,
-          "metrics": {
-            "precision": 0.625,
-            "recall": 1.0,
-            "f1": 0.7692,
-            "fpr": 1.0,
-            "tp": 10,
-            "fp": 6,
-            "fn": 0,
-            "tn": 0
-          },
-          "elapsed_seconds": 0.382,
-          "target_f1": 0.8,
-          "competitor_f1": 0.78,
           "meets_target": false,
           "beats_competitor": false
         },
@@ -243,63 +163,23 @@
             "fn": 0,
             "tn": 0
           },
-          "elapsed_seconds": 0.376,
+          "elapsed_seconds": 0.407,
           "target_f1": 0.85,
           "competitor_f1": 0.75,
           "meets_target": false,
           "beats_competitor": false
-        },
-        "perf-hint": {
-          "description": "Performance hints",
-          "expected_count": 3,
-          "found_count": 6,
-          "metrics": {
-            "precision": 0.75,
-            "recall": 1.0,
-            "f1": 0.8571,
-            "fpr": 1.0,
-            "tp": 3,
-            "fp": 1,
-            "fn": 0,
-            "tn": 0
-          },
-          "elapsed_seconds": 0.367,
-          "target_f1": 0.75,
-          "competitor_f1": 0.7,
-          "meets_target": true,
-          "beats_competitor": true
-        },
-        "circular": {
-          "description": "Circular deps",
-          "expected_count": 2,
-          "found_count": 2,
-          "metrics": {
-            "precision": 1.0,
-            "recall": 1.0,
-            "f1": 1.0,
-            "fpr": 0.0,
-            "tp": 2,
-            "fp": 0,
-            "fn": 0,
-            "tn": 0
-          },
-          "elapsed_seconds": 0.359,
-          "target_f1": 0.9,
-          "competitor_f1": 0.85,
-          "meets_target": true,
-          "beats_competitor": true
         }
       }
     }
   },
   "summary": {
-    "avg_f1": 0.872,
-    "avg_precision": 0.8127,
-    "avg_recall": 0.9714,
-    "avg_fpr_clean": 0.0496,
-    "meets_target_pct": 57.1,
-    "beats_competitor_pct": 28.6,
-    "total_commands_run": 14
+    "avg_f1": 0.8694,
+    "avg_precision": 0.8285,
+    "avg_recall": 0.95,
+    "avg_fpr_clean": 0.0,
+    "meets_target_pct": 62.5,
+    "beats_competitor_pct": 25.0,
+    "total_commands_run": 8
   },
   "token_efficiency": {
     "dead-code": {

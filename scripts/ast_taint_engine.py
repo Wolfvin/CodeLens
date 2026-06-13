@@ -126,17 +126,63 @@ class TaintState:
 
     Maps variable names to their taint information, including
     which sources tainted them and whether they've been sanitized.
+
+    Improvement 2 — Scope-hierarchical taint tracking:
+    Each TaintState has a `scope` (e.g., 'module', 'function:foo') and an
+    optional `_parent` pointing to the enclosing scope's TaintState.  Variable
+    lookups walk the parent chain so that variables from outer scopes are
+    visible in inner scopes, but taint added in an inner scope does not leak
+    upward.  This prevents cross-scope contamination where variable `x` in
+    function A and variable `x` in function B interfere.
     """
     tainted: Dict[str, TaintInfo] = field(default_factory=dict)
+    # ── Scope hierarchy (Improvement 2) ──
+    scope: str = "module"                     # e.g. "module", "function:foo"
+    _parent: Optional['TaintState'] = field(default=None, repr=False)
+
+    # ── Scope-aware helpers ────────────────────────────────────
+
+    def _lookup(self, var_name: str) -> Optional[TaintInfo]:
+        """Walk the scope chain to find taint info for *var_name*.
+
+        Current scope is checked first; if not found the parent scope
+        is consulted, and so on.  This implements genuine lexical scoping
+        so that closures and nested functions can see outer taint without
+        cross-scope contamination.
+        """
+        info = self.tainted.get(var_name)
+        if info is not None:
+            return info
+        if self._parent is not None:
+            return self._parent._lookup(var_name)
+        return None
+
+    def child_scope(self, scope_name: str) -> 'TaintState':
+        """Create a child TaintState that inherits from this one.
+
+        The child starts with an empty `tainted` dict so that writes go
+        only to the child scope.  Reads fall through to the parent when
+        the variable is not found locally — exactly like lexical scoping.
+        """
+        child = TaintState(scope=scope_name, _parent=self)
+        return child
+
+    # ── Core operations (backward-compatible) ──────────────────
 
     def copy(self) -> 'TaintState':
-        new = TaintState()
+        new = TaintState(scope=self.scope, _parent=self._parent)
         for var, info in self.tainted.items():
             new.tainted[var] = info.copy()
         return new
 
     def merge(self, other: 'TaintState') -> 'TaintState':
-        """Join two states (union of taints) for CFG join points."""
+        """Join two states (union of taints) for CFG join points.
+
+        Only variables in the *same* scope level are merged.  Parent
+        scopes are shared (not deep-merged) which prevents a variable
+        that exists only in an outer scope from being accidentally
+        polluted at the join.
+        """
         result = self.copy()
         for var, info in other.tainted.items():
             if var in result.tainted:
@@ -154,16 +200,25 @@ class TaintState:
         return result
 
     def is_tainted(self, var_name: str) -> bool:
-        """Check if a variable is tainted (and not fully sanitized)."""
-        info = self.tainted.get(var_name)
+        """Check if a variable is tainted (and not fully sanitized).
+
+        Scope-aware: walks the parent chain if the variable is not
+        defined in the current scope.
+        """
+        info = self._lookup(var_name)
         return info is not None and not info.is_sanitized
 
     def get_taint_info(self, var_name: str) -> Optional[TaintInfo]:
-        return self.tainted.get(var_name)
+        """Scope-aware lookup — checks current scope, then parent chain."""
+        return self._lookup(var_name)
 
     def add_taint(self, var_name: str, source: str, path_step: str,
                   sanitized_by: Set[str] = None):
-        """Mark a variable as tainted from a source."""
+        """Mark a variable as tainted from a source.
+
+        Writes to the *current* scope only, never to a parent scope.
+        This prevents inner scopes from polluting outer scopes.
+        """
         existing = self.tainted.get(var_name)
         if existing:
             existing.sources.add(source)
@@ -182,15 +237,32 @@ class TaintState:
             )
 
     def remove_taint(self, var_name: str, sanitizer: str):
-        """Mark a variable as sanitized."""
+        """Mark a variable as sanitized.
+
+        If the variable exists in the current scope, sanitize it there.
+        Otherwise, look it up in the parent chain and re-add a sanitized
+        copy in the current scope (shadowing the parent entry).
+        """
         info = self.tainted.get(var_name)
         if info:
             info.sanitized_by.add(sanitizer)
             info.is_sanitized = True
+        else:
+            # Variable inherited from parent scope — shadow it locally
+            parent_info = self._lookup(var_name)
+            if parent_info:
+                local_copy = parent_info.copy()
+                local_copy.sanitized_by.add(sanitizer)
+                local_copy.is_sanitized = True
+                self.tainted[var_name] = local_copy
 
     def propagate(self, src_var: str, dst_var: str):
-        """Propagate taint from src_var to dst_var (assignment)."""
-        src_info = self.tainted.get(src_var)
+        """Propagate taint from src_var to dst_var (assignment).
+
+        Source is resolved via scope chain; destination is written to
+        the current scope only.
+        """
+        src_info = self._lookup(src_var)
         if src_info:
             new_info = src_info.copy()
             new_info.var_name = dst_var
@@ -2014,10 +2086,16 @@ class ASTTaintAnalyzer:
         if not blocks:
             return findings
 
-        # Initialize taint states
+        # Initialize taint states — scope-aware (Improvement 2)
+        # Module-level blocks get a module-scoped TaintState; function/class
+        # blocks get a child scope whose parent is the module state.
+        module_state = TaintState(scope='module')
         for block in blocks:
-            block.taint_in = TaintState()
-            block.taint_out = TaintState()
+            if block.scope == 'module':
+                block.taint_in = module_state.child_scope('module')
+            else:
+                block.taint_in = module_state.child_scope(block.scope)
+            block.taint_out = block.taint_in.copy()
 
         # For function blocks, initialize with parameters as taint sources
         # This is standard practice — function parameters represent external input
@@ -2098,6 +2176,37 @@ class ASTTaintAnalyzer:
                     stmt, state, file_path, language, rules
                 )
                 findings.extend(stmt_findings)
+
+            # ── Improvement 3: Path-sensitive branch condition refinement ──
+            #
+            # If this block is a branch point with a stored condition, we refine
+            # the taint state that flows to each successor.  For example:
+            #
+            #   if sanitized:   ← branch_condition = "sanitized"
+            #       # then-branch: sanitized is truthy → it IS sanitized
+            #   else:
+            #       # else-branch: sanitized is falsy → mark as NOT sanitized
+            #
+            # Similarly for `if not var:` the semantics are inverted.
+            #
+            # The refined state is stored per-successor so that when a
+            # successor block merges its predecessors, it sees the refined
+            # (not the generic) state.
+            if block.is_branch and block.branch_condition:
+                self._apply_branch_refinement(
+                    block, state, blocks, visited, worklist
+                )
+                # The standard taint_out is the unrefined state (for any
+                # non-branch successor or as fallback).  Refined states for
+                # individual successors are applied inside the helper above.
+                old_out = block.taint_out
+                block.taint_out = state
+                if not self._states_equal(old_out, state):
+                    for succ_id in block.successors:
+                        if succ_id not in visited or succ_id == block_id:
+                            worklist.append(succ_id)
+                visited.add(block_id)
+                continue
 
             # Check if taint_out changed
             old_out = block.taint_out
@@ -2342,6 +2451,17 @@ class ASTTaintAnalyzer:
         2. The taint propagates to the parameter inside the function
         3. If the function's return value flows to a sink, we detect it
 
+        Improvement 1 — Return value propagation:
+        After analysing a function body we inspect every `return` statement.
+        If the returned expression carries tainted data, we mark the
+        variable that receives the call's return value as tainted at the
+        call site.  This closes the inter-procedural loop:
+
+            def get_query(user_id):      # user_id is tainted
+                return f"SELECT … {user_id}"   # return is tainted
+
+            q = get_query(uid)           # q is NOW tainted (return propagation)
+
         This is done by analyzing each function body separately with
         the taint state from call sites.
         """
@@ -2367,19 +2487,34 @@ class ASTTaintAnalyzer:
 
         root = tree.root_node
 
-        # Find all function calls and their arguments
+        # Find all function calls and their arguments + return-variable
         call_sites = self._find_call_sites(root)
+
+        # ── Improvement 1: compute return-taint for each function ──
+        # After analysing a function body we extract the taint that
+        # reaches any `return` statement.  This is later propagated
+        # back to the call-site LHS.
+        return_taint_cache: Dict[str, TaintState] = {}
+
+        # Build a map from line number → block taint_out so we can look up
+        # which variables are tainted at each call site (from Phase 3 results)
+        block_taint_at_line: Dict[int, TaintState] = {}
+        if self._cfg_builder:
+            for block in self._cfg_builder.blocks:
+                if block.taint_out:
+                    for line in range(block.line_start, block.line_end + 1):
+                        block_taint_at_line[line] = block.taint_out
 
         # For each function, analyze with taint from call sites
         for func_name, func_def in self._functions.items():
-            # Skip if no one calls this function with tainted args
+            # Skip if no one calls this function
             relevant_calls = [cs for cs in call_sites if cs['func_name'] == func_name]
             if not relevant_calls:
                 continue
 
             for call_site in relevant_calls:
                 # Create initial taint state based on call arguments
-                initial_state = TaintState()
+                initial_state = TaintState(scope=f'function:{func_name}')
                 param_taint_map = {}  # param_idx → taint source
 
                 args = call_site.get('args', [])
@@ -2388,28 +2523,77 @@ class ASTTaintAnalyzer:
                 for i, arg_name in enumerate(args):
                     if i < len(params):
                         param_name = params[i]
-                        # Check if arg is a known tainted variable
-                        # We need to look at the call site's taint state
-                        # For simplicity, check if arg matches source patterns
-                        matched = self._detector._match_source_pattern(arg_name)
-                        if matched:
-                            initial_state.add_taint(param_name, matched, param_name)
-                            param_taint_map[i] = matched
+                        # ── Improvement 1 (extended): use Phase 3 taint state ──
+                        # Instead of only checking source patterns, look up the
+                        # actual taint state from the CFG block that contains
+                        # this call site.  This correctly handles cases where
+                        # the argument is a local variable that was tainted by
+                        # a prior source detection in Phase 3.
+                        taint_info = None
+                        call_line = call_site.get('line', 0)
+                        taint_state = block_taint_at_line.get(call_line)
+                        if taint_state:
+                            taint_info = taint_state.get_taint_info(arg_name)
 
-                if not initial_state.tainted:
+                        if taint_info and not taint_info.is_sanitized:
+                            # The argument is tainted according to Phase 3
+                            source_name = list(taint_info.sources)[0] if taint_info.sources else arg_name
+                            initial_state.add_taint(param_name, source_name, param_name)
+                            param_taint_map[i] = source_name
+                        else:
+                            # Fallback: check if arg matches source patterns
+                            matched = self._detector._match_source_pattern(arg_name)
+                            if matched:
+                                initial_state.add_taint(param_name, matched, param_name)
+                                param_taint_map[i] = matched
+
+                # ── Improvement 1 (extended): also analyse functions that
+                # generate taint internally (e.g. read from request.args)
+                # even when no tainted argument is passed.  The function may
+                # still return tainted data that flows to the call-site LHS.
+                analyze_anyway = not initial_state.tainted and relevant_calls
+
+                if not initial_state.tainted and not analyze_anyway:
                     continue
 
                 # Analyze function body with this initial taint state
                 func_blocks = self._cfg_builder.blocks if self._cfg_builder else []
-                func_findings = self._analyze_function_body(
+                func_findings, final_state = self._analyze_function_body(
                     func_def, initial_state, file_path, language, rules
                 )
                 findings.extend(func_findings)
 
+                # ── Improvement 1: extract return taint ──
+                # Scan the function body for return statements and check
+                # whether the returned expression is tainted in final_state.
+                return_taint = self._extract_return_taint(
+                    func_def, final_state, language
+                )
+                if return_taint and return_taint.tainted:
+                    # Cache so we can propagate at call sites
+                    cache_key = func_name
+                    if cache_key in return_taint_cache:
+                        return_taint_cache[cache_key] = return_taint_cache[cache_key].merge(return_taint)
+                    else:
+                        return_taint_cache[cache_key] = return_taint
+
+        # ── Improvement 1: propagate return taint to call-site LHS ──
+        # For each call site where the LHS variable exists, mark it as
+        # tainted if the called function's return value carries taint.
+        if return_taint_cache:
+            self._propagate_return_taint(
+                call_sites, return_taint_cache, file_path, language, rules, findings
+            )
+
         return findings
 
     def _find_call_sites(self, root_node) -> List[Dict]:
-        """Find all function call sites in the AST."""
+        """Find all function call sites in the AST.
+
+        Improvement 1: also records the *lhs_var* — the variable that
+        receives the return value — so that return-taint can be
+        propagated back to the call site.
+        """
         call_sites = []
 
         def visit(node):
@@ -2427,10 +2611,17 @@ class ASTTaintAnalyzer:
                                     arg_vars.append(name)
 
                 if func_name and func_name in self._functions:
+                    # ── Improvement 1: determine the LHS variable ──
+                    # Walk up to find the enclosing assignment so we know
+                    # which variable receives the return value.
+                    lhs_var = self._find_call_lhs(node)
+
                     call_sites.append({
                         'func_name': func_name,
                         'args': arg_vars,
                         'line': node.start_point.row + 1,
+                        'lhs_var': lhs_var,  # may be None
+                        'node': node,        # keep reference for later
                     })
 
             for child in node.children:
@@ -2440,16 +2631,67 @@ class ASTTaintAnalyzer:
         visit(root_node)
         return call_sites
 
+    def _find_call_lhs(self, call_node) -> Optional[str]:
+        """Find the variable that receives the return value of a call.
+
+        Improvement 1 helper.  Walks the AST upward from the call_node
+        to find the enclosing assignment and returns the LHS variable name.
+
+        Handles:
+            result = func(args)        → "result"
+            result = obj.func(args)    → "result"
+            var x = func(args)  (JS)   → "x"
+        """
+        if not self._detector:
+            return None
+
+        parent = call_node.parent
+        if parent is None:
+            return None
+
+        # Python: assignment → right = call_node
+        if parent.type == 'assignment':
+            left = parent.child_by_field_name('left')
+            if left:
+                name = self._detector._resolve_expression_name(left)
+                if name:
+                    return name
+
+        # JS: variable_declarator → value = call_node
+        if parent.type == 'variable_declarator':
+            name_node = parent.child_by_field_name('name')
+            if name_node and name_node.type == 'identifier':
+                return self._detector._node_text(name_node)
+
+        # Check one more level up (call might be wrapped in expression_statement)
+        grandparent = parent.parent
+        if grandparent is None:
+            return None
+
+        if grandparent.type == 'assignment':
+            left = grandparent.child_by_field_name('left')
+            if left:
+                name = self._detector._resolve_expression_name(left)
+                if name:
+                    return name
+
+        return None
+
     def _analyze_function_body(self, func_def: FunctionDef,
                                 initial_state: TaintState,
                                 file_path: str, language: str,
-                                rules: List[Dict]) -> List[TaintFinding]:
-        """Analyze a function body with a given initial taint state."""
+                                rules: List[Dict]) -> Tuple[List[TaintFinding], TaintState]:
+        """Analyze a function body with a given initial taint state.
+
+        Improvement 1: returns both findings *and* the final taint state
+        so that callers can extract return-value taint for propagation
+        back to call sites.
+        """
         findings = []
         state = initial_state.copy()
 
         if not func_def.body_node:
-            return findings
+            return findings, state
 
         # Walk through the function body's statements
         for stmt in func_def.body_node.children:
@@ -2461,7 +2703,274 @@ class ASTTaintAnalyzer:
             )
             findings.extend(stmt_findings)
 
-        return findings
+        return findings, state
+
+    # ── Improvement 1 helpers: return-value taint extraction ────────
+
+    def _extract_return_taint(self, func_def: FunctionDef,
+                               final_state: TaintState,
+                               language: str) -> Optional[TaintState]:
+        """Inspect `return` statements in a function body for tainted data.
+
+        Walks the function body AST looking for `return` nodes.  For each
+        return, resolves the returned expression to a variable name and
+        checks if that variable is tainted in *final_state*.
+
+        Returns a TaintState containing the taint info of any tainted
+        return expressions, or None if no return carries taint.
+        """
+        if not func_def.body_node or not self._detector:
+            return None
+
+        return_state = TaintState(scope=f'return:{func_def.name}')
+
+        def visit(node):
+            """Recursively find return statements."""
+            found = False
+            if language == 'python' and node.type == 'return_statement':
+                found = True
+            elif language in ('javascript', 'typescript', 'tsx') and node.type == 'return_statement':
+                found = True
+
+            if found:
+                # The return statement may have a single child expression
+                for child in node.children:
+                    if not child.is_named:
+                        continue
+                    # Resolve the returned expression to a variable name
+                    ret_var = self._detector._resolve_expression_name(child)
+                    if ret_var:
+                        taint_info = final_state.get_taint_info(ret_var)
+                        if taint_info and not taint_info.is_sanitized:
+                            # This return carries taint — record it
+                            return_state.add_taint(
+                                f'<return:{func_def.name}>',
+                                list(taint_info.sources)[0] if taint_info.sources else 'unknown',
+                                f'{func_def.name}()',
+                            )
+                            # Also store a mapping from the return taint to
+                            # the actual taint info so we can propagate it
+                            return_state.tainted[f'<return:{func_def.name}>'] = taint_info.copy()
+                            return_state.tainted[f'<return:{func_def.name}>'].var_name = f'<return:{func_def.name}>'
+
+                    # Also check for f-strings / binary ops in return
+                    if child.type in ('string', 'template_string', 'binary_operator',
+                                      'binary_expression'):
+                        # Check interpolated/operand variables
+                        tainted_in_expr = self._find_tainted_subexpr(child, final_state)
+                        for var_name, tinfo in tainted_in_expr.items():
+                            if not tinfo.is_sanitized:
+                                return_state.add_taint(
+                                    f'<return:{func_def.name}>',
+                                    list(tinfo.sources)[0] if tinfo.sources else 'unknown',
+                                    f'{func_def.name}()',
+                                )
+                                return_state.tainted[f'<return:{func_def.name}>'] = tinfo.copy()
+                                return_state.tainted[f'<return:{func_def.name}>'].var_name = f'<return:{func_def.name}>'
+                    break  # only check first named child of return
+
+            # Recurse into non-function children (avoid descending into
+            # nested function definitions)
+            if node.type not in ('function_definition', 'function_declaration',
+                                  'arrow_function', 'class_definition',
+                                  'class_declaration'):
+                for child in node.children:
+                    if child.is_named:
+                        visit(child)
+
+        for stmt in func_def.body_node.children:
+            if stmt.is_named:
+                visit(stmt)
+
+        if return_state.tainted:
+            return return_state
+        return None
+
+    def _find_tainted_subexpr(self, node, state: TaintState) -> Dict[str, TaintInfo]:
+        """Find tainted variables referenced inside an expression.
+
+        Helper for _extract_return_taint — checks f-string
+        interpolations, binary operands, and identifier sub-expressions.
+        """
+        result = {}
+
+        def visit_inner(n):
+            if n.type == 'identifier':
+                name = self._detector._node_text(n) if self._detector else ""
+                if name:
+                    info = state.get_taint_info(name)
+                    if info:
+                        result[name] = info
+            elif n.type == 'interpolation':
+                for sub in n.children:
+                    if sub.is_named:
+                        visit_inner(sub)
+            elif n.type == 'template_substitution':
+                for sub in n.children:
+                    if sub.is_named:
+                        visit_inner(sub)
+            else:
+                for child in n.children:
+                    if child.is_named:
+                        visit_inner(child)
+
+        visit_inner(node)
+        return result
+
+    def _propagate_return_taint(self, call_sites: List[Dict],
+                                 return_taint_cache: Dict[str, TaintState],
+                                 file_path: str, language: str,
+                                 rules: List[Dict],
+                                 findings: List[TaintFinding]):
+        """Propagate taint from function return values to call-site LHS.
+
+        Improvement 1 — for each call site where the called function has
+        tainted return values, mark the LHS variable as tainted.  Then
+        scan subsequent blocks for sinks that use the LHS variable.
+
+        We do NOT re-run the full CFG propagation (which would re-initialize
+        taint states).  Instead, we do a targeted forward scan from the call
+        site's block to find sinks reachable with the new taint.
+        """
+        if not self._cfg_builder or not self._detector:
+            return
+
+        blocks = self._cfg_builder.blocks
+        if not blocks:
+            return
+
+        for cs in call_sites:
+            func_name = cs.get('func_name', '')
+            lhs_var = cs.get('lhs_var')
+            if not lhs_var or func_name not in return_taint_cache:
+                continue
+
+            ret_taint = return_taint_cache[func_name]
+            return_info = ret_taint.get_taint_info(f'<return:{func_name}>')
+            if not return_info:
+                continue
+
+            # Find the block that contains this call site
+            call_line = cs.get('line', 0)
+            start_block = None
+            for block in blocks:
+                if block.line_start <= call_line <= block.line_end:
+                    start_block = block
+                    break
+
+            if start_block is None:
+                continue
+
+            # Create a taint state with the LHS variable tainted
+            source_name = list(return_info.sources)[0] if return_info.sources else f'<return:{func_name}>'
+            taint_path = list(return_info.path) if return_info.path else [source_name, lhs_var]
+
+            # Scan from the call site block forward through successors,
+            # looking for sinks that use the LHS variable.
+            self._scan_for_sinks_with_taint(
+                start_block, blocks, lhs_var, source_name, taint_path,
+                return_info, file_path, language, rules, findings
+            )
+
+    def _scan_for_sinks_with_taint(self, start_block: 'BasicBlock',
+                                     blocks: List['BasicBlock'],
+                                     taint_var: str, source_name: str,
+                                     taint_path: List[str],
+                                     return_info: 'TaintInfo',
+                                     file_path: str, language: str,
+                                     rules: List[Dict],
+                                     findings: List[TaintFinding]):
+        """Targeted forward scan from a block to find sinks for a newly tainted variable.
+
+        This avoids re-running the full CFG propagation.  We walk through the
+        block's statements and successor blocks looking for sinks that reference
+        *taint_var*.
+        """
+        visited_blocks = set()
+        # Start scanning from the call-line onward in start_block
+        worklist = deque([start_block.id])
+
+        # Build a TaintInfo for the new taint
+        new_taint = TaintInfo(
+            var_name=taint_var,
+            sources=set(return_info.sources),
+            path=taint_path + [taint_var] if taint_var not in taint_path else taint_path,
+            sanitized_by=set(return_info.sanitized_by),
+            is_sanitized=return_info.is_sanitized,
+        )
+
+        while worklist:
+            block_id = worklist.popleft()
+            if block_id in visited_blocks:
+                continue
+            visited_blocks.add(block_id)
+
+            if block_id >= len(blocks):
+                continue
+            block = blocks[block_id]
+
+            # Process statements in this block looking for sinks
+            for stmt in block.statements:
+                sink_result = self._detector.detect_sink(stmt)
+                if sink_result:
+                    sink_name, line, arg_vars = sink_result
+                    if taint_var in arg_vars and not new_taint.is_sanitized:
+                        # Tainted return value reaches sink!
+                        is_parameterized = self._is_parameterized_sink(stmt, sink_name)
+                        if is_parameterized:
+                            continue
+
+                        for rule in rules:
+                            rule_sources = rule.get('sources', [])
+                            rule_sinks = rule.get('sinks', [])
+                            if self._matches_rule(new_taint.sources, sink_name,
+                                                  rule_sources, rule_sinks):
+                                rendered_path = self._render_taint_path(new_taint, sink_name)
+                                confidence = self._compute_confidence(new_taint, sink_name, TaintState())
+                                findings.append(TaintFinding(
+                                    rule_id=rule.get('id', 'unknown'),
+                                    rule_name=rule.get('name', 'Unknown'),
+                                    severity=rule.get('severity', 'medium'),
+                                    cwe=rule.get('cwe', ''),
+                                    message=rule.get('message', ''),
+                                    file=file_path,
+                                    line=line,
+                                    source=list(new_taint.sources)[0] if new_taint.sources else 'unknown',
+                                    sink=sink_name,
+                                    tainted_variable=taint_var,
+                                    sanitized=False,
+                                    sanitizers_found=[],
+                                    confidence=confidence,
+                                    taint_path=rendered_path,
+                                ))
+
+                # Also check if the tainted variable is reassigned
+                assign_result = self._detector.detect_assignment(stmt)
+                if assign_result:
+                    dst_var, src_var = assign_result
+                    if src_var == taint_var:
+                        # Taint propagates to dst_var — continue scanning with dst_var too
+                        new_taint = TaintInfo(
+                            var_name=dst_var,
+                            sources=set(new_taint.sources),
+                            path=list(new_taint.path) + [dst_var],
+                            sanitized_by=set(new_taint.sanitized_by),
+                            is_sanitized=new_taint.is_sanitized,
+                        )
+                        taint_var = dst_var
+
+                # Check for sanitizer
+                sanitizer_result = self._detector.detect_sanitizer(stmt)
+                if sanitizer_result:
+                    san_name, target_var = sanitizer_result
+                    if target_var == taint_var:
+                        new_taint.sanitized_by.add(san_name)
+                        new_taint.is_sanitized = True
+
+            # Add successors to worklist
+            for succ_id in block.successors:
+                if succ_id not in visited_blocks:
+                    worklist.append(succ_id)
 
     # ─── Helper Methods ───────────────────────────────────────
 
@@ -2531,7 +3040,11 @@ class ASTTaintAnalyzer:
         # Check source match — parameter sources match any rule source
         # since function parameters can receive data from any source
         has_param_source = any(s.startswith('<param:') for s in taint_sources)
-        if has_param_source:
+        # ── Improvement 1: return-value sources also match any rule source ──
+        # because a function's return value can carry taint from any source
+        # that was present inside the function body.
+        has_return_source = any(s.startswith('<return:') for s in taint_sources)
+        if has_param_source or has_return_source:
             source_match = True
         else:
             for src in taint_sources:
@@ -2549,6 +3062,33 @@ class ASTTaintAnalyzer:
                     rule_last = rule_src.split('.')[-1]
                     if src_last == rule_last and src_last.isidentifier():
                         source_match = True
+                        break
+                    # ── Improvement 1 (extended): prefix match ──
+                    # request.args.get should match flask.request.args
+                    # because request.args is a shared sub-pattern.
+                    # Try progressive prefixes of both src and rule_src.
+                    src_parts = src.split('.')
+                    rule_parts = rule_src.split('.')
+                    # Check if any suffix of src_parts matches any prefix of rule_parts
+                    # e.g., ['request', 'args', 'get'] → ['request', 'args'] matches ['flask', 'request', 'args']
+                    for start in range(len(src_parts)):
+                        src_suffix = '.'.join(src_parts[start:])
+                        if src_suffix == rule_src or rule_src.endswith('.' + src_suffix):
+                            source_match = True
+                            break
+                        # Also check reverse
+                        if rule_src == src_suffix or src.endswith('.' + src_suffix):
+                            # Already handled above
+                            pass
+                    if source_match:
+                        break
+                    # Also check if rule_src suffix matches src prefix
+                    for start in range(len(rule_parts)):
+                        rule_suffix = '.'.join(rule_parts[start:])
+                        if src.startswith(rule_suffix + '.') or src == rule_suffix:
+                            source_match = True
+                            break
+                    if source_match:
                         break
                     # Regex match for YAML patterns
                     if any(c in rule_src for c in ('\\', '(?:', '[', '|', '(', '^', '$')):
@@ -2653,6 +3193,164 @@ class ASTTaintAnalyzer:
 
         # Very indirect
         return 0.50
+
+    # ── Improvement 3 helpers: path-sensitive branch refinement ──────
+
+    def _apply_branch_refinement(self, block: BasicBlock, state: TaintState,
+                                  blocks: List[BasicBlock], visited: set,
+                                  worklist: deque):
+        """Apply path-sensitive refinement when propagating through a branch.
+
+        When the branch condition references a variable whose taint status we
+        track, we create *refined* copies of the outgoing state for each
+        successor:
+
+        * **then-branch** (condition is truthy):
+          – If the condition variable is marked ``is_sanitized``, it stays
+            sanitized (the branch confirms the sanitiser ran).
+          – If the condition is ``not var`` and *var* is tainted, we keep
+            the taint (the branch tells us var is falsy but still tainted).
+
+        * **else-branch** (condition is falsy):
+          – If the condition variable is marked ``is_sanitized``, we mark
+            it as *not* sanitized on this path — the sanitiser did NOT run.
+          – If the condition is ``not var`` and *var* is tainted, on this
+            else-branch var IS truthy, which doesn't remove taint but is a
+            genuine path distinction.
+
+        Only simple conditions are handled (variable name, ``not var``,
+        comparisons).  Complex conditions fall back to the default
+        (lossy) merge.
+        """
+        cond = block.branch_condition
+        if not cond or not block.successors:
+            return
+
+        # Parse the condition to extract the variable being tested
+        # and whether the condition is negated.
+        cond_var, is_negated = self._parse_branch_condition(cond)
+        if not cond_var:
+            return  # complex condition — skip refinement
+
+        # Look up taint info for the condition variable in the current state
+        var_info = state.get_taint_info(cond_var)
+        if var_info is None:
+            return  # variable not tracked — nothing to refine
+
+        # We have at most 2 successors for a branch: then (index 0),
+        # else (index 1).
+        succ_count = len(block.successors)
+
+        for idx, succ_id in enumerate(block.successors):
+            if succ_id < 0 or succ_id >= len(blocks):
+                continue
+            succ = blocks[succ_id]
+
+            # Create a refined copy of the state for this successor
+            refined = state.copy()
+
+            if idx == 0:
+                # ── then-branch (condition is True) ──
+                if is_negated:
+                    # `if not var:` — on the then-branch var is falsy.
+                    # If var was sanitized, this branch means it wasn't
+                    # actually validated (e.g. sanitize returned None/empty).
+                    if var_info.is_sanitized:
+                        refined.remove_taint(cond_var, '<branch:then:not>')
+                        # Un-sanitize: the branch tells us the sanitizer failed
+                        if cond_var in refined.tainted:
+                            refined.tainted[cond_var].is_sanitized = False
+                            refined.tainted[cond_var].sanitized_by.discard('<branch:then:not>')
+                else:
+                    # `if var:` — on the then-branch var is truthy.
+                    # If var was sanitized, confirm it stays sanitized.
+                    # (No change needed — it's already sanitized.)
+                    pass
+            elif idx == 1:
+                # ── else-branch (condition is False) ──
+                if is_negated:
+                    # `if not var:` — on the else-branch var is truthy.
+                    # (No change needed for taint — truthy doesn't remove taint.)
+                    pass
+                else:
+                    # `if var:` — on the else-branch var is falsy.
+                    # If var was sanitized, this path means the sanitizer
+                    # returned a falsy value (possibly failed), so we mark
+                    # it as NOT sanitized on this path.
+                    if var_info.is_sanitized:
+                        # Shadow the parent info with an unsanitized copy
+                        if cond_var in refined.tainted:
+                            refined.tainted[cond_var].is_sanitized = False
+                            # Keep sanitized_by for traceability but mark as
+                            # "branch-override" — the sanitizer may not have
+                            # run on this execution path.
+                            refined.tainted[cond_var].sanitized_by.add(
+                                '<branch:else:unsanitized>'
+                            )
+
+            # Store the refined state as the successor's taint_in
+            # (merged with other predecessors later in the main loop)
+            if succ.taint_in is None:
+                succ.taint_in = refined
+            else:
+                succ.taint_in = succ.taint_in.merge(refined)
+
+            # Add successor to worklist so refinement propagates
+            if succ_id not in visited:
+                worklist.append(succ_id)
+
+    def _parse_branch_condition(self, cond: str) -> Tuple[Optional[str], bool]:
+        """Parse a simple branch condition string.
+
+        Returns:
+            (variable_name, is_negated) or (None, False) for complex conditions.
+
+        Handles:
+            - ``var``             → ('var', False)
+            - ``not var``         → ('var', True)
+            - ``var != None``     → ('var', True)   (negated comparison)
+            - ``var is not None`` → ('var', True)
+            - ``var == None``     → ('var', False)  (truthy check inverted)
+            - ``var is None``     → ('var', False)
+        """
+        cond = cond.strip()
+
+        # `not var`
+        m = re.match(r'^not\s+(\w+)$', cond)
+        if m:
+            return m.group(1), True
+
+        # `var is not None`
+        m = re.match(r'^(\w+)\s+is\s+not\s+None$', cond)
+        if m:
+            return m.group(1), False  # "is not None" ≈ truthy check
+
+        # `var != None` / `var != None`
+        m = re.match(r'^(\w+)\s*!=\s*None$', cond)
+        if m:
+            return m.group(1), False  # != None ≈ truthy check
+
+        # `var is None`
+        m = re.match(r'^(\w+)\s+is\s+None$', cond)
+        if m:
+            return m.group(1), True  # is None ≈ falsy ≈ negated
+
+        # `var == None`
+        m = re.match(r'^(\w+)\s*==\s*None$', cond)
+        if m:
+            return m.group(1), True  # == None ≈ falsy ≈ negated
+
+        # Simple variable name
+        m = re.match(r'^(\w+)$', cond)
+        if m:
+            return m.group(1), False
+
+        # Comparison with a literal: var != "", var != 0, etc.
+        m = re.match(r'^(\w+)\s*!=\s*["\']?["\']?\s*$', cond)
+        if m:
+            return m.group(1), False
+
+        return None, False  # complex condition — no refinement
 
     def _states_equal(self, a: TaintState, b: TaintState) -> bool:
         """Check if two taint states are equal (for worklist convergence)."""
