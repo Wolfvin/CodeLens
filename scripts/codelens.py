@@ -842,6 +842,8 @@ def main():
     global_max_tokens = None
     global_lite = False
     global_deep = False
+    global_disable_suppression = False
+    global_ignore_pattern = None
 
     i = 1
     while i < len(sys.argv):
@@ -878,9 +880,21 @@ def main():
             global_lite = True
         elif arg == '--deep':
             global_deep = True
+        elif arg == '--disable-suppression':
+            global_disable_suppression = True
+        elif arg == '--codelens-ignore-pattern' and i + 1 < len(sys.argv):
+            global_ignore_pattern = sys.argv[i + 1]
+        elif arg.startswith('--codelens-ignore-pattern='):
+            global_ignore_pattern = arg.split('=', 1)[1]
         i += 1
 
     args = parser.parse_args()
+
+    # Apply global flags to args
+    if getattr(args, 'disable_suppression', None) is None:
+        args.disable_suppression = globals().get('global_disable_suppression', False)
+    if getattr(args, 'codelens_ignore_pattern', None) is None:
+        args.codelens_ignore_pattern = globals().get('global_ignore_pattern', None)
 
     # Resolve format: subparser --format overrides global --format
     # If neither is set, use the parser's default (which may be "ai" if CODELENS_AI_MODE=1)
@@ -1125,6 +1139,62 @@ def main():
         format_command = args.command
         if args.command == "ask" and isinstance(result, dict):
             format_command = result.get("query_interpretation", {}).get("interpreted_as", "ask")
+
+        # ─── Apply inline suppressions ──
+        if not getattr(args, 'disable_suppression', False) and isinstance(result, dict):
+            try:
+                from suppression import apply_suppressions, update_stats_with_suppressions, DEFAULT_KEYWORD_PATTERN
+
+                keyword_pattern = getattr(args, 'codelens_ignore_pattern', None) or DEFAULT_KEYWORD_PATTERN
+
+                # Collect source files from the result
+                source_files = {}
+                finding_keys = ("findings", "leaks", "hints", "issues", "violations", "matches", "chains")
+                for key in finding_keys:
+                    val = result.get(key)
+                    if isinstance(val, list):
+                        for f in val:
+                            if isinstance(f, dict):
+                                fp = f.get("file") or f.get("defined_in") or ""
+                                if fp and fp not in source_files:
+                                    try:
+                                        with open(fp, 'r', encoding='utf-8', errors='replace') as fh:
+                                            source_files[fp] = fh.read()
+                                    except (IOError, OSError):
+                                        pass
+                    elif isinstance(val, dict):
+                        for sub_val in val.values():
+                            if isinstance(sub_val, list):
+                                for f in sub_val:
+                                    if isinstance(f, dict):
+                                        fp = f.get("file") or f.get("defined_in") or ""
+                                        if fp and fp not in source_files:
+                                            try:
+                                                with open(fp, 'r', encoding='utf-8', errors='replace') as fh:
+                                                    source_files[fp] = fh.read()
+                                            except (IOError, OSError):
+                                                pass
+
+                if source_files:
+                    # Collect all findings from result
+                    all_findings = []
+                    for key in finding_keys:
+                        val = result.get(key)
+                        if isinstance(val, list):
+                            all_findings.extend(val)
+                        elif isinstance(val, dict):
+                            for sub_val in val.values():
+                                if isinstance(sub_val, list):
+                                    all_findings.extend(sub_val)
+
+                    if all_findings:
+                        apply_suppressions(all_findings, source_files, keyword_pattern=keyword_pattern)
+                        update_stats_with_suppressions(result)
+
+            except ImportError:
+                pass  # suppression module not available
+            except Exception as e:
+                logger.warning(f"Suppression processing failed: {e}", exc_info=True)
 
         # ─── Format and print output ──
         print(format_output(result, args.format, format_command, workspace))

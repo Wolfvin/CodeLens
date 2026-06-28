@@ -313,6 +313,30 @@ def _build_results(command: str, findings: List[Dict], workspace: str) -> List[D
         if finding.get("category"):
             result["properties"]["category"] = finding["category"]
 
+        # ─── Add suppressions field per SARIF spec ──────────────────────
+        # https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html#_Toc34317632
+        if finding.get("suppressed"):
+            suppressions = []
+            reason = finding.get("suppressed_reason", "")
+            suppressed_rules = finding.get("suppressed_rules", [])
+
+            if suppressed_rules:
+                # Specific rules suppressed
+                for rid in suppressed_rules:
+                    suppressions.append({
+                        "kind": "inSource",
+                        "justification": reason or f"Suppressed via inline annotation for rule: {rid}",
+                    })
+            else:
+                # All rules suppressed on this line
+                suppressions.append({
+                    "kind": "inSource",
+                    "justification": reason or "Suppressed via inline annotation (all rules)",
+                })
+
+            result["suppressions"] = suppressions
+            result["kind"] = "informational"
+
         # Add related locations for taint analysis
         if finding.get("taint_path") and finding.get("source"):
             source_loc = {
