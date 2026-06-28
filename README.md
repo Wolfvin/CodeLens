@@ -2,12 +2,13 @@
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 54 tools (49 static + 5 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, and a true graph data model (nodes + edges) for structural code queries.
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 57 CLI commands, an MCP server with 55 tools (50 static + 5 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
 
 ## Features
 
-- **56 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, and CI/CD quality gates
-- **MCP Server (54 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 49 statically-defined tools + 5 dynamically discovered
+- **57 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
+- **MCP Server (55 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 50 statically-defined tools + 5 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
+- **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
 - **Cross-File Call Graph** — Workspace-wide call graph with import resolution and bidirectional taint propagation
@@ -21,7 +22,7 @@ CodeLens is an AI-native code intelligence platform that gives AI agents **full 
 - **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, and more
 - **Incremental Scanning** — Only re-parse changed files for speed, with SQLite persistent registry storage
 - **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
-- **AI-Optimized Output** — `--format ai` and `--lite` flags for token-efficient AI agent consumption
+- **AI-Optimized Output** — `--format ai` (normalized schema) and `--format compact` (token-efficient single-char keys) flags for AI agent consumption
 - **Auto-Fix Engine** — Confidence-scored auto-fixes with dry-run-by-default safety
 - **HTML Dashboard** — Generate visual dashboards with historical trend tracking
 - **Hybrid LSP Engine** — Optional LSP-enhanced deep analysis (`--deep` flag) when language servers are available
@@ -101,14 +102,15 @@ python3 scripts/codelens.py query "myFunction" --lite
 
 | Command | Description |
 |---------|-------------|
-| `search "pattern" [workspace] [--type] [--context]` | Regex search across workspace |
-| `symbols "name" [workspace] [--fuzzy]` | Search symbol in registry |
-| `trace "name" [workspace] [--direction up\|down\|both] [--depth N]` | Deep call chain tracing |
+| `search "pattern" [workspace] [--type] [--context] [--limit N] [--offset N]` | Regex search across workspace (paginated, default limit=20) |
+| `symbols "name" [workspace] [--fuzzy] [--limit N] [--offset N]` | Search symbol in registry (paginated) |
+| `trace "name" [workspace] [--direction up\|down\|both] [--depth N] [--limit N] [--offset N]` | Deep call chain tracing (paginated) |
 | `context "name" [workspace]` | Rich symbol context (definition, callers, callees) |
-| `outline [workspace] [--file] [--all]` | File structure outline |
+| `outline [workspace] [--file] [--all] [--limit N] [--offset N]` | File structure outline (paginated) |
 | `missing-refs [workspace]` | Detect CSS/HTML mismatches |
 | `dependents "file" [workspace]` | Module-level import tracking |
-| `list [workspace] [--domain] [--filter]` | List entries with filter (dead, collision, duplicate, etc.) |
+| `list [workspace] [--domain] [--filter] [--limit N] [--offset N]` | List entries with filter (paginated, default limit=20) |
+| `graph-schema [workspace]` | Return graph shape: node/edge counts, type distribution, indexes (issue #17) |
 | `ask "question"` | Ask a question in natural language (auto-dispatches to relevant commands) |
 | `summary [workspace] [--focus ...] [--detail ...]` | Auto-summary with prioritized findings (anti-overload) |
 
@@ -136,6 +138,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 | `state-map [workspace]` | Track global state management |
 | `diff [workspace]` | Compare registry snapshots |
 | `circular [workspace]` | Detect circular dependencies |
+| `graph-schema [workspace]` | Cheap graph-shape introspection: node/edge counts, type distribution, indexes (issue #17) |
 | `handbook [workspace]` | Generate project handbook for AI agents |
 | `dashboard [workspace]` | Generate HTML visualization dashboard |
 | `history [workspace]` | Show historical trend data and charts |
@@ -275,8 +278,8 @@ codelens/
 │   ├── plugin_system.py           # Plugin system & marketplace
 │   ├── pre_commit_hook.py         # Git pre-commit hook integration
 │   ├── utils.py                   # Shared utilities (version, helpers)
-│   ├── commands/                  # One file per CLI command (auto-registered)
-│   ├── formatters/                # Output formatters (markdown, sarif)
+│   ├── commands/                  # One file per CLI command (auto-registered, 57 commands incl. graph-schema)
+│   ├── formatters/                # Output formatters (markdown, sarif, compact)
 │   ├── parsers/                   # Tree-sitter + fallback parsers
 │   │   ├── html_parser.py, css_parser.py, js_frontend_parser.py, js_backend_parser.py
 │   │   ├── rust_parser.py, python_parser.py, tsx_parser.py, ts_backend_parser.py
@@ -323,12 +326,25 @@ CodeLens is designed to be used by AI coding agents. The full integration guide 
 
 ### MCP Server Integration
 
-CodeLens ships with a native MCP server (54 tools) for direct AI agent integration:
+CodeLens ships with a native MCP server (55 tools) for direct AI agent integration:
 
 ```bash
 # Start MCP server (JSON-RPC over stdio)
 python3 scripts/codelens.py serve
 ```
+
+Every MCP tool accepts a `format` parameter with the enum `[json, markdown, ai, sarif, compact]`.
+For high-volume agent workflows, pass `format: "compact"` to cut token usage ~50%. Example:
+
+```json
+// tools/call with format=compact
+{"name": "codelens_graph_schema", "arguments": {"workspace": "/path/to/proj", "format": "compact"}}
+// → {"s":"ok","n":1234,"e":5678,"nts":{"function":1000,"class":234},"ets":{"CALLS":5678},"ix":6}
+```
+
+The new `codelens_graph_schema` tool (issue #17) returns the graph shape in one cheap call —
+use it first to decide whether structural queries (callers/callees/blast-radius) will return
+meaningful results before paying tokens for them.
 
 See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
 

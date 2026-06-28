@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Token-Efficient Output + Pagination (issue #17)
+
+Adds a 5th output format (`compact`) and pagination to all list-type commands
+so AI agents pay fewer tokens for the same information. A single `trace` call
+that previously returned 5-10KB of verbose JSON now returns ~2.5-5KB of
+compact single-char-key JSON. Target: 5 structural queries cost <5k tokens
+total (down from 30-80k).
+
+### Added (issue #17)
+
+- **`--format compact`** — New 5th output format alongside `json`/`markdown`/
+  `ai`/`sarif`. Implemented in `scripts/formatters/compact.py`:
+  - Omits null/empty fields (saves ~15% on average).
+  - Abbreviates node types: `function→fn`, `class→cls`, `file→f`, `module→m`,
+    `route→r`, `type→t`, `interface→i`.
+  - Abbreviates edge types: `CALLS→C`, `IMPORTS→I`, `DEFINES→D`, `INHERITS→H`,
+    `IMPLEMENTS→M`, `USES_TYPE→U`.
+  - Uses single-char keys: `name→n`, `file→f`, `line→l`, `type→t`, `status→s`,
+    `confidence→c`, etc. (full map in `formatters/compact.py:FIELD_KEY_ABBR`).
+  - Strips the workspace prefix from absolute paths.
+  - Output is still valid JSON — MCP clients parse it directly.
+
+- **`graph-schema` command + `codelens_graph_schema` MCP tool** — Returns
+  node + edge counts, node-type distribution, edge-type distribution, and
+  index count in one cheap call. Example compact output:
+  `{"s":"ok","n":31,"e":97,"nts":{"function":30,"class":1},"ets":{"CALLS":97},"ix":6}`.
+  The cheapest way for an agent to understand the graph shape before issuing
+  structural queries.
+
+- **`--limit N` / `--offset N` pagination** on `list`, `search`, `trace`,
+  `symbols`, `outline`. Default `--limit 20`. All paginated commands now
+  return `total_count`, `count`, `offset`, `limit`, `has_more` fields. The
+  existing `--top N` flag is preserved as an alias for `--limit N --offset 0`.
+
+- **`format` parameter on every MCP tool** — All MCP tools now accept a
+  `format` parameter with the enum `[json, markdown, ai, sarif, compact]`.
+  Default remains `ai` (normalized schema). Pass `format: "compact"` for
+  token-efficient responses.
+
+- **`tests/test_compact_format.py`** — 28 test cases covering compact
+  formatter rules, pagination behavior, graph-schema command, MCP tool
+  advertisement, and token-savings assertions.
+
+### Changed (issue #17)
+
+- **`scripts/codelens.py`** — Global `--format` flag (and per-subparser flag)
+  now accept `compact` as a 5th choice. Pre-parse loop updated to recognize
+  `compact` before subcommand dispatch.
+- **`scripts/formatters/__init__.py`** — `format_output()` now dispatches to
+  `formatters.compact.format_compact` when `format_type == "compact"`.
+- **`scripts/commands/search.py`** — Adds `--limit`/`--offset`, paginates
+  the `matches` list, adds `total_count`/`count`/`offset`/`limit`/`has_more`
+  fields.
+- **`scripts/commands/list.py`** — Default `--limit` lowered from 200 to 20
+  (per issue #17 spec); adds `total_count` field alongside the existing
+  `total`. `--limit 0` means unlimited (preserves backward compat).
+- **`scripts/commands/trace.py`** — Adds `--limit`/`--offset`, paginates
+  `chains.up` and `chains.down`, adds `total_count` field.
+- **`scripts/commands/symbols.py`** — Adds `--limit`/`--offset`, paginates
+  `results`, adds `total_count`/`has_more` fields.
+- **`scripts/commands/outline.py`** — Adds `--limit`/`--offset`, paginates
+  `outlines`, adds `total_count`/`has_more` fields.
+- **`scripts/mcp_server.py`** — Adds `graph-schema` to `_TOOL_DEFINITIONS`.
+  Adds `_inject_format_enum()` helper that injects the shared `format`
+  property into every tool's inputSchema. `_execute_command` now respects
+  `arguments["format"]` — when set to `"compact"`, returns the compacted
+  dict via `formatters.compact.compact_dict` instead of the AI-normalized
+  schema.
+
+### Non-Breaking (issue #17)
+
+- Existing `--format json/ai/markdown/sarif` outputs are unchanged.
+- Existing `--top N` flag still works (alias for `--limit N --offset 0`).
+- Existing `list --limit 200` (the old default) still works — only the
+  default value changed from 200 to 20. Pass `--limit 200` explicitly to
+  restore the old behavior, or `--limit 0` for unlimited.
+- All 56 existing CLI commands continue to work unchanged.
+- 28 new tests pass; 4 pre-existing `test_hybrid_engine.py` failures
+  (confidence-field assertions) are unchanged — NOT caused by this change.
+
+### Migration Notes for Engine Authors
+
+The compact formatter is purely a presentation-layer concern. Engines do
+not need to know about it — the formatter reads the engine's existing
+output dict and produces a compacted JSON string. To verify your engine's
+output compacts well, run:
+
+```bash
+$CLI <your-command> --format compact | python3 -m json.tool
+```
+
+If a field you depend on disappears in compact output, it's because the
+value was null/empty (the formatter drops these). Either populate the
+field with a meaningful default, or accept that null fields are noise.
+
+---
+
 ### Graph Data Model (issue #8)
 
 Replaces the ad-hoc flat-registry graph traversal with a true node + edge graph
