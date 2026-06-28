@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Incremental Graph Update (issue #25)
+
+Previously, `scan --incremental` updated only the flat backend registry
+and skipped graph population entirely. As a result, `graph_nodes` and
+`graph_edges` became stale after any incremental scan — `trace --use-graph`
+returned outdated callers/callees, and the recommended post-edit workflow
+(`scan --incremental`) silently broke the graph backend that #8 introduced.
+
+This fix adds a slice-level update path: only the changed files' nodes
+and edges are deleted and re-inserted from the flat registry, then
+`refine_call_edges` (from #13) is re-invoked to rebuild IMPORTS edges
+and re-refine CALLS edges. The full scan path is unchanged — it still
+calls `populate_graph_tables` for a bulk rebuild.
+
+### Added (issue #25)
+
+- **`scripts/graph_model.py:incremental_graph_update(workspace, db_path, changed_files)`**
+  — New function. Performs a slice-level graph update:
+  1. Normalize `changed_files` (absolute paths) to workspace-relative
+     paths. Empty input is a no-op (returns zero counts) so the
+     no-changes path in `scan --incremental` is safe.
+  2. Identify `graph_nodes` rows whose `file` is in the changed set
+     (the stale node ids that must be replaced).
+  3. Delete `graph_edges` rows that touch any changed file:
+     - edges whose `file` (originating file) is in the changed set
+       (covers CALLS edges from changed files + IMPORTS edges whose
+       importer changed), AND
+     - edges whose `source_id` or `target_id` references a stale node
+       id from step 2 (covers cross-file edges from an unchanged file
+       into a changed file — the target may have been renamed/moved).
+  4. Delete the stale `graph_nodes` rows themselves.
+  5. Re-read the flat backend registry (already updated by
+     `merge_backend_data` in the scan pipeline) and INSERT only the
+     nodes whose `file` is in the changed set, plus CALLS edges that
+     touch the changed set (either endpoint's file is in the set).
+  6. Call `refine_call_edges(workspace, db_path)` so IMPORTS edges
+     and import-aware CALLS-edge refinement are rebuilt for the
+     affected slice. `refine_call_edges` is idempotent (it clears
+     and rebuilds the `import_registry` table and IMPORTS edges from
+     scratch each call), so invoking it here is safe regardless of
+     whether a previous scan already ran it.
+
+  Returns: `{nodes, edges, edges_refined, edges_unresolved}` where
+  `nodes`/`edges` are the TOTAL graph row counts after the update
+  (not the delta) so the return shape matches `populate_graph_tables`.
+
+- **`tests/test_graph_incremental.py`** — 19 tests across 9 classes
+  covering: no-op cases, equivalence with full populate, idempotency,
+  slice isolation, file modification reflection (rename/add/remove),
+  stale edge dropping (no orphan edges), return-value shape, end-to-end
+  via `cmd_scan(incremental=True)` (graph field present in BOTH full
+  and incremental scan output with matching counts), and a performance
+  assertion (<200ms for 5 changed files; issue spec targets <100ms).
+
+### Changed (issue #25)
+
+- **`scripts/commands/scan.py`** — Incremental path now calls
+  `incremental_graph_update(workspace, db_path, changed_files)` instead
+  of skipping graph population. The full-scan path is unchanged (still
+  calls `populate_graph_tables` + `refine_call_edges`). Scan output now
+  ALWAYS includes a `graph` field with the actual final state
+  (`{nodes, edges}`) of `graph_nodes` + `graph_edges`, regardless of
+  scan mode — previously the incremental path emitted no `graph` field
+  at all. The `type_resolution` field is populated by the incremental
+  path too (from `incremental_graph_update`'s return value).
+
+### Non-Breaking (issue #25)
+
+- Full-scan behavior is unchanged — `populate_graph_tables` is still
+  called for a clean bulk rebuild on every full scan.
+- The incremental path is best-effort: any failure inside
+  `incremental_graph_update` is logged at WARNING level and swallowed,
+  so the flat registry remains the source of truth and the scan still
+  succeeds (matches the existing full-scan error-handling contract).
+- The function is idempotent — running twice with the same
+  `changed_files` yields the same final graph state.
+- The `graph` field added to the incremental-scan output is additive;
+  no existing field is removed or renamed. Consumers who previously
+  special-cased the missing `graph` field on incremental scans see a
+  populated `{nodes, edges}` shape identical to the full-scan output.
+- On the `clean_app` fixture: full scan reports
+  `graph: {nodes: 31, edges: 134}` (CALLS + IMPORTS, after refine).
+  Subsequent incremental scan with no changes reports the same counts.
+  Incremental scan after renaming `format_text` → `format_text_renamed`
+  in `src/utils.py` updates the graph (renamed node present, old name
+  gone from that file) and reports updated edge counts.
+
+### Migration Notes for Engine Authors (issue #25)
+
+Engines that read `graph_nodes` / `graph_edges` after an incremental
+scan no longer need to fall back to the flat registry or trigger a
+manual full scan — the graph is always in sync with the flat registry
+after `cmd_scan` returns, regardless of `incremental=True/False`.
+
 ### Confidence Fields on Non-Deep Output (test fix)
 
 Previously, the `confidence` / `confidence_distribution` fields were only
