@@ -16,6 +16,7 @@ import sqlite3
 from typing import Any, Dict, Optional
 
 from commands import register_command
+from utils import default_db_path
 
 
 def add_args(parser):
@@ -24,11 +25,6 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--db-path", default=None,
                         help="Custom path for SQLite database file")
-
-
-def _default_db_path(workspace: str) -> str:
-    """Return the default SQLite db path for a workspace."""
-    return os.path.join(workspace, ".codelens", "codelens.db")
 
 
 def get_graph_schema(workspace: str, db_path: Optional[str] = None) -> Dict[str, Any]:
@@ -48,7 +44,7 @@ def get_graph_schema(workspace: str, db_path: Optional[str] = None) -> Dict[str,
         ``indexes``, ``status``, and ``workspace``.
     """
     workspace = os.path.abspath(workspace)
-    db_path = db_path or _default_db_path(workspace)
+    db_path = db_path or default_db_path(workspace)
 
     schema: Dict[str, Any] = {
         "status": "ok",
