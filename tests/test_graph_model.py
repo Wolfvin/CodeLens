@@ -71,6 +71,29 @@ def scanned_clean_app():
     shutil.rmtree(workspace, ignore_errors=True)
 
 
+# ─── 0. Default DB Path ───────────────────────────────────────
+
+
+class TestDefaultDbPath:
+    """All call sites must resolve the same default SQLite path."""
+
+    def test_default_db_path_consistent_across_modules(self):
+        workspace = os.path.abspath("/tmp/codelens-workspace")
+
+        from utils import default_db_path
+        from graph_model import _default_db_path
+        from commands.graph_schema import _default_db_path as schema_default_db_path
+        from persistent_registry import PersistentRegistry, db_exists
+
+        expected = default_db_path(workspace)
+        assert _default_db_path(workspace) == expected
+        assert schema_default_db_path(workspace) == expected
+
+        registry = PersistentRegistry(workspace)
+        assert registry.db_path == expected
+        assert db_exists(workspace) == os.path.exists(expected)
+
+
 # ─── 1. Schema Initialization ────────────────────────────────
 
 

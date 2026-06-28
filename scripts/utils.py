@@ -26,6 +26,14 @@ logger = get_logger()
 
 # ─── Shared Configuration ───────────────────────────────────
 
+DB_FILENAME = "codelens.db"
+
+
+def default_db_path(workspace: str) -> str:
+    """Return the default SQLite database path for the workspace."""
+    return os.path.join(workspace, ".codelens", DB_FILENAME)
+
+
 DEFAULT_IGNORE_DIRS = frozenset({
     'node_modules', '.git', 'dist', 'build', 'target',
     '__pycache__', '.codelens', '.next', '.nuxt', '.cache',

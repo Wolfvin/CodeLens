@@ -27,13 +27,12 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from utils import logger
+from utils import default_db_path, logger
 
 
 # ─── Schema Version ────────────────────────────────────────────
 
 SCHEMA_VERSION = 1
-DB_FILENAME = "codelens.db"
 
 # ─── SQL Statements ────────────────────────────────────────────
 
@@ -129,9 +128,7 @@ class PersistentRegistry:
                      Defaults to .codelens/codelens.db
         """
         self.workspace = workspace
-        self._db_path = db_path or os.path.join(
-            workspace, ".codelens", DB_FILENAME
-        )
+        self._db_path = db_path or default_db_path(workspace)
         self._local = threading.local()  # Thread-local storage for connections
         self._initialized = False
         self._init_lock = threading.Lock()
@@ -855,7 +852,7 @@ class PersistentRegistry:
 
 def db_exists(workspace: str, db_path: Optional[str] = None) -> bool:
     """Check if a CodeLens SQLite database exists for the workspace."""
-    path = db_path or os.path.join(workspace, ".codelens", DB_FILENAME)
+    path = db_path or default_db_path(workspace)
     return os.path.exists(path)
 
 

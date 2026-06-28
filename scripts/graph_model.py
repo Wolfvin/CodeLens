@@ -50,7 +50,7 @@ import sqlite3
 from collections import deque
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from utils import logger
+from utils import default_db_path as _default_db_path, logger
 
 
 # ─── Schema Constants ─────────────────────────────────────────
@@ -157,11 +157,6 @@ def init_graph_schema(conn: sqlite3.Connection) -> None:
 
 
 # ─── Population ───────────────────────────────────────────────
-
-def _default_db_path(workspace: str) -> str:
-    """Return the default SQLite db path for a workspace."""
-    return os.path.join(workspace, ".codelens", "codelens.db")
-
 
 def _parse_file_line_from_node_id(node_id: str) -> Tuple[str, int]:
     """Extract (file, line) from a flat-registry node id like 'path/file.py:42:fn_name'.
