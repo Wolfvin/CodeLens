@@ -77,8 +77,8 @@ def scanned_clean_app():
 class TestDefaultDbPath:
     """All call sites must resolve the same default SQLite path."""
 
-    def test_default_db_path_consistent_across_modules(self):
-        workspace = os.path.abspath("/tmp/codelens-workspace")
+    def test_default_db_path_consistent_across_modules(self, tmp_path):
+        workspace = str(tmp_path / "codelens-workspace")
 
         from utils import default_db_path
         from graph_model import _default_db_path
