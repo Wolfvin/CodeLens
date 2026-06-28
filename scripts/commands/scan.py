@@ -94,7 +94,13 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         all_discovered = []
         for file_list in files.values():
             all_discovered.extend(file_list)
-        changed, new, deleted = find_changed_files(workspace, all_discovered)
+        # Pass the db_path so find_changed_files can look up the
+        # last_indexed_sha bookmark and use git-diff when available
+        # (issue #14). Falls back to mtime inside the function.
+        from graph_model import _default_db_path as _scan_db_path
+        changed, new, deleted = find_changed_files(
+            workspace, all_discovered, db_path=_scan_db_path(workspace)
+        )
 
         if not changed and not new and not deleted:
             # Load existing registry counts

@@ -169,6 +169,28 @@ def get_changed_files(workspace: str, since_sha: Optional[str] = None) -> List[s
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def get_untracked_files(workspace: str) -> List[str]:
+    """Return git-untracked file paths in ``workspace`` (excluding gitignored).
+
+    Uses ``git ls-files --others --exclude-standard`` so gitignored files
+    (node_modules, dist, .env, etc.) are NOT returned. Required because
+    :func:`get_changed_files` only reports tracked files — newly created
+    files that have not yet been ``git add`` -ed would otherwise be
+    invisible to incremental scans.
+
+    Args:
+        workspace: Absolute path to the workspace root.
+
+    Returns:
+        List of relative file paths (may be empty). Returns ``[]`` if git
+        is unavailable or the workspace is not a git repo.
+    """
+    out = _run_git(workspace, ["ls-files", "--others", "--exclude-standard"])
+    if not out:
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 # ─── registry_meta read/write ────────────────────────────────────────
 
 def _connect(db_path: str) -> sqlite3.Connection:
