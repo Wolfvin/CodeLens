@@ -170,7 +170,14 @@ class PersistentRegistry:
         return self._conn
 
     def _init_schema(self) -> None:
-        """Initialize the database schema."""
+        """Initialize the database schema.
+
+        Also creates the graph data-model tables (graph_nodes + graph_edges)
+        via graph_model.init_graph_schema so they always exist by the time
+        any engine tries to query them. This is additive and non-breaking —
+        existing tables (symbols, refs, files, analysis_cache, scan_metadata)
+        are untouched.
+        """
         conn = self._connect_raw()
         try:
             conn.executescript(_CREATE_SYMBOLS)
@@ -183,6 +190,17 @@ class PersistentRegistry:
             conn.commit()
         except sqlite3.Error as e:
             logger.warning(f"Schema init error: {e}")
+
+        # Initialize graph data-model tables (graph_nodes + graph_edges).
+        # Lazy import avoids a hard dependency cycle at module load time and
+        # keeps graph_model.py optional if a downstream fork removes it.
+        try:
+            from graph_model import init_graph_schema
+            init_graph_schema(conn)
+        except ImportError:
+            logger.debug("graph_model module not available; skipping graph schema init")
+        except Exception as e:
+            logger.warning(f"graph_model schema init failed: {e}")
 
     def _connect_raw(self) -> sqlite3.Connection:
         """Get raw connection without auto-init (for init itself)."""
