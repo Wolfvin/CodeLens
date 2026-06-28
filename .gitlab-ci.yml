@@ -7,6 +7,7 @@ stages:
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  CODELLENS_STRICT_COMMANDS: "1"
 
 cache:
   paths:

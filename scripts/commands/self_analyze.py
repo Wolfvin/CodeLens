@@ -192,10 +192,11 @@ def _compute_overall_health(analyses: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ─── Command Registration ─────────────────────────────────────
+from commands import register_command
 
-COMMAND_INFO = {
-    "help": "Run CodeLens on its own codebase (dogfooding / meta-analysis)",
-    "add_args": add_args,
-    "execute": execute,
-}
+register_command(
+    "self-analyze",
+    "Run CodeLens on its own codebase (dogfooding / meta-analysis)",
+    add_args,
+    execute,
+)
