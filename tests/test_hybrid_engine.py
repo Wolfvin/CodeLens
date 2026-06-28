@@ -173,3 +173,114 @@ class TestHybridIntegration:
                 capture_output=True, text=True
             )
             assert result.returncode == 0
+
+
+# ─── Issue #32: --deep must invoke create_hybrid_engine exactly once ────
+
+
+class TestDeepSingleInvocation:
+    """Regression guard for issue #32.
+
+    Before the fix, ``codelens.py`` had two duplicate ``--deep``
+    post-processing blocks that both ran when ``--deep`` was set for
+    ``dead-code``, ``query``, ``impact``, ``smell``, ``complexity``.
+    Each block instantiated a fresh HybridEngine, so the engine was
+    created twice per ``--deep`` invocation — doubling LSP subprocess
+    calls and potentially double-counting findings in
+    ``confidence_distribution``.
+
+    These tests assert ``create_hybrid_engine`` is invoked exactly once
+    per ``--deep`` CLI call, using ``unittest.mock.patch`` to count
+    ``call_args``.
+    """
+
+    def test_smell_deep_invokes_create_hybrid_engine_once(self):
+        """``codelens smell --deep`` must call create_hybrid_engine exactly once.
+
+        Calls ``main()`` in-process (not via subprocess) so the mock is
+        visible to the code under test. Subprocess mocks don't work
+        across process boundaries.
+        """
+        import tempfile
+        import shutil
+        from unittest.mock import patch, MagicMock
+
+        ws = tempfile.mkdtemp()
+        try:
+            # Minimal Python file so smell has something to analyze
+            with open(os.path.join(ws, "test.py"), "w") as f:
+                f.write("def foo():\n    pass\n")
+
+            # Pre-build registry so auto-setup doesn't interfere
+            from commands.scan import cmd_scan
+            cmd_scan(ws)
+
+            # Patch create_hybrid_engine to count calls without actually
+            # starting LSP subprocesses (which would be slow + flaky in CI).
+            with patch("hybrid_engine.create_hybrid_engine") as mock_create:
+                mock_engine = MagicMock()
+                mock_engine.lsp_active = False
+                mock_create.return_value = mock_engine
+
+                # Call main() in-process with patched argv so the mock
+                # is visible. Redirect stdout to suppress JSON output.
+                old_argv = sys.argv
+                import io
+                old_stdout = sys.stdout
+                sys.argv = ["codelens.py", "smell", ws, "--deep", "--format", "json"]
+                sys.stdout = io.StringIO()
+                try:
+                    from codelens import main
+                    main()
+                except SystemExit:
+                    # smell shouldn't sys.exit, but catch just in case
+                    pass
+                finally:
+                    sys.argv = old_argv
+                    sys.stdout = old_stdout
+
+                assert mock_create.call_count == 1, (
+                    f"Expected create_hybrid_engine to be called exactly once, "
+                    f"got {mock_create.call_count} calls. This indicates the "
+                    f"duplicate --deep block from issue #32 has regressed."
+                )
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_deep_unsupported_command_sets_hint(self):
+        """``--deep`` on an unsupported command must set deep_analysis_hint, not crash."""
+        import tempfile
+        import shutil
+
+        ws = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(ws, "test.py"), "w") as f:
+                f.write("x = 1\n")
+
+            from commands.scan import cmd_scan
+            cmd_scan(ws)
+
+            # symbols is NOT in the --deep supported list
+            proc = subprocess.run(
+                [sys.executable, "scripts/codelens.py",
+                 "symbols", "foo", ws, "--deep", "--format", "json"],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, "PYTHONPATH": "scripts"},
+            )
+
+            # Should not crash, and should include the hint
+            assert proc.returncode == 0, f"Command failed: {proc.stderr}"
+            import json as _json
+            output = _json.loads(proc.stdout)
+            assert output.get("deep_analysis") is False, (
+                f"deep_analysis should be False for unsupported command, "
+                f"got: {output.get('deep_analysis')}"
+            )
+            assert "deep_analysis_hint" in output, (
+                "deep_analysis_hint must be set for unsupported --deep command"
+            )
+            assert "symbols" in output["deep_analysis_hint"], (
+                f"hint should mention the command name, got: {output['deep_analysis_hint']}"
+            )
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)

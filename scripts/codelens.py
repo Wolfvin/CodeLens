@@ -1021,43 +1021,6 @@ def main():
         if getattr(args, 'lite', False) and isinstance(result, dict):
             result = _apply_lite(result, args.command)
 
-        # ─── Post-processing: --deep (hybrid LSP analysis) ──
-        if getattr(args, 'deep', False) and isinstance(result, dict):
-            try:
-                from hybrid_engine import HybridEngine
-                engine = HybridEngine(workspace, deep=True)
-                if engine.lsp_active:
-                    if args.command == "dead-code":
-                        items = result.get("results", {})
-                        if isinstance(items, dict):
-                            for cat, cat_items in items.items():
-                                if isinstance(cat_items, list):
-                                    items[cat] = engine.verify_dead_code(cat_items)
-                        result["deep_analysis"] = True
-                        result["confidence_distribution"] = compute_confidence_distribution_flat(result)
-                    elif args.command == "query":
-                        result = engine.enhance_query(result, getattr(args, 'name', ''))
-                        result["deep_analysis"] = True
-                    elif args.command == "impact":
-                        result = engine.enhance_impact(result, getattr(args, 'name', ''))
-                        result["deep_analysis"] = True
-                    elif args.command == "smell":
-                        findings = result.get("findings", [])
-                        if findings:
-                            result["findings"] = engine.verify_dead_code(findings)
-                        result["deep_analysis"] = True
-                        result["confidence_distribution"] = compute_confidence_distribution_flat(result)
-                    else:
-                        result["deep_analysis"] = False
-                        result["deep_analysis_hint"] = f"--deep not yet supported for {args.command}"
-                    engine.cleanup()
-                else:
-                    result["deep_analysis"] = False
-                    result["deep_analysis_hint"] = "No LSP server available. Install one (run: codelens --lsp-status)"
-            except ImportError:
-                result["deep_analysis"] = False
-                result["deep_analysis_hint"] = "Hybrid engine not available (hybrid_engine.py not found)"
-
         # ─── Post-processing: --max-tokens N ──
         max_tokens = getattr(args, 'max_tokens', None)
         if max_tokens and isinstance(result, dict):
@@ -1068,6 +1031,13 @@ def main():
             result["_auto_setup"] = auto_setup_info
 
         # ─── Post-processing: --deep (hybrid LSP analysis) ──
+        # Single consolidated block (issue #32: previously two duplicate blocks
+        # ran in sequence, double-instantiating HybridEngine and overwriting
+        # deep_analysis/lsp_active fields. Block 1 used HybridEngine() directly;
+        # Block 2 used create_hybrid_engine() + add_confidence_to_result().
+        # Block 2 is strictly more capable (handles complexity, adds confidence
+        # distribution), so Block 1 was deleted and the "unsupported command"
+        # hint was folded into the else branch below.)
         deep = getattr(args, 'deep', False)
         if deep and isinstance(result, dict) and args.command in (
             "dead-code", "query", "impact", "smell", "complexity"
@@ -1119,6 +1089,12 @@ def main():
                 if isinstance(result, dict):
                     result["lsp_active"] = False
                     result["deep_error"] = str(e)
+        elif deep and isinstance(result, dict):
+            # --deep set but command not in the supported list — surface a hint
+            # so the user knows --deep was a no-op for this command. (Folded in
+            # from deleted Block 1 — see issue #32.)
+            result["deep_analysis"] = False
+            result["deep_analysis_hint"] = f"--deep not yet supported for {args.command}"
         elif not deep and isinstance(result, dict) and args.command in (
             "dead-code", "query", "impact", "smell", "complexity"
         ):
