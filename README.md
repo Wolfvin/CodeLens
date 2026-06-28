@@ -1,4 +1,4 @@
-# CodeLens v8.2 — AI-Native Code Intelligence
+# CodeLens — AI-Native Code Intelligence
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 

@@ -1,4 +1,4 @@
-# CodeLens v8.2 — Quick Reference
+# CodeLens — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
