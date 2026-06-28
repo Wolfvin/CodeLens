@@ -263,3 +263,71 @@ class TestCmdList:
         finally:
             import shutil
             shutil.rmtree(ws, ignore_errors=True)
+
+
+# ─── check command positional workspace arg (issue #78) ─────────────────
+
+
+class TestCheckCommandArgs:
+    """Regression guard for issue #78: ``check`` command must accept an
+    optional positional ``workspace`` argument so the CI quality-gate
+    workflow command ``codelens check . --severity high --sarif`` works.
+
+    Before the fix, ``check`` only defined optional flags (``--severity``,
+    ``--max-findings``, etc.) and no positional, so argparse rejected the
+    ``.`` argument with ``error: unrecognized arguments: .``, failing CI
+    for every PR.
+    """
+
+    def test_check_accepts_positional_workspace(self):
+        """``check`` add_args must register a positional ``workspace``."""
+        import argparse
+        from commands.check import add_args
+
+        parser = argparse.ArgumentParser()
+        add_args(parser)
+
+        # With positional
+        args = parser.parse_args(["/tmp/test", "--severity", "high"])
+        assert args.workspace == "/tmp/test"
+        assert args.severity == "high"
+
+    def test_check_workspace_optional(self):
+        """``check`` without positional must still parse (workspace=None)."""
+        import argparse
+        from commands.check import add_args
+
+        parser = argparse.ArgumentParser()
+        add_args(parser)
+
+        args = parser.parse_args(["--severity", "high"])
+        assert args.workspace is None
+        assert args.severity == "high"
+
+    def test_check_full_cli_invocation_with_positional(self):
+        """End-to-end: ``codelens check <workspace> --severity high`` must not raise."""
+        import subprocess
+        import sys
+
+        ws = _create_sample_workspace()
+        try:
+            cmd_scan(ws)  # build registry so check has something to read
+            proc = subprocess.run(
+                [sys.executable, "scripts/codelens.py",
+                 "check", ws, "--severity", "high", "--format", "json"],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, "PYTHONPATH": "scripts"},
+            )
+            # ``check`` exits 1 when gate fails (which it likely will on the
+            # sample workspace) — that's fine, we only care that argparse
+            # no longer rejects the positional.
+            assert "unrecognized arguments" not in proc.stderr, (
+                f"argparse still rejects positional workspace: {proc.stderr}"
+            )
+            # Output should be valid JSON (gate result), not a usage error
+            assert proc.stdout.strip().startswith("{"), (
+                f"expected JSON output, got: {proc.stdout[:200]}"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
