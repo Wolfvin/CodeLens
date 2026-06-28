@@ -50,7 +50,7 @@ import sqlite3
 from collections import deque
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-from utils import logger
+from utils import default_db_path, logger
 
 
 # ─── Schema Constants ─────────────────────────────────────────
@@ -158,9 +158,11 @@ def init_graph_schema(conn: sqlite3.Connection) -> None:
 
 # ─── Population ───────────────────────────────────────────────
 
-def _default_db_path(workspace: str) -> str:
-    """Return the default SQLite db path for a workspace."""
-    return os.path.join(workspace, ".codelens", "codelens.db")
+# Single source of truth for the default db path lives in utils.default_db_path
+# (see issue #40). The private alias below is kept for backward compatibility
+# with tests and callers that import ``graph_model._default_db_path`` directly;
+# it delegates to the canonical helper so logic never drifts.
+_default_db_path = default_db_path
 
 
 def _parse_file_line_from_node_id(node_id: str) -> Tuple[str, int]:
@@ -244,7 +246,7 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         Dict with keys 'nodes' and 'edges' giving the number of rows inserted.
     """
     workspace = os.path.abspath(workspace)
-    db_path = db_path or _default_db_path(workspace)
+    db_path = db_path or default_db_path(workspace)
 
     # Lazy import to avoid circular dependency at module load time.
     from registry import load_backend_registry
@@ -430,7 +432,7 @@ def incremental_graph_update(
           unresolved after the post-pass.
     """
     workspace = os.path.abspath(workspace)
-    db_path = db_path or _default_db_path(workspace)
+    db_path = db_path or default_db_path(workspace)
 
     # Normalize changed_files to workspace-relative paths. We accept any
     # iterable (list, set, tuple) and de-duplicate via a set.

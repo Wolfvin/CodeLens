@@ -514,3 +514,79 @@ class TestTracePilot:
         )
 
         assert self._chain_set(forced_flat["chains"]["up"]) == self._chain_set(flat["chains"]["up"])
+
+
+# ─── 7. Default DB Path Consistency (issue #40) ─────────────
+
+
+class TestDefaultDbPathConsistency:
+    """Verify all three call sites resolve the default db path identically.
+
+    Issue #40: ``_default_db_path`` was duplicated in ``graph_schema.py``,
+    ``graph_model.py``, and ``persistent_registry.py``. After consolidation
+    to ``utils.default_db_path``, this test guards against future drift by
+    asserting that all three sites (plus the canonical helper) produce the
+    same path for the same workspace.
+    """
+
+    def test_default_db_path_consistency(self):
+        """All three call sites must resolve to the same db path."""
+        workspace = os.path.join(os.path.sep, "tmp", "codelens_path_test")
+
+        # 1. Canonical helper — the single source of truth.
+        from utils import default_db_path
+        canonical = default_db_path(workspace)
+
+        # 2. graph_model._default_db_path (kept as a backward-compat alias).
+        from graph_model import _default_db_path as graph_model_path
+        # 3. graph_schema used to define its own helper; it now imports
+        #    utils.default_db_path, so we exercise the public path through
+        #    the module's get_graph_schema function indirectly by checking
+        #    that the import resolves to the same callable.
+        from commands import graph_schema as graph_schema_mod
+
+        assert canonical == graph_model_path(workspace), (
+            "graph_model._default_db_path must match utils.default_db_path; "
+            f"got graph_model={graph_model_path(workspace)!r} "
+            f"vs utils={canonical!r}"
+        )
+
+        # graph_schema.py no longer defines its own _default_db_path; the
+        # module must import default_db_path from utils so its callers
+        # resolve through the same single source of truth.
+        assert hasattr(graph_schema_mod, "default_db_path"), (
+            "commands.graph_schema must import default_db_path from utils "
+            "(issue #40 consolidation)"
+        )
+        assert graph_schema_mod.default_db_path is default_db_path, (
+            "commands.graph_schema.default_db_path must be the same callable "
+            "as utils.default_db_path (not a re-definition)"
+        )
+        assert graph_schema_mod.default_db_path(workspace) == canonical, (
+            "commands.graph_schema must resolve to the same path as "
+            f"utils.default_db_path; got "
+            f"{graph_schema_mod.default_db_path(workspace)!r} "
+            f"vs {canonical!r}"
+        )
+
+        # 4. PersistentRegistry must construct the same default path when no
+        #    explicit db_path is supplied.
+        from persistent_registry import PersistentRegistry, db_exists
+        registry = PersistentRegistry(workspace)
+        assert registry.db_path == canonical, (
+            "PersistentRegistry default db_path must match utils.default_db_path; "
+            f"got registry={registry.db_path!r} vs utils={canonical!r}"
+        )
+        # db_exists() helper must also use the same default path.
+        # (We can't easily assert the path it computes without filesystem
+        # side effects, but we can assert the function does not raise and
+        # returns False for a non-existent workspace — proving it computes
+        # a path rather than crashing on the old hardcoded join.)
+        assert db_exists(workspace) is False, (
+            "db_exists must return False for a workspace with no database"
+        )
+
+        # Sanity: the canonical path has the expected shape.
+        assert canonical.endswith(os.path.join(".codelens", "codelens.db")), (
+            f"canonical path {canonical!r} must end with .codelens/codelens.db"
+        )

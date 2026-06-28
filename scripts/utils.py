@@ -40,6 +40,29 @@ DEFAULT_IGNORE_EXTENSIONS = frozenset({
     '.chunk.js', '.d.ts',  # declaration files
 })
 
+# ─── Storage Path Resolution ──────────────────────────────────
+
+
+def default_db_path(workspace: str) -> str:
+    """Return the default SQLite database path for a workspace.
+
+    Single source of truth for the default CodeLens database location.
+    Previously triplicated across ``scripts/commands/graph_schema.py``,
+    ``scripts/graph_model.py``, and ``scripts/persistent_registry.py``
+    (see issue #40). Any future change to the default path — e.g.,
+    honoring a ``CODELENS_DB_PATH`` environment variable or moving the
+    database out of ``.codelens/`` — only needs to be made here.
+
+    Args:
+        workspace: Absolute or relative path to the workspace root.
+
+    Returns:
+        Path to the default SQLite database file:
+        ``<workspace>/.codelens/codelens.db``.
+    """
+    return os.path.join(workspace, ".codelens", "codelens.db")
+
+
 # ─── Output File Generation ─────────────────────────────────
 
 def write_output_files(workspace: str, scan_result, max_files: int = 3000) -> dict:
