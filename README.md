@@ -20,6 +20,7 @@ CodeLens is an AI-native code intelligence platform that gives AI agents **full 
 - **Regex Fallback Parsers** — 28 additional languages supported via regex-based parsers (C, C++, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell, Vim, Zig, and more)
 - **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, and more
 - **Incremental Scanning** — Only re-parse changed files for speed, with SQLite persistent registry storage
+- **Git-Aware Re-Index (v8.2)** — `scan --incremental` uses `git diff <last-indexed-sha> --name-only` to enumerate exactly the files git knows changed (mtime fallback when git unavailable). `git-status` reports the HEAD/last-indexed SHA + branch + changed-files count + re-scan recommendation in one call. `diff --git-aware` shows changed files + symbols + downstream caller impact. `watch --git-mode` polls `git diff --name-only` instead of watchdog file events. All features gracefully degrade when git is unavailable
 - **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
 - **AI-Optimized Output** — `--format ai` and `--lite` flags for token-efficient AI agent consumption
 - **Auto-Fix Engine** — Confidence-scored auto-fixes with dry-run-by-default safety
@@ -82,7 +83,8 @@ python3 scripts/codelens.py query "myFunction" --lite
 | `scan [workspace] [--incremental] [--full] [--max-files N]` | Scan workspace and build registry |
 | `validate [workspace]` | Validate registry vs file system |
 | `detect [workspace]` | Detect frameworks and show recommended config |
-| `watch [workspace]` | Start file watcher for real-time registry updates |
+| `watch [workspace] [--git-mode] [--interval SECS]` | Start file watcher (default: watchdog; `--git-mode` polls `git diff --name-only`) |
+| `git-status [workspace]` | Show git-aware scan state: HEAD SHA, last-indexed SHA, changed files, re-scan recommendation |
 | `migrate [workspace]` | Migrate JSON registry to SQLite persistent database |
 | `serve` | Start MCP server for AI agent integration (JSON-RPC over stdio) |
 | `lsp-status` | Check which LSP servers are available for `--deep` analysis |
@@ -229,6 +231,7 @@ codelens/
 │   ├── incremental.py             # Incremental scan support
 │   ├── edge_resolver.py           # Cross-file edge resolution
 │   ├── graph_model.py             # Graph data model (nodes + edges) — issue #8
+│   ├── git_aware.py               # Git-diff aware incremental re-index — issue #14
 │   ├── search_engine.py           # Regex code search
 │   ├── trace_engine.py            # Call chain tracing
 │   ├── impact_engine.py           # Change impact analysis
