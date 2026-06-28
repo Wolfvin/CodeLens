@@ -725,11 +725,6 @@ _TOOL_DEFINITIONS = {
                     "type": "string",
                     "description": "Path to workspace root directory"
                 },
-                "format": {
-                    "type": "string",
-                    "description": "Output format (default: json)",
-                    "default": "json"
-                },
                 "lite": {
                     "type": "boolean",
                     "description": "Lite mode: return only languages, frameworks, entry_points, total_symbols (omits routes/packages/hotspots). Targets <1k tokens output for cheap agent orientation.",

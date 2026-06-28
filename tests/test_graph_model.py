@@ -166,11 +166,20 @@ class TestPopulation:
         assert stats["nodes"] == len(flat_nodes), (
             "graph_nodes count must match flat registry nodes count"
         )
-        # Edges may differ slightly because graph population skips edges with
-        # no 'from' field (malformed), but for the clean_app fixture they
-        # should match exactly.
-        assert stats["edges"] == len(flat_edges), (
-            "graph_edges count must match flat registry edges count for clean_app"
+        # The flat registry only contains CALLS edges. graph_edges also
+        # contains IMPORTS edges added by the hybrid type resolver
+        # (issue #13), so we compare CALLS counts only.
+        conn = sqlite3.connect(db_path)
+        calls_count = conn.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE edge_type = 'CALLS'"
+        ).fetchone()[0]
+        conn.close()
+        # Edges may differ slightly because graph population skips edges
+        # with no 'from' field (malformed), but for the clean_app fixture
+        # they should match exactly.
+        assert calls_count == len(flat_edges), (
+            "graph_edges CALLS count must match flat registry edges count "
+            "for clean_app (IMPORTS edges are added by issue #13)"
         )
 
     def test_population_preserves_node_metadata(self, scanned_clean_app):
@@ -313,8 +322,19 @@ class TestRepopulation:
         assert stats_before["edges"] == stats_after["edges"], (
             "re-population must not change edge count (no duplicates)"
         )
+        # populate_graph_tables returns only the CALLS edges it inserted
+        # (the flat registry contains only CALLS). graph_stats counts ALL
+        # edges including IMPORTS (added by issue #13's type resolver).
+        # Compare against the CALLS-only count to verify no duplication.
+        conn = sqlite3.connect(db_path)
+        calls_after = conn.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE edge_type = 'CALLS'"
+        ).fetchone()[0]
+        conn.close()
         assert result["nodes"] == stats_after["nodes"]
-        assert result["edges"] == stats_after["edges"]
+        assert result["edges"] == calls_after, (
+            "populate_graph_tables return value must match CALLS edge count"
+        )
 
     def test_clear_graph_tables_empties_both(self, scanned_clean_app):
         """clear_graph_tables must delete all rows from both tables."""
@@ -332,12 +352,20 @@ class TestRepopulation:
         assert stats_after["edges"] == 0
 
     def test_repopulation_after_clear_restores_data(self, scanned_clean_app):
-        """Clear then re-populate must restore the original counts."""
+        """Clear then re-populate must restore the original CALLS counts."""
         from graph_model import (
             clear_graph_tables, populate_graph_tables, graph_stats, _default_db_path,
         )
 
         db_path = _default_db_path(scanned_clean_app)
+
+        # Count CALLS edges before clear (IMPORTS edges added by issue #13
+        # are NOT restored by populate_graph_tables — only CALLS are).
+        conn = sqlite3.connect(db_path)
+        calls_before = conn.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE edge_type = 'CALLS'"
+        ).fetchone()[0]
+        conn.close()
         original = graph_stats(db_path)
 
         clear_graph_tables(db_path)
@@ -346,8 +374,18 @@ class TestRepopulation:
         populate_graph_tables(scanned_clean_app, db_path)
         restored = graph_stats(db_path)
 
+        # Nodes are fully restored (only function/class nodes exist).
         assert restored["nodes"] == original["nodes"]
-        assert restored["edges"] == original["edges"]
+        # CALLS edges are restored; IMPORTS edges are not (they require
+        # refine_call_edges to rebuild). Verify CALLS count matches.
+        conn = sqlite3.connect(db_path)
+        calls_after = conn.execute(
+            "SELECT COUNT(*) FROM graph_edges WHERE edge_type = 'CALLS'"
+        ).fetchone()[0]
+        conn.close()
+        assert calls_after == calls_before, (
+            "re-population must restore CALLS edge count"
+        )
 
 
 # ─── 6. Pilot: trace --use-graph matches trace (flat) ────────

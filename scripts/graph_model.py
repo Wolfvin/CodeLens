@@ -268,9 +268,14 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         # init_graph_schema already logged; continue anyway
         pass
 
-    # Wipe existing rows so re-scans don't accumulate duplicates.
+    # Wipe existing CALLS rows so re-scans don't accumulate duplicates.
+    # Only CALLS edges are managed by populate_graph_tables (they come
+    # from the flat backend registry). Other edge types (IMPORTS, etc.)
+    # are managed by their own builders and must survive re-population.
     try:
-        conn.execute("DELETE FROM {}".format(GRAPH_EDGES_TABLE))
+        conn.execute(
+            "DELETE FROM {} WHERE edge_type = 'CALLS'".format(GRAPH_EDGES_TABLE)
+        )
         conn.execute("DELETE FROM {}".format(GRAPH_NODES_TABLE))
     except sqlite3.Error as e:
         logger.warning(f"populate_graph_tables: clear error: {e}")

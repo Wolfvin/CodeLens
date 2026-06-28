@@ -122,8 +122,8 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Navigation (11)
 `architecture [--lite] [--no-cache]` · `summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both] [--limit N] [--offset N]` · `search "pattern" [--limit N] [--offset N]` · `symbols "name" [--fuzzy] [--limit N] [--offset N]` · `outline [--file path] [--limit N] [--offset N]` · `dependents "file"` · `list [--filter ...] [--limit N] [--offset N]` · `ask "question"` · `diff [--git-aware]`
 
-### Architecture (9)
-`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history` · `graph-schema`
+### Architecture (10)
+`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff [--git-aware]` · `dashboard` · `history` · `graph-schema` · `resolve-types`
 
 ### Security (5)
 `secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan` (OSV.dev + native audit) · `env-check [--var NAME]`
@@ -143,9 +143,9 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Tooling (1)
 `plugin <install|list|search|update|info|validate>`
 
-**Total: 58 commands** (56 original + `graph-schema` from #17 + `architecture` from #19; verified via `commands/__init__.py` auto-registration)
+**Total: 60 commands** (56 original + `graph-schema` #17 + `architecture` #19 + `resolve-types` #13 + `git-status` #14; verified via `commands/__init__.py` auto-registration)
 
-## MCP Server (56 Tools)
+## MCP Server (58 Tools)
 
 Start the MCP server for AI agent integration:
 
@@ -153,9 +153,9 @@ Start the MCP server for AI agent integration:
 python3 scripts/codelens.py serve
 ```
 
-Exposes 56 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`):
-- 51 statically-defined tools (full JSON schemas in `mcp_server.py`) including `codelens_graph_schema` (#17) and `codelens_architecture` (#19)
-- 5 dynamically-discovered tools (`benchmark`, `dashboard`, `history`, `lsp-status`, `migrate`)
+Exposes 58 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
+- 51 statically-defined tools (full JSON schemas in `mcp_server.py`) including `codelens_graph_schema` (#17), `codelens_architecture` (#19), `codelens_resolve_types` (#13), and `codelens_git_status` (#14)
+- 7 dynamically-discovered tools (`benchmark`, `dashboard`, `history`, `lsp-status`, `migrate`, `diff`, `resolve-types`)
 - Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
 - `watch` and `serve` itself are excluded (long-running)
 
