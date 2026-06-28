@@ -1,8 +1,8 @@
-# CodeLens v8.1 — AI-Native Code Intelligence
+# CodeLens v8.2 — AI-Native Code Intelligence
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 54 tools (49 static + 5 dynamic), AST-based taint analysis, live CVE/OSV scanning, and a plugin system with OWASP Top 10 + Compliance rule packs.
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 54 tools (49 static + 5 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, and a true graph data model (nodes + edges) for structural code queries.
 
 ## Features
 
@@ -11,6 +11,7 @@ CodeLens is an AI-native code intelligence platform that gives AI agents **full 
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
 - **Cross-File Call Graph** — Workspace-wide call graph with import resolution and bidirectional taint propagation
+- **Graph Data Model (v8.2)** — True node + edge graph (`graph_nodes` + `graph_edges` SQLite tables) for structural queries: callers, callees, blast radius, circular chains. Populated during scan; `trace` engine migrated to use it by default with `--use-graph` / `--no-graph` flag for A/B testing
 - **Plugin System** — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery (local → user → built-in), OWASP Top 10 (36 rules) + Compliance (53 rules: PCI-DSS v4.0 + HIPAA)
 - **VS Code Extension** — Diagnostics Provider, Code Actions, Guard hooks, Health status bar
 - **CI/CD Integration** — GitHub Actions workflows, SARIF v2.1.0 output, PR decoration, `check` quality-gate command
@@ -227,6 +228,7 @@ codelens/
 │   ├── framework_detect.py        # Framework auto-detection
 │   ├── incremental.py             # Incremental scan support
 │   ├── edge_resolver.py           # Cross-file edge resolution
+│   ├── graph_model.py             # Graph data model (nodes + edges) — issue #8
 │   ├── search_engine.py           # Regex code search
 │   ├── trace_engine.py            # Call chain tracing
 │   ├── impact_engine.py           # Change impact analysis

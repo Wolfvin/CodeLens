@@ -905,6 +905,22 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         }
     save_backend_registry(workspace, backend_registry)
 
+    # ─── Graph Data Model Population (issue #8) ─────────────────
+    # After the flat backend registry is built, populate the graph_nodes +
+    # graph_edges tables from it in a single bulk transaction. This is
+    # additive and non-breaking — the flat registry remains the source of
+    # truth; the graph tables are a derived projection that engines can
+    # query for structural traversals (callers/callees/cycles/blast-radius).
+    # Failures here MUST NOT break the scan — the graph is an optimization
+    # layer; engines fall back to the flat registry if it's missing.
+    graph_population = {"nodes": 0, "edges": 0}
+    try:
+        from graph_model import populate_graph_tables, _default_db_path
+        db_path = _default_db_path(workspace)
+        graph_population = populate_graph_tables(workspace, db_path)
+    except Exception:
+        logger.warning("Graph table population failed", exc_info=True)
+
     # Update mtimes cache
     all_files = []
     for file_list in files.values():
@@ -998,6 +1014,10 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         "changed_files_count": len(changed_files) if changed_files else 0,
         "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
         "lang_note": _build_lang_note(fw) if fw else None,
+        "graph": {
+            "nodes": graph_population.get("nodes", 0),
+            "edges": graph_population.get("edges", 0),
+        },
     }
 
     # Add plugin rules data if plugins were requested
