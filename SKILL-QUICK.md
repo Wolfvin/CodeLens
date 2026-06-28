@@ -74,7 +74,7 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | "cleanup before deploy" | `debug-leak` → `dead-code` → `secrets` |
 | "CSS issues?" | `css-deep` → `missing-refs` |
 | "accessible?" | `a11y` |
-| "project overview" | `summary` or `handbook` |
+| "project overview" | `architecture --lite` (single call, <1k tokens) or `summary` / `handbook` (deeper) |
 | "fix automatically" | `fix --apply` (dry-run by default) |
 | "show dashboard" | `dashboard` |
 | "trend over time" | `history` |
@@ -112,8 +112,8 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 ### Pre-Write Safety (5)
 `query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
 
-### Navigation (10)
-`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both]` · `search "pattern"` · `symbols "name" [--fuzzy]` · `outline [--file path]` · `dependents "file"` · `list [--filter ...]` · `ask "question"` · `diff`
+### Navigation (11)
+`architecture [--lite] [--no-cache]` · `summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both]` · `search "pattern"` · `symbols "name" [--fuzzy]` · `outline [--file path]` · `dependents "file"` · `list [--filter ...]` · `ask "question"` · `diff`
 
 ### Architecture (8)
 `entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history`

@@ -131,6 +131,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 
 | Command | Description |
 |---------|-------------|
+| `architecture [workspace] [--lite] [--no-cache]` | Single-call codebase overview for AI agents (languages, frameworks, entry points, packages, routes, hotspots, total symbols). `--lite` omits routes/packages/hotspots for <1k token orientation (issue #19) |
 | `entrypoints [workspace]` | Map execution entry points |
 | `api-map [workspace]` | Map REST/GraphQL/gRPC routes to handlers |
 | `state-map [workspace]` | Track global state management |
