@@ -9,7 +9,7 @@ description: >
   For version history, see CHANGELOG.md.
 ---
 
-# CodeLens v8.1
+# CodeLens
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
