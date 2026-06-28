@@ -1,5 +1,72 @@
 # CodeLens Changelog
 
+> For the canonical, top-level changelog, see [`../CHANGELOG.md`](../CHANGELOG.md).
+> This file keeps the older per-version highlights that were originally published in `SKILL.md`.
+
+## v8.1.0 — 2026-06-13
+
+### F1 Benchmark Improvements
+
+- **Avg F1: 0.803 → 0.872 (+8.6%)**
+- **Avg FPR (clean): 0.153 → 0.050 (-67%)**
+- **Targets met: 28.6% → 57.1%**
+
+### Circular Engine Fixes
+
+- Module-level cycle detection in `_detect_function_cycles`
+- Bidirectional import pair safety net in `_detect_import_cycles`
+- Cross-type deduplication between `function_call` and `import_chain` cycles
+- **Result:** circular F1 0.667 → 1.000, circular FPR (clean) 0.222 → 0.000
+
+### Dead-Code Engine Fixes
+
+- Fixed JS local export vs re-export differentiation (`export { X }` vs `export { X } from`)
+- Fixed Python unreachable code indent comparison (`<=` → `<`)
+- Fixed Python multi-line return statement bracket counting
+- **Result:** dead-code F1 0.800 → 0.952, dead-code FPR (clean) 0.500 → 0.000
+
+### AST Taint Engine Depth Improvements
+
+- Return value propagation — functions returning tainted data now propagate taint to callers
+- Scope-hierarchical TaintState — parent chain lookup prevents cross-scope contamination
+- Branch condition refinement — `branch_condition` is now used during propagation for path-sensitive analysis
+
+### CI/CD Integration
+
+- `.github/workflows/codelens-ci.yml` (test + benchmark + self-check + SARIF upload)
+- `.github/workflows/codelens-quality-gate.yml` (PR quality gate)
+- `.github/workflows/codelens-sarif.yml` (SARIF upload to GitHub Security)
+- `.github/workflows/codelens-benchmark.yml` (regression benchmark)
+- `.gitlab-ci.yml` (GitLab CI pipeline)
+
+---
+
+## v8.0.0 — 2026-06-13 — The "7 Killer Features" Release
+
+### Added (7 Major Features)
+
+1. **AST Taint Engine** (`taint` command, `ast_taint_engine.py`, 3057 lines) — Tree-sitter AST traversal replaces regex line-by-line. Path-sensitive, scope-aware, inter-procedural taint tracking. Confidence scoring with taint path rendering.
+2. **Live CVE/OSV Scanning** (`vuln-scan` v2, `osv_client.py`, 1600 lines) — Real-time vulnerability data from OSV.dev API across 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex). SQLite cache with configurable TTL. Rate limiting + offline fallback.
+3. **Plugin System** (`plugin` command, `plugin_system.py`, 1462 lines) — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery (local > user > built-in). Ships with OWASP Top 10 (36 rules) + Compliance (53 rules: PCI-DSS v4.0 + HIPAA).
+4. **VS Code Extension** (`vscode-codelens/`, 2011 lines) — Diagnostics Provider (SARIF → VS Code on save/open), Code Actions Provider (QuickFix + Fix All), Guard pre-save hooks, status bar health indicator.
+5. **Enhanced Cross-File Dataflow Engine** (`callgraph_engine.py`, 3539 lines) — Workspace-wide call graph with import resolution and bidirectional taint propagation.
+6. **OWASP Top 10 + Compliance Mapping** — 89 rules total (A01-A10 + PCI-DSS requirements 1-12 + HIPAA 45 CFR § 164.312).
+7. **Auto-fix / Dashboard / History / Hybrid LSP / Persistent Registry / Benchmark Suite** — Additional engines and commands (`fix`, `dashboard`, `history`, `migrate`, `benchmark`, `lsp-status`).
+
+### Version Bumps
+
+- CLI version: v7.2 → v8.0 → v8.1
+- Total commands: 45 → 56 (+11 new)
+- Total MCP tools: 49 static → 54 (49 static + 5 dynamic)
+- Total engines: ~23 → ~35
+- Total parsers: 9 tree-sitter + 28 fallback = 37 parser modules
+
+### New Commands (11)
+
+`analyze`, `artifact-scan`, `benchmark`, `binary-scan`, `check`, `fix`, `guard`, `handbook`, `lsp-status`, `migrate`, `plugin`, `serve`, `summary`, `taint`, `dashboard`, `history`
+
+---
+
 ## v7.0.0 — 2026-06-12
 
 ### Tested against exercism/python (2,227 files, 516 Python files, pytest-based exercise track)

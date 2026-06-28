@@ -1,13 +1,15 @@
 ---
 name: codelens
 description: >
-  CodeLens — Live Codebase Reference Intelligence. 45 commands for AI-powered
-  code analysis, security auditing, and quality scoring. Supports 28+ languages.
+  CodeLens — AI-Native Code Intelligence. 56 commands for AI-powered code analysis,
+  security auditing, quality scoring, AST-based taint analysis, live CVE scanning,
+  and pre-write safety checks. Supports 28+ languages with tree-sitter + regex
+  fallback parsing. MCP server exposes 54 tools for AI agent integration.
   For quick command reference with validated output schemas, see SKILL-QUICK.md.
   For version history, see CHANGELOG.md.
 ---
 
-# CodeLens v7.2
+# CodeLens v8.1
 
 Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.
 
@@ -320,3 +322,19 @@ Without this env var, the default format is `json` (backward compatible).
 - `references/parser-rules.md` — Parsing rules per language
 - `references/query-examples.md` — Query examples and output interpretation
 - `references/status-codes.md` — Details for all statuses and flags
+
+---
+
+## v8.x Feature Summary
+
+CodeLens v8.0+ adds 7 major capability pillars over v7.x:
+
+1. **AST Taint Engine** (`taint` command) — Tree-sitter AST traversal, path-sensitive, scope-aware, inter-procedural taint tracking with confidence scoring and taint path rendering. Default engine when tree-sitter is available.
+2. **Live CVE/OSV Scanning** (`vuln-scan` v2) — Real-time data from OSV.dev API across 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex) with SQLite cache + offline fallback.
+3. **Plugin System** (`plugin` command) — 4 plugin types (rule_pack / engine / formatter / command), 3-tier discovery (local > user > built-in). Ships with OWASP Top 10 (36 rules) + Compliance (53 rules: PCI-DSS v4.0 + HIPAA).
+4. **VS Code Extension** (`vscode-codelens/`) — Diagnostics on save, QuickFix code actions, guard pre-save hooks, status bar health indicator, SARIF v2.1.0 integration.
+5. **Cross-File Dataflow Engine** (`dataflow` v2) — Workspace-wide call graph with import resolution (`from/import`, `require` destructuring) and bidirectional taint propagation.
+6. **OWASP Top 10 + Compliance Mapping** — 89 rules total (A01-A10 + PCI-DSS requirements 1-12 + HIPAA 45 CFR § 164.312).
+7. **CI/CD Quality Gate** (`check` command) — Exits non-zero on failure, SARIF output for GitHub Advanced Security / VS Code.
+
+v8.1 follows up with F1 benchmark improvements (avg F1 0.803 → 0.872), circular engine depth fixes (F1 0.667 → 1.000), dead-code engine fixes (F1 0.800 → 0.952), and AST taint depth enhancements (return-value propagation, scope-hierarchical TaintState, branch condition refinement).

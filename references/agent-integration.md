@@ -1,8 +1,11 @@
-# Agent Integration Guide — CodeLens v5
+# Agent Integration Guide — CodeLens v8.1
 
 Complete guide for integrating CodeLens into AI agent workflows.
 Covers: CLI integration, programmatic Python API, JSON output schemas,
-decision trees, auto-trigger mapping, error handling, and best practices.
+decision trees, auto-trigger mapping, error handling, MCP server, guard hooks,
+plugin system, and best practices.
+
+**Current state:** 56 CLI commands · 54 MCP tools (49 static + 5 dynamic) · 28+ languages · 4 plugin types · OWASP Top 10 (36 rules) + Compliance (53 rules) built-in.
 
 ---
 

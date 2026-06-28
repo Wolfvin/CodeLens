@@ -1,4 +1,13 @@
-# Parser Rules per Bahasa — v2 (Tree-sitter Edition)
+# Parser Rules per Bahasa — v3 (Tree-sitter + Regex Fallback Edition)
+
+CodeLens menggunakan dua lapisan parser:
+
+1. **Tree-sitter parsers** (AST-level, akurat) — untuk 9 bahasa utama: HTML, CSS, JS, TS/TSX, Rust, Python, Vue SFC, Svelte, Blade. Lihat `scripts/parsers/*.py` (kecuali `fallback_*.py`).
+2. **Regex fallback parsers** (line-based, lebih longgar) — untuk 28+ bahasa lain. Lihat `scripts/parsers/fallback_*.py`. Auto-aktif ketika tree-sitter grammar tidak tersedia atau untuk bahasa yang belum punya tree-sitter parser.
+
+Tree-sitter lebih akurat (scope-aware, comment-aware, multi-line aware). Fallback regex lebih cepat tapi rentan false positive pada konstruksi kompleks (generics, macros, string-embedded code).
+
+---
 
 ## HTML Parser (tree-sitter-html)
 
@@ -220,3 +229,71 @@ Default              → JS Backend Parser (safer assumption)
 - `.svelte` files → selalu pakai Svelte Parser
 - `.ts` in frontend paths → TSX Parser
 - `.ts` in backend paths → JS Backend Parser
+
+---
+
+## Fallback Regex Parsers (28+ Bahasa)
+
+Untuk bahasa di luar 9 tree-sitter utama, CodeLens punya regex-based fallback parser di `scripts/parsers/fallback_<lang>.py`. Parser ini menangani function declarations, struct/class definitions, dan call edges — cukup untuk call graph & dead-code analysis dasar.
+
+### Bahasa yang Didukung via Fallback
+
+| Bahasa | File Extension | Parser File | Catatan |
+|--------|----------------|-------------|---------|
+| C | `.c`, `.h` | `fallback_c.py` | Functions, macros, typedefs, call edges |
+| C++ | `.cpp`, `.hpp`, `.cc`, `.cxx`, `.hxx` | `fallback_cpp.py` | Classes, methods, namespaces |
+| C# | `.cs` | `fallback_csharp.py` | Classes, methods, properties |
+| CSS | (fallback when tree-sitter unavailable) | `fallback_css.py` | Same rules as tree-sitter CSS parser |
+| Dart | `.dart` | `fallback_dart.py`, `fallback_dart_extra.py` | Classes, methods, async functions |
+| Elixir | `.ex`, `.exs` | `fallback_elixir.py` | Module functions, pattern-matched defs |
+| GDScript | `.gd` | `fallback_gdscript.py` | Godot script functions |
+| Go | `.go` | `fallback_go.py` | Functions, methods, types |
+| Haskell | `.hs` | `fallback_haskell.py` | Function defs, type sigs |
+| HTML | (fallback) | `fallback_html.py` | id/class extraction |
+| Java | `.java` | `fallback_java.py` | Classes, methods |
+| JavaScript (backend) | (fallback) | `fallback_js_backend.py` | Functions, calls |
+| JavaScript (frontend) | (fallback) | `fallback_js_frontend.py` | DOM selectors |
+| Kotlin | `.kt`, `.kts` | `fallback_kotlin.py` | Functions, classes |
+| Lua | `.lua` | `fallback_lua.py` | Functions, locals |
+| Nim | `.nim` | `fallback_nim.py` | Procedures, macros |
+| Objective-C | `.m`, `.mm` | `fallback_objc.py` | Methods, classes |
+| PHP | `.php` | `fallback_php.py` | Functions, classes |
+| Python | (fallback) | `fallback_python.py` | Functions, classes, decorators |
+| R | `.r`, `.R` | `fallback_r.py` | Functions |
+| Ruby | `.rb` | `fallback_ruby.py` | Methods, blocks |
+| Rust | (fallback) | `fallback_rust.py` | Functions, impls |
+| Scala | `.scala` | `fallback_scala.py` | Classes, methods, objects |
+| Shell/Bash | `.sh`, `.bash` | `fallback_shell.py` | Functions |
+| Swift | `.swift` | `fallback_swift.py` | Functions, classes |
+| Vim | `.vim` | `fallback_vim.py` | Functions, commands |
+| Zig | `.zig` | `fallback_zig.py` | Functions |
+
+### Aturan Umum Fallback
+
+- **Comment-aware**: `//`, `#`, `/* */`, `--`, `;;` di-skip sesuai sintaks bahasa
+- **String-aware**: literals `'...'`, `"..."`, `` `...` `` di-skip agar tidak ada false positive
+- **Brace-depth**: class/struct body di-track via brace matching (untuk C++/Java/C#/Swift)
+- **Storage-class skip**: keywords seperti `void`, `const`, `unsigned`, `static`, `inline` di-skip agar tidak dikelirukan dengan function name (bug yang ditemukan saat testing redis/redis)
+- **Macro skip**: macros seperti `println!`, `vec!` (Rust) atau `#define` (C) diabaikan dari call graph
+
+### Keterbatasan Fallback
+
+Tidak seperti tree-sitter, fallback parser:
+- **Tidak scope-aware** — tidak bisa bedain variabel lokal vs global dengan nama sama
+- **Tidak type-aware** — tidak bisa parse generic parameters `<T>` dengan akurat
+- **Tidak multi-line aware untuk arrow functions** dalam parentheses (bug yang pernah ditemukan di JS backend)
+- **Tidak template-literal aware** — `${variable}` di string bisa dikelirukan dengan code
+
+Untuk analisis kritis (taint analysis, security audit), jalankan `setup.sh` untuk install tree-sitter grammars dan dapatkan akurasi penuh.
+
+---
+
+## Bahasa yang Tidak Didukung
+
+Bahasa berikut tidak punya tree-sitter atau fallback parser sama sekali:
+
+OCaml, Perl, Clojure, F#, Erlang, Fortran, Lisp, Prolog.
+
+(Check `scripts/parsers/` untuk status terkini — daftar ini bisa berubah saat fallback parser baru ditambahkan.)
+
+Saat file bahasa ini discan, CodeLens menghitung jumlah file tapi tidak menghasilkan nodes/edges. Output scan akan menampilkan `"unsupported_langs": ["ocaml", "perl"]` di field `frameworks`.

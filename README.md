@@ -2,25 +2,29 @@
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 49 tools, AST-based taint analysis, and live CVE scanning.
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 56 CLI commands, an MCP server with 54 tools (49 static + 5 dynamic), AST-based taint analysis, live CVE/OSV scanning, and a plugin system with OWASP Top 10 + Compliance rule packs.
 
 ## Features
 
-- **56 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, and compliance checking
-- **MCP Server (49 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC)
+- **56 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, and CI/CD quality gates
+- **MCP Server (54 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 49 statically-defined tools + 5 dynamically discovered
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
-- **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems
+- **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
 - **Cross-File Call Graph** — Workspace-wide call graph with import resolution and bidirectional taint propagation
-- **Plugin System** — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery, OWASP Top 10 (36 rules) + Compliance (53 rules)
+- **Plugin System** — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery (local → user → built-in), OWASP Top 10 (36 rules) + Compliance (53 rules: PCI-DSS v4.0 + HIPAA)
 - **VS Code Extension** — Diagnostics Provider, Code Actions, Guard hooks, Health status bar
-- **CI/CD Integration** — GitHub Actions workflows, SARIF v2.1.0 output, PR decoration
+- **CI/CD Integration** — GitHub Actions workflows, SARIF v2.1.0 output, PR decoration, `check` quality-gate command
 - **Guard Command** — Pre/post-write verification designed for AI agent workflows
-- **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, SCSS
-- **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, and more
-- **Incremental Scanning** — Only re-parse changed files for speed
+- **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, Blade
+- **Regex Fallback Parsers** — 28 additional languages supported via regex-based parsers (C, C++, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell, Vim, Zig, and more)
+- **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, and more
+- **Incremental Scanning** — Only re-parse changed files for speed, with SQLite persistent registry storage
 - **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
 - **AI-Optimized Output** — `--format ai` and `--lite` flags for token-efficient AI agent consumption
-- **Security Auditing** — Detect hardcoded secrets, data flow taint analysis, CVE scanning
+- **Auto-Fix Engine** — Confidence-scored auto-fixes with dry-run-by-default safety
+- **HTML Dashboard** — Generate visual dashboards with historical trend tracking
+- **Hybrid LSP Engine** — Optional LSP-enhanced deep analysis (`--deep` flag) when language servers are available
+- **Security Auditing** — Detect hardcoded secrets, data flow taint analysis, CVE scanning, ReDoS regex auditing
 - **Quality Scoring** — Code smells, complexity metrics, dead code detection
 - **CSS Deep Analysis** — Unused variables, orphan keyframes, specificity wars, z-index abuse
 - **Performance Hints** — N+1 queries, sync blocking, memory leaks, expensive renders
@@ -57,18 +61,40 @@ python3 scripts/codelens.py query "btn-primary" # Auto-detect workspace
 python3 scripts/codelens.py smell              # Auto-detect workspace
 ```
 
+### Zero-Config for AI Agents (v6+)
+
+If no `.codelens/` registry exists, any analysis command auto-runs `init` + `scan` (capped at 3000 files to prevent timeout):
+
+```bash
+export CODELENS_AI_MODE=1           # --format ai becomes default
+python3 scripts/codelens.py query "myFunction" --lite
+# → Auto-init + auto-scan → then query → {found, action}
+```
+
 ## Command Reference
 
-### Core Commands (P0 — Always Use)
+### Setup & Lifecycle (P0)
 
 | Command | Description |
 |---------|-------------|
-| `init [workspace]` | Initialize .codelens config with auto-detected frameworks |
-| `scan [workspace] [--incremental] [--full]` | Scan workspace and build registry (`--full` forces full rescan) |
-| `query "name" [workspace] [--domain] [--file]` | Pre-write check: does this name already exist? |
-| `list [workspace] [--domain] [--filter]` | List entries with filter (dead, collision, duplicate, etc.) |
+| `init [workspace]` | Initialize `.codelens` config with auto-detected frameworks |
+| `scan [workspace] [--incremental] [--full] [--max-files N]` | Scan workspace and build registry |
+| `validate [workspace]` | Validate registry vs file system |
 | `detect [workspace]` | Detect frameworks and show recommended config |
 | `watch [workspace]` | Start file watcher for real-time registry updates |
+| `migrate [workspace]` | Migrate JSON registry to SQLite persistent database |
+| `serve` | Start MCP server for AI agent integration (JSON-RPC over stdio) |
+| `lsp-status` | Check which LSP servers are available for `--deep` analysis |
+
+### Pre-Write Safety (P0 — Always Use)
+
+| Command | Description |
+|---------|-------------|
+| `query "name" [workspace] [--domain] [--file] [--fuzzy]` | Pre-write check: does this name already exist? |
+| `impact "name" [workspace] [--action modify\|delete]` | Change impact analysis |
+| `refactor-safe "name" [workspace] [--action rename\|move]` | Pre-flight rename/move safety check |
+| `guard [workspace] (--pre\|--post) --file PATH` | Pre/post-write verification for AI agents |
+| `check [workspace] [--severity ...] [--max-findings N]` | CI/CD quality gate — exits non-zero on failure |
 
 ### Search & Understanding (P1)
 
@@ -76,43 +102,48 @@ python3 scripts/codelens.py smell              # Auto-detect workspace
 |---------|-------------|
 | `search "pattern" [workspace] [--type] [--context]` | Regex search across workspace |
 | `symbols "name" [workspace] [--fuzzy]` | Search symbol in registry |
-| `trace "name" [workspace] [--direction] [--depth]` | Deep call chain tracing |
-| `impact "name" [workspace] [--action]` | Change impact analysis |
+| `trace "name" [workspace] [--direction up\|down\|both] [--depth N]` | Deep call chain tracing |
 | `context "name" [workspace]` | Rich symbol context (definition, callers, callees) |
 | `outline [workspace] [--file] [--all]` | File structure outline |
 | `missing-refs [workspace]` | Detect CSS/HTML mismatches |
 | `dependents "file" [workspace]` | Module-level import tracking |
+| `list [workspace] [--domain] [--filter]` | List entries with filter (dead, collision, duplicate, etc.) |
+| `ask "question"` | Ask a question in natural language (auto-dispatches to relevant commands) |
+| `summary [workspace] [--focus ...] [--detail ...]` | Auto-summary with prioritized findings (anti-overload) |
 
 ### Quality & Security (P0-P1)
 
 | Command | Description |
 |---------|-------------|
-| `secrets [workspace]` | Detect hardcoded API keys, passwords, tokens |
-| `vuln-scan [workspace]` | Scan dependencies for known CVEs |
-| `dataflow [workspace] [--source] [--sink]` | Data flow taint analysis |
-| `env-check [workspace]` | Audit environment variables |
-| `smell [workspace]` | Code smell detection with health score |
-| `complexity [workspace]` | Cyclomatic/cognitive complexity scoring |
-| `dead-code [workspace]` | Enhanced dead code detection |
-| `debug-leak [workspace]` | Detect leftover debug code |
+| `secrets [workspace] [--severity ...]` | Detect hardcoded API keys, passwords, tokens |
+| `vuln-scan [workspace]` | Scan dependencies for known CVEs (OSV.dev + native audit) |
+| `taint [workspace]` | Run AST-based taint analysis for vulnerability detection |
+| `dataflow [workspace] [--source] [--sink]` | Data flow taint analysis with cross-file call graph |
+| `env-check [workspace] [--var NAME]` | Audit environment variables |
+| `smell [workspace] [--categories ...] [--severity ...]` | Code smell detection with health score |
+| `complexity [workspace] [--name FN] [--threshold N]` | Cyclomatic/cognitive complexity scoring |
+| `dead-code [workspace] [--categories ...]` | Enhanced dead code detection |
+| `debug-leak [workspace] [--category ...]` | Detect leftover debug code |
+| `fix [workspace] [--apply]` | Auto-fix issues with confidence scoring (dry-run by default) |
 
-### Understanding & Architecture (P1)
+### Architecture & Understanding (P1)
 
 | Command | Description |
 |---------|-------------|
 | `entrypoints [workspace]` | Map execution entry points |
-| `api-map [workspace]` | Map REST/GraphQL routes to handlers |
+| `api-map [workspace]` | Map REST/GraphQL/gRPC routes to handlers |
 | `state-map [workspace]` | Track global state management |
 | `diff [workspace]` | Compare registry snapshots |
 | `circular [workspace]` | Detect circular dependencies |
-| `validate [workspace]` | Validate registry vs file system |
+| `handbook [workspace]` | Generate project handbook for AI agents |
+| `dashboard [workspace]` | Generate HTML visualization dashboard |
+| `history [workspace]` | Show historical trend data and charts |
 
 ### Refactoring & Analysis (P2-P3)
 
 | Command | Description |
 |---------|-------------|
-| `refactor-safe "name" [workspace]` | Pre-flight rename/move safety check |
-| `side-effect [workspace] [--name]` | Pure vs impure function analysis |
+| `side-effect [workspace] [--name FN]` | Pure vs impure function analysis |
 | `stack-trace "name" [workspace]` | Error propagation simulation |
 | `test-map [workspace]` | Test coverage mapping |
 | `config-drift [workspace]` | Dependency drift detection |
@@ -120,8 +151,18 @@ python3 scripts/codelens.py smell              # Auto-detect workspace
 | `ownership [workspace]` | Git blame code ownership |
 | `regex-audit [workspace]` | ReDoS-vulnerable regex auditing |
 | `a11y [workspace]` | Accessibility auditing (WCAG 2.1) |
-| `perf-hint [workspace]` | Performance anti-pattern detection |
-| `css-deep [workspace]` | Deep CSS analysis |
+| `perf-hint [workspace] [--severity ...] [--category ...]` | Performance anti-pattern detection |
+| `css-deep [workspace]` | Deep CSS analysis (vars, keyframes, specificity) |
+
+### Advanced & Reverse Engineering (P2-P3)
+
+| Command | Description |
+|---------|-------------|
+| `analyze [workspace] [--focus ...] [--timeout SECS]` | Full repo analysis: init + scan + all engines in one command |
+| `binary-scan [workspace]` | Scan for binary/compiled artifacts with Tauri/Electron RE analysis |
+| `artifact-scan [workspace] [--deep]` | Scan for compiled/built artifacts (reverse engineering mode) |
+| `benchmark [workspace]` | Run accuracy and performance benchmarks |
+| `plugin <subcommand>` | Manage plugins: `install`, `list`, `search`, `update`, `info`, `validate` |
 
 ## Query Decision Rules
 
@@ -144,87 +185,119 @@ python3 scripts/codelens.py smell              # Auto-detect workspace
 
 ## Supported Languages & Frameworks
 
-**Languages:** HTML, CSS, SCSS, Less, JavaScript, TypeScript, TSX/JSX, Rust, Python, Vue SFC, Svelte
+**Tree-sitter parsed (AST-level):** HTML, CSS, SCSS, JavaScript, TypeScript, TSX/JSX, Rust, Python, Vue SFC, Svelte, Blade
 
-**Frameworks:** React/Next.js, Vue/Nuxt, Svelte/SvelteKit, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI
+**Regex fallback parsed (28+ languages):** C, C++, C#, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell/Bash, Vim, Zig, and more
 
-**Package Managers:** npm, yarn, pnpm, bun, cargo, pip, go modules
+**Frameworks:** React/Next.js, Vue/Nuxt, Svelte/SvelteKit, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, Drupal, pytest, poetry, setuptools, tox, sphinx, nox, hatch
+
+**Package Managers:** npm, yarn, pnpm, bun, cargo, pip, pipenv, poetry, go modules
 
 ## Architecture
 
 ```
 codelens/
-├── SKILL.md                    # Full documentation for AI agents
-├── SKILL-QUICK.md              # Quick reference (concise)
-├── README.md                   # This file
-├── LICENSE.txt                 # MIT License
-├── setup.sh                    # Dependency installer
-├── skill.json                  # Metadata
-├── references/                 # Detailed reference docs
-│   ├── parser-rules.md         # Parsing rules per language
-│   ├── query-examples.md       # Query usage examples
-│   ├── status-codes.md         # Status & flag reference
-│   ├── changelog.md            # Version changelog
-│   └── agent-integration.md    # AI agent integration guide
-└── scripts/
-    ├── codelens.py             # CLI entry point (56 commands)
-    ├── registry.py             # Registry read/write/build
-    ├── base_parser.py          # Base tree-sitter parser
-    ├── grammar_loader.py       # Lazy tree-sitter grammar loader
-    ├── framework_detect.py     # Framework auto-detection
-    ├── incremental.py          # Incremental scan support
-    ├── edge_resolver.py        # Cross-file edge resolution
-    ├── search_engine.py        # Regex code search
-    ├── trace_engine.py         # Call chain tracing
-    ├── impact_engine.py        # Change impact analysis
-    ├── outline_engine.py       # File structure outline
-    ├── missing_refs.py         # CSS/HTML mismatch detection
-    ├── diff_engine.py          # Registry diff/snapshots
-    ├── circular_engine.py      # Circular dependency detection
-    ├── context_engine.py       # Rich symbol context
-    ├── dependents_engine.py    # Module import tracking
-    ├── validate_engine.py      # Registry validation
-    ├── dataflow_engine.py      # Data flow taint analysis
-    ├── smell_engine.py         # Code smell detection
-    ├── sideeffect_engine.py    # Side-effect analysis
-    ├── refactor_safe_engine.py # Refactoring safety check
-    ├── deadcode_engine.py      # Enhanced dead code detection
-    ├── stacktrace_engine.py    # Error propagation simulation
-    ├── testmap_engine.py       # Test coverage mapping
-    ├── configdrift_engine.py   # Dependency drift detection
-    ├── typeinfer_engine.py     # Lightweight type inference
-    ├── ownership_engine.py     # Git blame ownership
-    ├── secrets_engine.py       # Hardcoded secret detection
-    ├── entrypoints_engine.py   # Entry point mapping
-    ├── apimap_engine.py        # API route mapping
-    ├── statemap_engine.py      # State management tracking
-    ├── envcheck_engine.py      # Environment variable audit
-    ├── debugleak_engine.py     # Debug code leak detection
-    ├── complexity_engine.py    # Complexity scoring
-    ├── regexaudit_engine.py    # Regex auditing
-    ├── a11y_engine.py          # Accessibility auditing
-    ├── vulnscan_engine.py      # Vulnerability scanning
-    ├── perfhint_engine.py      # Performance hints
-    ├── cssdeep_engine.py       # Deep CSS analysis
-    └── parsers/
-        ├── __init__.py
-        ├── html_parser.py      # Tree-sitter HTML parser
-        ├── css_parser.py       # Tree-sitter CSS parser
-        ├── js_frontend_parser.py # JS DOM selector parser
-        ├── js_backend_parser.py  # JS function call graph parser
-        ├── rust_parser.py      # Rust function call graph parser
-        ├── tsx_parser.py       # TSX/JSX React component parser
-        ├── vue_parser.py       # Vue SFC parser
-        ├── svelte_parser.py    # Svelte component parser
-        └── tailwind_detector.py # Tailwind utility analyzer
+├── SKILL.md                       # Full documentation for AI agents
+├── SKILL-QUICK.md                 # Quick reference (concise)
+├── README.md                      # This file
+├── CHANGELOG.md                   # Version history (top-level)
+├── CONTRIBUTING.md                # Contribution guidelines
+├── SECURITY.md                    # Security policy
+├── CODE_OF_CONDUCT.md             # Code of Conduct
+├── LICENSE.txt                    # MIT License
+├── setup.sh                       # Dependency installer
+├── pyproject.toml                 # Python package metadata
+├── skill.json                     # Skill metadata
+├── mcp_config.json                # MCP server config templates (Claude, Cursor, VS Code, Continue, Cline)
+├── pytest.ini                     # Pytest configuration
+├── references/                    # Detailed reference docs
+│   ├── parser-rules.md            # Parsing rules per language
+│   ├── query-examples.md          # Query usage examples
+│   ├── status-codes.md            # Status & flag reference
+│   ├── changelog.md               # Older changelog (per-version highlights)
+│   └── agent-integration.md       # AI agent integration guide
+├── scripts/
+│   ├── codelens.py                # CLI entry point (56 commands registered)
+│   ├── mcp_server.py              # MCP JSON-RPC server (54 tools)
+│   ├── registry.py                # Registry read/write/build
+│   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
+│   ├── base_parser.py             # Base tree-sitter parser
+│   ├── base_engine.py             # Base analysis engine
+│   ├── grammar_loader.py          # Lazy tree-sitter grammar loader
+│   ├── framework_detect.py        # Framework auto-detection
+│   ├── incremental.py             # Incremental scan support
+│   ├── edge_resolver.py           # Cross-file edge resolution
+│   ├── search_engine.py           # Regex code search
+│   ├── trace_engine.py            # Call chain tracing
+│   ├── impact_engine.py           # Change impact analysis
+│   ├── outline_engine.py          # File structure outline
+│   ├── missing_refs.py            # CSS/HTML mismatch detection
+│   ├── diff_engine.py             # Registry diff/snapshots
+│   ├── circular_engine.py         # Circular dependency detection
+│   ├── context_engine.py          # Rich symbol context
+│   ├── dependents_engine.py       # Module import tracking
+│   ├── validate_engine.py         # Registry validation
+│   ├── dataflow_engine.py         # Data flow taint analysis
+│   ├── ast_taint_engine.py        # AST-based taint analysis (tree-sitter)
+│   ├── crossfile_taint_engine.py  # Cross-file taint propagation
+│   ├── callgraph_engine.py        # Workspace-wide call graph
+│   ├── smell_engine.py            # Code smell detection
+│   ├── sideeffect_engine.py       # Side-effect analysis
+│   ├── refactor_safe_engine.py    # Refactoring safety check
+│   ├── deadcode_engine.py         # Enhanced dead code detection
+│   ├── stacktrace_engine.py       # Error propagation simulation
+│   ├── testmap_engine.py          # Test coverage mapping
+│   ├── configdrift_engine.py      # Dependency drift detection
+│   ├── typeinfer_engine.py        # Lightweight type inference
+│   ├── ownership_engine.py        # Git blame ownership
+│   ├── secrets_engine.py          # Hardcoded secret detection
+│   ├── entrypoints_engine.py      # Entry point mapping
+│   ├── apimap_engine.py           # API route mapping
+│   ├── statemap_engine.py         # State management tracking
+│   ├── envcheck_engine.py         # Environment variable audit
+│   ├── debugleak_engine.py        # Debug code leak detection
+│   ├── complexity_engine.py       # Complexity scoring
+│   ├── regexaudit_engine.py       # Regex auditing (ReDoS)
+│   ├── a11y_engine.py             # Accessibility auditing (WCAG 2.1)
+│   ├── vulnscan_engine.py         # Vulnerability scanning
+│   ├── osv_client.py              # OSV.dev API client (9 ecosystems)
+│   ├── perfhint_engine.py         # Performance hints
+│   ├── cssdeep_engine.py          # Deep CSS analysis
+│   ├── autofix_engine.py          # Auto-fix with confidence scoring
+│   ├── dashboard_engine.py        # HTML dashboard generation
+│   ├── history_engine.py          # Historical trend tracking
+│   ├── semantic_engine.py         # Semantic rules engine
+│   ├── hybrid_engine.py           # LSP-enhanced hybrid analysis
+│   ├── lsp_client.py              # LSP client wrapper
+│   ├── convention_engine.py       # Naming convention checking
+│   ├── plugin_system.py           # Plugin system & marketplace
+│   ├── pre_commit_hook.py         # Git pre-commit hook integration
+│   ├── utils.py                   # Shared utilities (version, helpers)
+│   ├── commands/                  # One file per CLI command (auto-registered)
+│   ├── formatters/                # Output formatters (markdown, sarif)
+│   ├── parsers/                   # Tree-sitter + fallback parsers
+│   │   ├── html_parser.py, css_parser.py, js_frontend_parser.py, js_backend_parser.py
+│   │   ├── rust_parser.py, python_parser.py, tsx_parser.py, ts_backend_parser.py
+│   │   ├── vue_parser.py, svelte_parser.py, tailwind_detector.py, blade_parser.py
+│   │   └── fallback_*.py          # 28 regex-based fallback parsers (C, C++, Go, Java, ...)
+│   ├── rules/                     # Built-in YAML rule packs
+│   │   ├── javascript_security.yaml
+│   │   └── python_security.yaml
+│   └── plugins/                   # Built-in plugin packs
+│       ├── owasp_top10/rules/owasp_top10.yaml   (36 rules, A01-A10)
+│       └── compliance/rules/{hipaa.yaml, pci_dss.yaml}  (53 rules)
+├── benchmarks/                    # Benchmark suite & fixtures (clean_app + vulnerable_app)
+├── tests/                         # Pytest test suite
+└── vscode-codelens/               # VS Code extension source
 ```
 
 ## Requirements
 
 - Python 3.8+
-- tree-sitter + language grammars (auto-installed by setup.sh)
+- tree-sitter + language grammars (auto-installed by `setup.sh`)
 - watchdog (optional, for file watching)
 - git (optional, for ownership analysis)
+- Language server (optional, for `--deep` LSP-enhanced analysis)
 
 ## Installation
 
@@ -244,27 +317,51 @@ python3 scripts/codelens.py --help
 
 CodeLens is designed to be used by AI coding agents. The full integration guide is in [references/agent-integration.md](references/agent-integration.md).
 
-**Key principle:** Before an AI writes any new class, ID, or function, it MUST query CodeLens first to check for collisions, overwrites, and dead code.
+**Key principle:** Before an AI writes any new class, id, or function, it MUST query CodeLens first to check for collisions, overwrites, and dead code.
 
 ### MCP Server Integration
 
-CodeLens ships with a native MCP server (49 tools) for direct AI agent integration:
+CodeLens ships with a native MCP server (54 tools) for direct AI agent integration:
 
 ```bash
-# Start MCP server
+# Start MCP server (JSON-RPC over stdio)
 python3 scripts/codelens.py serve
 ```
 
-See `mcp_config.json` for Claude Desktop / VS Code Copilot configuration.
+See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
 
 ### Guard Hooks for AI Agents
 
 ```bash
 # Pre-write safety check
-codelens guard /path/to/workspace --pre --file src/new_module.py
+python3 scripts/codelens.py guard /path/to/workspace --pre --file src/new_module.py
 
 # Post-write verification
-codelens guard /path/to/workspace --post --file src/new_module.py
+python3 scripts/codelens.py guard /path/to/workspace --post --file src/new_module.py
+```
+
+### CI/CD Quality Gate
+
+```bash
+# Quality gate — exits non-zero on failure (use in CI/CD pipelines)
+python3 scripts/codelens.py check /path/to/workspace --severity high --max-findings 50
+
+# SARIF output for GitHub Advanced Security / VS Code
+python3 scripts/codelens.py check /path/to/workspace --format sarif > codelens.sarif
+```
+
+### Plugin System
+
+```bash
+# List installed plugins
+python3 scripts/codelens.py plugin list
+
+# Built-in plugins (already shipped):
+#   - owasp_top10  (36 OWASP Top 10 rules, A01-A10)
+#   - compliance   (53 rules: PCI-DSS v4.0 + HIPAA Security Rule)
+
+# Search registry (future marketplace)
+python3 scripts/codelens.py plugin search "sql injection"
 ```
 
 ## Honest Competitive Positioning
@@ -304,4 +401,4 @@ MIT License — see [LICENSE.txt](LICENSE.txt)
 
 ## Changelog
 
-See [references/changelog.md](references/changelog.md) for version history.
+See [CHANGELOG.md](CHANGELOG.md) for version history (top-level) and [references/changelog.md](references/changelog.md) for older per-version highlights.

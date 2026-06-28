@@ -1,6 +1,8 @@
 # CodeLens — AI-Native Code Intelligence
 
-**VS Code Extension for the [CodeLens](https://github.com/Wolfvin/CodeLens) code analysis platform.**
+**VS Code Extension for the [CodeLens](https://github.com/Wolfvin/CodeLens) v8.1 code analysis platform.**
+
+The extension wraps the CodeLens CLI `check` command (SARIF output mode) and surfaces its findings as VS Code diagnostics, quick-fixes, and a status-bar health indicator. It is the IDE companion to the MCP server (`codelens serve`) used by AI agents.
 
 ## Features
 
@@ -36,12 +38,14 @@
 
 ## Prerequisites
 
-Install the CodeLens CLI:
+Install the CodeLens CLI v8.x:
 
 ```bash
 git clone https://github.com/Wolfvin/CodeLens.git
 cd CodeLens
-pip install -e .
+bash setup.sh
+# Verify
+python3 scripts/codelens.py --help
 ```
 
 Or set `codelens.path` to point to your `codelens.py` file.

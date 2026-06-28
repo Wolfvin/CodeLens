@@ -34,24 +34,26 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 CodeLens uses a modular engine architecture. To add a new analysis capability:
 
 1. **Check existing issues** for similar proposals
-2. **Open a discussion issue** first describing the engine's purpose and design
-3. **Follow the naming convention**: `yourfeature_engine.py`
-4. **Implement the engine** following the pattern of existing engines
+2. **Decide: plugin or built-in?** — Since v8.0, CodeLens supports plugins (rule_pack / engine / formatter / command). If your analysis is self-contained, ship it as a plugin (see `scripts/plugin_system.py`). If it needs tight integration with the registry or other engines, add it as built-in.
+3. **For built-in engines**: Follow the naming convention `yourfeature_engine.py`
+4. **Implement the engine** following the pattern of existing engines (return `{status, workspace, findings, summary}`)
 5. **Add a command module** in `commands/yourfeature.py` with `add_args(subparser)` and `execute(args)` functions
 6. **Add tests** in `tests/`
-7. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, and `README.md`
+7. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, `README.md`, and `CHANGELOG.md`
 
 Commands auto-register via `commands/__init__.py` — no manual wiring needed.
 
 ### Adding New Language Parsers
 
 1. **Check tree-sitter support** for the language
-2. **Create `parsers/yourlanguage_parser.py`** following the base_parser pattern
-3. **Add fallback regex parser** in `parsers/fallback_yourlanguage.py` for when tree-sitter is unavailable
-4. **Update file discovery** to recognize the file extension
-5. **Update `setup.sh`** to install the tree-sitter grammar
-6. **Add tests** with sample files in the target language
-7. **Update documentation**
+2. **Create `parsers/yourlanguage_parser.py`** following the `base_parser.py` pattern (preferred for accuracy)
+3. **Always add a fallback regex parser** in `parsers/fallback_yourlanguage.py` so the language works even without tree-sitter installed
+4. **Update file discovery** in `commands/scan.py` to recognize the file extension
+5. **Update `setup.sh`** to install the tree-sitter grammar (if applicable)
+6. **Update `framework_detect.py`** if the language has framework markers worth detecting
+7. **Add tests** with sample files in the target language
+8. **Update `references/parser-rules.md`** with the new language's parsing rules
+9. **Update `README.md`** supported languages list
 
 ## Development Setup
 
@@ -165,10 +167,11 @@ When adding a new CLI command, create a new file in the `commands/` directory:
 
 Maintainers follow this process:
 
-1. Update version in `skill.json`
-2. Update `references/changelog.md`
-3. Tag release: `git tag v5.x.x`
-4. Push tag: `git push origin v5.x.x`
+1. Update version in `scripts/utils.py` (`CODELENS_VERSION` constant), `skill.json`, and `pyproject.toml`
+2. Update `CHANGELOG.md` (top-level) and `references/changelog.md` (per-version highlights)
+3. Update `SKILL.md`, `SKILL-QUICK.md`, and `README.md` version numbers
+4. Tag release: `git tag v8.x.x`
+5. Push tag: `git push origin v8.x.x`
 
 ## Questions?
 

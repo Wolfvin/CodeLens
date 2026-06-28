@@ -1,4 +1,4 @@
-# CodeLens v7.2.0 — Quick Reference
+# CodeLens v8.1.0 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
@@ -24,6 +24,9 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | `--lite` | Command-specific minimal output (see table below) |
 | `--max-tokens N` | Auto-truncate to fit ~N tokens |
 | `--format ai` | Normalized: `{stats, items[], truncated, recommendations}` |
+| `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
+| `--format sarif` | SARIF v2.1.0 output for GitHub Advanced Security / VS Code |
+| `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
 
 ### Lite Mode Per Command
 
@@ -37,7 +40,10 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | `debug-leak` | `{stats, top_leaks[], leaks_total}` |
 | `perf-hint` | `{risk, stats, top_hints[], hints_total}` |
 | `secrets` | `{risk, action, stats, top_findings[]}` |
-| `a11y/css-deep/regex-audit/vuln-scan` | `{risk, stats, top_items[], recommendations[]}` |
+| `a11y` / `css-deep` / `regex-audit` / `vuln-scan` | `{risk, stats, top_items[], recommendations[]}` |
+| `taint` | `{status, stats, top_violations[], recommendations[]}` |
+| `guard` | `{status, risk, action, blocked_reason?}` |
+| `check` | `{status, exit_code, total_findings, critical_count}` |
 | Other | `{status, stats, top 5 items, recommendations}` |
 
 ## Query Decision Rules
@@ -61,13 +67,22 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | "safe to rename?" | `refactor-safe` |
 | "production ready?" | `smell` → `complexity` → `debug-leak` → `secrets` |
 | "security audit" | `secrets` → `dataflow` → `env-check` → `vuln-scan` |
+| "taint analysis" | `taint` (AST) or `dataflow` (cross-file) |
 | "what to refactor?" | `smell` |
 | "too complex?" | `complexity` |
 | "performance?" | `perf-hint` → `circular` |
 | "cleanup before deploy" | `debug-leak` → `dead-code` → `secrets` |
 | "CSS issues?" | `css-deep` → `missing-refs` |
 | "accessible?" | `a11y` |
-| "project overview" | `summary` |
+| "project overview" | `summary` or `handbook` |
+| "fix automatically" | `fix --apply` (dry-run by default) |
+| "show dashboard" | `dashboard` |
+| "trend over time" | `history` |
+| "run everything" | `analyze` |
+| "CI/CD gate" | `check --severity high` |
+| "manage plugins" | `plugin list` / `plugin install` |
+| "MCP server" | `serve` |
+| "pre/post-write hook" | `guard --pre` / `guard --post` |
 | "don't know which command" | `ask "question"` |
 
 ### Disambiguation
@@ -85,38 +100,58 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | "Security in my code" | `secrets` | `vuln-scan` (vuln-scan checks deps) |
 | "Dependency CVEs" | `vuln-scan` | `secrets` (secrets finds hardcoded) |
 | "Project identity" | `handbook` | `summary` (summary = findings) |
+| "AST taint (precise)" | `taint` | `dataflow` (dataflow is cross-file, regex-aware) |
+| "Cross-file taint" | `dataflow` | `taint` (taint is single-file, AST-deep) |
+| "Auto-fix issues" | `fix` | `check` (check just gates, doesn't fix) |
 
-## All 45 Commands
+## All 56 Commands
 
-### Setup (3)
-`init` `scan [--incremental] [--max-files N]` `validate`
+### Setup & Lifecycle (8)
+`init` · `scan [--incremental] [--max-files N] [--full]` · `validate` · `detect` · `watch [--debounce SECS]` · `migrate` · `serve` · `lsp-status`
 
-### Pre-Write (3)
-`query "name" [--domain ...] [--fuzzy]` `impact "name" [--action modify|delete]` `refactor-safe "name" [--action rename|move]`
+### Pre-Write Safety (5)
+`query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
 
-### Navigation (9)
-`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` `context "name"` `trace "name" [--direction up|down|both]` `search "pattern"` `symbols "name" [--fuzzy]` `outline [--file path]` `dependents "file"` `list [--filter ...]` `ask "question"`
+### Navigation (10)
+`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both]` · `search "pattern"` · `symbols "name" [--fuzzy]` · `outline [--file path]` · `dependents "file"` · `list [--filter ...]` · `ask "question"` · `diff`
 
-### Architecture (6)
-`entrypoints` `api-map` `state-map` `detect` `handbook` `diff`
+### Architecture (8)
+`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history`
 
-### Security (4)
-`secrets [--severity ...]` `dataflow [--source ...] [--sink ...]` `vuln-scan` `env-check [--var NAME]`
+### Security (5)
+`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan` (OSV.dev + native audit) · `env-check [--var NAME]`
 
-### Quality (8)
-`smell [--categories ...] [--severity ...]` `complexity [--name FN] [--threshold N] [--sort ...]` `dead-code [--categories ...]` `debug-leak [--category ...]` `circular [--domain ...]` `missing-refs` `side-effect [--name FN]` `perf-hint [--severity ...] [--category ...]`
+### Quality (9)
+`smell [--categories ...] [--severity ...]` · `complexity [--name FN] [--threshold N] [--sort ...]` · `dead-code [--categories ...]` · `debug-leak [--category ...]` · `circular [--domain ...]` · `missing-refs` · `side-effect [--name FN]` · `perf-hint [--severity ...] [--category ...]` · `fix [--apply]`
 
 ### Refactoring (3)
-`test-map` `stack-trace "name"` `config-drift`
+`test-map` · `stack-trace "name"` · `config-drift`
 
 ### Frontend (2)
-`css-deep` `a11y`
+`css-deep` · `a11y`
 
-### Advanced (6)
-`analyze [--focus ...] [--timeout SECS]` `type-infer` `ownership` `regex-audit` `binary-scan` `artifact-scan [--deep]`
+### Advanced & RE (5)
+`analyze [--focus ...] [--timeout SECS]` · `type-infer` · `ownership` · `regex-audit` · `binary-scan` · `artifact-scan [--deep]`
 
-### Utility (1)
-`watch [--debounce SECS]`
+### Tooling (1)
+`plugin <install|list|search|update|info|validate>`
+
+**Total: 56 commands** (verified via `commands/__init__.py` auto-registration)
+
+## MCP Server (54 Tools)
+
+Start the MCP server for AI agent integration:
+
+```bash
+python3 scripts/codelens.py serve
+```
+
+Exposes 54 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`):
+- 49 statically-defined tools (full JSON schemas in `mcp_server.py`)
+- 5 dynamically-discovered tools (`benchmark`, `dashboard`, `history`, `lsp-status`, `migrate`)
+- `watch` and `serve` itself are excluded (long-running)
+
+See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
 
 ## Error Handling
 
@@ -129,6 +164,10 @@ All errors return `{status:"error", error_type, error, suggestion}`. Common patt
 | `ask` timeout (45s) | Run specific command directly |
 | Any `status:"error"` | Follow `suggestion` field |
 | Workspace invalid | Auto-detect from cwd/parent dirs |
+| `analyze` engine timeout | `skipped:true` per-engine — run that command individually |
+| `summary` budget exceeded | `timed_out_engines[]` — use `--detail minimal` or specific commands |
+| `handbook` budget exceeded | `partial:true` — run individual commands for skipped sections |
+| `guard` blocks write | Follow `blocked_reason` — fix the flagged issue before retrying |
 
 ## First-Time Setup (if zero-config fails)
 
