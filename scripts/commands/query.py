@@ -44,7 +44,30 @@ def add_args(parser):
 def execute(args, workspace):
     limit = None if getattr(args, 'all', False) else getattr(args, 'limit', 20)
     fuzzy = getattr(args, 'fuzzy', False)
-    return cmd_query(args.name, workspace, args.domain, args.file, limit=limit, fuzzy=fuzzy)
+    result = cmd_query(args.name, workspace, args.domain, args.file, limit=limit, fuzzy=fuzzy)
+    _attach_baseline_confidence(result, args.name, workspace)
+    return result
+
+
+def _attach_baseline_confidence(result: Dict[str, Any], query_name: str, workspace: str) -> None:
+    """Attach baseline confidence to query results.
+
+    Per ``hybrid_engine.py`` module docstring, CodeLens's default analysis path
+    (tree-sitter AST) corresponds to MEDIUM confidence.  ``HybridEngine.enhance_query``
+    sets ``confidence=MEDIUM`` when LSP is not active (``deep=False``).  When the
+    user later passes ``--deep``, ``codelens.py`` post-processing calls
+    ``enhance_query`` again with ``deep=True`` and may override this to HIGH or
+    LOW based on LSP verification.
+    """
+    if not isinstance(result, dict) or not result.get("found"):
+        return
+    try:
+        from hybrid_engine import create_hybrid_engine
+        engine = create_hybrid_engine(workspace, deep=False)
+        engine.enhance_query(result, query_name)
+        engine.cleanup()
+    except Exception:
+        result.setdefault("confidence", "medium")
 
 
 def cmd_query(query_name: str, workspace: str, domain: str = None,

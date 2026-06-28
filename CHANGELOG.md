@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Confidence Fields on Non-Deep Output (test fix)
+
+Previously, the `confidence` / `confidence_distribution` fields were only
+attached to `query` / `impact` / `dead-code` output when the `--deep` flag
+was passed (which triggers LSP verification). This meant consumers of the
+default (non-deep) output had no way to know the analysis provenance. The
+hybrid engine's module docstring already documents the intended semantics
+(`high` = LSP verified, `medium` = AST matched, `low` = regex only), and
+`HybridEngine.enhance_*` methods already set `confidence = MEDIUM` when LSP
+is not active — but those methods were only invoked from the `--deep`
+post-processing path in `codelens.py`, never from the command `execute()`
+entry points.
+
+This fix completes the partially-implemented feature by attaching baseline
+`confidence = "medium"` (and `confidence_distribution` for `dead-code`) at
+command execution time, before the `--deep` post-processing layer runs.
+When `--deep` is later applied, LSP verification may override individual
+fields to `high` or `low` as before.
+
+### Added (confidence fields)
+
+- **`query` command** — top-level `confidence` field is now always present
+  on `found` results (value: `"medium"` for AST-based analysis, `"high"` or
+  `"low"` when `--deep` + LSP verifies).
+- **`impact` command** — top-level `confidence` field is now always present
+  on `status: ok` results.
+- **`dead-code` command** — each finding in `results` now carries a
+  `confidence` field; `stats.confidence_distribution` (counts of
+  `high` / `medium` / `low`) is now always present.
+
+### Non-Breaking (confidence fields)
+
+- All previously-passing tests continue to pass.
+- The new fields are additive — no existing field is removed or renamed.
+- When `--deep` is used, the `--deep` post-processing layer in
+  `codelens.py` still runs and may override the baseline confidence based
+  on LSP verification, exactly as before.
+- The `confidence` field is also surfaced in the `--format ai` normalized
+  output via the existing `_META_KEYS` extraction in
+  `formatters/__init__.py`.
+
 ### Token-Efficient Output + Pagination (issue #17)
 
 Adds a 5th output format (`compact`) and pagination to all list-type commands
