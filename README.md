@@ -121,7 +121,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 | Command | Description |
 |---------|-------------|
 | `secrets [workspace] [--severity ...]` | Detect hardcoded API keys, passwords, tokens |
-| `vuln-scan [workspace]` | Scan dependencies for known CVEs (OSV.dev + native audit) |
+| `vuln-scan [workspace] [--refresh] [--max-age Nh]` | Scan dependencies for known CVEs (OSV.dev + native audit). `--refresh` bypasses the OSV cache; `--max-age Nh` treats cache entries older than N hours as stale for this run. Output includes a `cache_info` block (`last_refresh`, `age_hours`, `ttl_hours`, `is_stale`, `stale_packages`) — issue #30 |
 | `taint [workspace]` | Run AST-based taint analysis for vulnerability detection |
 | `dataflow [workspace] [--source] [--sink]` | Data flow taint analysis with cross-file call graph |
 | `env-check [workspace] [--var NAME]` | Audit environment variables |

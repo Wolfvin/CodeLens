@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### OSV Cache Staleness Flag + Refresh Flags (issue #30)
+
+`vuln-scan` now reports OSV cache freshness and lets agents force fresh
+data. Previously the 24h OSV cache had no staleness indicator and no way
+to force a re-fetch short of deleting the cache — agents relying on
+`vuln-scan` for security posture had no way to know whether the CVE
+results were minutes or 23 hours old.
+
+### Added (vuln-scan staleness)
+
+- **`cache_info` block in `vuln-scan` output** — additive top-level field:
+  ```json
+  "cache_info": {
+    "last_refresh": "2026-06-28T10:00:00Z",
+    "age_hours": 23.5,
+    "ttl_hours": 24,
+    "is_stale": false,
+    "stale_packages": ["requests@2.20.0"]
+  }
+  ```
+  `is_stale` is true when any cached entry is past the effective TTL, the
+  newest entry's age ≥ the effective TTL, or there are OSV-queriable
+  packages but none are cached (no fresh coverage). `stale_packages` lists
+  the `"name@version"` of cached entries past the effective TTL.
+- **`vuln-scan --refresh`** — bypasses the OSV cache and forces fresh
+  OSV.dev API calls for every package, then updates the cache with the new
+  results. No-op in `--offline` mode.
+- **`vuln-scan --max-age Nh`** — treats cache entries older than `N` hours
+  as stale for this run only (overrides the default 24h TTL without
+  changing the stored TTL). Accepts `6h`/`30m`/`2d`/`90s`/bare-integer
+  (hours). `cache_info.ttl_hours` and the staleness threshold honour this
+  override so they stay consistent. Ignored with `--refresh` and in
+  `--offline` mode.
+
+### Changed (vuln-scan staleness)
+
+- `scripts/osv_client.py`: new `OSVCache.peek(key)` — pure inspection
+  returning `(timestamp, ttl)` without mutating the cache (unlike `get()`,
+  which deletes expired entries). New `OSVClient.get_cache_info(packages,
+  max_age=None)`. `OSVClient.query_packages()` gained `force_refresh` and
+  `max_age` parameters (default behaviour unchanged).
+- `scripts/vulnscan_engine.py`: `scan_vulnerabilities()` gained `refresh`
+  and `max_age` parameters and now attaches `cache_info` to its result.
+- `scripts/commands/vuln_scan.py`: new `--refresh` and `--max-age` flags
+  plus a `_parse_max_age()` helper. Invalid `--max-age` values return an
+  `error` result instead of crashing.
+
+### Non-Breaking (vuln-scan staleness)
+
+- `cache_info` is additive — no existing `vuln-scan` output field is
+  changed or removed.
+- Default network behaviour is unchanged: the API is only contacted for
+  uncached packages, or when `--refresh` is set, or when `--max-age`
+  marks cached entries stale.
+
 ### Confidence Fields on Non-Deep Output (test fix)
 
 Previously, the `confidence` / `confidence_distribution` fields were only

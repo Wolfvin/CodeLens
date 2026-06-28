@@ -126,7 +126,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 `entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff [--git-aware]` · `dashboard` · `history` · `graph-schema` · `resolve-types`
 
 ### Security (5)
-`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan` (OSV.dev + native audit) · `env-check [--var NAME]`
+`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan [--refresh] [--max-age Nh]` (OSV.dev + native audit; output includes `cache_info` staleness block — issue #30) · `env-check [--var NAME]`
 
 ### Quality (9)
 `smell [--categories ...] [--severity ...]` · `complexity [--name FN] [--threshold N] [--sort ...]` · `dead-code [--categories ...]` · `debug-leak [--category ...]` · `circular [--domain ...]` · `missing-refs` · `side-effect [--name FN]` · `perf-hint [--severity ...] [--category ...]` · `fix [--apply]`
