@@ -507,6 +507,7 @@ def scan_vulnerabilities(
     config: Optional[Dict] = None,
     offline: bool = False,
     osv_ttl: int = 86400,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     """
     Scan dependency files for known vulnerabilities.
@@ -522,6 +523,9 @@ def scan_vulnerabilities(
                 "vulnscan.skip_audit_tools" options)
         offline: If True, skip OSV API queries (use cache only)
         osv_ttl: Cache TTL for OSV results in seconds (default 86400 = 24h)
+        refresh: If True, bypass the OSV cache and force fresh API calls for
+            every package (issue #30 ``--refresh`` flag). Ignored when
+            ``offline`` is True.
 
     Returns:
         Dict with findings, stats, risk level, audit availability,
@@ -572,7 +576,9 @@ def scan_vulnerabilities(
             osv_packages = OSVQueryBuilder.build_from_workspace(workspace)
 
             if osv_packages:
-                osv_vulns = osv_client.query_packages(osv_packages)
+                osv_vulns = osv_client.query_packages(
+                    osv_packages, force_refresh=refresh
+                )
                 osv_findings = [v.to_finding() for v in osv_vulns]
 
                 # Tag OSV findings so we can prioritize them

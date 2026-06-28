@@ -477,14 +477,19 @@ class OSVClient:
     def query_packages(
         self,
         packages: List[OSVPackage],
+        force_refresh: bool = False,
     ) -> List[OSVVulnerability]:
         """Query multiple packages against OSV.dev.
 
-        Uses batch queries for efficiency. Checks cache first,
-        then queries API for uncached packages.
+        Uses batch queries for efficiency. Checks cache first, then queries
+        the API for uncached packages. Cached API responses are updated with
+        the fresh results.
 
         Args:
-            packages: List of OSVPackage objects to query
+            packages: List of OSVPackage objects to query.
+            force_refresh: If True, bypass the cache and force fresh API
+                calls for every package (issue #30 ``--refresh`` flag).
+                Ignored when ``offline`` is True (cannot hit the network).
 
         Returns:
             List of OSVVulnerability objects (deduplicated)
@@ -496,12 +501,23 @@ class OSVClient:
         uncached_packages: List[OSVPackage] = []
         uncached_keys: List[str] = []
 
+        # --refresh bypasses cache reads entirely (issue #30). It is a no-op
+        # in offline mode, where we cannot reach the API and must rely on
+        # whatever the cache already holds.
+        bypass_cache = bool(force_refresh) and not self.offline
+
         # Check cache first
         for pkg in packages:
             if pkg.ecosystem is None:
                 continue  # Not supported by OSV
 
             cache_key = pkg.cache_key()
+
+            if bypass_cache:
+                uncached_packages.append(pkg)
+                uncached_keys.append(cache_key)
+                continue
+
             cached = self.cache.get(cache_key)
             if cached is not None:
                 self._cache_hit_count += 1

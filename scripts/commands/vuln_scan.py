@@ -13,6 +13,10 @@ def add_args(parser):
                         help="Skip OSV.dev API queries (use cached data only)")
     parser.add_argument("--osv-ttl", type=int, default=86400,
                         help="OSV cache TTL in seconds (default: 86400 = 24h)")
+    parser.add_argument("--refresh", action="store_true", default=False,
+                        help="Bypass the OSV cache and force fresh API calls for "
+                             "every package (issue #30). Updates the cache with new "
+                             "results. Ignored in --offline mode.")
 
 
 def execute(args, workspace):
@@ -21,6 +25,7 @@ def execute(args, workspace):
         severity=args.severity,
         offline=args.offline,
         osv_ttl=args.osv_ttl,
+        refresh=args.refresh,
     )
 
 
