@@ -652,7 +652,7 @@ body {{
   <button onclick="showSection('dependencies')">Dependencies</button>
   <button onclick="showSection('security')">Security</button>
   <button onclick="showSection('trends')">Trends</button>
-  {"<button onclick=\"showSection('compare')\">Compare</button>" if comparison else ""}
+  {'''<button onclick="showSection('compare')">Compare</button>''' if comparison else ""}
 </div>
 
 <!-- Main Content -->
