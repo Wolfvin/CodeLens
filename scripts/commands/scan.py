@@ -111,6 +111,20 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
             fe_classes = existing_frontend.get("classes", [])
             fe_ids = existing_frontend.get("ids", [])
 
+            # No changes detected → graph tables are unchanged from the
+            # previous scan. Report current graph stats so the scan
+            # output shape (issue #25) matches the full-scan output:
+            # both expose a `graph` field with `{nodes, edges}`.
+            graph_stats_existing = {"nodes": 0, "edges": 0}
+            try:
+                from graph_model import graph_stats as _graph_stats
+                from graph_model import _default_db_path as _scan_db_path2
+                graph_stats_existing = _graph_stats(_scan_db_path2(workspace))
+            except Exception:
+                logger.debug(
+                    "graph_stats failed in no-changes path", exc_info=True
+                )
+
             return {
                 "status": "ok",
                 "workspace": workspace,
@@ -172,6 +186,13 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                 "frameworks": config.get("frameworks", []),
                 "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
                 "lang_note": _build_lang_note(fw) if fw else None,
+                # Issue #25: incremental scan output includes graph stats
+                # so consumers can verify graph is populated without a
+                # separate `graph-schema` call.
+                "graph": {
+                    "nodes": graph_stats_existing.get("nodes", 0),
+                    "edges": graph_stats_existing.get("edges", 0),
+                },
             }
 
         # Handle deleted files: remove from mtimes cache and clean registry
@@ -911,40 +932,60 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         }
     save_backend_registry(workspace, backend_registry)
 
-    # ─── Graph Data Model Population (issue #8) ─────────────────
-    # After the flat backend registry is built, populate the graph_nodes +
-    # graph_edges tables from it in a single bulk transaction. This is
-    # additive and non-breaking — the flat registry remains the source of
-    # truth; the graph tables are a derived projection that engines can
-    # query for structural traversals (callers/callees/cycles/blast-radius).
+    # ─── Graph Data Model Population (issue #8 + #25) ────────────
+    # After the flat backend registry is built, populate (full scan) or
+    # incrementally update (incremental scan) the graph_nodes + graph_edges
+    # tables. The incremental path (issue #25) updates only the affected
+    # slice — graph stays in sync without a full re-population.
+    #
+    # In incremental mode, incremental_graph_update also runs
+    # refine_call_edges internally (so we skip the redundant full refine
+    # call below). In full-scan mode, populate_graph_tables + refine_call_edges
+    # run separately (existing flow from #8 + #13).
+    #
     # Failures here MUST NOT break the scan — the graph is an optimization
     # layer; engines fall back to the flat registry if it's missing.
-    graph_population = {"nodes": 0, "edges": 0}
-    try:
-        from graph_model import populate_graph_tables, _default_db_path
-        db_path = _default_db_path(workspace)
-        graph_population = populate_graph_tables(workspace, db_path)
-    except Exception:
-        logger.warning("Graph table population failed", exc_info=True)
-
-    # ─── Hybrid Type Resolution (issue #13) ──────────────────────
-    # Post-pass that enriches CALLS edges with receiver type info via
-    # an import-aware resolver. Also writes IMPORTS edges to graph_edges
-    # and populates the import_registry table. Additive — only refines
-    # existing edges in place; never removes or replaces them. Failures
-    # here MUST NOT break the scan (type resolution is an optimization
-    # layer; unresolved edges fall back to name-based resolution).
     type_resolution = {"edges_refined": 0, "edges_unresolved": 0}
-    try:
-        from hybrid_type_resolver import refine_call_edges
-        from graph_model import _default_db_path as _tr_db_path
-        tr_stats = refine_call_edges(workspace, _tr_db_path(workspace))
-        type_resolution = {
-            "edges_refined": tr_stats.get("edges_refined", 0),
-            "edges_unresolved": tr_stats.get("edges_unresolved", 0),
-        }
-    except Exception:
-        logger.warning("Hybrid type resolution failed", exc_info=True)
+    if incremental and changed_files:
+        try:
+            from graph_model import (
+                incremental_graph_update, _default_db_path,
+            )
+            db_path = _default_db_path(workspace)
+            inc_result = incremental_graph_update(
+                workspace, db_path, changed_files
+            )
+            type_resolution = {
+                "edges_refined": inc_result.get("edges_refined", 0),
+                "edges_unresolved": inc_result.get("edges_unresolved", 0),
+            }
+        except Exception:
+            logger.warning("Incremental graph update failed", exc_info=True)
+    else:
+        try:
+            from graph_model import populate_graph_tables, _default_db_path
+            db_path = _default_db_path(workspace)
+            populate_graph_tables(workspace, db_path)
+        except Exception:
+            logger.warning("Graph table population failed", exc_info=True)
+
+        # ─── Hybrid Type Resolution (issue #13) ──────────────────
+        # Post-pass that enriches CALLS edges with receiver type info via
+        # an import-aware resolver. Also writes IMPORTS edges to graph_edges
+        # and populates the import_registry table. Additive — only refines
+        # existing edges in place; never removes or replaces them. Failures
+        # here MUST NOT break the scan (type resolution is an optimization
+        # layer; unresolved edges fall back to name-based resolution).
+        try:
+            from hybrid_type_resolver import refine_call_edges
+            from graph_model import _default_db_path as _tr_db_path
+            tr_stats = refine_call_edges(workspace, _tr_db_path(workspace))
+            type_resolution = {
+                "edges_refined": tr_stats.get("edges_refined", 0),
+                "edges_unresolved": tr_stats.get("edges_unresolved", 0),
+            }
+        except Exception:
+            logger.warning("Hybrid type resolution failed", exc_info=True)
 
     # ─── Git-aware scan bookmark (issue #14) ─────────────────────
     # After a successful scan, record the current HEAD SHA + branch so the
@@ -996,6 +1037,20 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         except Exception as e:
             logger.warning(f"Failed to load plugin rules: {e}")
             plugin_rules_data = {"error": str(e)}
+
+    # ─── Final graph stats (issue #25) ───────────────────────────
+    # Query the actual graph state AFTER all post-scan passes (populate +
+    # refine for full scan; incremental_graph_update for incremental scan)
+    # so the reported counts reflect the true final state — CALLS + IMPORTS
+    # edges, after type resolution. Both full and incremental paths report
+    # the same shape so consumers can compare counts across scan modes.
+    final_graph_stats = {"nodes": 0, "edges": 0}
+    try:
+        from graph_model import graph_stats as _final_graph_stats
+        from graph_model import _default_db_path as _final_db_path
+        final_graph_stats = _final_graph_stats(_final_db_path(workspace))
+    except Exception:
+        logger.debug("final graph_stats query failed", exc_info=True)
 
     result = {
         "status": "ok",
@@ -1057,9 +1112,13 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         "changed_files_count": len(changed_files) if changed_files else 0,
         "unsupported_langs": fw.get("unsupported_langs", []) if fw else [],
         "lang_note": _build_lang_note(fw) if fw else None,
+        # Issue #25: graph field reflects the actual final state of
+        # graph_nodes + graph_edges (CALLS + IMPORTS, after type
+        # resolution). Both full and incremental scans report the same
+        # shape so consumers can compare counts across scan modes.
         "graph": {
-            "nodes": graph_population.get("nodes", 0),
-            "edges": graph_population.get("edges", 0),
+            "nodes": final_graph_stats.get("nodes", 0),
+            "edges": final_graph_stats.get("edges", 0),
         },
         "type_resolution": {
             "edges_refined": type_resolution.get("edges_refined", 0),
