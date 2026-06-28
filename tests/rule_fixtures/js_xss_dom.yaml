@@ -1,0 +1,25 @@
+# Migrated from scripts/rules/javascript_security.yaml for rule-test fixture.
+rules:
+  - id: js/xss-dom
+    name: DOM Cross-Site Scripting
+    language: javascript
+    severity: critical
+    cwe: CWE-79
+    message: "User input flows into DOM without sanitization (XSS)"
+    sources:
+      - window.location
+      - window.location.href
+      - location.search
+      - document.cookie
+      - message.data
+    sinks:
+      - .innerHTML
+      - .outerHTML
+      - document.write
+    sanitizers:
+      - textContent
+      - innerText
+      - DOMPurify
+      - escapeHtml
+      - encodeURI
+      - createTextNode

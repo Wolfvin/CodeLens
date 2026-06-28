@@ -1,0 +1,10 @@
+# Missing required field fixture for rule-validate testing.
+# This rule is missing the 'severity' field.
+rules:
+  - id: py/missing-severity
+    message: "This rule is missing the severity field"
+    language: python
+    sources:
+      - input
+    sinks:
+      - eval

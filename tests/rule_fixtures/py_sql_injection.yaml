@@ -1,0 +1,25 @@
+# Migrated from scripts/rules/python_security.yaml for rule-test fixture.
+# Single-rule file so `codelens rule-test` can exercise it in isolation.
+rules:
+  - id: py/sql-injection
+    name: SQL Injection
+    language: python
+    severity: critical
+    cwe: CWE-89
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+    sinks:
+      - cursor.execute
+      - db.execute
+      - connection.execute
+      - session.execute
+      - engine.execute
+    sanitizers:
+      - parameterized_query
+      - escape_string
+      - psycopg2.sql.SQL

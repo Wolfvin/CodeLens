@@ -1,0 +1,27 @@
+# Test fixture for js/sql-injection rule.
+rule: js/sql-injection
+samples:
+  - name: positive_req_body_to_query
+    language: javascript
+    code: |
+      const username = req.body.username;
+      db.query("SELECT * FROM users WHERE name = '" + username + "'");  // ruleid: js/sql-injection
+
+  - name: positive_req_query_to_execute
+    language: javascript
+    code: |
+      const id = req.query.id;
+      connection.execute("SELECT * FROM products WHERE id = " + id);  // ruleid: js/sql-injection
+
+  - name: negative_sanitized_with_escape
+    language: javascript
+    code: |
+      const username = req.body.username;
+      const safe = escape(username);
+      db.query("SELECT * FROM users WHERE name = '" + safe + "'");  // ok
+
+  - name: negative_no_taint_reaches_sink
+    language: javascript
+    code: |
+      const data = "static_value";
+      db.query("SELECT * FROM accounts WHERE name = '" + data + "'");  // ok

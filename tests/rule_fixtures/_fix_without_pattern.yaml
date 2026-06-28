@@ -1,0 +1,11 @@
+# Cross-field violation: fix without pattern.
+rules:
+  - id: py/fix-without-pattern
+    message: "This rule has a fix but no pattern"
+    severity: high
+    language: python
+    sources:
+      - input
+    sinks:
+      - eval
+    fix: "safe_eval($X)"

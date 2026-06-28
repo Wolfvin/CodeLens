@@ -1,0 +1,26 @@
+# Test fixture for js/xss-dom rule.
+rule: js/xss-dom
+samples:
+  - name: positive_location_to_innerHTML
+    language: javascript
+    code: |
+      const userInput = window.location.hash;
+      document.getElementById('output').innerHTML = userInput;  // ruleid: js/xss-dom
+
+  - name: positive_location_search_to_document_write
+    language: javascript
+    code: |
+      const params = location.search;
+      document.write(params);  // ruleid: js/xss-dom
+
+  - name: negative_sanitized_with_escapeHtml
+    language: javascript
+    code: |
+      const userInput = window.location.hash;
+      const safe = escapeHtml(userInput);
+      document.getElementById('output').innerHTML = safe;  // ok
+
+  - name: negative_static_content
+    language: javascript
+    code: |
+      document.getElementById('output').innerHTML = "<p>Hello</p>";  // ok

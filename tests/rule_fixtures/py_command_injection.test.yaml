@@ -1,0 +1,26 @@
+# Test fixture for py/command-injection rule.
+rule: py/command-injection
+samples:
+  - name: positive_input_to_os_system
+    language: python
+    code: |
+      cmd = input("Enter command: ")
+      os.system(cmd)  # ruleid: py/command-injection
+
+  - name: positive_input_to_subprocess_run
+    language: python
+    code: |
+      user_input = input("Enter args: ")
+      subprocess.run(user_input, shell=True)  # ruleid: py/command-injection
+
+  - name: negative_sanitized_with_shlex_quote
+    language: python
+    code: |
+      cmd = input("Enter command: ")
+      safe = shlex.quote(cmd)
+      os.system("echo " + safe)  # ok
+
+  - name: negative_static_command
+    language: python
+    code: |
+      os.system("ls -la")  # ok

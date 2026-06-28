@@ -1,0 +1,25 @@
+# Migrated from scripts/rules/python_security.yaml for rule-test fixture.
+rules:
+  - id: py/path-traversal
+    name: Path Traversal
+    language: python
+    severity: high
+    cwe: CWE-22
+    message: "User input flows into file path without validation"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+    sinks:
+      - open
+      - os.path.join
+      - pathlib.Path
+      - shutil.copy
+      - shutil.move
+    sanitizers:
+      - os.path.realpath
+      - os.path.abspath
+      - validate_path
+      - secure_filename

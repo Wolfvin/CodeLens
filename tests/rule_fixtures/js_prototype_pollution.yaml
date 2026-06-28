@@ -1,0 +1,23 @@
+# Migrated from scripts/rules/javascript_security.yaml for rule-test fixture.
+rules:
+  - id: js/prototype-pollution
+    name: Prototype Pollution
+    language: javascript
+    severity: high
+    cwe: CWE-1321
+    message: "User input flows into object merge without prototype protection"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - JSON.parse
+    sinks:
+      - Object.assign(
+      - .merge(
+      - lodash.merge
+      - lodash.set
+    sanitizers:
+      - hasOwnProperty
+      - Object.create(null)
+      - Object.freeze

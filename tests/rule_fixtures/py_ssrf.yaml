@@ -1,0 +1,24 @@
+# Migrated from scripts/rules/python_security.yaml for rule-test fixture.
+rules:
+  - id: py/ssrf
+    name: Server-Side Request Forgery
+    language: python
+    severity: high
+    cwe: CWE-918
+    message: "User-controlled URL flows into HTTP request"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+    sinks:
+      - requests.get
+      - requests.post
+      - requests.put
+      - requests.delete
+      - urllib.request.urlopen
+      - http.client.HTTPConnection
+    sanitizers:
+      - validate_url
+      - url_allowed
+      - is_internal_url

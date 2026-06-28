@@ -1,0 +1,11 @@
+# Unknown key + typo fixture for rule-validate testing.
+# 'pattern-eiter' is a typo for 'pattern-either'.
+# 'extra_unknown_field' is not a known field.
+rules:
+  - id: py/typo-and-unknown
+    message: "This rule has a typo and an unknown field"
+    severity: high
+    language: python
+    pattern-eiter:
+      - pattern: eval($X)
+    extra_unknown_field: true

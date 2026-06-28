@@ -1,0 +1,23 @@
+# Migrated from scripts/rules/python_security.yaml for rule-test fixture.
+rules:
+  - id: py/xss-template
+    name: Cross-Site Scripting (Template)
+    language: python
+    severity: high
+    cwe: CWE-79
+    message: "User input rendered in template without escaping"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - django.http.request.GET
+      - django.http.request.POST
+    sinks:
+      - render_template_string
+      - mark_safe
+      - Markup
+      - dangerously_set_innerhtml
+    sanitizers:
+      - escape
+      - bleach.clean
+      - markupsafe.escape

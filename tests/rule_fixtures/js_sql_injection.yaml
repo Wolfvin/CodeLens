@@ -1,0 +1,23 @@
+# Migrated from scripts/rules/javascript_security.yaml for rule-test fixture.
+rules:
+  - id: js/sql-injection
+    name: SQL Injection
+    language: javascript
+    severity: critical
+    cwe: CWE-89
+    message: "User input flows into SQL query without parameterization"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - req.cookies
+    sinks:
+      - .query(
+      - .execute(
+      - .raw(
+      - knex.raw(
+    sanitizers:
+      - parameterized
+      - placeholder
+      - escape
