@@ -507,6 +507,8 @@ def scan_vulnerabilities(
     config: Optional[Dict] = None,
     offline: bool = False,
     osv_ttl: int = 86400,
+    refresh: bool = False,
+    max_age: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Scan dependency files for known vulnerabilities.
@@ -522,9 +524,18 @@ def scan_vulnerabilities(
                 "vulnscan.skip_audit_tools" options)
         offline: If True, skip OSV API queries (use cache only)
         osv_ttl: Cache TTL for OSV results in seconds (default 86400 = 24h)
+        refresh: If True, bypass the OSV cache and force fresh API calls
+            for every package (issue #30 --refresh flag). Ignored when
+            ``offline`` is True.
+        max_age: Optional per-run TTL override in seconds. When set, cached
+            OSV entries older than ``max_age`` are treated as stale and
+            re-fetched from the API for this run only (issue #30 --max-age
+            flag). The stored TTL is unchanged.
 
     Returns:
-        Dict with findings, stats, risk level, audit availability, and recommendations
+        Dict with findings, stats, risk level, audit availability,
+        recommendations, and a ``cache_info`` block (issue #30) describing
+        OSV cache freshness.
     """
     workspace = os.path.abspath(workspace)
 
@@ -548,6 +559,7 @@ def scan_vulnerabilities(
     ignore_packages: Set[str] = set()
     skip_audit: bool = False
     osv_stats: Optional[Dict[str, Any]] = None
+    cache_info: Optional[Dict[str, Any]] = None
 
     # Parse config
     if config:
@@ -568,7 +580,11 @@ def scan_vulnerabilities(
             osv_packages = OSVQueryBuilder.build_from_workspace(workspace)
 
             if osv_packages:
-                osv_vulns = osv_client.query_packages(osv_packages)
+                osv_vulns = osv_client.query_packages(
+                    osv_packages,
+                    force_refresh=refresh,
+                    max_age=max_age,
+                )
                 osv_findings = [v.to_finding() for v in osv_vulns]
 
                 # Tag OSV findings so we can prioritize them
@@ -584,13 +600,35 @@ def scan_vulnerabilities(
                 }
                 logger.info("OSV.dev: queried %d packages, found %d vulnerabilities",
                             len(osv_packages), len(osv_findings))
+
+                # Issue #30: cache freshness info (computed AFTER the query
+                # so it reflects the post-query state — any package just
+                # fetched or refreshed is now fresh).
+                cache_info = osv_client.get_cache_info(osv_packages)
             else:
                 osv_stats = {"packages_queried": 0, "vulnerabilities_found": 0}
                 logger.debug("OSV.dev: no packages to query")
+                # No packages → no cache entries to inspect. Still surface
+                # the cache_info block so consumers can rely on the shape.
+                cache_info = {
+                    "last_refresh": None,
+                    "age_hours": None,
+                    "ttl_hours": round(osv_ttl / 3600.0, 2),
+                    "is_stale": False,
+                    "stale_packages": [],
+                }
 
         except Exception as exc:
             logger.warning("OSV.dev integration failed, continuing with native audit: %s", exc)
             osv_stats = {"error": str(exc)}
+            cache_info = {
+                "last_refresh": None,
+                "age_hours": None,
+                "ttl_hours": round(osv_ttl / 3600.0, 2),
+                "is_stale": False,
+                "stale_packages": [],
+                "error": str(exc),
+            }
     else:
         logger.debug("OSV.dev client not available (osv_client.py not importable)")
 
@@ -717,6 +755,7 @@ def scan_vulnerabilities(
         "findings": findings[:200],  # Cap to avoid explosion
         "audit_available": any_audit_available,
         "osv_stats": osv_stats,
+        "cache_info": cache_info,
         "recommendations": recommendations,
     }
 
