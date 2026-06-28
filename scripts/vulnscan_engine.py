@@ -524,7 +524,10 @@ def scan_vulnerabilities(
         osv_ttl: Cache TTL for OSV results in seconds (default 86400 = 24h)
 
     Returns:
-        Dict with findings, stats, risk level, audit availability, and recommendations
+        Dict with findings, stats, risk level, audit availability,
+        recommendations, and a ``cache_info`` block (issue #30) describing
+        OSV cache freshness (``last_refresh``, ``age_hours``, ``ttl_hours``,
+        ``is_stale``, ``stale_packages``).
     """
     workspace = os.path.abspath(workspace)
 
@@ -548,6 +551,7 @@ def scan_vulnerabilities(
     ignore_packages: Set[str] = set()
     skip_audit: bool = False
     osv_stats: Optional[Dict[str, Any]] = None
+    cache_info: Optional[Dict[str, Any]] = None
 
     # Parse config
     if config:
@@ -584,13 +588,35 @@ def scan_vulnerabilities(
                 }
                 logger.info("OSV.dev: queried %d packages, found %d vulnerabilities",
                             len(osv_packages), len(osv_findings))
+
+                # Issue #30: cache freshness info (computed AFTER the query so
+                # it reflects the post-query state — any package just fetched
+                # or refreshed is now fresh).
+                cache_info = osv_client.get_cache_info(osv_packages)
             else:
                 osv_stats = {"packages_queried": 0, "vulnerabilities_found": 0}
                 logger.debug("OSV.dev: no packages to query")
+                # No packages → no cache entries to inspect. Still surface a
+                # cache_info block so consumers can rely on the shape.
+                cache_info = {
+                    "last_refresh": None,
+                    "age_hours": None,
+                    "ttl_hours": round(osv_ttl / 3600.0, 2),
+                    "is_stale": False,
+                    "stale_packages": [],
+                }
 
         except Exception as exc:
             logger.warning("OSV.dev integration failed, continuing with native audit: %s", exc)
             osv_stats = {"error": str(exc)}
+            cache_info = {
+                "last_refresh": None,
+                "age_hours": None,
+                "ttl_hours": round(osv_ttl / 3600.0, 2),
+                "is_stale": False,
+                "stale_packages": [],
+                "error": str(exc),
+            }
     else:
         logger.debug("OSV.dev client not available (osv_client.py not importable)")
 
@@ -717,6 +743,7 @@ def scan_vulnerabilities(
         "findings": findings[:200],  # Cap to avoid explosion
         "audit_available": any_audit_available,
         "osv_stats": osv_stats,
+        "cache_info": cache_info,
         "recommendations": recommendations,
     }
 

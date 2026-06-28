@@ -27,6 +27,7 @@ import threading
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -348,6 +349,33 @@ class OSVCache:
             finally:
                 conn.close()
 
+    def peek(self, key: str) -> Optional[Tuple[float, int]]:
+        """Return ``(timestamp, ttl)`` for a cache key WITHOUT mutating the cache.
+
+        Unlike :meth:`get`, this is a pure inspection — it never deletes
+        expired or corrupt entries. Used by staleness reporting (issue #30)
+        so we can describe cache freshness without side effects.
+
+        Args:
+            key: Cache key (e.g., "npm|lodash|4.17.15")
+
+        Returns:
+            ``(timestamp, ttl)`` tuple if the key exists, else ``None``.
+        """
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.execute(
+                    "SELECT timestamp, ttl FROM cache WHERE package_ecosystem_version = ?",
+                    (key,)
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return (float(row[0]), int(row[1]))
+            finally:
+                conn.close()
+
 
 # ─── Rate Limiter ──────────────────────────────────────────────
 
@@ -519,6 +547,91 @@ class OSVClient:
             List of OSVVulnerability objects
         """
         return self.query_packages(packages)
+
+    def get_cache_info(
+        self,
+        packages: List[OSVPackage],
+        max_age: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Return OSV cache freshness info for ``packages`` (issue #30).
+
+        Inspects the cache WITHOUT mutating it (uses :meth:`OSVCache.peek`).
+        Intended to be attached to ``vuln-scan`` output as ``cache_info`` so
+        agents can decide whether to trust the cached CVE data or re-scan.
+
+        Args:
+            packages: The OSV packages that were (or would be) queried.
+            max_age: Optional per-run TTL override in seconds. When set, the
+                effective TTL is ``max_age`` instead of the configured cache
+                TTL — entries older than this count as stale for this run.
+                ``None`` means use the configured cache TTL.
+
+        Returns:
+            Dict with::
+
+                {
+                  "last_refresh": "2026-06-28T10:00:00Z" | None,
+                  "age_hours": 23.5 | None,            # hours since last_refresh
+                  "ttl_hours": 24.0,                    # effective TTL in hours
+                  "is_stale": bool,
+                  "stale_packages": ["requests@2.20.0", ...]
+                }
+
+            ``last_refresh`` / ``age_hours`` are ``None`` when none of the
+            packages are cached. ``is_stale`` is True when any cached entry
+            is past the effective TTL, OR the newest entry's age >= the
+            effective TTL, OR there are OSV-queriable packages but none are
+            cached (no fresh coverage).
+        """
+        now = time.time()
+        configured_ttl = self.cache.ttl
+        effective_ttl = (
+            max_age if (max_age is not None and max_age > 0) else configured_ttl
+        )
+        ttl_hours = round(effective_ttl / 3600.0, 2)
+
+        timestamps: List[float] = []
+        stale_packages: List[str] = []
+        seen: Set[str] = set()
+
+        for pkg in packages:
+            if pkg.ecosystem is None:
+                continue  # Not supported by OSV — never cached
+            key = pkg.cache_key()
+            if key in seen:
+                continue
+            seen.add(key)
+
+            peek = self.cache.peek(key)
+            if peek is None:
+                continue  # Not cached yet
+            ts, _stored_ttl = peek
+            timestamps.append(ts)
+            if (now - ts) > effective_ttl:
+                stale_packages.append(f"{pkg.name}@{pkg.version}")
+
+        if timestamps:
+            last_refresh_ts = max(timestamps)
+            last_refresh = datetime.fromtimestamp(
+                last_refresh_ts, tz=timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            age_raw = (now - last_refresh_ts) / 3600.0
+            age_hours = round(age_raw, 2)
+            is_stale = bool(stale_packages) or age_raw >= (effective_ttl / 3600.0)
+        else:
+            last_refresh = None
+            age_hours = None
+            # OSV-queriable packages exist but none are cached → no fresh
+            # coverage, so the data is effectively stale.
+            is_stale = len(seen) > 0
+
+        return {
+            "last_refresh": last_refresh,
+            "age_hours": age_hours,
+            "ttl_hours": ttl_hours,
+            "is_stale": is_stale,
+            "stale_packages": stale_packages,
+        }
 
     def _batch_query_api(
         self,
