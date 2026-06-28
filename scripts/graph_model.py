@@ -48,7 +48,7 @@ import json
 import os
 import sqlite3
 from collections import deque
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from utils import logger
 
@@ -360,6 +360,340 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
 
     conn.close()
     return {"nodes": len(node_rows), "edges": len(edge_rows)}
+
+
+# ─── Incremental Update (issue #25) ──────────────────────────
+
+
+def incremental_graph_update(
+    workspace: str,
+    db_path: Optional[str],
+    changed_files: Iterable[str],
+) -> Dict[str, int]:
+    """Update graph_nodes + graph_edges for a set of changed files only.
+
+    Used by ``scan --incremental`` to keep the graph tables in sync without
+    a full re-population (issue #25). Performs a slice-level update:
+
+    1. Convert ``changed_files`` (absolute paths) to workspace-relative paths.
+       Empty input is a no-op (returns zero counts).
+    2. Identify ``graph_nodes`` rows whose ``file`` is in the changed set —
+       these are the stale node ids whose definitions must be replaced.
+    3. Delete ``graph_edges`` rows that touch any changed file:
+       - edges whose ``file`` (originating file) is in the changed set
+         (covers both CALLS edges from changed files and IMPORTS edges
+         whose importing file changed), AND
+       - edges whose ``source_id`` or ``target_id`` references a stale
+         node id from step 2 (covers cross-file edges from an unchanged
+       file into a changed file — the target may have been renamed or
+       moved, so the edge must be dropped and re-resolved).
+    4. Delete the stale ``graph_nodes`` rows themselves.
+    5. Re-read the flat backend registry (already updated by
+       ``merge_backend_data`` in the scan pipeline) and INSERT only the
+       nodes whose ``file`` is in the changed set, plus CALLS edges that
+       touch the changed set (either endpoint's file is in the set).
+    6. Call ``refine_call_edges(workspace, db_path)`` so IMPORTS edges
+       and import-aware CALLS-edge refinement are rebuilt for the
+       affected slice. ``refine_call_edges`` is idempotent (it clears
+       and rebuilds the ``import_registry`` table and IMPORTS edges
+       from scratch each call), so invoking it here is safe regardless
+       of whether a previous scan already ran it.
+
+    Idempotent: running twice with the same ``changed_files`` yields the
+    same final graph state (steps 2–4 wipe the affected slice before
+    step 5 re-inserts; step 6 rebuilds IMPORTS + refinement deterministically).
+
+    Performance: O(changed_nodes + changed_edges) for steps 2–5; step 6
+    is O(total_edges) because ``refine_call_edges`` is not parameterized
+    by file. On the ``clean_app`` fixture (31 nodes / 97 edges), the
+    whole function completes in well under 200 ms.
+
+    Args:
+        workspace: Absolute path to the workspace root.
+        db_path: Optional SQLite db path. Defaults to
+            ``<workspace>/.codelens/codelens.db``.
+        changed_files: Iterable of absolute file paths that changed since
+            the last scan. May be empty — empty input is a no-op.
+
+    Returns:
+        Dict with keys:
+
+        * ``nodes`` — total ``graph_nodes`` row count AFTER the update
+          (matches the shape returned by :func:`populate_graph_tables`
+          so scan output stays consistent between full and incremental
+          scans).
+        * ``edges`` — total ``graph_edges`` row count AFTER the update
+          (includes CALLS + IMPORTS edges).
+        * ``edges_refined`` — number of CALLS edges refined by
+          :func:`refine_call_edges` (0 if the post-pass is skipped).
+        * ``edges_unresolved`` — number of CALLS edges that remain
+          unresolved after the post-pass.
+    """
+    workspace = os.path.abspath(workspace)
+    db_path = db_path or _default_db_path(workspace)
+
+    # Normalize changed_files to workspace-relative paths. We accept any
+    # iterable (list, set, tuple) and de-duplicate via a set.
+    changed_rel_paths: Set[str] = set()
+    for f in changed_files or []:
+        if not f:
+            continue
+        try:
+            rel = os.path.relpath(os.path.abspath(f), workspace)
+        except (ValueError, OSError):
+            continue
+        if rel and rel != ".":
+            changed_rel_paths.add(rel)
+
+    zero_result: Dict[str, int] = {
+        "nodes": 0,
+        "edges": 0,
+        "edges_refined": 0,
+        "edges_unresolved": 0,
+    }
+    if not changed_rel_paths:
+        return zero_result
+    if not os.path.exists(db_path):
+        # No database yet — nothing to update. The full-scan path will
+        # create and populate the tables on the next non-incremental scan.
+        return zero_result
+
+    # Ensure the schema exists (idempotent — safe if PersistentRegistry
+    # already created the tables).
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        init_graph_schema(conn)
+    except sqlite3.Error:
+        # init_graph_schema already logged; continue anyway
+        pass
+
+    # Lazy import to avoid circular dependency at module load time, and
+    # to keep hybrid_type_resolver optional for downstream forks that
+    # remove it.
+    from registry import load_backend_registry
+
+    backend = load_backend_registry(workspace)
+    flat_nodes = backend.get("nodes", [])
+    flat_edges = backend.get("edges", [])
+
+    # Build a node_id → file lookup from the flat registry. We use this
+    # to decide whether an edge touches a changed file (its source or
+    # target node's file is in the changed set). We can't rely on
+    # _parse_file_line_from_node_id for this because some node_ids use
+    # a 4-segment format (``file:line:class:Name``) that the heuristic
+    # mis-parses — the lookup is authoritative because it comes from
+    # the parsers' own ``file`` field.
+    node_id_to_file: Dict[str, str] = {
+        n.get("id", ""): n.get("file", "")
+        for n in flat_nodes if n.get("id")
+    }
+
+    edges_refined = 0
+    edges_unresolved = 0
+
+    try:
+        # ── Step 1: Identify stale node ids ──────────────────────
+        # These are nodes whose file is in the changed set. Their ids
+        # may have changed (line numbers shifted, symbols renamed), so
+        # we must drop them and re-insert from the flat registry.
+        ph_files = ",".join("?" for _ in changed_rel_paths)
+        params_files = tuple(changed_rel_paths)
+
+        cursor = conn.execute(
+            "SELECT node_id FROM {t} WHERE file IN ({ph})".format(
+                t=GRAPH_NODES_TABLE, ph=ph_files
+            ),
+            params_files,
+        )
+        affected_node_ids: Set[str] = {row[0] for row in cursor.fetchall()}
+
+        # ── Step 2: Delete affected edges ────────────────────────
+        # An edge is affected if ANY of:
+        #   - its originating file (`file` column) is in the changed set
+        #     (covers CALLS edges from changed files + IMPORTS edges
+        #     whose importer changed), OR
+        #   - its source_id references a stale node (covers the rare
+        #     case where a CALLS edge has a file column value that
+        #     doesn't match its source_id's file — defensive), OR
+        #   - its target_id references a stale node (covers cross-file
+        #     edges from an unchanged file into a changed file — the
+        #     target may have been renamed/moved, so the edge must be
+        #     dropped and re-resolved from the flat registry).
+        if affected_node_ids:
+            ph_nodes = ",".join("?" for _ in affected_node_ids)
+            params_nodes = tuple(affected_node_ids)
+            conn.execute(
+                "DELETE FROM {t} WHERE file IN ({phf}) "
+                "OR source_id IN ({phn}) "
+                "OR target_id IN ({phn})".format(
+                    t=GRAPH_EDGES_TABLE, phf=ph_files, phn=ph_nodes
+                ),
+                params_files + params_nodes + params_nodes,
+            )
+        else:
+            conn.execute(
+                "DELETE FROM {t} WHERE file IN ({phf})".format(
+                    t=GRAPH_EDGES_TABLE, phf=ph_files
+                ),
+                params_files,
+            )
+
+        # ── Step 3: Delete stale nodes ───────────────────────────
+        conn.execute(
+            "DELETE FROM {t} WHERE file IN ({phf})".format(
+                t=GRAPH_NODES_TABLE, phf=ph_files
+            ),
+            params_files,
+        )
+
+        # ── Step 4: Re-insert nodes from changed files ───────────
+        node_rows: List[Tuple[Any, ...]] = []
+        for node in flat_nodes:
+            file_val = node.get("file", "")
+            if file_val not in changed_rel_paths:
+                continue
+            node_id = node.get("id", "")
+            if not node_id:
+                continue  # skip malformed nodes without an id
+            name = node.get("fn", node.get("name", ""))
+            flat_type = node.get("type", "function")
+            node_type = _map_node_type(flat_type)
+            line_val = node.get("line", 0)
+            extra_keys = {
+                k: v for k, v in node.items()
+                if k not in ("id", "fn", "name", "type", "file", "line")
+            }
+            extra_json = (
+                json.dumps(extra_keys, default=str) if extra_keys else None
+            )
+            node_rows.append(
+                (node_id, node_type, name, file_val, line_val, extra_json)
+            )
+
+        if node_rows:
+            conn.executemany(
+                "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)".format(t=GRAPH_NODES_TABLE),
+                node_rows,
+            )
+
+        # ── Step 5: Re-insert CALLS edges touching changed files ─
+        # An edge qualifies for re-insertion if EITHER endpoint's file
+        # (looked up via the flat registry's node_id → file map) is in
+        # the changed set. Edges between two unchanged files are
+        # untouched in both the flat registry and the graph — they were
+        # preserved by step 2 (not deleted) and don't need re-insertion.
+        #
+        # The edge's ``file`` and ``line`` columns are populated via
+        # _parse_file_line_from_node_id to match populate_graph_tables'
+        # behavior exactly (so full and incremental paths produce
+        # byte-identical edge rows for the same flat registry).
+        edge_rows: List[Tuple[Any, ...]] = []
+        for edge in flat_edges:
+            source_id = edge.get("from", "")
+            if not source_id:
+                continue  # skip malformed edges
+            target_id = edge.get("to")  # may be None for unresolved
+
+            # Use the authoritative node_id → file map (not the
+            # _parse_file_line_from_node_id heuristic) to decide whether
+            # this edge touches a changed file. The heuristic mishandles
+            # 4-segment class node_ids (``file:line:class:Name``).
+            src_file_lookup = node_id_to_file.get(source_id, "")
+            tgt_file_lookup = (
+                node_id_to_file.get(target_id, "") if target_id else ""
+            )
+            if (src_file_lookup not in changed_rel_paths
+                    and tgt_file_lookup not in changed_rel_paths):
+                continue
+
+            to_fn = edge.get("to_fn", "")
+            resolved = edge.get("resolved")
+            via_self = edge.get("via_self", False)
+            ipc = edge.get("ipc", False)
+
+            # Confidence scoring (mirrors populate_graph_tables).
+            if target_id:
+                confidence = 0.9 if ipc else 1.0
+            else:
+                confidence = 0.5
+
+            # Edge file/line: parsed from source id (where the call
+            # originates). Matches populate_graph_tables' behavior so
+            # the graph_edges.file column is identical between paths.
+            src_file, src_line = _parse_file_line_from_node_id(source_id)
+
+            extra: Dict[str, Any] = {}
+            if to_fn:
+                extra["to_fn"] = to_fn
+            if via_self:
+                extra["via_self"] = True
+            if ipc:
+                extra["ipc"] = True
+            if resolved is not None:
+                extra["resolved"] = resolved
+            extra_json = (
+                json.dumps(extra, default=str) if extra else None
+            )
+
+            edge_rows.append((
+                source_id, target_id, EDGE_TYPE_CALLS,
+                src_file, src_line, confidence, extra_json,
+            ))
+
+        if edge_rows:
+            conn.executemany(
+                "INSERT INTO {t} "
+                "(source_id, target_id, edge_type, file, line, confidence, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)".format(t=GRAPH_EDGES_TABLE),
+                edge_rows,
+            )
+
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.warning("incremental_graph_update: db error: %s", e)
+        conn.rollback()
+        conn.close()
+        return zero_result
+
+    # ── Step 6: Re-run refine_call_edges ────────────────────────
+    # Rebuilds IMPORTS edges + import-aware CALLS-edge refinement for
+    # the whole graph. Idempotent — safe to call on every incremental
+    # update. Failures MUST NOT break the scan (type resolution is an
+    # optimization layer).
+    try:
+        from hybrid_type_resolver import refine_call_edges
+        tr_stats = refine_call_edges(workspace, db_path)
+        edges_refined = tr_stats.get("edges_refined", 0)
+        edges_unresolved = tr_stats.get("edges_unresolved", 0)
+    except Exception:
+        logger.warning(
+            "refine_call_edges failed during incremental update",
+            exc_info=True,
+        )
+
+    # Return TOTAL graph stats (not the delta) so the scan output
+    # shape matches populate_graph_tables' return value — callers see
+    # the current graph size, regardless of full vs incremental path.
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM {t}".format(t=GRAPH_NODES_TABLE)
+        ).fetchone()[0]
+        e = conn.execute(
+            "SELECT COUNT(*) FROM {t}".format(t=GRAPH_EDGES_TABLE)
+        ).fetchone()[0]
+    except sqlite3.Error:
+        n, e = 0, 0
+    finally:
+        conn.close()
+
+    return {
+        "nodes": n,
+        "edges": e,
+        "edges_refined": edges_refined,
+        "edges_unresolved": edges_unresolved,
+    }
 
 
 # ─── Graph Queries (BFS) ──────────────────────────────────────
