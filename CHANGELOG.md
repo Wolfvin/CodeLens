@@ -2,8 +2,95 @@
 
 All notable changes to CodeLens will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepa.changelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/html).
+
+## [8.2.0] — Unreleased
+
+### Graph Data Model (issue #8)
+
+Replaces the ad-hoc flat-registry graph traversal with a true node + edge graph
+backed by SQLite. This unblocks structural queries like "who calls this function
+across the entire codebase", "blast radius if I rename this class", and
+"circular dependency chains" — engines no longer need to reimplement partial
+graph traversal logic.
+
+### Added
+
+- **`scripts/graph_model.py`** — New module implementing the graph data model:
+  - `init_graph_schema(conn)` — Creates `graph_nodes` + `graph_edges` tables
+    and 6 indexes (idempotent, called during database initialization).
+  - `populate_graph_tables(workspace, db_path)` — Reads the flat backend
+    registry and bulk-inserts all nodes + edges in a single transaction.
+    Clears stale rows first so re-scans don't duplicate.
+  - `query_callers(node_id, db_path, max_depth=1)` — BFS over CALLS edges
+    in reverse (who calls this node).
+  - `query_callees(node_id, db_path, max_depth=1)` — BFS over CALLS edges
+    forward (what this node calls).
+  - `clear_graph_tables(db_path)` — DELETE FROM both tables.
+  - `find_nodes_by_name`, `graph_tables_exist`, `graph_tables_populated`,
+    `graph_stats` — introspection helpers for engines and tests.
+
+- **Graph schema** (additive, prefixed `graph_` to avoid collisions):
+  ```sql
+  graph_nodes(id, node_id UNIQUE, node_type, name, file, line, extra_json)
+  graph_edges(id, source_id, target_id, edge_type, file, line,
+              confidence, extra_json)
+  ```
+  Node types: `function|class|file|module|route|type|interface`
+  Edge types: `CALLS|IMPORTS|DEFINES|INHERITS|IMPLEMENTS|USES_TYPE`
+  (Only `CALLS` is populated in v8.2; other types are reserved for future
+  engine migrations — `impact`, `circular`, `dependents`.)
+
+- **`trace --use-graph` / `--no-graph` flags** — The `trace` command now
+  queries the graph tables by default, with the flat-registry path retained
+  as fallback. Use `--no-graph` to force the flat path for A/B testing.
+
+- **`tests/test_graph_model.py`** — 20 test cases covering schema init,
+  population, query_callers, query_callees, re-population idempotency, and
+  the trace pilot A/B comparison.
+
+### Changed
+
+- **`scripts/persistent_registry.py`** — Calls `init_graph_schema(conn)`
+  during `_init_schema` so the graph tables always exist by the time any
+  engine tries to query them. Additive — existing tables untouched.
+- **`scripts/commands/scan.py`** — After the flat backend registry is built,
+  calls `populate_graph_tables(workspace, db_path)` to populate the graph
+  tables in a single bulk transaction. Scan output now includes a `graph`
+  field with node + edge counts.
+- **`scripts/trace_engine.py`** — Pilot engine migration: `trace_symbol` is
+  now a dispatcher that picks between `trace_via_graph` (default) and
+  `trace_via_flat` (fallback). Falls back to flat automatically when graph
+  tables are empty (pre-8.2 databases). Output shape is identical regardless
+  of backend — callers and formatters don't need to know which backend ran.
+
+### Non-Breaking
+
+- All 56 existing CLI commands continue to work unchanged.
+- Existing flat tables (`symbols`, `refs`, `files`, `analysis_cache`,
+  `scan_metadata`) and JSON registries (`frontend.json`, `backend.json`)
+  are untouched.
+- The graph tables are additive — no existing table or column was modified.
+- Scan performance impact is negligible (single bulk INSERT in one
+  transaction; <5ms on the clean_app fixture with 31 nodes + 97 edges).
+
+### Migration Notes for Engine Authors
+
+The flat registry remains the source of truth during scan. The graph tables
+are a derived projection that engines can query for structural traversals.
+To migrate an engine to the graph backend:
+
+1. Check `graph_model.graph_tables_populated(db_path)` — if False, fall back
+   to the flat path (don't hard-fail).
+2. Use `graph_model.find_nodes_by_name(name, db_path)` to find start nodes.
+3. Use `graph_model.query_callers` / `query_callees` for BFS traversal.
+4. Preserve the existing flat-path output shape so callers and formatters
+   don't break. See `trace_engine.trace_via_graph` for a reference impl.
+
+Future engine migrations (post-v8.2): `impact`, `circular`, `dependents`.
+
+---
 
 ## [8.1.0] — 2026-06-13
 

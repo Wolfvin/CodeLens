@@ -1169,6 +1169,7 @@ workspace/
     codelens.config.json    ← Configuration
     frontend.json           ← Frontend registry (classes + ids)
     backend.json            ← Backend registry (nodes + edges)
+    codelens.db             ← SQLite: symbols/refs/files/analysis_cache + graph_nodes/graph_edges (v8.2+)
     mtimes.json             ← File modification times cache
 ```
 
@@ -1227,6 +1228,51 @@ def quick_lookup(workspace, name):
 
     return results
 ```
+
+### 10.4 Graph Data Model (v8.2+)
+
+For structural queries (callers, callees, blast radius, circular chains),
+agents should prefer the graph data model over iterating the flat registry.
+The graph tables (`graph_nodes` + `graph_edges`) are populated automatically
+during `scan` and live in `.codelens/codelens.db` alongside the existing
+SQLite tables.
+
+```python
+from graph_model import (
+    find_nodes_by_name, query_callers, query_callees,
+    graph_tables_populated, graph_stats,
+)
+
+db_path = os.path.join(workspace, '.codelens', 'codelens.db')
+
+# Always check population first — pre-8.2 dbs won't have graph data.
+if not graph_tables_populated(db_path):
+    # Fall back to flat registry iteration (see 10.3 above).
+    pass
+
+# Find a function node by name (case-insensitive + fuzzy match).
+nodes = find_nodes_by_name('my_function', db_path)
+
+# Who calls this function? (BFS over CALLS edges in reverse)
+callers = query_callers(nodes[0]['node_id'], db_path, max_depth=3)
+
+# What does this function call? (BFS over CALLS edges forward)
+callees = query_callees(nodes[0]['node_id'], db_path, max_depth=3)
+```
+
+**When to use the graph vs the flat registry:**
+
+| Use case | Backend |
+|----------|---------|
+| Structural traversal (callers/callees/cycles/blast-radius) | **Graph** (`graph_model`) |
+| Single-symbol lookup (does `foo` exist?) | Flat (`backend.json`) |
+| Frontend class/id reference lookup | Flat (`frontend.json`) |
+| Cross-language edge resolution (Tauri IPC) | Flat (edge_resolver) |
+
+The graph is a derived projection of the flat registry — it is rebuilt from
+`backend.json` on every scan. Engines that need the original node metadata
+(`status`, `async`, `impl_for`, `component`) can read it from the graph
+node's `extra` field, which preserves all non-id/fn/type/file/line fields.
 
 ---
 
