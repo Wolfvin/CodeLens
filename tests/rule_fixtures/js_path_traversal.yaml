@@ -1,0 +1,24 @@
+# Migrated from scripts/rules/javascript_security.yaml for rule-test fixture.
+rules:
+  - id: js/path-traversal
+    name: Path Traversal
+    language: javascript
+    severity: critical
+    cwe: CWE-22
+    message: "User input flows into file system path without validation"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - process.argv
+    sinks:
+      - fs.readFile
+      - fs.readFileSync
+      - fs.writeFile
+      - fs.createReadStream
+    sanitizers:
+      - path.normalize
+      - path.resolve
+      - startsWith
+      - path.basename

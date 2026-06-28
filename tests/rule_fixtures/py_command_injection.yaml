@@ -1,0 +1,27 @@
+# Migrated from scripts/rules/python_security.yaml for rule-test fixture.
+rules:
+  - id: py/command-injection
+    name: Command Injection
+    language: python
+    severity: critical
+    cwe: CWE-78
+    message: "User input flows into OS command without sanitization"
+    sources:
+      - flask.request.args
+      - flask.request.form
+      - flask.request.json
+      - input
+      - sys.stdin
+      - os.environ
+    sinks:
+      - os.system
+      - os.popen
+      - subprocess.call
+      - subprocess.run
+      - subprocess.Popen
+      - subprocess.check_output
+    sanitizers:
+      - shlex.quote
+      - shlex.split
+      - validate_command
+      - whitelist_command

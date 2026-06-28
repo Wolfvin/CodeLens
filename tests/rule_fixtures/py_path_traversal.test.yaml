@@ -1,0 +1,26 @@
+# Test fixture for py/path-traversal rule.
+rule: py/path-traversal
+samples:
+  - name: positive_input_to_open
+    language: python
+    code: |
+      filename = input("Enter filename: ")
+      f = open(filename)  # ruleid: py/path-traversal
+
+  - name: positive_flask_args_to_open
+    language: python
+    code: |
+      path = flask.request.args.get('file')
+      f = open(path)  # ruleid: py/path-traversal
+
+  - name: negative_sanitized_with_realpath
+    language: python
+    code: |
+      filename = input("Enter filename: ")
+      safe = os.path.realpath(filename)
+      f = open(safe)  # ok
+
+  - name: negative_static_path
+    language: python
+    code: |
+      f = open("/etc/passwd")  # ok

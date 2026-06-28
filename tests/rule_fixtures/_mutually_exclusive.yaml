@@ -1,0 +1,10 @@
+# Cross-field violation fixture for rule-validate testing.
+# 'pattern' and 'patterns' are mutually exclusive.
+rules:
+  - id: py/mutually-exclusive
+    message: "This rule uses both pattern and patterns"
+    severity: high
+    language: python
+    pattern: eval($X)
+    patterns:
+      - eval($X)

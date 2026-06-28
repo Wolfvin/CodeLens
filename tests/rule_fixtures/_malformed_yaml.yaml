@@ -1,0 +1,11 @@
+# Malformed YAML fixture for rule-validate testing.
+# This file has intentionally invalid YAML (unclosed quote).
+rules:
+  - id: py/broken
+    message: "This rule has an unclosed quote
+    severity: critical
+    language: python
+    sources:
+      - input
+    sinks:
+      - eval

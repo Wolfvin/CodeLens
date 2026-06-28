@@ -1,0 +1,26 @@
+# Test fixture for py/ssrf rule.
+rule: py/ssrf
+samples:
+  - name: positive_input_to_requests_get
+    language: python
+    code: |
+      url = input("Enter URL: ")
+      response = requests.get(url)  # ruleid: py/ssrf
+
+  - name: positive_flask_args_to_urlopen
+    language: python
+    code: |
+      target = flask.request.args.get('url')
+      urllib.request.urlopen(target)  # ruleid: py/ssrf
+
+  - name: negative_sanitized_with_validate_url
+    language: python
+    code: |
+      url = input("Enter URL: ")
+      safe = validate_url(url)
+      response = requests.get(safe)  # ok
+
+  - name: negative_static_url
+    language: python
+    code: |
+      response = requests.get("https://api.example.com/health")  # ok

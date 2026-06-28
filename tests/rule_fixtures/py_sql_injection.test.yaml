@@ -1,0 +1,29 @@
+# Test fixture for py/sql-injection rule.
+# Inline markers: `# ruleid: <rule-id>` (expect finding on this line),
+# `# ok` (expect no finding on this line).
+rule: py/sql-injection
+samples:
+  - name: positive_basic_input_to_execute
+    language: python
+    code: |
+      user = input("Enter name: ")
+      cursor.execute("SELECT * FROM accounts WHERE name = '" + user + "'")  # ruleid: py/sql-injection
+
+  - name: positive_flask_args_to_execute
+    language: python
+    code: |
+      name = flask.request.args.get('name')
+      cursor.execute("SELECT * FROM accounts WHERE name = '%s'" % name)  # ruleid: py/sql-injection
+
+  - name: negative_sanitized_with_parameterized_query
+    language: python
+    code: |
+      user = input("Enter name: ")
+      safe = parameterized_query(user)
+      cursor.execute("SELECT * FROM accounts WHERE name = %s", (safe,))  # ok
+
+  - name: negative_no_taint_reaches_sink
+    language: python
+    code: |
+      name = "static_value"
+      cursor.execute("SELECT * FROM accounts WHERE name = %s", (name,))  # ok

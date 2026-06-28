@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Wolfvin/CodeLens/blob/main/references/rule-schema.json",
+  "title": "CodeLens Rule YAML Schema",
+  "description": "JSON Schema for CodeLens rule YAML files. Used by `codelens rule-validate` to catch typos, unknown keys, missing required fields, and type mismatches before a rule is loaded by the engine. The schema describes the superset of taint-style (sources/sinks/sanitizers) and pattern-style (pattern/patterns) rules; cross-field constraints (pattern vs patterns mutually exclusive, fix requires pattern) are enforced separately by the validator because JSON Schema cannot express them cleanly.",
+  "type": "object",
+  "required": ["rules"],
+  "additionalProperties": false,
+  "properties": {
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["id", "message", "severity", "language"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable unique rule identifier, e.g. 'py/sql-injection' or 'owasp/A01/broken-access-control'. Used in findings, SARIF, and # ruleid: test markers."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable rule name shown in reports."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Finding message displayed when the rule fires."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "info"],
+          "description": "Severity level. Maps to SARIF result level: critical/high -> error, medium -> warning, low/info -> note."
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target language. CodeLens tree-sitter-supported: python, javascript, typescript, tsx, rust, html, css. Other languages are accepted but pattern parseability is skipped."
+        },
+        "cwe": {
+          "type": "string",
+          "description": "CWE identifier, e.g. 'CWE-89'. Optional metadata."
+        },
+        "owasp": {
+          "type": "string",
+          "description": "OWASP Top 10 category, e.g. 'A01:2021'. Optional metadata."
+        },
+        "sources": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Taint sources — where untrusted data enters (e.g. 'flask.request.args'). Used by taint-style rules."
+        },
+        "sinks": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Taint sinks — where untrusted data becomes dangerous (e.g. 'cursor.execute'). Used by taint-style rules."
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Sanitizers — functions that make data safe (e.g. 'parameterized_query'). Used by taint-style rules."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Pattern-style rule: a single AST pattern (Semgrep-compatible subset). Mutually exclusive with 'patterns'."
+        },
+        "patterns": {
+          "type": "array",
+          "items": {"type": ["string", "object"]},
+          "description": "Pattern-style rule: list of patterns (all must match). Mutually exclusive with 'pattern'."
+        },
+        "pattern-either": {
+          "type": "array",
+          "items": {"type": "object"},
+          "description": "Pattern-style rule: any of these patterns matches."
+        },
+        "pattern-not": {
+          "type": ["string", "object"],
+          "description": "Pattern-style rule: this pattern must NOT match."
+        },
+        "pattern-inside": {
+          "type": ["string", "object"],
+          "description": "Pattern-style rule: match must be inside this pattern."
+        },
+        "pattern-not-inside": {
+          "type": ["string", "object"],
+          "description": "Pattern-style rule: match must NOT be inside this pattern."
+        },
+        "pattern-regex": {
+          "type": "string",
+          "description": "Pattern-style rule: regex pattern (matched against source text, not AST)."
+        },
+        "metavariable-regex": {
+          "type": "object",
+          "description": "Constrain a metavariable by regex."
+        },
+        "metavariable-comparison": {
+          "type": "object",
+          "description": "Constrain a metavariable by Python expression."
+        },
+        "fix": {
+          "type": "string",
+          "description": "Autofix replacement string (may reference metavariables). Requires 'pattern', 'patterns', or 'pattern-either'."
+        },
+        "fix-regex": {
+          "type": "object",
+          "description": "Regex-based autofix. Requires 'pattern', 'patterns', or 'pattern-either'.",
+          "properties": {
+            "regex": {"type": "string"},
+            "replacement": {"type": "string"},
+            "count": {"type": "integer", "minimum": 0}
+          },
+          "required": ["regex", "replacement"]
+        },
+        "paths": {
+          "type": "object",
+          "description": "Per-rule path filter (gitignore-style globs).",
+          "properties": {
+            "include": {"type": "array", "items": {"type": "string"}},
+            "exclude": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Free-form metadata dict. Serialized to SARIF 'properties' and JSON output 'metadata'."
+        },
+        "options": {
+          "type": "object",
+          "description": "Per-rule engine options (constant_propagation, symbolic_propagation, taint_intrafile, etc.)."
+        },
+        "timeout": {
+          "type": ["integer", "number"],
+          "minimum": 0,
+          "description": "Per-rule timeout in seconds (overrides global --timeout). Requires --allow-rule-timeout-control."
+        },
+        "max-match-per-file": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-rule cap on reported matches per file."
+        },
+        "project-depends-on": {
+          "type": "array",
+          "items": {"type": "object"},
+          "description": "SCA rule: only match if project depends on the specified package(s).",
+          "properties": {
+            "namespace": {"type": "string"},
+            "package": {"type": "string"},
+            "version": {"type": "string"}
+          },
+          "required": ["namespace", "package", "version"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Invalid severity enum fixture for rule-validate testing.
+rules:
+  - id: py/bad-severity
+    message: "This rule has an invalid severity value"
+    severity: bogus
+    language: python
+    sources:
+      - input
+    sinks:
+      - eval

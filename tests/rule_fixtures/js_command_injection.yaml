@@ -1,0 +1,24 @@
+# Migrated from scripts/rules/javascript_security.yaml for rule-test fixture.
+rules:
+  - id: js/command-injection
+    name: Command Injection
+    language: javascript
+    severity: critical
+    cwe: CWE-78
+    message: "User input flows into system command without sanitization"
+    sources:
+      - req.body
+      - req.params
+      - req.query
+      - req.headers
+      - req.cookies
+      - process.argv
+      - process.env
+    sinks:
+      - child_process.exec
+      - exec(
+      - execSync(
+      - spawn(
+    sanitizers:
+      - execFile
+      - shell

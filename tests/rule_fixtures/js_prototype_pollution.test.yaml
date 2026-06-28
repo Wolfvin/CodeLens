@@ -1,0 +1,27 @@
+# Test fixture for js/prototype-pollution rule.
+rule: js/prototype-pollution
+samples:
+  - name: positive_req_body_to_merge
+    language: javascript
+    code: |
+      const userInput = req.body;
+      lodash.merge(target, userInput);  // ruleid: js/prototype-pollution
+
+  - name: positive_req_query_to_lodash_set
+    language: javascript
+    code: |
+      const path = req.query.path;
+      const value = req.query.value;
+      lodash.set(obj, path, value);  // ruleid: js/prototype-pollution
+
+  - name: negative_sanitized_with_hasOwnProperty
+    language: javascript
+    code: |
+      const userInput = req.body;
+      const safe = Object.keys(userInput).filter(k => hasOwnProperty(userInput, k));
+      Object.assign(target, safe);  // ok
+
+  - name: negative_static_merge
+    language: javascript
+    code: |
+      Object.assign(target, {a: 1, b: 2});  // ok
