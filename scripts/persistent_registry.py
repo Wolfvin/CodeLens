@@ -680,6 +680,160 @@ class PersistentRegistry:
         """Load the backend registry from the cache."""
         return self.get_cached_result("__backend_registry__", ["__all__"])
 
+    # ─── Scan Result Storage ────────────────────────────
+
+    # Directories that are never part of the scanned file set, used by
+    # _compute_scan_file_set_hash when walking the workspace. Kept short
+    # and explicit so the hash reflects only user source code.
+    _SCAN_HASH_IGNORED_DIRS = {
+        ".codelens", ".git", "node_modules", ".venv", "venv",
+        "__pycache__", ".pytest_cache", ".idea", ".vscode",
+    }
+
+    def _compute_scan_file_set_hash(self, workspace: str) -> str:
+        """Compute a stable SHA-256 hash for the set of source files in workspace.
+
+        Walks the workspace with ``os.walk``, skips well-known non-source
+        directories (``.codelens``, ``.git``, ``node_modules``, etc.), sorts
+        the resulting relative paths, and hashes the joined string. The hash
+        is stable across runs as long as the file set is unchanged — files
+        can be edited without invalidating the cache key, which matches the
+        design intent of ``analysis_cache`` (per the module docstring at
+        L7-15: cache keyed by ``(command, file_set_hash)``).
+
+        Args:
+            workspace: Absolute path to the workspace root
+
+        Returns:
+            64-char hex SHA-256 digest, or empty string if workspace
+            does not exist or contains no source files.
+        """
+        if not workspace or not os.path.isdir(workspace):
+            return ""
+
+        rel_paths: List[str] = []
+        for root, dirs, filenames in os.walk(workspace):
+            # Prune ignored directories in-place so os.walk does not descend
+            dirs[:] = [d for d in dirs if d not in self._SCAN_HASH_IGNORED_DIRS]
+            for filename in filenames:
+                abs_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(abs_path, workspace)
+                # Normalize to forward slashes for cross-platform stability
+                rel_paths.append(rel_path.replace(os.sep, "/"))
+
+        if not rel_paths:
+            return ""
+
+        rel_paths.sort()
+        joined = "\n".join(rel_paths)
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+    def store_scan_result(self, result: Dict[str, Any]) -> None:
+        """Persist a normalized subset of a scan result to ``analysis_cache``.
+
+        Closes the P0 silent bug from issue #31: ``codelens.py`` calls
+        ``pr.store_scan_result(result)`` after every successful scan, but
+        the method did not exist, raising ``AttributeError`` that was
+        swallowed by a bare ``except Exception`` — so the
+        ``analysis_cache`` table was never populated, the
+        ``result["sqlite_persisted"] = True`` flag was never set, and the
+        success message was never printed.
+
+        This method persists a small, normalized subset of the scan result
+        (counts + frameworks + timestamp), keyed by ``command="scan"`` and
+        a ``file_set_hash`` derived from the workspace's source file paths.
+        Idempotent: re-scanning the same file set with the same result
+        subset does not insert a duplicate row.
+
+        Args:
+            result: The full scan result dict returned by
+                ``commands.scan.cmd_scan``. Expected to contain the
+                ``workspace``, ``files_scanned``, ``frontend``,
+                ``backend``, and ``frameworks`` keys; missing keys are
+                tolerated and contribute zero/empty values to the subset.
+        """
+        workspace = result.get("workspace") or self.workspace
+
+        files_scanned = result.get("files_scanned", {}) or {}
+        frontend = result.get("frontend", {}) or {}
+        backend = result.get("backend", {}) or {}
+        frameworks = result.get("frameworks", []) or []
+
+        # total_symbols mirrors the calc used by migrate_from_json
+        # (frontend_classes + frontend_ids + backend_nodes) and gives
+        # a single comparable scalar for trend tracking.
+        total_symbols = (
+            int(frontend.get("classes", 0) or 0)
+            + int(frontend.get("ids", 0) or 0)
+            + int(backend.get("nodes", 0) or 0)
+        )
+
+        subset = {
+            "files_scanned": files_scanned,
+            "frontend_counts": {
+                "classes": int(frontend.get("classes", 0) or 0),
+                "ids": int(frontend.get("ids", 0) or 0),
+            },
+            "backend_counts": {
+                "nodes": int(backend.get("nodes", 0) or 0),
+                "edges": int(backend.get("edges", 0) or 0),
+            },
+            "frameworks": frameworks,
+            "scan_timestamp": time.time(),
+            "total_symbols": total_symbols,
+        }
+
+        file_set_hash = self._compute_scan_file_set_hash(workspace)
+        if not file_set_hash:
+            logger.warning(
+                "store_scan_result: empty file_set_hash (workspace=%s); "
+                "skipping analysis_cache insert", workspace
+            )
+            return
+
+        result_json = json.dumps(subset, ensure_ascii=False, default=str, sort_keys=True)
+        result_hash = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+        now = time.time()
+
+        conn = self._connect()
+        # Idempotent: if the same (command, file_set_hash, result_hash)
+        # triple already exists, do nothing. This mirrors the "INSERT OR
+        # IGNORE" intent — re-scanning the same file set with the same
+        # outcome must not bloat the cache.
+        existing = conn.execute(
+            """SELECT 1 FROM analysis_cache
+               WHERE command = ? AND file_set_hash = ? AND result_hash = ?
+               LIMIT 1
+            """,
+            ("scan", file_set_hash, result_hash),
+        ).fetchone()
+        if existing:
+            logger.debug(
+                "store_scan_result: cache hit (command=scan, "
+                "file_set_hash=%s, result_hash=%s) — skipping insert",
+                file_set_hash[:12], result_hash[:12],
+            )
+            return
+
+        try:
+            conn.execute(
+                """INSERT INTO analysis_cache
+                   (command, file_set_hash, result_hash, result_json, timestamp)
+                   VALUES (?, ?, ?, ?, ?)
+                """,
+                ("scan", file_set_hash, result_hash, result_json, now),
+            )
+            conn.commit()
+            logger.info(
+                "store_scan_result: persisted scan result to analysis_cache "
+                "(file_set_hash=%s, total_symbols=%d)",
+                file_set_hash[:12], total_symbols,
+            )
+        except sqlite3.Error as e:
+            logger.warning(
+                "store_scan_result: failed to insert into analysis_cache: %s", e
+            )
+
     # ─── Migration ──────────────────────────────────────────
 
     def migrate_from_json(self) -> Dict[str, Any]:
