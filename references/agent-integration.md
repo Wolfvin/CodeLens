@@ -1155,6 +1155,65 @@ Step 5: Final audit:
         "After cleanup: 0 dead entries remaining."
 ```
 
+### 9.4 Git-Aware Workflow (v8.2+)
+
+CodeLens v8.2 adds optional git-diff awareness to incremental scans so
+agents can target exactly the files git knows changed, instead of
+re-parsing every file with a bumped mtime. All git-aware features
+degrade gracefully to None / mtime-fallback when git is unavailable or
+the workspace is not a git repo — no special-casing required in agent
+code.
+
+```
+Step 1: codelens_git_status(workspace)
+          │
+          ├── rescan_recommended: false ──► skip scan, registry is current
+          │
+          └── rescan_recommended: true  ──► proceed to Step 2
+          │
+          ▼
+Step 2: codelens_scan(workspace, incremental=True)
+        ↑ uses `git diff <last_indexed_sha> --name-only` to pick files;
+          mtime fallback runs automatically when git unavailable
+          │
+          ▼
+Step 3: codelens_diff(workspace, git_aware=True)
+          │
+          ├── changed_files[]  ← files git knows changed since last index
+          ├── symbols[]        ← backend nodes in those files
+          └── impact[]         ← callers of those symbols (graph BFS)
+          │
+          ▼
+Step 4: For each impact[].callers[] entry:
+        - Read the caller's file + line to understand the call site
+        - Decide if the change is safe (signature preserved) or
+          breaking (signature changed → run `refactor-safe` next)
+          │
+          ▼
+Step 5: If branch switch detected (git checkout rewrote many files):
+        codelens_scan(workspace, incremental=False)
+        ↑ full scan recommended — incremental may miss cross-file
+          edges that a checkout rewrote atomically
+```
+
+**Branch switch detection**: `git-status` reports `branch_switch_detected: true`
+when the current HEAD SHA differs from `last_indexed_sha` AND the branch
+name differs from `last_indexed_branch`. Same-branch commits do NOT
+trigger this (SHA moves but branch doesn't) — only `git checkout` to a
+different branch does.
+
+**Watch mode**: `watch --git-mode` polls `git diff --name-only` every
+`--interval` seconds (default 2.0) instead of using watchdog file
+events. Useful when watchdog is unavailable or when the agent wants
+git-aware delta instead of mtime-based change detection. Falls back to
+mtime polling when git is unavailable.
+
+**Known gap (issue #25)**: Incremental scans do NOT populate the graph
+tables (`graph_nodes` + `graph_edges`) — only full scans do. When the
+graph is empty, `diff --git-aware` returns an empty `impact` array.
+This is a pre-existing gap tracked in #25 and is NOT made worse by the
+git-aware layer.
+
 ---
 
 ## 10. Programmatic Registry File Access

@@ -202,6 +202,18 @@ class PersistentRegistry:
         except Exception as e:
             logger.warning(f"graph_model schema init failed: {e}")
 
+        # Initialize the registry_meta table used by git_aware.py to store
+        # the last-indexed git SHA + branch bookmark (issue #14). Additive —
+        # no existing table or column is modified. Lazy import keeps
+        # git_aware optional for downstream forks that remove it.
+        try:
+            from git_aware import init_registry_meta
+            init_registry_meta(conn)
+        except ImportError:
+            logger.debug("git_aware module not available; skipping registry_meta init")
+        except Exception as e:
+            logger.warning(f"registry_meta schema init failed: {e}")
+
     def _connect_raw(self) -> sqlite3.Connection:
         """Get raw connection without auto-init (for init itself)."""
         if self._conn is None:

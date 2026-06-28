@@ -50,6 +50,110 @@ graph traversal logic.
   population, query_callers, query_callees, re-population idempotency, and
   the trace pilot A/B comparison.
 
+### Git-Aware Incremental Re-Index (issue #14)
+
+Replaces the file-watcher-only change detection with optional git-diff
+awareness so incremental scans target exactly the files git knows changed
+(tracked + untracked), instead of relying solely on filesystem mtimes.
+All features gracefully degrade to None / [] / False / mtime-fallback
+when git is unavailable or the workspace is not a git repo.
+
+### Added (git-aware)
+
+- **`scripts/git_aware.py`** — New module implementing the git-aware
+  change-detection layer:
+  - `get_current_sha(workspace)` / `get_current_branch(workspace)` —
+    HEAD SHA + branch (None when not a git repo).
+  - `get_changed_files(workspace, since_sha=None)` — `git diff
+    --name-only` (HEAD or `<sha>`).
+  - `get_untracked_files(workspace)` — `git ls-files --others
+    --exclude-standard` so newly-created (not-yet-added) files are
+    visible to incremental scans.
+  - `get_last_indexed_sha` / `set_last_indexed_sha` — registry_meta
+    key/value bookmark of the HEAD SHA + branch at the time of the last
+    successful scan.
+  - `detect_branch_switch(workspace, db_path)` — True when HEAD moved
+    AND the branch name changed (catches `git checkout`, not same-branch
+    commits).
+  - `rescan_recommended(workspace, db_path)` — True when a branch
+    switch is detected OR any changed files exist since the last index.
+  - `init_registry_meta(conn)` — creates the `registry_meta(key TEXT
+    PRIMARY KEY, value TEXT)` table (idempotent).
+
+- **`scripts/commands/git_status.py`** — New `git-status` command
+  (auto-registered). Single-call "do I need to re-scan?" check for AI
+  agents. Reports: current_sha, current_branch, last_indexed_sha,
+  last_indexed_branch, changed_files_count, branch_switch_detected,
+  rescan_recommended. Always returns status=ok; git-unavailable is
+  reported via git_available=False (not an error).
+
+- **`tests/test_git_aware.py`** — 32 test cases across 9 classes
+  (TestCurrentSha, TestChangedFiles, TestRegistryMeta, TestBranchSwitch,
+  TestRescanRecommended, TestGitStatusCommand, TestDiffGitAware,
+  TestIncrementalGitPath, TestScanStoresBookmark). All git operations
+  use a temp directory + `git init` — no dependency on the CodeLens
+  repo's git state. Tests skip with `pytest.skip('git not available')`
+  when git is missing.
+
+### Changed (git-aware)
+
+- **`scripts/incremental.py`** — `find_changed_files` now tries the
+  git-aware path FIRST: if a `last_indexed_sha` bookmark exists in
+  `registry_meta`, uses `git diff <sha> --name-only` + `git ls-files
+  --others` to enumerate exactly the files git knows changed. Deleted
+  files (in diff but not on disk) are returned in the deleted slot so
+  `scan.py`'s existing deletion-cleanup path runs unchanged. Falls back
+  to the existing mtime-based detection when git is unavailable, no
+  bookmark is stored, or any unexpected error occurs. Signature is
+  backward-compatible — `db_path` is a new optional kwarg.
+- **`scripts/commands/scan.py`** — After a successful scan (full or
+  incremental), if git is available, persists `last_indexed_sha` +
+  `last_indexed_branch` via `set_last_indexed_sha()`. Scan output now
+  includes a `git` field with `{last_indexed_sha, last_indexed_branch}`
+  so agents can verify the bookmark was recorded. Fail-soft: if the
+  bookmark write fails, the scan still succeeds.
+- **`scripts/commands/diff.py`** — New `--git-aware` flag. When set,
+  the diff command produces a single-call "what changed + what's
+  affected" view: changed_files (from git), symbols (from flat backend
+  registry, filtered to changed files), impact (callers from
+  `graph_model.query_callers` when graph tables are populated). Default
+  snapshot-diff behavior is unchanged — `--git-aware` is purely
+  additive. Falls back to `git_available=False` when git is unavailable
+  (status stays "ok").
+- **`scripts/commands/watch.py`** — New `--git-mode` flag (default
+  off). When set, switches from watchdog file events to git-diff
+  polling: every `--interval` seconds (default 2.0), runs `git diff
+  --name-only` + `git ls-files --others` and re-indexes only the files
+  git knows changed. Falls back to mtime polling when git is
+  unavailable or the workspace is not a git repo. Default watchdog
+  behavior is preserved (BOS decision: keep watchdog as default, ADD
+  git-awareness as alternative).
+- **`scripts/persistent_registry.py`** — Calls `init_registry_meta(conn)`
+  during `_init_schema` so the `registry_meta` table always exists by
+  the time any git-aware function tries to read or write a bookmark.
+  Additive — no existing table or column modified.
+
+### Non-Breaking (git-aware)
+
+- All 56 existing CLI commands continue to work unchanged.
+- The git-aware layer is purely additive — when git is unavailable, all
+  functions return None / [] / False and the existing mtime path runs.
+- The `registry_meta` table is additive — no existing table or column
+  was modified.
+- Scan output gained a new top-level `git` field; existing fields are
+  untouched.
+- The `diff --git-aware` flag is opt-in; default `diff` behavior is
+  unchanged.
+
+### Known Gaps (NOT made worse by this change)
+
+- **Issue #25 (incremental graph population)** — Incremental scans
+  still don't populate the graph tables (`graph_nodes` + `graph_edges`);
+  only full scans do. `diff --git-aware` reports an empty `impact` array
+  when graph tables aren't populated (e.g. after an incremental-only
+  scan). This is a pre-existing gap tracked in #25 and is NOT made
+  worse by this change.
+
 ### Changed
 
 - **`scripts/persistent_registry.py`** — Calls `init_graph_schema(conn)`

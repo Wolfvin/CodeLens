@@ -94,7 +94,13 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         all_discovered = []
         for file_list in files.values():
             all_discovered.extend(file_list)
-        changed, new, deleted = find_changed_files(workspace, all_discovered)
+        # Pass the db_path so find_changed_files can look up the
+        # last_indexed_sha bookmark and use git-diff when available
+        # (issue #14). Falls back to mtime inside the function.
+        from graph_model import _default_db_path as _scan_db_path
+        changed, new, deleted = find_changed_files(
+            workspace, all_discovered, db_path=_scan_db_path(workspace)
+        )
 
         if not changed and not new and not deleted:
             # Load existing registry counts
@@ -921,6 +927,24 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     except Exception:
         logger.warning("Graph table population failed", exc_info=True)
 
+    # ─── Git-aware scan bookmark (issue #14) ─────────────────────
+    # After a successful scan, record the current HEAD SHA + branch so the
+    # next `scan --incremental` can diff against this bookmark instead of
+    # relying solely on filesystem mtimes. Additive — if git is unavailable
+    # or the workspace is not a git repo, this is a no-op. Failures here
+    # MUST NOT break the scan (git-awareness is an optimization layer).
+    git_bookmark = {"sha": None, "branch": None}
+    try:
+        from git_aware import get_current_sha, get_current_branch, set_last_indexed_sha
+        from graph_model import _default_db_path as _git_db_path
+        sha = get_current_sha(workspace)
+        if sha:
+            branch = get_current_branch(workspace)
+            set_last_indexed_sha(workspace, _git_db_path(workspace), sha)
+            git_bookmark = {"sha": sha, "branch": branch}
+    except Exception:
+        logger.debug("Git bookmark update failed", exc_info=True)
+
     # Update mtimes cache
     all_files = []
     for file_list in files.values():
@@ -1017,6 +1041,10 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         "graph": {
             "nodes": graph_population.get("nodes", 0),
             "edges": graph_population.get("edges", 0),
+        },
+        "git": {
+            "last_indexed_sha": git_bookmark.get("sha"),
+            "last_indexed_branch": git_bookmark.get("branch"),
         },
     }
 

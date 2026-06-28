@@ -80,11 +80,82 @@ def get_current_mtimes(workspace: str, files: List[str]) -> Dict[str, float]:
 
 def find_changed_files(
     workspace: str,
-    all_files: List[str]
+    all_files: List[str],
+    db_path: Optional[str] = None,
 ) -> Tuple[List[str], List[str], List[str]]:
+    """Detect changed, new, and deleted files since the last scan.
+
+    Tries the git-aware path FIRST (issue #14). If git is available and a
+    ``last_indexed_sha`` bookmark exists in the registry_meta table, uses
+    ``git diff <sha> --name-only`` (+ ``git ls-files --others``) to
+    enumerate exactly the files git knows changed. Falls back to the
+    mtime-based path when git is unavailable, no bookmark is stored, or
+    the git path returns nothing actionable.
+
+    Args:
+        workspace: Absolute path to the workspace root.
+        all_files: List of absolute file paths currently in the workspace
+                   (used by the mtime fallback path and to compute the
+                   default db_path when ``db_path`` is None).
+        db_path: Optional SQLite db path. Defaults to
+                 ``<workspace>/.codelens/codelens.db``. Pass explicitly
+                 when the caller already has the path to avoid recomputing.
+
+    Returns:
+        Tuple of ``(changed_files, new_files, deleted_files)``.
+        ``changed_files`` and ``new_files`` are absolute paths.
+        ``deleted_files`` are relative paths (matches the pre-8.2 contract
+        so :func:`remove_from_mtimes_cache` keeps working unchanged).
     """
-    Compare current mtimes with cached mtimes.
-    Returns (changed_files, new_files, deleted_files).
+    # ── Git-aware path (issue #14) ──────────────────────────────
+    # Try git-diff first. If a last_indexed_sha bookmark is set, use it as
+    # the diff base. Otherwise (no bookmark yet) fall through to mtime so
+    # the first scan on a fresh repo still works.
+    try:
+        from git_aware import (
+            get_changed_files as _git_changed,
+            get_untracked_files as _git_untracked,
+            get_last_indexed_sha as _git_last_sha,
+        )
+        if db_path is None:
+            db_path = os.path.join(workspace, ".codelens", "codelens.db")
+        last_sha = _git_last_sha(workspace, db_path)
+        if last_sha:
+            git_changed_rel = set(_git_changed(workspace, since_sha=last_sha))
+            git_untracked_rel = set(_git_untracked(workspace))
+            all_rel = git_changed_rel | git_untracked_rel
+
+            changed_abs: List[str] = []
+            deleted_rel: List[str] = []
+            for rel in all_rel:
+                abs_path = os.path.join(workspace, rel)
+                if os.path.exists(abs_path):
+                    changed_abs.append(abs_path)
+                else:
+                    # File was deleted between last SHA and now.
+                    deleted_rel.append(rel)
+
+            # In git mode, "new" files (untracked + just-added) are folded
+            # into the changed set — both are files that need re-parsing.
+            # Keep new=[] so the caller's `set(changed + new)` union still
+            # works without double-counting.
+            return changed_abs, [], deleted_rel
+    except Exception:
+        logger.debug("git-aware find_changed_files failed; falling back to mtime", exc_info=True)
+
+    # ── Mtime fallback (pre-8.2 behavior) ───────────────────────
+    return _find_changed_files_mtime(workspace, all_files)
+
+
+def _find_changed_files_mtime(
+    workspace: str,
+    all_files: List[str],
+) -> Tuple[List[str], List[str], List[str]]:
+    """Compare current mtimes with cached mtimes (pre-8.2 mtime path).
+
+    Returns (changed_files, new_files, deleted_files) as absolute paths
+    for changed/new and relative paths for deleted. Kept as a separate
+    helper so :func:`find_changed_files` can fall back to it cleanly.
     """
     cached = load_mtimes(workspace)
     current = get_current_mtimes(workspace, all_files)

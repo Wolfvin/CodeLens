@@ -61,6 +61,8 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | Intent | Command |
 |--------|---------|
 | Create/edit/delete code | `query` → write → `scan --incremental` |
+| "what changed?" | `diff --git-aware` |
+| "do I need to re-scan?" | `git-status` |
 | "does this exist?" | `query --lite` |
 | "who calls this?" | `trace --direction up` |
 | "safe to delete?" | `impact` → `dead-code` |
@@ -106,8 +108,8 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 
 ## All 56 Commands
 
-### Setup & Lifecycle (8)
-`init` · `scan [--incremental] [--max-files N] [--full]` · `validate` · `detect` · `watch [--debounce SECS]` · `migrate` · `serve` · `lsp-status`
+### Setup & Lifecycle (8+)
+`init` · `scan [--incremental] [--max-files N] [--full]` · `validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status`
 
 ### Pre-Write Safety (5)
 `query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
