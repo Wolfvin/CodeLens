@@ -10,6 +10,8 @@ from commands import register_command
 
 
 def add_args(parser):
+    parser.add_argument("workspace", nargs="?", default=None,
+                        help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument('--severity', choices=['critical', 'high', 'medium', 'low'],
                         default='high',
                         help='Minimum severity to fail the gate (default: high)')
