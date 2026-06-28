@@ -1,11 +1,11 @@
-# Agent Integration Guide — CodeLens v8.1
+# Agent Integration Guide — CodeLens v8.2
 
 Complete guide for integrating CodeLens into AI agent workflows.
 Covers: CLI integration, programmatic Python API, JSON output schemas,
 decision trees, auto-trigger mapping, error handling, MCP server, guard hooks,
-plugin system, and best practices.
+plugin system, compact output format (issue #17), and best practices.
 
-**Current state:** 56 CLI commands · 54 MCP tools (49 static + 5 dynamic) · 28+ languages · 4 plugin types · OWASP Top 10 (36 rules) + Compliance (53 rules) built-in.
+**Current state:** 57 CLI commands · 55 MCP tools (50 static + 5 dynamic) · 28+ languages · 4 plugin types · OWASP Top 10 (36 rules) + Compliance (53 rules) built-in · `--format compact` for token-efficient output (issue #17).
 
 ---
 
@@ -1332,6 +1332,90 @@ The graph is a derived projection of the flat registry — it is rebuilt from
 `backend.json` on every scan. Engines that need the original node metadata
 (`status`, `async`, `impl_for`, `component`) can read it from the graph
 node's `extra` field, which preserves all non-id/fn/type/file/line fields.
+
+---
+
+## 10.5 Compact Output Format (v8.2+ — issue #17)
+
+For high-volume MCP tool calls, pass `format: "compact"` (CLI: `--format compact`)
+to cut token usage ~50% vs `json`. The compact formatter:
+
+1. Omits null/empty fields (no `impl_for: null`, no empty `callees: []`).
+2. Abbreviates node types: `function→fn`, `class→cls`, `file→f`, `module→m`,
+   `route→r`, `type→t`, `interface→i`.
+3. Abbreviates edge types: `CALLS→C`, `IMPORTS→I`, `DEFINES→D`, `INHERITS→H`,
+   `IMPLEMENTS→M`, `USES_TYPE→U`.
+4. Uses single-char keys: `name→n`, `file→f`, `line→l`, `type→t`, `status→s`,
+   `confidence→c`, `depth→d`, `resolved→r`. Full map in
+   `scripts/formatters/compact.py:FIELD_KEY_ABBR`.
+5. Strips the workspace prefix from absolute paths
+   (`/home/user/proj/src/app.py` → `src/app.py`).
+6. Uses JSON with no whitespace separators (`,` and `:` only, no spaces).
+
+Output is still valid JSON — standard JSON parsers handle it directly.
+
+### Example: trace output, json vs compact
+
+```bash
+$CLI trace main --direction down --depth 2 --format json     # → 23,026 bytes
+$CLI trace main --direction down --depth 2 --format compact  # → 11,622 bytes (50.5% of json)
+```
+
+Compact sample (single line, wrapped here for readability):
+
+```json
+{"s":"ok","sym":"main","ws":"/tmp/proj","dir":"down","md":2,
+ "ch":{"up":[],"dn":[{"d":1,"n":"get_user_by_id","f":"src/db_queries.py","l":5,"r":true}, ...]},
+ "st":{"up":0,"dn":18,"af":7,"afl":["main.py","src/db_queries.py", ...]},
+ "tot":18,"off":0,"lim":20}
+```
+
+### Pagination (issue #17)
+
+All list-type commands accept `--limit N` / `--offset N` (default `limit=20`).
+The response includes `total_count`, `count`, `offset`, `limit`, and `has_more`
+fields so agents know whether to fetch the next page. `--top N` is preserved
+as an alias for `--limit N --offset 0`.
+
+| Command | What's paginated |
+|---------|------------------|
+| `list` | `results` (frontend classes/ids + backend nodes) |
+| `search` | `matches` (regex hits across files) |
+| `trace` | `chains.up` + `chains.down` |
+| `symbols` | `results` (registry symbol hits) |
+| `outline` | `outlines` (per-file structure summaries) |
+
+### graph-schema command + codelens_graph_schema MCP tool (issue #17)
+
+The cheapest way to understand the graph shape before issuing structural
+queries. One call returns node + edge counts, type distribution, and index
+count. Use it to short-circuit expensive trace/impact calls when the graph
+is empty (pre-scan) or trivially small.
+
+```bash
+$CLI graph-schema /path/to/proj --format compact
+# → {"s":"ok","n":31,"e":97,"nts":{"function":30,"class":1},"ets":{"CALLS":97},"ix":6}
+```
+
+MCP equivalent:
+
+```json
+{"name": "codelens_graph_schema",
+ "arguments": {"workspace": "/path/to/proj", "format": "compact"}}
+```
+
+Returns zeros and empty type maps when scan hasn't been run — agents can
+branch on `n == 0` to decide whether to scan first.
+
+### When to use compact vs ai vs json
+
+| Use case | Format |
+|----------|--------|
+| High-volume MCP tool calls (agent in a loop) | `compact` (~50% smaller than `json`) |
+| Single ad-hoc query, agent wants normalized schema | `ai` (default for MCP) |
+| Debugging / piping to `jq` / human inspection | `json` (pretty-printed) |
+| GitHub Advanced Security / VS Code SARIF viewer | `sarif` |
+| README / report generation | `markdown` |
 
 ---
 

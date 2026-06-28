@@ -15,20 +15,20 @@ def add_args(parser):
     parser.add_argument("--filter", dest="filter_type",
                         choices=["all", "dead", "duplicate_define", "duplicate_ref", "collision", "active"],
                         default="all", help="Filter by status")
-    parser.add_argument("--limit", type=int, default=200,
-                        help="Max results to return (default: 200)")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="Max results to return (default: 20). Use --limit 0 for unlimited.")
     parser.add_argument("--offset", type=int, default=0,
                         help="Offset for pagination (default: 0)")
 
 
 def execute(args, workspace):
     return cmd_list(workspace, args.domain, args.filter_type,
-                    limit=getattr(args, 'limit', 200),
+                    limit=getattr(args, 'limit', 20),
                     offset=getattr(args, 'offset', 0))
 
 
 def cmd_list(workspace: str, domain: str, filter_type: str = "all",
-             limit: int = 200, offset: int = 0) -> Dict[str, Any]:
+             limit: int = 20, offset: int = 0) -> Dict[str, Any]:
     """List all entries with optional filter and pagination."""
     workspace = os.path.abspath(workspace)
     results = []
@@ -90,7 +90,9 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
                 results.append(entry)
 
     total = len(results)
-    paginated = results[offset:offset + limit]
+    # --limit 0 means unlimited (return everything).
+    page_limit = limit if limit and limit > 0 else total
+    paginated = results[offset:offset + page_limit]
 
     # Build summary counts by type and status
     by_type = {}
@@ -106,10 +108,11 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
         "domain": domain,
         "filter": filter_type,
         "total": total,
+        "total_count": total,
         "count": len(paginated),
         "offset": offset,
-        "limit": limit,
-        "has_more": offset + limit < total,
+        "limit": page_limit,
+        "has_more": (offset + page_limit) < total,
         "summary": {
             "by_type": by_type,
             "by_status": by_status,

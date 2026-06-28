@@ -963,7 +963,57 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "graph-schema": {
+        "description": "Return the shape of the code graph: node + edge counts, node type distribution (function/class/...), edge type distribution (CALLS/IMPORTS/...), and index count. The cheapest way to understand the graph before issuing structural queries. Returns zeros when scan has not been run.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Custom SQLite db path (default: <workspace>/.codelens/codelens.db)"
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
 }
+
+
+# ─── Tool Schema Helpers ──────────────────────────────────────────────
+
+
+# Format enum shared by every tool's inputSchema (issue #17).
+# compact = token-efficient single-char keys + abbreviated types.
+_FORMAT_PROPERTY = {
+    "type": "string",
+    "enum": ["json", "markdown", "ai", "sarif", "compact"],
+    "description": (
+        "Output format. 'ai' (default) is the normalized schema; 'compact' "
+        "uses single-character keys and abbreviated types to cut tokens "
+        "40-70%. 'json'/'markdown'/'sarif' are the legacy verbose forms."
+    ),
+    "default": "ai",
+}
+
+
+def _inject_format_enum(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of ``schema`` with the shared ``format`` property added.
+
+    Avoids mutating the static ``_TOOL_DEFINITIONS`` dict in place so the
+    original schemas remain available for inspection. Idempotent: if the
+    schema already declares a ``format`` property it is left untouched.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out = json.loads(json.dumps(schema))  # deep copy via JSON (schemas are JSON-serializable)
+    props = out.setdefault("properties", {})
+    if isinstance(props, dict) and "format" not in props:
+        props["format"] = dict(_FORMAT_PROPERTY)
+    return out
 
 
 # ─── Smart Caching Layer ──────────────────────────────────────────────
@@ -1287,13 +1337,20 @@ class MCPServer:
         }
 
     def _handle_tools_list(self) -> Dict[str, Any]:
-        """Handle tools/list request. Returns all CodeLens commands as MCP tools."""
+        """Handle tools/list request. Returns all CodeLens commands as MCP tools.
+
+        Every tool's inputSchema gets a ``format`` property added with the
+        enum ``[json, markdown, ai, sarif, compact]`` (issue #17). The MCP
+        server always returns AI-formatted results by default; the ``format``
+        parameter lets agents opt into the token-efficient ``compact`` form.
+        """
         tools = []
         for cmd_name, tool_def in sorted(_TOOL_DEFINITIONS.items()):
+            schema = _inject_format_enum(tool_def["parameters"])
             tools.append({
                 "name": f"codelens_{cmd_name.replace('-', '_')}",
                 "description": tool_def["description"],
-                "inputSchema": tool_def["parameters"],
+                "inputSchema": schema,
             })
 
         # Also include tools for commands not in the static definitions
@@ -1328,7 +1385,12 @@ class MCPServer:
         return tools
 
     def _infer_schema_from_command(self, cmd_name: str, cmd_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Infer a JSON Schema for a command based on its argument parser."""
+        """Infer a JSON Schema for a command based on its argument parser.
+
+        Includes the ``format`` enum (json/markdown/ai/sarif/compact) so
+        agents can opt into compact output for any dynamically-discovered
+        command (issue #17).
+        """
         schema = {
             "type": "object",
             "properties": {
@@ -1342,6 +1404,8 @@ class MCPServer:
         # Most commands require workspace
         if cmd_name not in ("ask",):
             schema["required"].append("workspace")
+        # Issue #17: every tool accepts a format enum (compact = token-efficient).
+        schema = _inject_format_enum(schema)
         return schema
 
     def _handle_tools_call(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1523,8 +1587,10 @@ class MCPServer:
     def _execute_command(self, cmd_name: str, arguments: Dict[str, Any], workspace: str) -> Dict[str, Any]:
         """Execute a CodeLens command by name with the given arguments.
 
-        Uses the command registry to find and execute the right command.
-        Results are always formatted in AI mode (normalized schema).
+        Results are formatted in AI mode (normalized schema) by default. If
+        the caller passes ``format='compact'`` (issue #17), the result is
+        compacted via :mod:`formatters.compact` — single-char keys,
+        abbreviated types, no null fields — to cut token usage 40-70%.
         """
         from commands import get_all_commands
         from formatters import format_output
@@ -1546,7 +1612,12 @@ class MCPServer:
         # Execute the command
         result = cmd_info["execute"](args, workspace)
 
-        # Format in AI mode
+        # Format the result. Default is AI mode; compact mode returns the
+        # compacted dict so the JSON-RPC transport layer can serialize it.
+        fmt = arguments.get("format") or "ai"
+        if fmt == "compact" and isinstance(result, dict):
+            from formatters.compact import compact_dict
+            return compact_dict(result, workspace)
         if isinstance(result, dict):
             from formatters import _normalize_to_ai
             return _normalize_to_ai(result, cmd_name)

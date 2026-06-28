@@ -1,17 +1,20 @@
-# CodeLens v8.1.0 — Quick Reference
+# CodeLens v8.2 — Quick Reference
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
-> Read THIS FILE FIRST. All commands: auto-detect workspace, auto-setup, smart `--top 20`, `--lite`, `--max-tokens N`, `--format ai`.
+> Read THIS FILE FIRST. All commands: auto-detect workspace, auto-setup, smart `--top 20`, `--lite`, `--max-tokens N`, `--format ai`, `--format compact` (issue #17).
 
 ## Zero-Config Usage
 
 ```bash
 CLI="python3 /path/to/codelens/scripts/codelens.py"
 export CODELENS_AI_MODE=1           # Optional: --format ai becomes default
-$CLI query "myFunction" --lite   # → {found, action}. Auto-init+scan if needed.
-$CLI smell                       # → Auto --top 20, sorted by severity
-$CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
+$CLI query "myFunction" --lite                              # → {found, action}
+$CLI smell                                                  # → Auto --top 20, sorted by severity
+$CLI complexity --top 5 --lite                              # → Top 5 most complex, minimal output
+$CLI trace "main" --direction down --format compact         # → token-efficient single-char keys (issue #17)
+$CLI graph-schema                                           # → graph shape: nodes/edges/types in ~50 bytes (issue #17)
+$CLI list --limit 5 --offset 10 --format compact            # → paginated + compact
 ```
 
 **Auto-setup** caps at 3000 files to prevent timeout. For full analysis: `$CLI scan` manually.
@@ -24,8 +27,10 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 | `--lite` | Command-specific minimal output (see table below) |
 | `--max-tokens N` | Auto-truncate to fit ~N tokens |
 | `--format ai` | Normalized: `{stats, items[], truncated, recommendations}` |
-| `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
+| `--format compact` | Token-efficient: single-char keys + abbreviated types (issue #17). ~50% smaller than `json`. Best for high-volume MCP tool calls |
 | `--format sarif` | SARIF v2.1.0 output for GitHub Advanced Security / VS Code |
+| `--limit N` / `--offset N` | Pagination on list-type commands (`list`, `search`, `trace`, `symbols`, `outline`). Default limit=20 (issue #17). `--top N` is an alias for `--limit N --offset 0` |
+| `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
 | `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
 
 ### Lite Mode Per Command
@@ -115,10 +120,10 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 `query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
 
 ### Navigation (10)
-`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both]` · `search "pattern"` · `symbols "name" [--fuzzy]` · `outline [--file path]` · `dependents "file"` · `list [--filter ...]` · `ask "question"` · `diff`
+`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both] [--limit N] [--offset N]` · `search "pattern" [--limit N] [--offset N]` · `symbols "name" [--fuzzy] [--limit N] [--offset N]` · `outline [--file path] [--limit N] [--offset N]` · `dependents "file"` · `list [--filter ...] [--limit N] [--offset N]` · `ask "question"` · `diff`
 
-### Architecture (8)
-`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history`
+### Architecture (9)
+`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history` · `graph-schema`
 
 ### Security (5)
 `secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan` (OSV.dev + native audit) · `env-check [--var NAME]`
@@ -138,9 +143,9 @@ $CLI complexity --top 5 --lite   # → Top 5 most complex, minimal output
 ### Tooling (1)
 `plugin <install|list|search|update|info|validate>`
 
-**Total: 56 commands** (verified via `commands/__init__.py` auto-registration)
+**Total: 57 commands** (56 + `graph-schema` added in v8.2 issue #17; verified via `commands/__init__.py` auto-registration)
 
-## MCP Server (54 Tools)
+## MCP Server (55 Tools)
 
 Start the MCP server for AI agent integration:
 
@@ -148,9 +153,10 @@ Start the MCP server for AI agent integration:
 python3 scripts/codelens.py serve
 ```
 
-Exposes 54 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`):
-- 49 statically-defined tools (full JSON schemas in `mcp_server.py`)
+Exposes 55 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`):
+- 50 statically-defined tools (full JSON schemas in `mcp_server.py`) including the new `codelens_graph_schema` (issue #17)
 - 5 dynamically-discovered tools (`benchmark`, `dashboard`, `history`, `lsp-status`, `migrate`)
+- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
 - `watch` and `serve` itself are excluded (long-running)
 
 See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.

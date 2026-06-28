@@ -16,6 +16,11 @@ def add_args(parser):
                         help="Domain to trace")
     parser.add_argument("--max-results", type=int, default=MAX_CHAIN_RESULTS,
                         help=f"Max chain entries to return (default {MAX_CHAIN_RESULTS})")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="Max chain entries to return after pagination (default: 20). "
+                             "Use --limit 0 for unlimited (still bounded by --max-results).")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Offset for pagination of chain entries (default: 0)")
     # v8.2 (issue #8): toggle between the new graph backend (default) and the
     # legacy flat-registry backend. Default is graph with automatic fallback
     # to flat when the graph tables are empty. Use --no-graph to force the
@@ -39,7 +44,7 @@ def add_args(parser):
 def execute(args, workspace):
     """Execute the trace command."""
     use_graph = getattr(args, "use_graph", True)
-    return trace_symbol(
+    result = trace_symbol(
         args.name, workspace,
         direction=args.direction,
         max_depth=args.depth,
@@ -47,6 +52,22 @@ def execute(args, workspace):
         max_results=args.max_results,
         use_graph=use_graph,
     )
+    # Apply pagination to chains.up and chains.down (issue #17).
+    if isinstance(result, dict) and isinstance(result.get("chains"), dict):
+        chains = result["chains"]
+        limit = getattr(args, 'limit', 20)
+        offset = max(getattr(args, 'offset', 0), 0)
+        total_count = 0
+        for direction_key in ("up", "down"):
+            if direction_key in chains and isinstance(chains[direction_key], list):
+                page_limit = limit if limit and limit > 0 else len(chains[direction_key])
+                full = chains[direction_key]
+                total_count += len(full)
+                chains[direction_key] = full[offset:offset + page_limit]
+        result["total_count"] = total_count
+        result["offset"] = offset
+        result["limit"] = limit
+    return result
 
 
 register_command("trace", "Trace deep call chain from a symbol", add_args, execute)
