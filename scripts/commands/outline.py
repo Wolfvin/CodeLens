@@ -12,15 +12,34 @@ def add_args(parser):
                         help="Detail level")
     parser.add_argument("--all", action="store_true", dest="all_files",
                         help="Outline all files in workspace")
+    parser.add_argument("--limit", type=int, default=20,
+                        help="Max files to return after pagination (default: 20). "
+                             "Use --limit 0 for unlimited.")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Offset for pagination of outlines (default: 0)")
 
 
 def execute(args, workspace):
     if args.all_files:
-        return get_workspace_outline(workspace)
+        result = get_workspace_outline(workspace)
     elif args.file:
-        return get_file_outline(args.file, workspace, detail_level=args.detail)
+        result = get_file_outline(args.file, workspace, detail_level=args.detail)
     else:
-        return get_workspace_outline(workspace)
+        result = get_workspace_outline(workspace)
+    # Apply pagination to workspace outlines (issue #17).
+    if isinstance(result, dict) and "outlines" in result:
+        outlines = result["outlines"]
+        total = len(outlines)
+        limit = args.limit if args.limit and args.limit > 0 else total
+        offset = max(args.offset, 0)
+        paginated = outlines[offset:offset + limit]
+        result["outlines"] = paginated
+        result["total_count"] = total
+        result["count"] = len(paginated)
+        result["offset"] = offset
+        result["limit"] = limit
+        result["has_more"] = (offset + limit) < total
+    return result
 
 
 register_command("outline", "Get file structure outline", add_args, execute)
