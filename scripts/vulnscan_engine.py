@@ -508,6 +508,7 @@ def scan_vulnerabilities(
     offline: bool = False,
     osv_ttl: int = 86400,
     refresh: bool = False,
+    max_age: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Scan dependency files for known vulnerabilities.
@@ -526,6 +527,10 @@ def scan_vulnerabilities(
         refresh: If True, bypass the OSV cache and force fresh API calls for
             every package (issue #30 ``--refresh`` flag). Ignored when
             ``offline`` is True.
+        max_age: Optional per-run TTL override in seconds. When set, cached
+            OSV entries older than ``max_age`` are treated as stale and
+            re-fetched from the API for this run only (issue #30 ``--max-age``
+            flag). The stored TTL is unchanged.
 
     Returns:
         Dict with findings, stats, risk level, audit availability,
@@ -577,7 +582,9 @@ def scan_vulnerabilities(
 
             if osv_packages:
                 osv_vulns = osv_client.query_packages(
-                    osv_packages, force_refresh=refresh
+                    osv_packages,
+                    force_refresh=refresh,
+                    max_age=max_age,
                 )
                 osv_findings = [v.to_finding() for v in osv_vulns]
 
@@ -597,8 +604,9 @@ def scan_vulnerabilities(
 
                 # Issue #30: cache freshness info (computed AFTER the query so
                 # it reflects the post-query state — any package just fetched
-                # or refreshed is now fresh).
-                cache_info = osv_client.get_cache_info(osv_packages)
+                # or refreshed is now fresh). Pass max_age so ttl_hours and
+                # the staleness threshold match the --max-age override.
+                cache_info = osv_client.get_cache_info(osv_packages, max_age=max_age)
             else:
                 osv_stats = {"packages_queried": 0, "vulnerabilities_found": 0}
                 logger.debug("OSV.dev: no packages to query")

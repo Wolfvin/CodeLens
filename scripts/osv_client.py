@@ -478,18 +478,25 @@ class OSVClient:
         self,
         packages: List[OSVPackage],
         force_refresh: bool = False,
+        max_age: Optional[int] = None,
     ) -> List[OSVVulnerability]:
         """Query multiple packages against OSV.dev.
 
         Uses batch queries for efficiency. Checks cache first, then queries
-        the API for uncached packages. Cached API responses are updated with
-        the fresh results.
+        the API for uncached (or stale) packages. Cached API responses are
+        updated with the fresh results.
 
         Args:
             packages: List of OSVPackage objects to query.
             force_refresh: If True, bypass the cache and force fresh API
                 calls for every package (issue #30 ``--refresh`` flag).
                 Ignored when ``offline`` is True (cannot hit the network).
+            max_age: Optional per-run TTL override in seconds. When set,
+                cached entries older than ``max_age`` are treated as stale
+                and re-fetched from the API for this run only (issue #30
+                ``--max-age`` flag). The stored TTL is unchanged. ``None``
+                means use each entry's stored TTL. Ignored when
+                ``force_refresh`` is True (cache is bypassed entirely).
 
         Returns:
             List of OSVVulnerability objects (deduplicated)
@@ -501,10 +508,14 @@ class OSVClient:
         uncached_packages: List[OSVPackage] = []
         uncached_keys: List[str] = []
 
+        now = time.time()
         # --refresh bypasses cache reads entirely (issue #30). It is a no-op
         # in offline mode, where we cannot reach the API and must rely on
         # whatever the cache already holds.
         bypass_cache = bool(force_refresh) and not self.offline
+        # --max-age (issue #30): treat still-fresh entries as stale for this
+        # run only. Only meaningful when we are actually consulting the cache.
+        max_age_ttl = max_age if (max_age is not None and max_age > 0) else None
 
         # Check cache first
         for pkg in packages:
@@ -520,6 +531,15 @@ class OSVClient:
 
             cached = self.cache.get(cache_key)
             if cached is not None:
+                # Honor --max-age: an entry that is still fresh per its
+                # stored TTL may be considered stale for this run.
+                if max_age_ttl is not None:
+                    peek = self.cache.peek(cache_key)
+                    if peek is not None and (now - peek[0]) > max_age_ttl:
+                        uncached_packages.append(pkg)
+                        uncached_keys.append(cache_key)
+                        continue
+
                 self._cache_hit_count += 1
 
                 # cached can be:
