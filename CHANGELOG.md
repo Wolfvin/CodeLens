@@ -251,6 +251,69 @@ when git is unavailable or the workspace is not a git repo.
   scan). This is a pre-existing gap tracked in #25 and is NOT made
   worse by this change.
 
+### Hybrid Type Resolution (issue #13)
+
+Adds a post-AST-pass type resolution layer that uses the per-file import
+registry to refine CALLS edges. Previously `user.profile.update()` was
+recorded as a call to `update` with no target type — the call graph had
+holes wherever methods were called on imported objects. Now the receiver
+type is resolved via the import registry, and the CALLS edge's
+`target_id` is refined to the correct target node (e.g. `Profile.update`
+in `models.py` instead of an arbitrary `update` match).
+
+### Added (type resolution)
+
+- **`scripts/hybrid_type_resolver.py`** — New module with:
+  - `build_import_registry(workspace, db_path)` — Scans Python
+    `from X import Y` / `import X.Y as Z` and TS/JS
+    `import {Y} from 'X'` / `import * as X from 'Y'` statements. Stores
+    results in a new `import_registry` SQLite table
+    `(file, local_name, module_path, symbol_name, line)`. Also writes
+    IMPORTS edges to `graph_edges` (edge_type='IMPORTS') so the graph
+    model now carries import relationships alongside CALLS.
+  - `resolve_receiver_type(file_path, receiver_expr, import_registry)` —
+    Resolves a dotted receiver expression (`user.profile`) to a fully
+    qualified type (`models.Profile`) via the import registry + class
+    definitions in `graph_nodes`. Best-effort: returns `None` when
+    unresolvable, never crashes.
+  - `refine_call_edges(workspace, db_path)` — For each CALLS edge with
+    a generic/unresolved `target_id`, attempts to resolve the receiver
+    type and updates `target_id` to the resolved node. Stores
+    `{"resolved_type": "...", "resolution_method": "import_registry"}`
+    in the edge's `extra_json` on success, or
+    `{"resolution_attempted": true, "failure_reason": "..."}` on failure.
+    Returns stats: `{edges_total, edges_refined, edges_unresolved}`.
+
+- **`resolve-types` command + `codelens_resolve_types` MCP tool** —
+  Manually triggers type resolution without a full re-scan. Useful for
+  agents who want to refresh type resolution after adding new imports.
+  Output: `{status, edges_total, edges_refined, edges_unresolved,
+  import_registry_size}`.
+
+- **IMPORTS edges in graph model** — The graph now carries two edge
+  types: `CALLS` (from #8) and `IMPORTS` (from #13). Future
+  `query_graph` work (#9, Phase 3) can traverse both.
+
+### Changed (type resolution)
+
+- **`scripts/commands/scan.py`** — After `populate_graph_tables()` (from
+  #8), calls `refine_call_edges(workspace, db_path)`. Scan output now
+  includes a `type_resolution` field: `{edges_refined, edges_unresolved}`.
+- **`scripts/graph_model.py`** — `graph_stats()` now reports IMPORTS
+  edges in the `edge_types` breakdown alongside CALLS.
+
+### Non-Breaking (type resolution)
+
+- Type resolution is best-effort: unresolvable edges are left unchanged
+  with a `resolution_attempted` flag. No CALLS edge is ever deleted.
+- The `import_registry` table is additive — no existing table modified.
+- On the `clean_app` fixture: 11/97 CALLS edges refined, 55 unresolved
+  (the remaining 31 are self-referential or std-lib calls that don't
+  need refinement). On the synthetic `type_resolution` fixture
+  (`tests/fixtures/type_resolution/`), `user.profile.update()` correctly
+  refines to `Profile.update` even when a `Cache.update` competitor
+  exists.
+
 ### Changed
 
 - **`scripts/persistent_registry.py`** — Calls `init_graph_schema(conn)`

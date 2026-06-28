@@ -142,6 +142,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 | `diff [workspace]` | Compare registry snapshots |
 | `circular [workspace]` | Detect circular dependencies |
 | `graph-schema [workspace]` | Cheap graph-shape introspection: node/edge counts, type distribution, indexes (issue #17) |
+| `resolve-types [workspace]` | Manually trigger hybrid type resolution (import-aware CALLS edge refinement, issue #13) |
 | `handbook [workspace]` | Generate project handbook for AI agents |
 | `dashboard [workspace]` | Generate HTML visualization dashboard |
 | `history [workspace]` | Show historical trend data and charts |

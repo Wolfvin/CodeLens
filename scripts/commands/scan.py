@@ -927,6 +927,25 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     except Exception:
         logger.warning("Graph table population failed", exc_info=True)
 
+    # ─── Hybrid Type Resolution (issue #13) ──────────────────────
+    # Post-pass that enriches CALLS edges with receiver type info via
+    # an import-aware resolver. Also writes IMPORTS edges to graph_edges
+    # and populates the import_registry table. Additive — only refines
+    # existing edges in place; never removes or replaces them. Failures
+    # here MUST NOT break the scan (type resolution is an optimization
+    # layer; unresolved edges fall back to name-based resolution).
+    type_resolution = {"edges_refined": 0, "edges_unresolved": 0}
+    try:
+        from hybrid_type_resolver import refine_call_edges
+        from graph_model import _default_db_path as _tr_db_path
+        tr_stats = refine_call_edges(workspace, _tr_db_path(workspace))
+        type_resolution = {
+            "edges_refined": tr_stats.get("edges_refined", 0),
+            "edges_unresolved": tr_stats.get("edges_unresolved", 0),
+        }
+    except Exception:
+        logger.warning("Hybrid type resolution failed", exc_info=True)
+
     # ─── Git-aware scan bookmark (issue #14) ─────────────────────
     # After a successful scan, record the current HEAD SHA + branch so the
     # next `scan --incremental` can diff against this bookmark instead of
@@ -1041,6 +1060,10 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         "graph": {
             "nodes": graph_population.get("nodes", 0),
             "edges": graph_population.get("edges", 0),
+        },
+        "type_resolution": {
+            "edges_refined": type_resolution.get("edges_refined", 0),
+            "edges_unresolved": type_resolution.get("edges_unresolved", 0),
         },
         "git": {
             "last_indexed_sha": git_bookmark.get("sha"),
