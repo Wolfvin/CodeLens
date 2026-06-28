@@ -31,7 +31,8 @@ DB_FILENAME = "codelens.db"
 
 def default_db_path(workspace: str) -> str:
     """Return the default SQLite database path for the workspace."""
-    return os.path.join(workspace, ".codelens", DB_FILENAME)
+    safe_workspace = os.path.abspath(workspace)
+    return os.path.join(safe_workspace, ".codelens", DB_FILENAME)
 
 
 DEFAULT_IGNORE_DIRS = frozenset({
