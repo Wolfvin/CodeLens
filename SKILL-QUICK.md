@@ -45,7 +45,8 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | `debug-leak` | `{stats, top_leaks[], leaks_total}` |
 | `perf-hint` | `{risk, stats, top_hints[], hints_total}` |
 | `secrets` | `{risk, action, stats, top_findings[]}` |
-| `a11y` / `css-deep` / `regex-audit` / `vuln-scan` | `{risk, stats, top_items[], recommendations[]}` |
+| `a11y` / `css-deep` / `regex-audit` | `{risk, stats, top_items[], recommendations[]}` |
+| `vuln-scan` | `{risk, stats, findings[], osv_stats, cache_info{last_refresh, age_hours, ttl_hours, is_stale, stale_packages[]}, recommendations[]}` — `cache_info.is_stale` tells agents whether to re-run with `--refresh` (issue #30) |
 | `taint` | `{status, stats, top_violations[], recommendations[]}` |
 | `guard` | `{status, risk, action, blocked_reason?}` |
 | `check` | `{status, exit_code, total_findings, critical_count}` |
@@ -74,6 +75,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | "safe to rename?" | `refactor-safe` |
 | "production ready?" | `smell` → `complexity` → `debug-leak` → `secrets` |
 | "security audit" | `secrets` → `dataflow` → `env-check` → `vuln-scan` |
+| "are CVE results fresh?" | `vuln-scan` → check `cache_info.is_stale` → if stale, re-run `vuln-scan --refresh` or `vuln-scan --max-age 6h` (issue #30) |
 | "taint analysis" | `taint` (AST) or `dataflow` (cross-file) |
 | "what to refactor?" | `smell` |
 | "too complex?" | `complexity` |
@@ -126,7 +128,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 `entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff [--git-aware]` · `dashboard` · `history` · `graph-schema` · `resolve-types`
 
 ### Security (5)
-`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan` (OSV.dev + native audit) · `env-check [--var NAME]`
+`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan [--offline] [--osv-ttl N] [--refresh] [--max-age Nh]` (OSV.dev + native audit; `--refresh` bypasses cache, `--max-age Nh` overrides per-run TTL, `cache_info` in output signals staleness — issue #30) · `env-check [--var NAME]`
 
 ### Quality (9)
 `smell [--categories ...] [--severity ...]` · `complexity [--name FN] [--threshold N] [--sort ...]` · `dead-code [--categories ...]` · `debug-leak [--category ...]` · `circular [--domain ...]` · `missing-refs` · `side-effect [--name FN]` · `perf-hint [--severity ...] [--category ...]` · `fix [--apply]`

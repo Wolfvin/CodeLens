@@ -7,6 +7,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### OSV Cache Staleness Flags + `cache_info` Output (issue #30)
+
+Phase 1 roadmap (#21) checklist item: "Fix vuln DB staleness (OSV.dev
+API, update scheduler)". The OSV client had a 24h TTL cache with
+`cleanup()` but **no staleness indicator in vuln-scan output** and
+**no way to force a refresh** — agents consuming `vuln-scan` had no
+way to know whether the cached CVE data was fresh or stale, and no
+way to override the 24h TTL for a single run.
+
+This change adds three things:
+
+1. **`cache_info` block in vuln-scan output** — a new top-level key
+   in the `vuln-scan` JSON describing OSV cache freshness:
+   ```json
+   "cache_info": {
+     "last_refresh": "2026-06-28T10:00:00Z",
+     "age_hours": 23.5,
+     "ttl_hours": 24,
+     "is_stale": false,
+     "stale_packages": []
+   }
+   ```
+   `last_refresh` is the ISO 8601 UTC timestamp of the most-recent
+   cache entry among the packages queried in this run. `age_hours` is
+   its age. `is_stale` is `true` when any queried package's cache
+   entry is past TTL or missing. `stale_packages` lists the
+   `"name@version"` strings of stale/missing packages (sorted for
+   deterministic output).
+
+2. **`--refresh` flag** — `codelens vuln-scan --refresh` bypasses the
+   OSV cache and forces a fresh OSV.dev API call for every package.
+   The cache is updated with the new results. Silently ignored in
+   `--offline` mode (no network to refresh from).
+
+3. **`--max-age Nh` flag** — `codelens vuln-scan --max-age 6h` treats
+   cache entries older than 6 hours as stale for this run only,
+   re-fetching them from the API. The stored TTL is **not** modified
+   (per-run override only). Accepts `Nh` (hours), `Nm` (minutes),
+   `Ns` (seconds), `Nd` (days), or a bare integer (interpreted as
+   hours, matching `--osv-ttl` semantics). `--max-age 0` is
+   equivalent to `--refresh` for cached entries.
+
+Network calls happen only when `--refresh` is set OR the cache is
+expired/missing/stale-per-`--max-age`. Default behaviour (no flags)
+is unchanged: cached entries within TTL are served from the cache.
+
+### Added (issue #30)
+
+- **`scripts/osv_client.py:OSVCache.peek(key)`** — New method.
+  Returns the raw `(response, timestamp, ttl)` tuple WITHOUT applying
+  the stored TTL or deleting the entry. This is what `--max-age`
+  relies on to apply a per-run TTL threshold without mutating stored
+  state. Corrupt entries (invalid JSON) are deleted and treated as
+  missing, matching `get()`'s behaviour.
+- **`scripts/osv_client.py:OSVClient.query_packages(packages,
+  force_refresh=False, max_age=None)`** — New optional params.
+  `force_refresh=True` bypasses the cache entirely (issue #30
+  `--refresh`); `max_age=N` (seconds) uses `peek()` to apply a
+  per-run TTL threshold (issue #30 `--max-age`). Behaviour is
+  unchanged when both are unset.
+- **`scripts/osv_client.py:OSVClient._parse_cached_response(cached,
+  package)`** — New private helper. Factors the two-shape cache
+  parsing (list of vuln IDs vs list of full vuln dicts) out of
+  `query_packages` so all three code paths (normal, force_refresh,
+  max_age) share it. Zero dead code — the inline parsing logic was
+  moved, not duplicated.
+- **`scripts/osv_client.py:OSVClient.get_cache_info(packages)`** —
+  New method. Returns the `cache_info` dict described above.
+  Packages with unsupported ecosystems are skipped. Missing entries
+  are treated as stale.
+- **`scripts/commands/vuln_scan.py:_parse_max_age(raw)`** — New
+  helper. Parses `--max-age` duration strings into seconds.
+- **`scripts/commands/vuln_scan.py`** — New `--refresh` and
+  `--max-age` CLI flags.
+- **`tests/test_vuln_staleness.py`** — 39 tests across 7 classes
+  covering `_parse_max_age`, `OSVCache.peek`, `get_cache_info`
+  (empty/all-stale/all-fresh/mixed/sorted/ttl), `force_refresh`
+  (bypasses cache / uses cache / ignored offline), `max_age`
+  (old→stale / young→fresh / stored TTL unchanged / `0`=refresh),
+  end-to-end `scan_vulnerabilities` output on `clean_app` and
+  `vulnerable_app` fixtures, and CLI arg wiring. All network-free
+  (API calls mocked via `unittest.mock.patch.object`).
+
+### Changed (issue #30)
+
+- **`scripts/vulnscan_engine.py:scan_vulnerabilities()`** — Gains
+  `refresh` and `max_age` params, forwarded to
+  `osv_client.query_packages(force_refresh=, max_age=)`. Computes a
+  `cache_info` block after the OSV query (three code paths: success
+  → from `get_cache_info()`; no packages → empty shape; OSV
+  exception → empty shape with `error` field). The return dict now
+  includes a `cache_info` key.
+- **`scripts/commands/vuln_scan.py:execute()`** — Validates
+  `--max-age` via `_parse_max_age()` before calling the engine.
+  Invalid `--max-age` returns a structured
+  `{status:'error', error:'invalid_argument', message:...}` dict
+  instead of raising.
+
+### Non-Breaking (issue #30)
+
+- The `cache_info` block is additive — no existing `vuln-scan`
+  output key is removed or renamed. Consumers who don't read
+  `cache_info` see no change.
+- `scan_vulnerabilities()`'s new params (`refresh`, `max_age`) are
+  optional with defaults (`False`, `None`), so existing callers are
+  unaffected.
+- `OSVClient.query_packages()`'s new params are optional with
+  defaults (`False`, `None`); existing callers (including
+  `query_single`, `batch_query`, and `scan_with_osv`) are
+  unaffected.
+- `OSVCache.peek()` is a new method; no existing method's signature
+  or behaviour changes.
+- Network behaviour is unchanged by default: the OSV API is only
+  contacted when `--refresh` is set OR a cache entry is expired /
+  missing / stale per `--max-age`. The default 24h TTL path is
+  byte-for-byte identical to the pre-issue-#30 code.
+- `--refresh` is silently ignored in `--offline` mode (matches the
+  existing offline contract — no network calls are ever attempted
+  when `offline=True`).
+
+### Migration Notes for Agent Authors (issue #30)
+
+Agents that consume `vuln-scan` output can now check
+`cache_info.is_stale` to decide whether to trust the cached CVE
+results. If stale, re-run with `--refresh` (force fresh API calls
+for all packages) or `--max-age 6h` (only re-fetch entries older
+than 6 hours, cheaper than a full refresh). `stale_packages` lists
+the specific packages that need attention.
+
 ### Incremental Graph Update (issue #25)
 
 Previously, `scan --incremental` updated only the flat backend registry

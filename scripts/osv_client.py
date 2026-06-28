@@ -249,6 +249,51 @@ class OSVCache:
             finally:
                 conn.close()
 
+    def peek(self, key: str) -> Optional[Tuple[List[Dict[str, Any]], float, int]]:
+        """Retrieve a cache entry WITHOUT TTL check or deletion.
+
+        Unlike :meth:`get`, this method does not apply the stored TTL when
+        deciding whether to return the entry. Callers receive the raw
+        ``(response, timestamp, ttl)`` tuple and decide staleness themselves
+        — for example using a ``--max-age`` override (issue #30).
+
+        Corrupt entries (invalid JSON) are deleted and treated as missing.
+
+        Args:
+            key: Cache key (e.g., ``"npm|lodash|4.17.15"``)
+
+        Returns:
+            Tuple of ``(response, timestamp, ttl)`` or ``None`` if the key is
+            not present or corrupt. ``timestamp`` is a Unix epoch float;
+            ``ttl`` is the stored TTL in seconds.
+        """
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.execute(
+                    "SELECT response_json, timestamp, ttl FROM cache "
+                    "WHERE package_ecosystem_version = ?",
+                    (key,)
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+
+                response_json, timestamp, ttl = row
+                try:
+                    response = json.loads(response_json)
+                except json.JSONDecodeError:
+                    # Corrupt cache entry — delete and treat as missing
+                    conn.execute(
+                        "DELETE FROM cache WHERE package_ecosystem_version = ?",
+                        (key,)
+                    )
+                    conn.commit()
+                    return None
+                return (response, timestamp, ttl)
+            finally:
+                conn.close()
+
     def set(self, key: str, response: List[Dict[str, Any]], ttl: Optional[int] = None):
         """Cache an OSV API response.
 
@@ -449,6 +494,8 @@ class OSVClient:
     def query_packages(
         self,
         packages: List[OSVPackage],
+        force_refresh: bool = False,
+        max_age: Optional[int] = None,
     ) -> List[OSVVulnerability]:
         """Query multiple packages against OSV.dev.
 
@@ -457,6 +504,16 @@ class OSVClient:
 
         Args:
             packages: List of OSVPackage objects to query
+            force_refresh: If True, bypass the OSV cache and force fresh
+                API calls for every package (issue #30 ``--refresh`` flag).
+                Silently ignored when ``self.offline`` is True (no network
+                available). Cached entries are still updated with new results.
+            max_age: Optional per-run TTL override in seconds. When set,
+                cached entries older than ``max_age`` are treated as stale
+                and re-fetched from the API for this run only (issue #30
+                ``--max-age`` flag). The stored TTL is unchanged. Use
+                ``max_age=0`` to force-refresh all entries without the
+                ``force_refresh`` flag.
 
         Returns:
             List of OSVVulnerability objects (deduplicated)
@@ -468,31 +525,48 @@ class OSVClient:
         uncached_packages: List[OSVPackage] = []
         uncached_keys: List[str] = []
 
-        # Check cache first
+        # --refresh is meaningless in offline mode (no network to refresh
+        # from). Fall back to normal cache behaviour so users still get
+        # whatever cached data exists.
+        effective_force_refresh = force_refresh and not self.offline
+
         for pkg in packages:
             if pkg.ecosystem is None:
                 continue  # Not supported by OSV
 
             cache_key = pkg.cache_key()
+
+            if effective_force_refresh:
+                # Issue #30 --refresh: bypass cache, force fresh API call.
+                uncached_packages.append(pkg)
+                uncached_keys.append(cache_key)
+                continue
+
+            if max_age is not None:
+                # Issue #30 --max-age: apply a per-run TTL threshold using
+                # peek() so the stored entry (and its stored TTL) is left
+                # intact for future runs.
+                entry = self.cache.peek(cache_key)
+                if entry is None:
+                    uncached_packages.append(pkg)
+                    uncached_keys.append(cache_key)
+                    continue
+                response, timestamp, _stored_ttl = entry
+                if (time.time() - timestamp) > max_age:
+                    # Stale per --max-age — re-fetch
+                    uncached_packages.append(pkg)
+                    uncached_keys.append(cache_key)
+                    continue
+                # Fresh per --max-age — use cached response
+                self._cache_hit_count += 1
+                all_vulns.extend(self._parse_cached_response(response, pkg))
+                continue
+
+            # Normal mode — TTL-based cache.get()
             cached = self.cache.get(cache_key)
             if cached is not None:
                 self._cache_hit_count += 1
-
-                # cached can be:
-                # 1. A list of vuln IDs (from /v1/querybatch cache) → fetch each detail
-                # 2. A list of full vuln dicts (from /v1/query fallback cache) → parse directly
-                if cached and isinstance(cached[0], str):
-                    # List of vuln IDs → fetch details from cache/API
-                    for vuln_id in cached:
-                        vuln_detail = self._fetch_vuln_detail(vuln_id)
-                        if vuln_detail is not None:
-                            parsed = self._parse_single_vuln(vuln_detail, pkg)
-                            if parsed is not None:
-                                all_vulns.append(parsed)
-                else:
-                    # List of full vuln dicts → parse directly
-                    vulns = self._parse_osv_response(cached, pkg)
-                    all_vulns.extend(vulns)
+                all_vulns.extend(self._parse_cached_response(cached, pkg))
             else:
                 uncached_packages.append(pkg)
                 uncached_keys.append(cache_key)
@@ -503,6 +577,47 @@ class OSVClient:
             all_vulns.extend(api_vulns)
 
         return all_vulns
+
+    def _parse_cached_response(
+        self,
+        cached: List[Any],
+        package: OSVPackage,
+    ) -> List[OSVVulnerability]:
+        """Parse a cached OSV response for a single package.
+
+        The OSV cache stores two response shapes (both as JSON lists):
+
+        1. A list of vulnerability IDs (strings) — produced by the
+           ``/v1/querybatch`` endpoint. Each ID must be resolved to its
+           full detail via :meth:`_fetch_vuln_detail` (which itself uses
+           the cache).
+        2. A list of full vulnerability dicts — produced by the
+           ``/v1/query`` fallback path. Parsed directly via
+           :meth:`_parse_osv_response`.
+
+        Args:
+            cached: The cached JSON list (may be empty).
+            package: The OSVPackage this cache entry belongs to.
+
+        Returns:
+            List of OSVVulnerability objects (possibly empty).
+        """
+        if not cached:
+            return []
+
+        if isinstance(cached[0], str):
+            # List of vuln IDs → fetch details from cache/API
+            results: List[OSVVulnerability] = []
+            for vuln_id in cached:
+                vuln_detail = self._fetch_vuln_detail(vuln_id)
+                if vuln_detail is not None:
+                    parsed = self._parse_single_vuln(vuln_detail, package)
+                    if parsed is not None:
+                        results.append(parsed)
+            return results
+
+        # List of full vuln dicts → parse directly
+        return self._parse_osv_response(cached, package)
 
     def batch_query(
         self,
@@ -1105,6 +1220,90 @@ class OSVClient:
         fixed_str = fixed_versions[0] if fixed_versions else ""  # Earliest fix
 
         return (affected_str, fixed_str)
+
+    def get_cache_info(
+        self,
+        packages: List[OSVPackage],
+    ) -> Dict[str, Any]:
+        """Compute OSV cache freshness info for the queried packages.
+
+        Implements the ``cache_info`` block requested in issue #30 so that
+        agents consuming ``vuln-scan`` output can decide whether to trust
+        the cached CVE data or trigger a refresh.
+
+        The staleness assessment covers only the packages that were
+        actually queried in this run — other cache entries (from previous
+        scans of different packages) are ignored. A package counts as
+        stale if its cache entry is missing OR past the cache's stored
+        TTL.
+
+        Args:
+            packages: List of OSVPackage objects that were queried in
+                this run (typically the result of
+                ``OSVQueryBuilder.build_from_workspace``).
+
+        Returns:
+            Dict with the following keys:
+
+            - ``last_refresh``: ISO 8601 UTC timestamp (``YYYY-MM-DDTHH:MM:SSZ``)
+              of the most recently written cache entry among the queried
+              packages, or ``None`` if no entries exist.
+            - ``age_hours``: Age in hours of that most-recent entry
+              (i.e., how long ago the cache was last refreshed for any
+              of the queried packages), or ``None`` if no entries exist.
+            - ``ttl_hours``: The cache TTL in hours (from
+              ``self.cache.ttl``), rounded to 2 decimals.
+            - ``is_stale``: ``True`` if any queried package's cache entry
+              is past TTL or missing.
+            - ``stale_packages``: List of ``"name@version"`` strings for
+              stale or missing packages (sorted for deterministic output).
+        """
+        now = time.time()
+        ttl_seconds = self.cache.ttl
+        ttl_hours = round(ttl_seconds / 3600.0, 2)
+
+        latest_timestamp: Optional[float] = None
+        stale_packages: List[str] = []
+
+        for pkg in packages:
+            if pkg.ecosystem is None:
+                continue  # Not supported by OSV — skip staleness check
+
+            cache_key = pkg.cache_key()
+            entry = self.cache.peek(cache_key)
+            if entry is None:
+                # Missing cache entry → treat as stale (needs fetch).
+                stale_packages.append(f"{pkg.name}@{pkg.version}")
+                continue
+
+            _response, timestamp, _stored_ttl = entry
+            if latest_timestamp is None or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+
+            if (now - timestamp) > ttl_seconds:
+                stale_packages.append(f"{pkg.name}@{pkg.version}")
+
+        # Deterministic ordering for stable test/output assertions.
+        stale_packages.sort()
+
+        if latest_timestamp is not None:
+            last_refresh = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(latest_timestamp)
+            )
+            age_hours = round((now - latest_timestamp) / 3600.0, 2)
+        else:
+            last_refresh = None
+            age_hours = None
+
+        is_stale = bool(stale_packages)
+
+        return {
+            "last_refresh": last_refresh,
+            "age_hours": age_hours,
+            "ttl_hours": ttl_hours,
+            "is_stale": is_stale,
+            "stale_packages": stale_packages,
+        }
 
     # ─── Statistics ──────────────────────────────────────────────
 
