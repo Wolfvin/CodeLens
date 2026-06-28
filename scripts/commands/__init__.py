@@ -27,7 +27,7 @@ import os
 import importlib
 import logging
 
-_STRICT_COMMAND_IMPORTS = os.environ.get("CODELLENS_STRICT_COMMANDS", "").lower() in {
+_STRICT_COMMAND_IMPORTS = os.environ.get("CODELENS_STRICT_COMMANDS", "").lower() in {
     "1",
     "true",
     "yes",

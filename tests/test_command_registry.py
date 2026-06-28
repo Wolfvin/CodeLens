@@ -39,11 +39,11 @@ def test_every_command_module_registers():
 
 
 def test_strict_command_imports_fail_fast_on_broken_module():
-    """CODELLENS_STRICT_COMMANDS=1 should surface broken command imports."""
+    """CODELENS_STRICT_COMMANDS=1 should surface broken command imports."""
     broken_module = COMMANDS_DIR / "_test_broken_import.py"
     broken_module.write_text("def broken(\n", encoding="utf-8")
     env = os.environ.copy()
-    env["CODELLENS_STRICT_COMMANDS"] = "1"
+    env["CODELENS_STRICT_COMMANDS"] = "1"
     env["PYTHONPATH"] = str(SCRIPT_DIR)
 
     try:
