@@ -745,6 +745,17 @@ class PersistentRegistry:
         Idempotent: re-scanning the same file set with the same result
         subset does not insert a duplicate row.
 
+        Closes the P1 idempotency bug from issue #82: the previous
+        implementation included ``scan_timestamp = time.time()`` in the
+        ``result_hash`` computation, so the hash changed on every call and
+        the idempotency check below never matched — every re-scan inserted
+        a fresh row, causing unbounded ``analysis_cache`` growth. The fix
+        splits the subset into a stable part (no timestamp) used for
+        hashing and a full part (with timestamp) used for storage. On a
+        cache hit, the existing row's ``timestamp`` and ``result_json``
+        are updated in place so trend tracking still reflects the latest
+        scan without inserting duplicates.
+
         Args:
             result: The full scan result dict returned by
                 ``commands.scan.cmd_scan``. Expected to contain the
@@ -768,7 +779,12 @@ class PersistentRegistry:
             + int(backend.get("nodes", 0) or 0)
         )
 
-        subset = {
+        # Stable subset (no scan_timestamp) used for result_hash — issue #82.
+        # Excluding scan_timestamp from the hash makes re-scans of the same
+        # file set with the same counts produce an identical result_hash,
+        # so the idempotency check below finds the existing row instead of
+        # inserting a duplicate on every call (which caused cache bloat).
+        stable_subset = {
             "files_scanned": files_scanned,
             "frontend_counts": {
                 "classes": int(frontend.get("classes", 0) or 0),
@@ -779,9 +795,17 @@ class PersistentRegistry:
                 "edges": int(backend.get("edges", 0) or 0),
             },
             "frameworks": frameworks,
-            "scan_timestamp": time.time(),
             "total_symbols": total_symbols,
         }
+
+        # Capture once per call and reuse for both the JSON scan_timestamp
+        # field and the analysis_cache.timestamp column — keeps the two
+        # consistent without paying for a second time.time() call.
+        now = time.time()
+        # Full subset (with scan_timestamp) stored in result_json for trend
+        # tracking. scan_timestamp is preserved in storage but excluded
+        # from the hash above so re-scans stay idempotent.
+        subset = {**stable_subset, "scan_timestamp": now}
 
         file_set_hash = self._compute_scan_file_set_hash(workspace)
         if not file_set_hash:
@@ -791,15 +815,16 @@ class PersistentRegistry:
             )
             return
 
+        stable_json = json.dumps(stable_subset, ensure_ascii=False, default=str, sort_keys=True)
+        result_hash = hashlib.sha256(stable_json.encode("utf-8")).hexdigest()
         result_json = json.dumps(subset, ensure_ascii=False, default=str, sort_keys=True)
-        result_hash = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
-        now = time.time()
 
         conn = self._connect()
-        # Idempotent: if the same (command, file_set_hash, result_hash)
-        # triple already exists, do nothing. This mirrors the "INSERT OR
-        # IGNORE" intent — re-scanning the same file set with the same
-        # outcome must not bloat the cache.
+        # Idempotent upsert: if the same (command, file_set_hash, result_hash)
+        # triple already exists, update its timestamp + result_json in place
+        # so trend tracking reflects the latest scan, instead of inserting a
+        # duplicate row. Mirrors the "INSERT OR IGNORE" intent — re-scanning
+        # the same file set with the same outcome must not bloat the cache.
         existing = conn.execute(
             """SELECT 1 FROM analysis_cache
                WHERE command = ? AND file_set_hash = ? AND result_hash = ?
@@ -808,11 +833,24 @@ class PersistentRegistry:
             ("scan", file_set_hash, result_hash),
         ).fetchone()
         if existing:
-            logger.debug(
-                "store_scan_result: cache hit (command=scan, "
-                "file_set_hash=%s, result_hash=%s) — skipping insert",
-                file_set_hash[:12], result_hash[:12],
-            )
+            try:
+                conn.execute(
+                    """UPDATE analysis_cache
+                       SET result_json = ?, timestamp = ?
+                       WHERE command = ? AND file_set_hash = ? AND result_hash = ?
+                    """,
+                    (result_json, now, "scan", file_set_hash, result_hash),
+                )
+                conn.commit()
+                logger.debug(
+                    "store_scan_result: cache hit (command=scan, "
+                    "file_set_hash=%s, result_hash=%s) — updated timestamp",
+                    file_set_hash[:12], result_hash[:12],
+                )
+            except sqlite3.Error as e:
+                logger.warning(
+                    "store_scan_result: failed to update analysis_cache on hit: %s", e
+                )
             return
 
         try:
