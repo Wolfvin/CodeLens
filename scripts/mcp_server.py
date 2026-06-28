@@ -716,6 +716,29 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "architecture": {
+        "description": "Single-call codebase overview for AI agent orientation (issue #19). Returns languages, frameworks, entry points, packages, top routes, graph hotspots, and total symbol count in one call. Use --lite for <1k token orientation mode that omits routes/packages/hotspots. Result is cached in .codelens/architecture_cache.json and invalidated on re-scan.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Output format (default: json)",
+                    "default": "json"
+                },
+                "lite": {
+                    "type": "boolean",
+                    "description": "Lite mode: return only languages, frameworks, entry_points, total_symbols (omits routes/packages/hotspots). Targets <1k tokens output for cheap agent orientation.",
+                    "default": False
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
     "analyze": {
         "description": "Full repository analysis in a single command. The ultimate one-shot command for understanding an entire repository.",
         "parameters": {

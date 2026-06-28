@@ -291,6 +291,89 @@ To migrate an engine to the graph backend:
 
 Future engine migrations (post-v8.2): `impact`, `circular`, `dependents`.
 
+### `get_architecture` — single-call codebase overview (issue #19)
+
+Orientation on an unfamiliar codebase previously required 4-6 chained commands
+(scan → list → detect → entrypoints → api-map → read entry files), burning
+10-20k tokens before any real work started. The new `architecture` command
++ `codelens_architecture` MCP tool collapses that into a single call returning
+a compact overview: languages, frameworks, entry points, packages, top routes,
+graph hotspots, total symbol count, and an `adrs` placeholder (ADR feature is
+issue #16, Phase 3).
+
+#### Added
+
+- **`scripts/architecture_engine.py`** — New engine module orchestrating
+  existing engines into one overview:
+  - `get_architecture(workspace, lite=False)` — single public entry point.
+  - `_compute_languages` — three-tier resolution: fresh scan_result's
+    `files_scanned` → `.codelens/summary.json` → cheap stat-only extension
+    walk. Scan-result buckets are collapsed to canonical language names
+    (e.g. `js_backend` + `js_frontend` → `javascript`).
+  - `_compute_frameworks` — thin wrapper around `framework_detect`.
+  - `_compute_entry_points` — wraps `entrypoints_engine.map_entrypoints`,
+    dedupes by file path, prioritises main/handler/cli types.
+  - `_compute_packages` — scans `src/`, `app/`, `lib/`, `packages/`,
+    `server/`, `internal/` for immediate subdirectories that contain source
+    files (one level of recursion allowed for flat two-tier packages).
+  - `_compute_routes` — wraps `apimap_engine.map_api_routes`, normalises
+    each route to `{method, path, handler}`, capped at 20.
+  - `_compute_hotspots` — single SQL round-trip: `SELECT gn.file,
+    COUNT(*) FROM graph_edges JOIN graph_nodes ... GROUP BY gn.file
+    ORDER BY cnt DESC LIMIT 5`. This is the killer feature of the new
+    graph model — files ranked by total incoming CALLS edges across all
+    their symbols (blast-radius surface).
+  - `_compute_total_symbols` — `graph_stats(db_path).nodes`.
+  - Cache layer: writes `.codelens/architecture_cache.json` on first call;
+    subsequent calls return the cache as long as `.codelens/codelens.db`
+    mtime hasn't advanced (i.e. scan hasn't been re-run). Lite and full
+    payloads have different shapes — the cache won't serve the wrong shape
+    even when the db is unchanged.
+
+- **`scripts/commands/architecture.py`** — New CLI command auto-registered
+  via `commands/__init__.py`. Flags: `--lite` (omit routes/packages/hotspots
+  for <1k token orientation), `--no-cache` (force rebuild).
+
+- **`codelens_architecture` MCP tool** — Added to `_TOOL_DEFINITIONS` in
+  `scripts/mcp_server.py`. Schema: `{workspace: string}` required;
+  `{format: string, lite: boolean}` optional. Calls the `architecture`
+  command internally.
+
+- **`tests/test_architecture.py`** — 24 test cases covering all eight spec
+  verification points: status ok, all required fields, lite mode shape,
+  hotspots sorting + graph query match + distinct files, cache create +
+  reuse + invalidation + lite/full shape isolation, MCP tool listing +
+  end-to-end call, <4000-byte token budget (raw + MCP-normalised).
+
+#### Design Decisions
+
+- **Architecture-specific fields nested inside `stats`** — The MCP
+  `_normalize_to_ai` formatter preserves `stats` as-is but drops unknown
+  top-level keys. To deliver the full architecture data through MCP without
+  modifying the shared formatter (which would collide with parallel worker
+  2-a's compact-format changes), all architecture fields (languages,
+  frameworks, entry_points, packages, routes, hotspots, total_symbols, adrs)
+  are nested inside `stats`. CLI consumers see the same shape.
+- **`adrs` placeholder is `[]`** — ADR detection is issue #16 (Phase 3).
+  The field is reserved so consumers can rely on the shape today.
+- **Auto-scan on fresh workspace** — If `.codelens/codelens.db` doesn't
+  exist or the graph tables are empty when `architecture` is called, the
+  engine runs `cmd_scan` first. This makes the tool self-sufficient for
+  the issue #19 use-case ("agent starts on an unfamiliar codebase").
+- **File-level hotspots (not per-symbol)** — The SQL query groups by
+  `gn.file`, not `ge.target_id`, so each hotspot is a distinct file with
+  its total blast radius. Matches the issue spec example
+  `"src/models/user.py (47 dependents)"`.
+
+#### Token Budget Verification (clean_app fixture)
+
+- `--lite` raw engine payload: **284 bytes** (~71 tokens)
+- `--lite` MCP-normalised response: **298 bytes** (~75 tokens)
+- Full raw engine payload: **502 bytes** (~125 tokens)
+- Full MCP-normalised response: **515 bytes** (~128 tokens)
+
+All well under the 1k-token target.
+
 ---
 
 ## [8.1.0] — 2026-06-13

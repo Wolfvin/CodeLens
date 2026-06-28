@@ -81,7 +81,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | "cleanup before deploy" | `debug-leak` → `dead-code` → `secrets` |
 | "CSS issues?" | `css-deep` → `missing-refs` |
 | "accessible?" | `a11y` |
-| "project overview" | `summary` or `handbook` |
+| "project overview" | `architecture --lite` (single call, <1k tokens) or `summary` / `handbook` (deeper) |
 | "fix automatically" | `fix --apply` (dry-run by default) |
 | "show dashboard" | `dashboard` |
 | "trend over time" | `history` |
@@ -119,8 +119,8 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Pre-Write Safety (5)
 `query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
 
-### Navigation (10)
-`summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both] [--limit N] [--offset N]` · `search "pattern" [--limit N] [--offset N]` · `symbols "name" [--fuzzy] [--limit N] [--offset N]` · `outline [--file path] [--limit N] [--offset N]` · `dependents "file"` · `list [--filter ...] [--limit N] [--offset N]` · `ask "question"` · `diff`
+### Navigation (11)
+`architecture [--lite] [--no-cache]` · `summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both] [--limit N] [--offset N]` · `search "pattern" [--limit N] [--offset N]` · `symbols "name" [--fuzzy] [--limit N] [--offset N]` · `outline [--file path] [--limit N] [--offset N]` · `dependents "file"` · `list [--filter ...] [--limit N] [--offset N]` · `ask "question"` · `diff [--git-aware]`
 
 ### Architecture (9)
 `entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff` · `dashboard` · `history` · `graph-schema`
@@ -143,9 +143,9 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Tooling (1)
 `plugin <install|list|search|update|info|validate>`
 
-**Total: 57 commands** (56 + `graph-schema` added in v8.2 issue #17; verified via `commands/__init__.py` auto-registration)
+**Total: 58 commands** (56 original + `graph-schema` from #17 + `architecture` from #19; verified via `commands/__init__.py` auto-registration)
 
-## MCP Server (55 Tools)
+## MCP Server (56 Tools)
 
 Start the MCP server for AI agent integration:
 
@@ -153,8 +153,8 @@ Start the MCP server for AI agent integration:
 python3 scripts/codelens.py serve
 ```
 
-Exposes 55 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`):
-- 50 statically-defined tools (full JSON schemas in `mcp_server.py`) including the new `codelens_graph_schema` (issue #17)
+Exposes 56 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`):
+- 51 statically-defined tools (full JSON schemas in `mcp_server.py`) including `codelens_graph_schema` (#17) and `codelens_architecture` (#19)
 - 5 dynamically-discovered tools (`benchmark`, `dashboard`, `history`, `lsp-status`, `migrate`)
 - Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
 - `watch` and `serve` itself are excluded (long-running)

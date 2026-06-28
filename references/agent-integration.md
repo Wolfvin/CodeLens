@@ -52,12 +52,14 @@ This is the fastest way for an AI to pick the right tool:
 
 | User Intent | Tool Chain |
 |-------------|------------|
-| "How does this app work?" | `entrypoints` → `api-map` → `state-map` → `outline --all` |
-| "What endpoints exist?" | `api-map` |
+| "How does this app work?" | `architecture --lite` (single-call overview, <1k tokens) → `entrypoints` → `api-map` → `state-map` → `outline --all` for deeper drill-down |
+| "Give me a codebase overview" | `architecture --lite` (issue #19 — single call replaces 4-6 chained commands) |
+| "What endpoints exist?" | `api-map` (or `architecture` for top 20 routes in one call) |
 | "Where is global state?" | `state-map` |
 | "Who calls this function?" | `trace --direction up` |
 | "What does this function call?" | `trace --direction down` |
 | "Tell me about this symbol" | `context` |
+| "What files have the most dependents?" | `architecture` (the `hotspots` field uses the graph model) |
 
 #### Quality & Production
 
@@ -94,6 +96,7 @@ corresponding CodeLens tools:
 
 | Keywords (EN) | Keywords (ID) | Tool |
 |---------------|---------------|------|
+| overview, orient, unfamiliar, codebase summary, what is this project | gambaran umum, mengenal, proyek ini apa | `architecture --lite` (issue #19) |
 | exists, already, check if, does this | sudah ada, apakah | `query` |
 | who uses, who calls, references | siapa pakai, siapa panggil | `trace` / `query` |
 | delete, remove, hapus | hapus, buang | `impact` + `dead-code` |
