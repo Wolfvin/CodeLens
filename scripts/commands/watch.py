@@ -28,22 +28,44 @@ def add_args(parser):
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--debounce", "-d", type=float, default=0.5,
                         help="Debounce interval in seconds (default: 0.5)")
+    parser.add_argument("--git-mode", action="store_true",
+                        help="Use git-diff polling instead of watchdog file events. "
+                             "Checks 'git diff --name-only' every --interval seconds and "
+                             "re-indexes only the files git knows changed. Falls back to "
+                             "watchdog if git is unavailable or the workspace is not a "
+                             "git repo. Default: watchdog (real-time file events).")
+    parser.add_argument("--interval", type=float, default=2.0,
+                        help="Polling interval in seconds for --git-mode (default: 2.0)")
 
 
 def execute(args, workspace):
     """Execute the watch command. This is a long-running command that doesn't return a dict."""
-    cmd_watch(workspace, debounce=args.debounce)
+    git_mode = getattr(args, 'git_mode', False)
+    interval = getattr(args, 'interval', 2.0)
+    cmd_watch(workspace, debounce=args.debounce, git_mode=git_mode, interval=interval)
     return {"status": "stopped"}
 
 
-def cmd_watch(workspace: str, debounce: float = 0.5) -> None:
+def cmd_watch(workspace: str, debounce: float = 0.5,
+              git_mode: bool = False, interval: float = 2.0) -> None:
     """
     Start file watcher for real-time registry updates.
     Uses debounce to coalesce rapid file changes, prints a clean
     one-line summary, and writes outline.json + summary.json to .codelens/.
+
+    Two modes (issue #14):
+    - Default (watchdog): real-time file events via the watchdog library.
+    - --git-mode: polls 'git diff --name-only' every `interval` seconds
+      and re-indexes only the files git knows changed. Useful when
+      watchdog is unavailable or when the agent wants git-aware delta
+      instead of mtime-based change detection.
     """
     import threading as _threading
     workspace = os.path.abspath(workspace)
+
+    if git_mode:
+        _watch_git_mode(workspace, interval=interval, debounce=debounce)
+        return
 
     # ─── Debounce state ────────────────────────────────────
     _timer: Optional[_threading.Timer] = None
@@ -243,6 +265,96 @@ def _watch_polling(
                             except OSError:
                                 logger.debug(f"Failed to get mtime for new file: {filepath}")
 
+    except KeyboardInterrupt:
+        print('[CodeLens] Stopped.')
+
+
+def _watch_git_mode(
+    workspace: str,
+    interval: float = 2.0,
+    debounce: float = 0.5,
+) -> None:
+    """Polling watcher that uses git-diff to detect changes (issue #14).
+
+    Every ``interval`` seconds, runs ``git diff --name-only`` (working
+    tree vs HEAD) + ``git ls-files --others`` (untracked) to enumerate
+    the files git knows changed since the last poll. If the set is
+    non-empty, runs an incremental scan and prints a one-line summary.
+
+    Falls back to ``_watch_polling`` (mtime-based) when git is
+    unavailable or the workspace is not a git repo — the user requested
+    git-mode but git isn't usable, so we degrade to the next-best
+    available watcher instead of refusing to start.
+    """
+    try:
+        from git_aware import get_current_sha, get_changed_files, get_untracked_files
+    except ImportError:
+        print('[CodeLens] git_aware module not available; falling back to mtime polling')
+        _watch_polling(workspace, debounce=debounce)
+        return
+
+    if not get_current_sha(workspace):
+        print('[CodeLens] workspace is not a git repo; falling back to mtime polling')
+        _watch_polling(workspace, debounce=debounce)
+        return
+
+    print(f'[CodeLens] Git-mode watching {workspace} (poll: {interval}s, debounce: {debounce}s) — Press Ctrl+C to stop')
+
+    import threading as _threading
+    last_seen: set = set()
+    _timer: Optional[_threading.Timer] = None
+    _lock = _threading.Lock()
+    _pending: set = set()
+
+    def _do_rescan():
+        nonlocal _timer
+        with _lock:
+            changed = _pending.copy()
+            _pending.clear()
+        if not changed:
+            return
+        changed_rel = sorted(os.path.relpath(f, workspace) for f in changed)
+        for rel in changed_rel:
+            print(f'  Changed: {rel}')
+        scan_result = cmd_scan(workspace, incremental=True)
+        try:
+            frontend = load_frontend_registry(workspace)
+            backend = load_backend_registry(workspace)
+            save_snapshot(workspace, frontend, backend)
+        except Exception:
+            logger.debug("Failed to save snapshot in git-mode", exc_info=True)
+        summary = write_output_files(workspace, scan_result)
+        print(_format_watch_summary(summary, changed_count=len(changed)))
+
+    def _schedule_rescan(filepath: str) -> None:
+        nonlocal _timer
+        with _lock:
+            _pending.add(filepath)
+            if _timer:
+                _timer.cancel()
+            _timer = _threading.Timer(debounce, _do_rescan)
+            _timer.daemon = True
+            _timer.start()
+
+    try:
+        while True:
+            time.sleep(interval)
+            # Combine tracked changes (vs HEAD) + untracked new files.
+            rel_paths = set(get_changed_files(workspace, since_sha=None))
+            rel_paths |= set(get_untracked_files(workspace))
+            abs_paths = {
+                os.path.join(workspace, rel)
+                for rel in rel_paths
+                if os.path.splitext(rel)[1].lower() in _WATCH_EXTENSIONS
+                and '.codelens' not in rel
+            }
+            new_changes = abs_paths - last_seen
+            if new_changes:
+                last_seen = abs_paths
+                for fp in new_changes:
+                    _schedule_rescan(fp)
+            else:
+                last_seen = abs_paths
     except KeyboardInterrupt:
         print('[CodeLens] Stopped.')
 
