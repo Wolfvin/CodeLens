@@ -45,6 +45,43 @@ def execute(args, workspace):
                     result["removal_safety"] = "caution"
                 result["dependency_count"] = with_refs
                 result["recommended_action"] = "Review before removing. Some dead code may still be referenced indirectly." if with_refs > 0 else "Safe to remove. No references found."
+
+        # Attach baseline confidence (medium = AST-based analysis per hybrid_engine.py
+        # docstring) to each finding and add confidence_distribution to stats.
+        # HybridEngine.verify_dead_code sets confidence=MEDIUM on every finding when
+        # LSP is not active (deep=False).  add_confidence_to_result backfills any
+        # remaining findings and computes the distribution.  When --deep is later
+        # applied in codelens.py post-processing, LSP verification may override
+        # individual findings to HIGH or LOW.
+        try:
+            from hybrid_engine import create_hybrid_engine, add_confidence_to_result
+            engine = create_hybrid_engine(workspace, deep=False)
+            all_findings = []
+            for cat_items in result.get("results", {}).values():
+                if isinstance(cat_items, list):
+                    all_findings.extend(cat_items)
+            if all_findings:
+                engine.verify_dead_code(all_findings)
+            add_confidence_to_result(result)
+            engine.cleanup()
+        except Exception:
+            # Best-effort fallback: manually attach medium confidence + distribution
+            all_findings = []
+            for cat_items in result.get("results", {}).values():
+                if isinstance(cat_items, list):
+                    all_findings.extend(cat_items)
+            for f in all_findings:
+                if isinstance(f, dict) and "confidence" not in f:
+                    f["confidence"] = "medium"
+            if all_findings:
+                dist = {"high": 0, "medium": 0, "low": 0}
+                for f in all_findings:
+                    c = f.get("confidence", "medium") if isinstance(f, dict) else "medium"
+                    if c in dist:
+                        dist[c] += 1
+                if "stats" not in result:
+                    result["stats"] = {}
+                result["stats"]["confidence_distribution"] = dist
     return result
 
 

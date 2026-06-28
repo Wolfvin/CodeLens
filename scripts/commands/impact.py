@@ -43,6 +43,18 @@ def execute(args, workspace):
             result["recommended_action"] = "Proceed with caution. Review affected code before changing."
         else:
             result["recommended_action"] = "Safe to proceed. No dependent code found."
+
+        # Attach baseline confidence (medium = AST-based analysis per hybrid_engine.py
+        # docstring).  HybridEngine.enhance_impact sets confidence=MEDIUM when LSP is
+        # not active (deep=False).  When --deep is later applied in codelens.py
+        # post-processing, LSP verification may override this to HIGH or LOW.
+        try:
+            from hybrid_engine import create_hybrid_engine
+            engine = create_hybrid_engine(workspace, deep=False)
+            engine.enhance_impact(result, args.name)
+            engine.cleanup()
+        except Exception:
+            result.setdefault("confidence", "medium")
     return result
 
 
