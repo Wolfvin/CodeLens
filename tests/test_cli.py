@@ -775,3 +775,99 @@ class TestAutoSetupFallbackCap:
         finally:
             import shutil
             shutil.rmtree(ws, ignore_errors=True)
+
+
+class TestLspStatusEntryPointParity:
+    """Regression guard for issue #33.
+
+    Before the fix, ``codelens --lsp-status`` (top-level flag, intercepted in
+    ``codelens.py``) called ``hybrid_engine.get_lsp_status()`` while
+    ``codelens lsp-status`` (subcommand, ``commands/lsp_status.py``) called
+    ``lsp_client.detect_available_servers()`` directly. The two payloads had
+    different top-level keys, different per-server fields, and different
+    hint/recommendation field names — so CLI users and MCP agents got
+    different answers to the same question.
+
+    After the fix, both entry points delegate to ``hybrid_engine.get_lsp_status``
+    (single source of truth). These tests assert structural parity: the set of
+    top-level keys must be identical, and the set of per-server keys must be
+    identical. The byte-identical check is covered by the repro diff in the
+    PR description; these tests guard against future regressions in the
+    test suite itself.
+    """
+
+    @staticmethod
+    def _run_codelens(extra_args):
+        """Run ``codelens <extra_args> --format json`` and return parsed JSON."""
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+             *extra_args, "--format", "json"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "PYTHONPATH": "scripts"},
+        )
+        assert proc.returncode == 0, (
+            f"codelens {' '.join(extra_args)} failed with rc={proc.returncode}:\n"
+            f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+        )
+        # Strip any leading non-JSON lines (e.g. workspace auto-detect notices
+        # on stderr don't affect stdout, but be defensive).
+        idx = proc.stdout.find("{")
+        assert idx >= 0, f"No JSON in stdout: {proc.stdout!r}"
+        return json.loads(proc.stdout[idx:])
+
+    def test_top_level_keys_match(self):
+        """``--lsp-status`` and ``lsp-status`` must have identical top-level keys."""
+        flag_payload = self._run_codelens(["--lsp-status"])
+        sub_payload = self._run_codelens(["lsp-status"])
+
+        flag_keys = set(flag_payload.keys())
+        sub_keys = set(sub_payload.keys())
+
+        assert flag_keys == sub_keys, (
+            f"Top-level key sets differ between --lsp-status and lsp-status.\n"
+            f"  --lsp-status only: {flag_keys - sub_keys}\n"
+            f"  lsp-status   only: {sub_keys - flag_keys}\n"
+            f"  common            : {flag_keys & sub_keys}"
+        )
+
+    def test_per_server_keys_match(self):
+        """Per-server field sets must be identical across both entry points."""
+        flag_payload = self._run_codelens(["--lsp-status"])
+        sub_payload = self._run_codelens(["lsp-status"])
+
+        flag_servers = flag_payload.get("servers", {})
+        sub_servers = sub_payload.get("servers", {})
+
+        # Same set of server names
+        assert set(flag_servers.keys()) == set(sub_servers.keys()), (
+            f"Server name sets differ:\n"
+            f"  --lsp-status only: {set(flag_servers) - set(sub_servers)}\n"
+            f"  lsp-status   only: {set(sub_servers) - set(flag_servers)}"
+        )
+
+        # For each server, same set of field names
+        for name in flag_servers:
+            flag_fields = set(flag_servers[name].keys())
+            sub_fields = set(sub_servers[name].keys())
+            assert flag_fields == sub_fields, (
+                f"Per-server field sets differ for server {name!r}:\n"
+                f"  --lsp-status only: {flag_fields - sub_fields}\n"
+                f"  lsp-status   only: {sub_fields - flag_fields}"
+            )
+
+    def test_payloads_byte_identical(self):
+        """Full payload equality — the strongest possible parity guarantee.
+
+        Both entry points must produce byte-identical JSON (after canonical
+        formatting), not just structural parity. This catches any future
+        regression that introduces a divergent field value.
+        """
+        flag_payload = self._run_codelens(["--lsp-status"])
+        sub_payload = self._run_codelens(["lsp-status"])
+
+        assert flag_payload == sub_payload, (
+            "Payloads differ between --lsp-status and lsp-status:\n"
+            f"  --lsp-status: {json.dumps(flag_payload, sort_keys=True, indent=2)}\n"
+            f"  lsp-status  : {json.dumps(sub_payload, sort_keys=True, indent=2)}"
+        )

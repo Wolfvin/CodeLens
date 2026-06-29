@@ -93,6 +93,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | "MCP server" | `serve` |
 | "pre/post-write hook" | `guard --pre` / `guard --post` |
 | "don't know which command" | `ask "question"` |
+| "LSP servers available?" | `lsp-status` (issue #33: `--lsp-status` top-level flag is an alias — both produce the identical payload, and the MCP `codelens_lsp_status` tool uses the same subcommand path) |
 
 ### Disambiguation
 
@@ -116,7 +117,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ## All 64 Commands
 
 ### Setup & Lifecycle (8+)
-`init` · `scan [--incremental] [--max-files N] [--full]` · `validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status`
+`init` · `scan [--incremental] [--max-files N] [--full]` · `validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status` (issue #33: `codelens --lsp-status` top-level flag is an alias of `codelens lsp-status` — both delegate to `hybrid_engine.get_lsp_status()` and return the identical payload)
 
 ### Pre-Write Safety (5)
 `query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
