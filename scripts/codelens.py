@@ -232,26 +232,61 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
 # ─── Auto-Setup: Registry Bootstrap ────────────────────────────
 
 def _registry_exists(workspace: str) -> bool:
-    """Check if a valid registry exists for the workspace."""
+    """Check if a valid registry exists for the workspace.
+
+    A registry is considered valid when at least one of these is true:
+
+    1. A legacy JSON registry file exists (``backend.json`` or
+       ``frontend.json``) — the pre-migration state used by older
+       workspaces. Preserved so unmigrated workspaces keep working.
+    2. A populated SQLite database exists at ``.codelens/codelens.db``
+       — the post-migration state. "Populated" means the file exists
+       AND the ``symbols`` table has at least one row, so an empty or
+       corrupt db is NOT treated as a valid registry (issue #35).
+
+    Without path 2, a workspace that ran ``migrate`` and then deleted
+    its JSON files was treated as having no registry, triggering an
+    unnecessary ``init + scan`` on every command and discarding the
+    migrated SQLite data.
+    """
     codelens_dir = os.path.join(workspace, ".codelens")
     if not os.path.isdir(codelens_dir):
         return False
-    # Check for at least one registry file
+
+    # Path 1: legacy JSON registry — still works for unmigrated workspaces.
     backend_json = os.path.join(codelens_dir, "backend.json")
     frontend_json = os.path.join(codelens_dir, "frontend.json")
-    return os.path.exists(backend_json) or os.path.exists(frontend_json)
+    if os.path.exists(backend_json) or os.path.exists(frontend_json):
+        return True
+
+    # Path 2: migrated SQLite registry — must exist AND be populated,
+    # so an empty/corrupt db does not falsely satisfy the check (issue #35).
+    from persistent_registry import db_is_populated
+    db_path = os.path.join(codelens_dir, "codelens.db")
+    return db_is_populated(db_path)
 
 
 def _auto_setup(workspace: str) -> Dict[str, Any]:
     """Auto-run init + scan when no registry exists. Returns scan result or error info.
-    
-    Includes timeout protection: if the workspace has many source files,
-    limits scan to --max-files 3000 to prevent long auto-setup times.
+
+    Applies a hard cap of ``_AUTO_SETUP_MAX_FILES`` (3000) files on BOTH the
+    subprocess path and the in-process fallback path, so auto-setup can never
+    silently hang on huge repos (issue #34).
+
+    Returns a dict with:
+      - ``auto_setup``: "ok" | "failed"
+      - ``capped``: True iff the 3000-file cap was reached (only on success)
+      - ``fallback``: True iff the in-process fallback path was taken (only on success)
+      - ``files_scanned``: total files scanned (only on success)
+      - ``hint``: human-readable note (only present when ``capped`` is True)
+      - ``stage`` / ``error``: failure details (only on failure)
     """
     from commands.init import cmd_init
     from commands.scan import cmd_scan
+    import subprocess
 
-    # Cap to prevent 5+ minute auto-setup on large repos
+    # Cap to prevent 5+ minute auto-setup on large repos.
+    # Applied to BOTH the subprocess path and the in-process fallback.
     _AUTO_SETUP_MAX_FILES = 3000
     _AUTO_SETUP_TIMEOUT_MSG = (
         "Auto-setup running with --max-files 3000 to prevent timeout. "
@@ -268,37 +303,57 @@ def _auto_setup(workspace: str) -> Dict[str, Any]:
     except Exception as e:
         return {"auto_setup": "failed", "stage": "init", "error": str(e)}
 
-    # Step 2: Scan (with max-files cap for auto-setup)
+    # Step 2: Scan (with --max-files cap on BOTH paths)
     try:
         print(f"[CodeLens] {_AUTO_SETUP_TIMEOUT_MSG}", file=sys.stderr)
-        # Use subprocess to run scan with --max-files flag
-        # This avoids coupling to cmd_scan's internal signature
+        # Primary path: subprocess with --max-files flag (timeout=120s).
+        # This isolates the scan in a child process so we can enforce a
+        # hard wall-clock timeout on top of the file-count cap.
         scan_cmd = [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
                      "scan", workspace, "--max-files", str(_AUTO_SETUP_MAX_FILES)]
-        scan_proc = __import__("subprocess").run(
-            scan_cmd, capture_output=True, text=True, timeout=120
-        )
-        if scan_proc.returncode != 0:
-            # Fallback: try without max-files
-            try:
-                scan_result = cmd_scan(workspace, incremental=False)
-                if scan_result.get("status") != "ok":
-                    return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
-            except Exception as e2:
-                return {"auto_setup": "failed", "stage": "scan", "error": str(e2)}
-        else:
-            scan_result = json.loads(scan_proc.stdout) if scan_proc.stdout.strip() else {"status": "ok"}
+        fallback_taken = False
+        scan_result: Optional[Dict[str, Any]] = None
+        try:
+            scan_proc = subprocess.run(
+                scan_cmd, capture_output=True, text=True, timeout=120
+            )
+            if scan_proc.returncode == 0:
+                scan_result = (
+                    json.loads(scan_proc.stdout)
+                    if scan_proc.stdout.strip()
+                    else {"status": "ok"}
+                )
+        except Exception as e:
+            print(f"[CodeLens] Scan subprocess error: {e}; "
+                  "falling back to in-process scan.", file=sys.stderr)
+
+        # Fallback path: in-process scan with the SAME max_files cap.
+        # The cap is enforced by cmd_scan(max_files=...) so huge repos
+        # cannot hang auto-setup even when the subprocess path fails.
+        if scan_result is None:
+            fallback_taken = True
+            print(f"[CodeLens] Falling back to in-process scan "
+                  f"with max_files={_AUTO_SETUP_MAX_FILES}.", file=sys.stderr)
+            scan_result = cmd_scan(
+                workspace, incremental=False, max_files=_AUTO_SETUP_MAX_FILES
+            )
+            if scan_result.get("status") != "ok":
+                return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
 
         files_scanned = scan_result.get("files_scanned", {})
         total_files = sum(v for v in files_scanned.values() if isinstance(v, int)) if isinstance(files_scanned, dict) else 0
-        print(f"[CodeLens] Auto-setup complete. {total_files} files scanned. Registry built.", file=sys.stderr)
-        
-        result_info = {
+        capped = total_files >= _AUTO_SETUP_MAX_FILES
+        print(f"[CodeLens] Auto-setup complete. {total_files} files scanned. "
+              f"Registry built. (fallback={fallback_taken}, capped={capped})",
+              file=sys.stderr)
+
+        result_info: Dict[str, Any] = {
             "auto_setup": "ok",
             "files_scanned": total_files,
-            "capped": total_files >= _AUTO_SETUP_MAX_FILES,
+            "capped": capped,
+            "fallback": fallback_taken,
         }
-        if total_files >= _AUTO_SETUP_MAX_FILES:
+        if capped:
             result_info["hint"] = "Auto-setup capped at 3000 files. Run 'scan' manually for full analysis."
         return result_info
     except Exception as e:
@@ -307,7 +362,11 @@ def _auto_setup(workspace: str) -> Dict[str, Any]:
 
 # ─── Post-Processing: --top N ──────────────────────────────────
 
-# Keys that commonly contain list results across all commands
+# Keys that commonly contain list results across all commands.
+# Used by _apply_lite to find the "primary result list" for lite mode output.
+# NOTE: _apply_top_n no longer relies on this list — it auto-discovers all
+# list-valued keys at runtime (issue #36). This list is kept solely for
+# _apply_lite's priority-ordered lookup.
 _LIST_KEYS = [
     "functions", "findings", "leaks", "hints", "issues", "matches", "results",
     "violations", "entrypoints", "routes", "stores", "callers", "callees",
@@ -318,12 +377,17 @@ _LIST_KEYS = [
     "risks", "drift",  # refactor-safe, config-drift
 ]
 
-# Nested containers that may contain category-keyed lists
-_NESTED_LIST_KEYS = [
-    "results",  # dead-code: results{category:[]}
-    "issues",   # missing-refs: issues{type:[]}
-    "cycles",   # circular: cycles{type:[]}
-]
+# Keys whose values should NEVER be truncated by --top, even if they're lists.
+# These are structural/metadata keys (command names, engine names, etc.) that
+# are not "result lists" in the --top N contract sense. Adding a key here is
+# an explicit opt-out — the default is to truncate all list-valued keys (issue #36).
+_NO_TOP_KEYS = frozenset({
+    "available_commands",  # help/list-commands: metadata, not results
+    "engines",             # analyze: engine list is structural
+    "supported_languages", # setup/info: metadata
+    "categories",          # category names are metadata
+    "tags",                # tag names are metadata
+})
 
 # Commands that return large lists — get smart default --top
 _LIST_COMMANDS = {
@@ -378,15 +442,31 @@ def _sort_items(items: list, sort_key: str, descending: bool) -> list:
 
 
 def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[str, Any]:
-    """Limit all list/array results to top N items. Sort by relevance first. Adds truncated flags."""
+    """Limit all list/array results to top N items. Sort by relevance first. Adds truncated flags.
+
+    Auto-discovers ALL list-valued keys at runtime — no allowlist needed (issue #36).
+    This ensures --top N is a universal contract: any command, present or future,
+    that returns a list under any key name will be truncated. Keys in _NO_TOP_KEYS
+    are exempt (structural/metadata keys like ``available_commands``).
+
+    Also handles category-keyed dicts (e.g., ``by_category{cat: [...]}``) and
+    nested containers (e.g., ``results{category: [...]}``) by scanning dict
+    values for lists.
+    """
     if not isinstance(result, dict) or top_n <= 0:
         return result
 
     # Get sort strategy for this command
     sort_key, sort_desc = _SORT_STRATEGIES.get(command, (None, False))
 
-    for key in _LIST_KEYS:
-        val = result.get(key)
+    # Auto-discover: iterate ALL top-level keys (snapshot to allow in-place additions).
+    # Truncate every list-valued key except those in _NO_TOP_KEYS or starting with '_'.
+    # Also scan dict-valued keys for category-keyed lists.
+    for key in list(result.keys()):
+        if key in _NO_TOP_KEYS or key.startswith("_"):
+            continue
+        val = result[key]
+
         if isinstance(val, list) and len(val) > top_n:
             # Sort by relevance before truncating
             if sort_key:
@@ -397,23 +477,8 @@ def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[
             result[f"{key}_truncated"] = True
             result[f"{key}_total"] = len(val)
         elif isinstance(val, dict):
-            # Handle category-keyed dicts like by_category{cat: [...]}
-            for sub_key, sub_val in val.items():
-                if isinstance(sub_val, list) and len(sub_val) > top_n:
-                    # Sort items within each category
-                    if sort_key:
-                        sub_val = _sort_items(sub_val, sort_key, sort_desc)
-                        val[sub_key] = sub_val[:top_n]
-                    else:
-                        val[sub_key] = sub_val[:top_n]
-                    if "_truncated_categories" not in result:
-                        result["_truncated_categories"] = {}
-                    result["_truncated_categories"][sub_key] = len(sub_val)
-
-    # Handle nested containers like dead-code's results{category:[]}
-    for key in _NESTED_LIST_KEYS:
-        val = result.get(key)
-        if isinstance(val, dict):
+            # Handle category-keyed dicts like by_category{cat: [...]} and
+            # nested containers like dead-code's results{category:[]}
             for sub_key, sub_val in val.items():
                 if isinstance(sub_val, list) and len(sub_val) > top_n:
                     if sort_key:
@@ -425,7 +490,8 @@ def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[
                         result["_truncated_categories"] = {}
                     result["_truncated_categories"][sub_key] = len(sub_val)
 
-    # Handle coverage_map in test-map (file:{fn:{...}})
+    # Handle coverage_map in test-map (file:{fn:{...}}) — dict-of-dicts, not
+    # dict-of-lists, so the auto-discover above doesn't catch it.
     if "coverage_map" in result and isinstance(result["coverage_map"], dict):
         cm = result["coverage_map"]
         if len(cm) > top_n:
@@ -769,8 +835,28 @@ def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, in
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
+    # Command count is derived from COMMAND_REGISTRY at runtime so it can never
+    # drift from the actual number of registered commands (issue #38). The
+    # `--command-count` flag below prints it for scripts / CI; the description
+    # also includes it so `--help` is self-documenting.
+    from commands import COMMAND_REGISTRY as _cli_registry_for_count
+    _command_count = len(_cli_registry_for_count)
+
     parser = argparse.ArgumentParser(
-        description=f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description=(
+            f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence "
+            f"(Tree-sitter Edition). {_command_count} commands available; run "
+            f"`python3 scripts/codelens.py --command-count` to print just the count."
+        )
+    )
+    # Quick introspection flag — prints the runtime command count and exits.
+    # Used by tests / CI / sync_command_count.py to verify the registry size.
+    parser.add_argument(
+        "--command-count",
+        action="store_true",
+        default=False,
+        help="Print the runtime command count (len(COMMAND_REGISTRY)) and exit. "
+             "Single source of truth for issue #38 reconciliation.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -834,6 +920,14 @@ def main():
             print(format_output(status, _default_format, "lsp-status"))
         except Exception as e:
             print(json.dumps({"status": "error", "error": str(e)}, indent=2))
+        sys.exit(0)
+
+    # Handle --command-count as a special top-level flag (issue #38):
+    # prints just the runtime command count and exits. Used by tests, CI,
+    # and sync_command_count.py to verify the registry size without parsing
+    # the full --help output.
+    if "--command-count" in sys.argv:
+        print(_command_count)
         sys.exit(0)
 
     # Pre-parse to capture global flags before subparser overwrites them
@@ -955,6 +1049,11 @@ def main():
             auto_setup_info = {
                 "auto_setup": True,
                 "message": "Registry was auto-built. For best results, run 'scan' manually on large repos.",
+                # Issue #34: surface which path produced the registry and
+                # whether the 3000-file cap was hit, so MCP clients / agents
+                # can decide whether to trust the registry or re-scan.
+                "capped": bool(auto_setup_result.get("capped", False)),
+                "fallback": bool(auto_setup_result.get("fallback", False)),
             }
         else:
             auto_setup_info = {
