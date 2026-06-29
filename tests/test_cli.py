@@ -15,6 +15,9 @@ from commands.scan import cmd_scan
 from commands.query import cmd_query
 from commands.list import cmd_list
 from commands.init import cmd_init
+from codelens import _apply_top_n, _NO_TOP_KEYS
+from commands.migrate import cmd_migrate
+from codelens import _registry_exists
 
 
 def _create_sample_workspace():
@@ -333,7 +336,257 @@ class TestCheckCommandArgs:
             shutil.rmtree(ws, ignore_errors=True)
 
 
-# ─── _auto_setup fallback cap (issue #34) ───────────────────────────
+# ─── --top N universal truncation (issue #36) ──────────────────
+
+
+class TestTopNUniversalTruncation:
+    """Regression guard for issue #36: --top N must truncate ALL list-valued
+    keys in command output, not just those in a hardcoded allowlist.
+
+    Before the fix, ``_apply_top_n`` only truncated keys listed in ``_LIST_KEYS``
+    (28 names). A new command returning a list under a non-standard key (e.g.,
+    ``entities``, ``my_things``, ``nodes``) would silently ignore ``--top N``,
+    violating the documented *"Limit list results to top N items"* contract from
+    ``SKILL-QUICK.md`` and risking token overflow for MCP clients.
+
+    The fix replaces the allowlist with runtime auto-discovery: every top-level
+    list-valued key is truncated, except those in ``_NO_TOP_KEYS`` (structural/
+    metadata keys like ``available_commands``).
+    """
+
+    def test_non_standard_key_gets_truncated(self):
+        """A hypothetical key name not in any allowlist must still be truncated."""
+        result = {"status": "ok", "entities": [{"id": i} for i in range(100)]}
+        out = _apply_top_n(result, 5)
+        assert len(out["entities"]) == 5, (
+            f"Expected 5 items after truncation, got {len(out['entities'])}. "
+            "Non-standard key 'entities' was not truncated by --top."
+        )
+        assert out["entities_truncated"] is True
+        assert out["entities_total"] == 100
+
+    def test_multiple_non_standard_keys_truncated(self):
+        """Multiple non-standard list keys must all be truncated."""
+        result = {
+            "status": "ok",
+            "widgets": [{"id": i} for i in range(50)],
+            "gadgets": [{"id": i} for i in range(30)],
+        }
+        out = _apply_top_n(result, 10)
+        assert len(out["widgets"]) == 10
+        assert len(out["gadgets"]) == 10
+        assert out["widgets_truncated"] is True
+        assert out["gadgets_truncated"] is True
+
+    def test_no_top_keys_exempt(self):
+        """Keys in _NO_TOP_KEYS must NOT be truncated even if they're lists."""
+        result = {
+            "status": "ok",
+            "available_commands": [f"cmd_{i}" for i in range(50)],
+        }
+        out = _apply_top_n(result, 5)
+        assert len(out["available_commands"]) == 50, (
+            "available_commands should NOT be truncated (it's in _NO_TOP_KEYS)"
+        )
+        assert "available_commands_truncated" not in out
+
+    def test_standard_keys_still_truncated(self):
+        """Existing allowlisted keys (e.g., 'findings') must still be truncated."""
+        result = {"findings": [{"name": f"f_{i}"} for i in range(50)]}
+        out = _apply_top_n(result, 10)
+        assert len(out["findings"]) == 10
+        assert out["findings_truncated"] is True
+        assert out["findings_total"] == 50
+
+    def test_top_zero_means_no_truncation_for_non_standard_key(self):
+        """--top 0 (unlimited) must apply to non-standard keys too."""
+        result = {"entities": [{"id": i} for i in range(100)]}
+        out = _apply_top_n(result, 0)
+        assert len(out["entities"]) == 100
+
+    def test_nested_dict_non_standard_key_truncated(self):
+        """Non-standard dict-of-lists key must also be truncated."""
+        result = {
+            "groups": {
+                "alpha": [{"id": i} for i in range(30)],
+                "beta": [{"id": i} for i in range(5)],
+            }
+        }
+        out = _apply_top_n(result, 10)
+        assert len(out["groups"]["alpha"]) == 10
+        assert len(out["groups"]["beta"]) == 5  # under limit, no truncation
+
+    def test_underscore_prefixed_keys_skipped(self):
+        """Internal keys starting with '_' should not be processed."""
+        result = {
+            "_meta": [{"x": i} for i in range(50)],
+            "findings": [{"name": f"f_{i}"} for i in range(50)],
+        }
+        out = _apply_top_n(result, 5)
+        assert len(out["_meta"]) == 50, "_-prefixed keys should not be truncated"
+        assert len(out["findings"]) == 5
+
+    def test_repro_from_issue(self):
+        """Exact repro from issue #36: hypothetical command returning 'entities'."""
+        # Simulate what a new command might return
+        result = {"status": "ok", "entities": [{"id": i} for i in range(1000)]}
+        out = _apply_top_n(result, 5)
+        # Before fix: len == 1000 (silent --top bypass)
+        # After fix: len == 5 (universal truncation)
+        assert len(out["entities"]) == 5, (
+            "Issue #36 repro: --top 5 did not truncate 'entities' key. "
+            "This means a new command returning non-standard keys would "
+            "silently bypass --top, risking token overflow for MCP clients."
+        )
+# ─── _registry_exists after migrate (issue #35) ─────────────────────
+
+class TestRegistryExistsSqlite:
+    """Regression guard for issue #35.
+
+    Before the fix, ``_registry_exists`` only checked for
+    ``backend.json`` / ``frontend.json``. A workspace that had been
+    migrated to SQLite (``codelens migrate``) and whose JSON files
+    were then deleted was always treated as having no registry, so
+    every subsequent command silently re-ran ``init + scan`` and threw
+    away the migrated data — negating the whole point of ``migrate``.
+
+    The fix adds a second path: a populated ``codelens.db`` also
+    counts as a valid registry. "Populated" means the ``symbols``
+    table has at least one row, so an empty or corrupt db is NOT
+    falsely treated as valid.
+    """
+
+    def test_registry_exists_after_migrate_with_json_deleted(self):
+        """migrate → delete JSON → ``_registry_exists`` must return True.
+
+        This is the exact repro from issue #35.
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Sanity: JSON files exist before migrate.
+            assert os.path.exists(os.path.join(ws, ".codelens", "backend.json"))
+            assert os.path.exists(os.path.join(ws, ".codelens", "frontend.json"))
+
+            # Migrate JSON → SQLite.
+            migrate_result = cmd_migrate(ws)
+            assert migrate_result["status"] == "ok", migrate_result
+
+            # Delete the JSON files (post-migrate cleanup).
+            os.remove(os.path.join(ws, ".codelens", "backend.json"))
+            os.remove(os.path.join(ws, ".codelens", "frontend.json"))
+
+            # The fix: the migrated SQLite db must still satisfy
+            # _registry_exists so commands don't trigger auto-setup.
+            assert _registry_exists(ws) is True, (
+                "issue #35 regression: migrated workspace with deleted JSON "
+                "files is not recognized as having a valid registry"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_registry_exists_false_for_empty_db(self):
+        """An empty SQLite db (``symbols`` has 0 rows) must NOT be valid.
+
+        Issue #35 constraint: 'db kosong/corrupt tidak salah dianggap
+        registry valid'.
+        """
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as ws:
+            codelens_dir = os.path.join(ws, ".codelens")
+            os.makedirs(codelens_dir)
+            db_path = os.path.join(codelens_dir, "codelens.db")
+            # Create a real SQLite db with the symbols table but no rows.
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE symbols (id INTEGER PRIMARY KEY, name TEXT)"
+            )
+            conn.commit()
+            conn.close()
+
+            # No JSON files, empty db → must be False so auto-setup runs.
+            assert _registry_exists(ws) is False, (
+                "empty SQLite db should not be treated as a valid registry"
+            )
+
+    def test_registry_exists_false_for_corrupt_db(self):
+        """A corrupt SQLite db (random bytes) must NOT be valid."""
+        with tempfile.TemporaryDirectory() as ws:
+            codelens_dir = os.path.join(ws, ".codelens")
+            os.makedirs(codelens_dir)
+            db_path = os.path.join(codelens_dir, "codelens.db")
+            with open(db_path, "wb") as f:
+                f.write(b"not a sqlite database file - corrupt bytes")
+
+            # No JSON files, corrupt db → must be False.
+            assert _registry_exists(ws) is False, (
+                "corrupt SQLite db should not be treated as a valid registry"
+            )
+
+    def test_registry_exists_true_for_json_only_workspace(self):
+        """Legacy JSON-only workspace (no migrate) must still work.
+
+        Ensures the fix is purely additive — path 1 (JSON check) is
+        unchanged and still detects pre-migration workspaces, even
+        though ``scan`` may also create an empty ``codelens.db`` shell
+        via ``store_scan_result`` (which writes only to
+        ``analysis_cache``, not ``symbols``).
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Pre-migration state: JSON files exist.
+            assert os.path.exists(os.path.join(ws, ".codelens", "backend.json"))
+            assert os.path.exists(os.path.join(ws, ".codelens", "frontend.json"))
+
+            assert _registry_exists(ws) is True, (
+                "JSON-only workspace should still be detected as valid "
+                "(pre-existing behavior must not regress)"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_query_uses_sqlite_fallback_after_json_deleted(self):
+        """End-to-end: query must return real data from SQLite after
+        ``migrate`` + JSON deletion — not just avoid auto-setup, but
+        actually serve the migrated data (issue #35: 'padahal data
+        lengkap sudah ada di codelens.db').
+
+        Verifies that ``load_backend_registry`` / ``load_frontend_registry``
+        fall back to the SQLite cache populated by ``migrate`` when the
+        JSON files are missing.
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Sanity: the symbol we'll query exists in the JSON registry.
+            pre = cmd_query("verify_token", ws, domain="backend")
+            assert pre["found"] is True, (
+                "verify_token must exist in JSON registry before migrate"
+            )
+
+            # Migrate → delete JSON → query must still find the symbol.
+            mig = cmd_migrate(ws)
+            assert mig["status"] == "ok", mig
+            os.remove(os.path.join(ws, ".codelens", "backend.json"))
+            os.remove(os.path.join(ws, ".codelens", "frontend.json"))
+
+            post = cmd_query("verify_token", ws, domain="backend")
+            assert post["found"] is True, (
+                "query must return data from SQLite cache after JSON deletion "
+                "(issue #35: migrated data must be usable, not just present)"
+            )
+            assert post["type"] == "function"
+            assert post["node"]["fn"] == "verify_token"
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
 
 
 class TestAutoSetupFallbackCap:
