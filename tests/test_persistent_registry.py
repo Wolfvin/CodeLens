@@ -476,13 +476,21 @@ class TestMigration:
 
 
 class TestStoreScanResult:
-    """Test PersistentRegistry.store_scan_result — closes issue #31.
+    """Test PersistentRegistry.store_scan_result — closes issues #31 and #82.
 
-    The P0 bug: codelens.py calls pr.store_scan_result(result) after every
-    successful scan, but the method did not exist. The resulting
+    The P0 bug (#31): codelens.py calls pr.store_scan_result(result) after
+    every successful scan, but the method did not exist. The resulting
     AttributeError was swallowed by a bare except Exception, so the
     analysis_cache table was never populated and the sqlite_persisted
     flag was never set. These tests verify the fix.
+
+    The P1 bug (#82): the previous implementation included
+    ``scan_timestamp = time.time()`` in the ``result_hash`` computation,
+    so the hash changed on every call and the idempotency check never
+    matched — every re-scan inserted a fresh row (cache bloat). The fix
+    excludes ``scan_timestamp`` from the hash while still storing it in
+    ``result_json`` for trend tracking, and updates the existing row's
+    timestamp + result_json in place on cache hit.
     """
 
     def _make_scan_result(self, workspace, **overrides):
@@ -545,7 +553,17 @@ class TestStoreScanResult:
         assert stored["total_symbols"] == 8
 
     def test_store_scan_result_is_idempotent(self, populated_workspace):
-        """Calling store_scan_result twice with the same result inserts only one row."""
+        """Calling store_scan_result twice with the same result inserts only one row.
+
+        Issue #82: idempotency must hold with REAL time (no patching).
+        Previously this test only passed by patching ``time.time()`` to a
+        fixed value — meaningless in production where every scan has a
+        different timestamp. With ``scan_timestamp`` excluded from
+        ``result_hash``, two calls with real time still produce the same
+        hash (because the stable subset is identical) → the second call
+        hits the existing row and updates it in place instead of
+        inserting a duplicate.
+        """
         from persistent_registry import PersistentRegistry
         import sqlite3
 
@@ -553,19 +571,11 @@ class TestStoreScanResult:
         reg._connect()
 
         result = self._make_scan_result(populated_workspace)
-        # Note: scan_timestamp is computed inside store_scan_result via
-        # time.time(), so the second call will produce a DIFFERENT subset
-        # unless we freeze the timestamp. To test idempotency, we patch
-        # time.time inside the module to return a fixed value.
-        import persistent_registry as pr_module
-
-        original_time = pr_module.time.time
-        pr_module.time.time = lambda: 1700000000.0
-        try:
-            reg.store_scan_result(result)
-            reg.store_scan_result(result)
-        finally:
-            pr_module.time.time = original_time
+        # Real time — no patching. Two consecutive calls will have
+        # different scan_timestamp values, but the stable subset used for
+        # result_hash is identical, so the idempotency check must fire.
+        reg.store_scan_result(result)
+        reg.store_scan_result(result)
 
         db_path = reg.db_path
         reg.close()
@@ -578,6 +588,59 @@ class TestStoreScanResult:
 
         assert count == 1, (
             f"expected 1 row after duplicate store_scan_result, got {count}"
+        )
+
+    def test_store_scan_result_updates_timestamp_on_rescan(self, populated_workspace):
+        """Re-scanning the same file set updates the existing row's timestamp.
+
+        Issue #82 acceptance criterion: idempotency means no duplicate row,
+        but the row's ``timestamp`` column must reflect the LATEST scan
+        (not the first) so trend tracking stays current. We query the
+        ``timestamp`` column after the first call, then again after the
+        second call, and assert the value changed.
+        """
+        from persistent_registry import PersistentRegistry
+        import sqlite3
+
+        reg = PersistentRegistry(populated_workspace)
+        reg._connect()
+
+        result = self._make_scan_result(populated_workspace)
+        reg.store_scan_result(result)
+
+        db_path = reg.db_path
+        reg.close()
+
+        conn = sqlite3.connect(db_path)
+        ts_after_first = conn.execute(
+            "SELECT timestamp FROM analysis_cache WHERE command = 'scan'"
+        ).fetchone()[0]
+        conn.close()
+
+        # Sleep briefly so the second call's time.time() is strictly
+        # greater than the first's (deterministic on any platform).
+        time.sleep(0.05)
+
+        reg2 = PersistentRegistry(populated_workspace)
+        reg2._connect()
+        reg2.store_scan_result(result)
+        reg2.close()
+
+        conn = sqlite3.connect(db_path)
+        row_count = conn.execute(
+            "SELECT COUNT(*) FROM analysis_cache WHERE command = 'scan'"
+        ).fetchone()[0]
+        ts_after_second = conn.execute(
+            "SELECT timestamp FROM analysis_cache WHERE command = 'scan'"
+        ).fetchone()[0]
+        conn.close()
+
+        assert row_count == 1, (
+            f"expected 1 row after re-scan (idempotent), got {row_count}"
+        )
+        assert ts_after_second > ts_after_first, (
+            f"timestamp must be updated on re-scan: "
+            f"first={ts_after_first!r}, second={ts_after_second!r}"
         )
 
     def test_store_scan_result_different_file_sets(self, workspace):
