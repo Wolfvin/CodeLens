@@ -15,6 +15,7 @@ from commands.scan import cmd_scan
 from commands.query import cmd_query
 from commands.list import cmd_list
 from commands.init import cmd_init
+from codelens import _apply_top_n, _NO_TOP_KEYS
 from commands.migrate import cmd_migrate
 from codelens import _registry_exists
 
@@ -335,8 +336,109 @@ class TestCheckCommandArgs:
             shutil.rmtree(ws, ignore_errors=True)
 
 
-# ─── _registry_exists after migrate (issue #35) ─────────────────────
+# ─── --top N universal truncation (issue #36) ──────────────────
 
+
+class TestTopNUniversalTruncation:
+    """Regression guard for issue #36: --top N must truncate ALL list-valued
+    keys in command output, not just those in a hardcoded allowlist.
+
+    Before the fix, ``_apply_top_n`` only truncated keys listed in ``_LIST_KEYS``
+    (28 names). A new command returning a list under a non-standard key (e.g.,
+    ``entities``, ``my_things``, ``nodes``) would silently ignore ``--top N``,
+    violating the documented *"Limit list results to top N items"* contract from
+    ``SKILL-QUICK.md`` and risking token overflow for MCP clients.
+
+    The fix replaces the allowlist with runtime auto-discovery: every top-level
+    list-valued key is truncated, except those in ``_NO_TOP_KEYS`` (structural/
+    metadata keys like ``available_commands``).
+    """
+
+    def test_non_standard_key_gets_truncated(self):
+        """A hypothetical key name not in any allowlist must still be truncated."""
+        result = {"status": "ok", "entities": [{"id": i} for i in range(100)]}
+        out = _apply_top_n(result, 5)
+        assert len(out["entities"]) == 5, (
+            f"Expected 5 items after truncation, got {len(out['entities'])}. "
+            "Non-standard key 'entities' was not truncated by --top."
+        )
+        assert out["entities_truncated"] is True
+        assert out["entities_total"] == 100
+
+    def test_multiple_non_standard_keys_truncated(self):
+        """Multiple non-standard list keys must all be truncated."""
+        result = {
+            "status": "ok",
+            "widgets": [{"id": i} for i in range(50)],
+            "gadgets": [{"id": i} for i in range(30)],
+        }
+        out = _apply_top_n(result, 10)
+        assert len(out["widgets"]) == 10
+        assert len(out["gadgets"]) == 10
+        assert out["widgets_truncated"] is True
+        assert out["gadgets_truncated"] is True
+
+    def test_no_top_keys_exempt(self):
+        """Keys in _NO_TOP_KEYS must NOT be truncated even if they're lists."""
+        result = {
+            "status": "ok",
+            "available_commands": [f"cmd_{i}" for i in range(50)],
+        }
+        out = _apply_top_n(result, 5)
+        assert len(out["available_commands"]) == 50, (
+            "available_commands should NOT be truncated (it's in _NO_TOP_KEYS)"
+        )
+        assert "available_commands_truncated" not in out
+
+    def test_standard_keys_still_truncated(self):
+        """Existing allowlisted keys (e.g., 'findings') must still be truncated."""
+        result = {"findings": [{"name": f"f_{i}"} for i in range(50)]}
+        out = _apply_top_n(result, 10)
+        assert len(out["findings"]) == 10
+        assert out["findings_truncated"] is True
+        assert out["findings_total"] == 50
+
+    def test_top_zero_means_no_truncation_for_non_standard_key(self):
+        """--top 0 (unlimited) must apply to non-standard keys too."""
+        result = {"entities": [{"id": i} for i in range(100)]}
+        out = _apply_top_n(result, 0)
+        assert len(out["entities"]) == 100
+
+    def test_nested_dict_non_standard_key_truncated(self):
+        """Non-standard dict-of-lists key must also be truncated."""
+        result = {
+            "groups": {
+                "alpha": [{"id": i} for i in range(30)],
+                "beta": [{"id": i} for i in range(5)],
+            }
+        }
+        out = _apply_top_n(result, 10)
+        assert len(out["groups"]["alpha"]) == 10
+        assert len(out["groups"]["beta"]) == 5  # under limit, no truncation
+
+    def test_underscore_prefixed_keys_skipped(self):
+        """Internal keys starting with '_' should not be processed."""
+        result = {
+            "_meta": [{"x": i} for i in range(50)],
+            "findings": [{"name": f"f_{i}"} for i in range(50)],
+        }
+        out = _apply_top_n(result, 5)
+        assert len(out["_meta"]) == 50, "_-prefixed keys should not be truncated"
+        assert len(out["findings"]) == 5
+
+    def test_repro_from_issue(self):
+        """Exact repro from issue #36: hypothetical command returning 'entities'."""
+        # Simulate what a new command might return
+        result = {"status": "ok", "entities": [{"id": i} for i in range(1000)]}
+        out = _apply_top_n(result, 5)
+        # Before fix: len == 1000 (silent --top bypass)
+        # After fix: len == 5 (universal truncation)
+        assert len(out["entities"]) == 5, (
+            "Issue #36 repro: --top 5 did not truncate 'entities' key. "
+            "This means a new command returning non-standard keys would "
+            "silently bypass --top, risking token overflow for MCP clients."
+        )
+# ─── _registry_exists after migrate (issue #35) ─────────────────────
 
 class TestRegistryExistsSqlite:
     """Regression guard for issue #35.

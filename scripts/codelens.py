@@ -331,7 +331,11 @@ def _auto_setup(workspace: str) -> Dict[str, Any]:
 
 # ─── Post-Processing: --top N ──────────────────────────────────
 
-# Keys that commonly contain list results across all commands
+# Keys that commonly contain list results across all commands.
+# Used by _apply_lite to find the "primary result list" for lite mode output.
+# NOTE: _apply_top_n no longer relies on this list — it auto-discovers all
+# list-valued keys at runtime (issue #36). This list is kept solely for
+# _apply_lite's priority-ordered lookup.
 _LIST_KEYS = [
     "functions", "findings", "leaks", "hints", "issues", "matches", "results",
     "violations", "entrypoints", "routes", "stores", "callers", "callees",
@@ -342,12 +346,17 @@ _LIST_KEYS = [
     "risks", "drift",  # refactor-safe, config-drift
 ]
 
-# Nested containers that may contain category-keyed lists
-_NESTED_LIST_KEYS = [
-    "results",  # dead-code: results{category:[]}
-    "issues",   # missing-refs: issues{type:[]}
-    "cycles",   # circular: cycles{type:[]}
-]
+# Keys whose values should NEVER be truncated by --top, even if they're lists.
+# These are structural/metadata keys (command names, engine names, etc.) that
+# are not "result lists" in the --top N contract sense. Adding a key here is
+# an explicit opt-out — the default is to truncate all list-valued keys (issue #36).
+_NO_TOP_KEYS = frozenset({
+    "available_commands",  # help/list-commands: metadata, not results
+    "engines",             # analyze: engine list is structural
+    "supported_languages", # setup/info: metadata
+    "categories",          # category names are metadata
+    "tags",                # tag names are metadata
+})
 
 # Commands that return large lists — get smart default --top
 _LIST_COMMANDS = {
@@ -402,15 +411,31 @@ def _sort_items(items: list, sort_key: str, descending: bool) -> list:
 
 
 def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[str, Any]:
-    """Limit all list/array results to top N items. Sort by relevance first. Adds truncated flags."""
+    """Limit all list/array results to top N items. Sort by relevance first. Adds truncated flags.
+
+    Auto-discovers ALL list-valued keys at runtime — no allowlist needed (issue #36).
+    This ensures --top N is a universal contract: any command, present or future,
+    that returns a list under any key name will be truncated. Keys in _NO_TOP_KEYS
+    are exempt (structural/metadata keys like ``available_commands``).
+
+    Also handles category-keyed dicts (e.g., ``by_category{cat: [...]}``) and
+    nested containers (e.g., ``results{category: [...]}``) by scanning dict
+    values for lists.
+    """
     if not isinstance(result, dict) or top_n <= 0:
         return result
 
     # Get sort strategy for this command
     sort_key, sort_desc = _SORT_STRATEGIES.get(command, (None, False))
 
-    for key in _LIST_KEYS:
-        val = result.get(key)
+    # Auto-discover: iterate ALL top-level keys (snapshot to allow in-place additions).
+    # Truncate every list-valued key except those in _NO_TOP_KEYS or starting with '_'.
+    # Also scan dict-valued keys for category-keyed lists.
+    for key in list(result.keys()):
+        if key in _NO_TOP_KEYS or key.startswith("_"):
+            continue
+        val = result[key]
+
         if isinstance(val, list) and len(val) > top_n:
             # Sort by relevance before truncating
             if sort_key:
@@ -421,23 +446,8 @@ def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[
             result[f"{key}_truncated"] = True
             result[f"{key}_total"] = len(val)
         elif isinstance(val, dict):
-            # Handle category-keyed dicts like by_category{cat: [...]}
-            for sub_key, sub_val in val.items():
-                if isinstance(sub_val, list) and len(sub_val) > top_n:
-                    # Sort items within each category
-                    if sort_key:
-                        sub_val = _sort_items(sub_val, sort_key, sort_desc)
-                        val[sub_key] = sub_val[:top_n]
-                    else:
-                        val[sub_key] = sub_val[:top_n]
-                    if "_truncated_categories" not in result:
-                        result["_truncated_categories"] = {}
-                    result["_truncated_categories"][sub_key] = len(sub_val)
-
-    # Handle nested containers like dead-code's results{category:[]}
-    for key in _NESTED_LIST_KEYS:
-        val = result.get(key)
-        if isinstance(val, dict):
+            # Handle category-keyed dicts like by_category{cat: [...]} and
+            # nested containers like dead-code's results{category:[]}
             for sub_key, sub_val in val.items():
                 if isinstance(sub_val, list) and len(sub_val) > top_n:
                     if sort_key:
@@ -449,7 +459,8 @@ def _apply_top_n(result: Dict[str, Any], top_n: int, command: str = "") -> Dict[
                         result["_truncated_categories"] = {}
                     result["_truncated_categories"][sub_key] = len(sub_val)
 
-    # Handle coverage_map in test-map (file:{fn:{...}})
+    # Handle coverage_map in test-map (file:{fn:{...}}) — dict-of-dicts, not
+    # dict-of-lists, so the auto-discover above doesn't catch it.
     if "coverage_map" in result and isinstance(result["coverage_map"], dict):
         cm = result["coverage_map"]
         if len(cm) > top_n:
