@@ -52,25 +52,33 @@ def add_args(parser):
                         help="Only re-scan changed files")
     parser.add_argument("--plugins", nargs="*", default=None,
                         help="Enable plugin rules: specify plugin names or 'all' for all rule_pack plugins")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Cap total files scanned (default: unlimited). "
+                             "Used by auto-setup to prevent timeout on huge repos.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
     incremental = getattr(args, 'incremental', False)
     plugins = getattr(args, 'plugins', None)
+    max_files = getattr(args, 'max_files', None)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, plugins=plugins)
+    return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files)
 
 
-def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None) -> Dict[str, Any]:
+def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None,
+             max_files: Optional[int] = None) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
+
     If incremental=True, only re-scan changed files.
     If plugins is provided, load plugin rules for the scan.
+    If max_files is provided and > 0, cap the total number of discovered files
+    that get parsed (used by auto-setup to prevent timeout on huge repos).
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -87,6 +95,12 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
 
     # Discover files
     files = discover_files(workspace, config)
+
+    # Apply max_files cap (auto-setup uses this to bound scan time on huge repos).
+    # The cap is applied AFTER discovery but BEFORE parsing, so os.walk cost is
+    # unchanged but parsing/registry-build cost is bounded.
+    if max_files is not None and max_files > 0:
+        files = _cap_discovered_files(files, max_files)
 
     # Check if incremental scan is possible
     changed_files = None
@@ -1170,6 +1184,25 @@ def _build_lang_note(fw: Dict) -> Optional[str]:
     }
     parts = [lang_names.get(l, l) for l in unsupported]
     return f"Detected {', '.join(parts)} source files — these languages do not have dedicated parsers yet. CodeLens uses regex-based fallback extraction for many languages, but analysis may be less accurate than for fully supported languages (JS/TS/Python/Rust/HTML/CSS). Note: Go, Java, Kotlin, C/C++, C#, Ruby, Elixir, Dart, Swift, Scala, Shell, PHP, GDScript, Lua, and Objective-C all have fallback parsers; they are listed here only when no parser exists."
+
+
+def _cap_discovered_files(files: Dict[str, List[str]], max_files: int) -> Dict[str, List[str]]:
+    """Cap total files across all categories to ``max_files``.
+
+    Truncates per-category lists in dict iteration order until the budget
+    is exhausted; remaining categories are emptied. Used by auto-setup to
+    bound scan time on huge repos (issue #34).
+    """
+    capped: Dict[str, List[str]] = {}
+    remaining = max_files
+    for key, file_list in files.items():
+        if not file_list or remaining <= 0:
+            capped[key] = []
+            continue
+        take = file_list[:remaining]
+        capped[key] = take
+        remaining -= len(take)
+    return capped
 
 
 def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
