@@ -268,14 +268,25 @@ def _registry_exists(workspace: str) -> bool:
 
 def _auto_setup(workspace: str) -> Dict[str, Any]:
     """Auto-run init + scan when no registry exists. Returns scan result or error info.
-    
-    Includes timeout protection: if the workspace has many source files,
-    limits scan to --max-files 3000 to prevent long auto-setup times.
+
+    Applies a hard cap of ``_AUTO_SETUP_MAX_FILES`` (3000) files on BOTH the
+    subprocess path and the in-process fallback path, so auto-setup can never
+    silently hang on huge repos (issue #34).
+
+    Returns a dict with:
+      - ``auto_setup``: "ok" | "failed"
+      - ``capped``: True iff the 3000-file cap was reached (only on success)
+      - ``fallback``: True iff the in-process fallback path was taken (only on success)
+      - ``files_scanned``: total files scanned (only on success)
+      - ``hint``: human-readable note (only present when ``capped`` is True)
+      - ``stage`` / ``error``: failure details (only on failure)
     """
     from commands.init import cmd_init
     from commands.scan import cmd_scan
+    import subprocess
 
-    # Cap to prevent 5+ minute auto-setup on large repos
+    # Cap to prevent 5+ minute auto-setup on large repos.
+    # Applied to BOTH the subprocess path and the in-process fallback.
     _AUTO_SETUP_MAX_FILES = 3000
     _AUTO_SETUP_TIMEOUT_MSG = (
         "Auto-setup running with --max-files 3000 to prevent timeout. "
@@ -292,37 +303,57 @@ def _auto_setup(workspace: str) -> Dict[str, Any]:
     except Exception as e:
         return {"auto_setup": "failed", "stage": "init", "error": str(e)}
 
-    # Step 2: Scan (with max-files cap for auto-setup)
+    # Step 2: Scan (with --max-files cap on BOTH paths)
     try:
         print(f"[CodeLens] {_AUTO_SETUP_TIMEOUT_MSG}", file=sys.stderr)
-        # Use subprocess to run scan with --max-files flag
-        # This avoids coupling to cmd_scan's internal signature
+        # Primary path: subprocess with --max-files flag (timeout=120s).
+        # This isolates the scan in a child process so we can enforce a
+        # hard wall-clock timeout on top of the file-count cap.
         scan_cmd = [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
                      "scan", workspace, "--max-files", str(_AUTO_SETUP_MAX_FILES)]
-        scan_proc = __import__("subprocess").run(
-            scan_cmd, capture_output=True, text=True, timeout=120
-        )
-        if scan_proc.returncode != 0:
-            # Fallback: try without max-files
-            try:
-                scan_result = cmd_scan(workspace, incremental=False)
-                if scan_result.get("status") != "ok":
-                    return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
-            except Exception as e2:
-                return {"auto_setup": "failed", "stage": "scan", "error": str(e2)}
-        else:
-            scan_result = json.loads(scan_proc.stdout) if scan_proc.stdout.strip() else {"status": "ok"}
+        fallback_taken = False
+        scan_result: Optional[Dict[str, Any]] = None
+        try:
+            scan_proc = subprocess.run(
+                scan_cmd, capture_output=True, text=True, timeout=120
+            )
+            if scan_proc.returncode == 0:
+                scan_result = (
+                    json.loads(scan_proc.stdout)
+                    if scan_proc.stdout.strip()
+                    else {"status": "ok"}
+                )
+        except Exception as e:
+            print(f"[CodeLens] Scan subprocess error: {e}; "
+                  "falling back to in-process scan.", file=sys.stderr)
+
+        # Fallback path: in-process scan with the SAME max_files cap.
+        # The cap is enforced by cmd_scan(max_files=...) so huge repos
+        # cannot hang auto-setup even when the subprocess path fails.
+        if scan_result is None:
+            fallback_taken = True
+            print(f"[CodeLens] Falling back to in-process scan "
+                  f"with max_files={_AUTO_SETUP_MAX_FILES}.", file=sys.stderr)
+            scan_result = cmd_scan(
+                workspace, incremental=False, max_files=_AUTO_SETUP_MAX_FILES
+            )
+            if scan_result.get("status") != "ok":
+                return {"auto_setup": "failed", "stage": "scan", "error": scan_result}
 
         files_scanned = scan_result.get("files_scanned", {})
         total_files = sum(v for v in files_scanned.values() if isinstance(v, int)) if isinstance(files_scanned, dict) else 0
-        print(f"[CodeLens] Auto-setup complete. {total_files} files scanned. Registry built.", file=sys.stderr)
-        
-        result_info = {
+        capped = total_files >= _AUTO_SETUP_MAX_FILES
+        print(f"[CodeLens] Auto-setup complete. {total_files} files scanned. "
+              f"Registry built. (fallback={fallback_taken}, capped={capped})",
+              file=sys.stderr)
+
+        result_info: Dict[str, Any] = {
             "auto_setup": "ok",
             "files_scanned": total_files,
-            "capped": total_files >= _AUTO_SETUP_MAX_FILES,
+            "capped": capped,
+            "fallback": fallback_taken,
         }
-        if total_files >= _AUTO_SETUP_MAX_FILES:
+        if capped:
             result_info["hint"] = "Auto-setup capped at 3000 files. Run 'scan' manually for full analysis."
         return result_info
     except Exception as e:
@@ -1018,6 +1049,11 @@ def main():
             auto_setup_info = {
                 "auto_setup": True,
                 "message": "Registry was auto-built. For best results, run 'scan' manually on large repos.",
+                # Issue #34: surface which path produced the registry and
+                # whether the 3000-file cap was hit, so MCP clients / agents
+                # can decide whether to trust the registry or re-scan.
+                "capped": bool(auto_setup_result.get("capped", False)),
+                "fallback": bool(auto_setup_result.get("fallback", False)),
             }
         else:
             auto_setup_info = {

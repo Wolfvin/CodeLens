@@ -587,3 +587,191 @@ class TestRegistryExistsSqlite:
         finally:
             import shutil
             shutil.rmtree(ws, ignore_errors=True)
+
+
+class TestAutoSetupFallbackCap:
+    """Regression tests for issue #34.
+
+    ``_auto_setup`` in scripts/codelens.py runs scan via subprocess with
+    ``--max-files 3000`` as a timeout guard. When the subprocess failed
+    (non-zero exit / exception), the fallback called
+    ``cmd_scan(workspace, incremental=False)`` with NO cap and NO timeout,
+    so huge repos could hang auto-setup indefinitely — while the result
+    hint still claimed "Auto-setup capped at 3000 files" (a lie).
+
+    Fix: the fallback must pass ``max_files=_AUTO_SETUP_MAX_FILES`` to
+    ``cmd_scan``, and ``result["_auto_setup"]`` must surface ``capped`` and
+    ``fallback`` flags so MCP clients can tell which path produced the
+    registry.
+    """
+
+    def test_fallback_passes_max_files_cap(self, monkeypatch):
+        """When the subprocess scan fails, the fallback ``cmd_scan`` call
+        must be invoked with ``max_files=3000`` (not uncapped)."""
+        import subprocess
+        from commands import scan as scan_mod
+        import codelens
+
+        ws = _create_sample_workspace()
+        try:
+            # Force subprocess.run to raise so the fallback path is taken.
+            def fake_run(*args, **kwargs):
+                raise subprocess.SubprocessError("simulated subprocess failure")
+            monkeypatch.setattr(subprocess, "run", fake_run)
+
+            # Spy on cmd_scan to capture the max_files kwarg.
+            captured = {}
+            real_cmd_scan = scan_mod.cmd_scan
+
+            def spy_cmd_scan(workspace, incremental=False, plugins=None, max_files=None):
+                captured["called"] = True
+                captured["max_files"] = max_files
+                captured["incremental"] = incremental
+                # Delegate to the real cmd_scan so the registry actually
+                # gets built (otherwise _auto_setup would fail downstream).
+                return real_cmd_scan(
+                    workspace, incremental=incremental,
+                    plugins=plugins, max_files=max_files,
+                )
+            monkeypatch.setattr(scan_mod, "cmd_scan", spy_cmd_scan)
+
+            result = codelens._auto_setup(ws)
+
+            assert captured.get("called") is True, (
+                "Fallback path did not call cmd_scan at all"
+            )
+            assert captured.get("max_files") == 3000, (
+                f"Fallback must pass max_files=3000 to cmd_scan; "
+                f"got: {captured.get('max_files')!r}"
+            )
+            assert result.get("auto_setup") == "ok"
+            assert result.get("fallback") is True
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_fallback_sets_capped_and_fallback_flags(self, monkeypatch, capsys):
+        """``result['_auto_setup']`` must include ``capped=True`` and
+        ``fallback=True`` when the fallback path runs against a workspace
+        large enough to actually hit the 3000-file cap.
+
+        Verifies issue #34's Definition of Done item #2: the hint that
+        says "capped at 3000 files" must no longer be a lie.
+
+        Drives the full CLI flow (``codelens.main()``) so the assertion
+        is on the actual ``result["_auto_setup"]`` dict that gets attached
+        to the command's JSON output, not just on ``_auto_setup()``'s
+        private return value.
+        """
+        import subprocess
+        import codelens
+
+        # Build a workspace with > 3000 source files so the cap is hit.
+        ws = tempfile.mkdtemp()
+        try:
+            os.makedirs(os.path.join(ws, "src"), exist_ok=True)
+            for i in range(3001):
+                with open(os.path.join(ws, "src", f"f{i}.py"), "w") as fh:
+                    fh.write(f"def f{i}():\n    pass\n")
+
+            # Force subprocess.run to raise → fallback path is taken.
+            # This patches subprocess.run in THIS process, which is the
+            # same process codelens.main() runs in, so the inner
+            # subprocess call inside _auto_setup will hit the patch.
+            def fake_run(*args, **kwargs):
+                raise subprocess.SubprocessError("simulated subprocess failure")
+            monkeypatch.setattr(subprocess, "run", fake_run)
+
+            # Drive the full CLI flow in-process so we can assert on the
+            # actual result["_auto_setup"] attached to the JSON output.
+            old_argv = sys.argv
+            sys.argv = ["codelens.py", "list", ws, "--format", "json"]
+            try:
+                codelens.main()
+            except SystemExit as e:
+                # main() may sys.exit(0) on success or sys.exit(1) on gate
+                # failure (for `check`). For `list`, success path returns
+                # normally or exits 0.
+                assert e.code in (0, None), (
+                    f"unexpected exit code from main(): {e.code}"
+                )
+            finally:
+                sys.argv = old_argv
+
+            captured = capsys.readouterr()
+            assert captured.out.strip().startswith("{"), (
+                f"expected JSON on stdout; got: {captured.out[:300]!r}"
+            )
+            result = json.loads(captured.out.strip())
+            auto = result.get("_auto_setup")
+            assert auto is not None, (
+                "result['_auto_setup'] missing from CLI output; "
+                f"got keys: {list(result.keys())}"
+            )
+            assert auto.get("fallback") is True, (
+                f"expected fallback=True after subprocess failure; "
+                f"got _auto_setup={auto!r}"
+            )
+            assert auto.get("capped") is True, (
+                f"expected capped=True when workspace has >3000 files; "
+                f"got _auto_setup={auto!r}"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_main_path_no_fallback_when_subprocess_succeeds(self, capsys):
+        """Sanity guard for Definition of Done item #3: when the subprocess
+        path succeeds, ``fallback`` must be False and the auto-setup flags
+        must still be present on ``result["_auto_setup"]``.
+
+        Also confirms the issue #34 fix didn't break the main path: with
+        ``--max-files`` now a registered scan argument, the subprocess no
+        longer exits 2 on argparse rejection, so the main path actually
+        runs end-to-end (previously it silently failed every time and the
+        fallback was always taken).
+        """
+        import codelens
+
+        ws = _create_sample_workspace()
+        try:
+            # Real subprocess (no monkeypatching). With the fix,
+            # `--max-files` is now a valid scan arg, so the subprocess
+            # should succeed and the fallback should NOT be taken.
+            old_argv = sys.argv
+            sys.argv = ["codelens.py", "list", ws, "--format", "json"]
+            try:
+                codelens.main()
+            except SystemExit as e:
+                assert e.code in (0, None), (
+                    f"unexpected exit code from main(): {e.code}"
+                )
+            finally:
+                sys.argv = old_argv
+
+            captured = capsys.readouterr()
+            assert captured.out.strip().startswith("{"), (
+                f"expected JSON on stdout; got: {captured.out[:300]!r}"
+            )
+            result = json.loads(captured.out.strip())
+            auto = result.get("_auto_setup")
+            assert auto is not None, (
+                f"result['_auto_setup'] missing; got keys: {list(result.keys())}"
+            )
+            # Sample workspace has ~4 files (html, css, js, rs) — well below
+            # the 3000-file cap, so capped must be False.
+            assert auto.get("fallback") is False, (
+                f"expected fallback=False on subprocess success; "
+                f"got _auto_setup={auto!r}"
+            )
+            assert auto.get("capped") is False, (
+                f"expected capped=False for small workspace; "
+                f"got _auto_setup={auto!r}"
+            )
+            # Flags must always be present (even when False) so MCP clients
+            # can rely on the schema.
+            assert "capped" in auto, "capped flag missing from _auto_setup"
+            assert "fallback" in auto, "fallback flag missing from _auto_setup"
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
