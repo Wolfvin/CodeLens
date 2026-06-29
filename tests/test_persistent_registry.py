@@ -464,12 +464,22 @@ class TestMigration:
         from commands.migrate import cmd_migrate
         from persistent_registry import PersistentRegistry
 
-        # Create the DB first
+        # Create the DB first and populate it with at least one symbol.
+        # An empty db shell (created by ``scan`` via ``store_scan_result``)
+        # must NOT trigger the "already exists" early-return — otherwise
+        # the real JSON→SQLite migration is skipped and ``symbols`` stays
+        # empty, which is the root cause of issue #35. Only a populated
+        # db should be treated as "already migrated".
         reg = PersistentRegistry(workspace)
-        reg._connect()
+        conn = reg._connect()
+        conn.execute(
+            "INSERT INTO symbols (name, kind, file_path) VALUES (?, ?, ?)",
+            ("placeholder", "function", "/fake/path.py"),
+        )
+        conn.commit()
         reg.close()
 
-        # Should return "already exists" message
+        # Should return "already exists" message because the db is populated.
         result = cmd_migrate(workspace)
         assert result['status'] == 'ok'
         assert 'already exists' in result.get('message', '')

@@ -15,6 +15,8 @@ from commands.scan import cmd_scan
 from commands.query import cmd_query
 from commands.list import cmd_list
 from commands.init import cmd_init
+from commands.migrate import cmd_migrate
+from codelens import _registry_exists
 
 
 def _create_sample_workspace():
@@ -328,6 +330,158 @@ class TestCheckCommandArgs:
             assert proc.stdout.strip().startswith("{"), (
                 f"expected JSON output, got: {proc.stdout[:200]}"
             )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+
+# ─── _registry_exists after migrate (issue #35) ─────────────────────
+
+
+class TestRegistryExistsSqlite:
+    """Regression guard for issue #35.
+
+    Before the fix, ``_registry_exists`` only checked for
+    ``backend.json`` / ``frontend.json``. A workspace that had been
+    migrated to SQLite (``codelens migrate``) and whose JSON files
+    were then deleted was always treated as having no registry, so
+    every subsequent command silently re-ran ``init + scan`` and threw
+    away the migrated data — negating the whole point of ``migrate``.
+
+    The fix adds a second path: a populated ``codelens.db`` also
+    counts as a valid registry. "Populated" means the ``symbols``
+    table has at least one row, so an empty or corrupt db is NOT
+    falsely treated as valid.
+    """
+
+    def test_registry_exists_after_migrate_with_json_deleted(self):
+        """migrate → delete JSON → ``_registry_exists`` must return True.
+
+        This is the exact repro from issue #35.
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Sanity: JSON files exist before migrate.
+            assert os.path.exists(os.path.join(ws, ".codelens", "backend.json"))
+            assert os.path.exists(os.path.join(ws, ".codelens", "frontend.json"))
+
+            # Migrate JSON → SQLite.
+            migrate_result = cmd_migrate(ws)
+            assert migrate_result["status"] == "ok", migrate_result
+
+            # Delete the JSON files (post-migrate cleanup).
+            os.remove(os.path.join(ws, ".codelens", "backend.json"))
+            os.remove(os.path.join(ws, ".codelens", "frontend.json"))
+
+            # The fix: the migrated SQLite db must still satisfy
+            # _registry_exists so commands don't trigger auto-setup.
+            assert _registry_exists(ws) is True, (
+                "issue #35 regression: migrated workspace with deleted JSON "
+                "files is not recognized as having a valid registry"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_registry_exists_false_for_empty_db(self):
+        """An empty SQLite db (``symbols`` has 0 rows) must NOT be valid.
+
+        Issue #35 constraint: 'db kosong/corrupt tidak salah dianggap
+        registry valid'.
+        """
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as ws:
+            codelens_dir = os.path.join(ws, ".codelens")
+            os.makedirs(codelens_dir)
+            db_path = os.path.join(codelens_dir, "codelens.db")
+            # Create a real SQLite db with the symbols table but no rows.
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "CREATE TABLE symbols (id INTEGER PRIMARY KEY, name TEXT)"
+            )
+            conn.commit()
+            conn.close()
+
+            # No JSON files, empty db → must be False so auto-setup runs.
+            assert _registry_exists(ws) is False, (
+                "empty SQLite db should not be treated as a valid registry"
+            )
+
+    def test_registry_exists_false_for_corrupt_db(self):
+        """A corrupt SQLite db (random bytes) must NOT be valid."""
+        with tempfile.TemporaryDirectory() as ws:
+            codelens_dir = os.path.join(ws, ".codelens")
+            os.makedirs(codelens_dir)
+            db_path = os.path.join(codelens_dir, "codelens.db")
+            with open(db_path, "wb") as f:
+                f.write(b"not a sqlite database file - corrupt bytes")
+
+            # No JSON files, corrupt db → must be False.
+            assert _registry_exists(ws) is False, (
+                "corrupt SQLite db should not be treated as a valid registry"
+            )
+
+    def test_registry_exists_true_for_json_only_workspace(self):
+        """Legacy JSON-only workspace (no migrate) must still work.
+
+        Ensures the fix is purely additive — path 1 (JSON check) is
+        unchanged and still detects pre-migration workspaces, even
+        though ``scan`` may also create an empty ``codelens.db`` shell
+        via ``store_scan_result`` (which writes only to
+        ``analysis_cache``, not ``symbols``).
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Pre-migration state: JSON files exist.
+            assert os.path.exists(os.path.join(ws, ".codelens", "backend.json"))
+            assert os.path.exists(os.path.join(ws, ".codelens", "frontend.json"))
+
+            assert _registry_exists(ws) is True, (
+                "JSON-only workspace should still be detected as valid "
+                "(pre-existing behavior must not regress)"
+            )
+        finally:
+            import shutil
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_query_uses_sqlite_fallback_after_json_deleted(self):
+        """End-to-end: query must return real data from SQLite after
+        ``migrate`` + JSON deletion — not just avoid auto-setup, but
+        actually serve the migrated data (issue #35: 'padahal data
+        lengkap sudah ada di codelens.db').
+
+        Verifies that ``load_backend_registry`` / ``load_frontend_registry``
+        fall back to the SQLite cache populated by ``migrate`` when the
+        JSON files are missing.
+        """
+        ws = _create_sample_workspace()
+        try:
+            cmd_init(ws)
+            cmd_scan(ws)
+            # Sanity: the symbol we'll query exists in the JSON registry.
+            pre = cmd_query("verify_token", ws, domain="backend")
+            assert pre["found"] is True, (
+                "verify_token must exist in JSON registry before migrate"
+            )
+
+            # Migrate → delete JSON → query must still find the symbol.
+            mig = cmd_migrate(ws)
+            assert mig["status"] == "ok", mig
+            os.remove(os.path.join(ws, ".codelens", "backend.json"))
+            os.remove(os.path.join(ws, ".codelens", "frontend.json"))
+
+            post = cmd_query("verify_token", ws, domain="backend")
+            assert post["found"] is True, (
+                "query must return data from SQLite cache after JSON deletion "
+                "(issue #35: migrated data must be usable, not just present)"
+            )
+            assert post["type"] == "function"
+            assert post["node"]["fn"] == "verify_token"
         finally:
             import shutil
             shutil.rmtree(ws, ignore_errors=True)
