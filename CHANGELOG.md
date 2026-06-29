@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### LSP Status Entry-Point Unification (issue #33)
+
+The `codelens --lsp-status` top-level flag (intercepted in
+`scripts/codelens.py`) and the `codelens lsp-status` subcommand
+(`scripts/commands/lsp_status.py`) returned **structurally different
+payloads** for what the documentation treats as the same operation:
+
+- `--lsp-status` called `hybrid_engine.get_lsp_status()` — the richer
+  payload with `available_count`, `total_servers`, per-server `path` +
+  `extensions`, and a `recommendation` field.
+- `lsp-status` called `lsp_client.detect_available_servers()` directly
+  and rebuilt a smaller dict — no `available_count`/`total_servers`,
+  per-server entries missing `path`/`extensions`, and a `hint` field
+  instead of `recommendation`.
+
+The MCP server dynamically discovers subcommands, so MCP agents
+(`codelens_lsp_status` tool) got the **smaller** payload while CLI
+users got the **richer** one — two different "truths" for the same
+question.
+
+**Fix (Option B from the issue):** both entry points now delegate to
+`hybrid_engine.get_lsp_status()` — single source of truth. The
+top-level `--lsp-status` flag is preserved as a backward-compatible
+alias of the `lsp-status` subcommand. Option A (remove the flag
+entirely) was rejected because the issue's DoD explicitly requires
+both entry points to produce byte-identical output (repro diff exit
+code 0), which is unsatisfiable if one entry point is removed.
+
+A pre-existing determinism bug was also fixed in
+`lsp_client.detect_available_servers()`: `extensions` was returned as
+`list(config["extensions"])` where `config["extensions"]` is a `set`,
+so order varied across Python invocations (hash randomization). Now
+sorted, so the repro diff is byte-identical, not just structurally
+equal.
+
+### Changed (issue #33)
+
+- **`scripts/commands/lsp_status.py:execute()`** — Now delegates to
+  `hybrid_engine.get_lsp_status()` instead of rebuilding a smaller
+  dict from `lsp_client.detect_available_servers()`. The ImportError
+  fallback was updated to match the new (richer) shape so error
+  responses are still structurally consistent.
+- **`scripts/lsp_client.py:detect_available_servers()`** — `extensions`
+  field is now `sorted(config["extensions"])` instead of
+  `list(config["extensions"])` for deterministic cross-invocation
+  output.
+
+### Documented (issue #33)
+
+- **`SKILL-QUICK.md`** — Trigger map now has an explicit
+  `"LSP servers available?"` → `lsp-status` entry, noting that
+  `--lsp-status` is an alias. The Setup & Lifecycle command list also
+  documents the alias relationship.
+
+### Tested (issue #33)
+
+- **`tests/test_cli.py:TestLspStatusEntryPointParity`** — New class
+  with 3 tests: top-level key parity, per-server field parity, and
+  full byte-identical payload equality. Guards against future
+  regressions of the dual-truth problem.
+
 ### OSV Cache Staleness Flags + `cache_info` Output (issue #30)
 
 Phase 1 roadmap (#21) checklist item: "Fix vuln DB staleness (OSV.dev

@@ -1,4 +1,11 @@
-"""LSP status command — check which language servers are available."""
+"""LSP status command — check which language servers are available.
+
+Issue #33: this subcommand and the top-level ``--lsp-status`` flag (intercepted
+in ``codelens.py``) MUST return the same payload. Both entry points therefore
+delegate to :func:`hybrid_engine.get_lsp_status` — the single source of truth
+for LSP availability. The MCP server dynamically discovers this subcommand, so
+unifying here also fixes the CLI/MCP divergence described in the issue.
+"""
 
 from commands import register_command
 
@@ -9,38 +16,28 @@ def add_args(sub):
 
 
 def execute(args, workspace):
-    """Check which LSP servers are available on the system."""
+    """Check which LSP servers are available on the system.
+
+    Delegates to :func:`hybrid_engine.get_lsp_status` so that
+    ``codelens lsp-status``, ``codelens --lsp-status``, and the MCP
+    ``codelens_lsp_status`` tool all return the same payload.
+    """
     try:
-        from lsp_client import detect_available_servers, LSP_SERVERS
+        from hybrid_engine import get_lsp_status
     except ImportError:
         return {
             "status": "ok",
             "lsp_available": False,
+            "available_count": 0,
+            "total_servers": 0,
             "servers": {},
-            "hint": "lsp_client.py not found. Install hybrid analysis support.",
+            "recommendation": (
+                "hybrid_engine.py not found. Install hybrid analysis support "
+                "to enable LSP status checks."
+            ),
         }
 
-    available = detect_available_servers()
-    servers = {}
-    for name, info in available.items():
-        servers[name] = {
-            "available": info.get("available", False),
-            "languages": info.get("languages", []),
-            "install_hint": info.get("install_hint", ""),
-        }
-
-    any_available = any(s["available"] for s in servers.values())
-
-    return {
-        "status": "ok",
-        "lsp_available": any_available,
-        "servers": servers,
-        "hint": (
-            "LSP servers found! Use --deep flag for enhanced analysis."
-            if any_available
-            else "No LSP servers found. Install one for deep analysis (see install_hint)."
-        ),
-    }
+    return get_lsp_status()
 
 
 register_command(

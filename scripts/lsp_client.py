@@ -86,7 +86,14 @@ def _which(command: str) -> Optional[str]:
 
 
 def detect_available_servers() -> Dict[str, Dict[str, Any]]:
-    """Auto-detect which LSP servers are available on the system."""
+    """Auto-detect which LSP servers are available on the system.
+
+    ``extensions`` is sorted so the payload is deterministic across Python
+    invocations (``config["extensions"]`` is a set, and ``list(set)`` order
+    depends on hash randomization). Required by issue #33 so that
+    ``codelens --lsp-status`` and ``codelens lsp-status`` produce byte-identical
+    JSON, not just structurally-equal JSON.
+    """
     results = {}
     for name, config in LSP_SERVERS.items():
         cmd = config["command"][0]
@@ -95,7 +102,7 @@ def detect_available_servers() -> Dict[str, Dict[str, Any]]:
             "available": path is not None,
             "path": path,
             "languages": config["languages"],
-            "extensions": list(config["extensions"]),
+            "extensions": sorted(config["extensions"]),
             "install_hint": config["install_hint"],
         }
     return results
