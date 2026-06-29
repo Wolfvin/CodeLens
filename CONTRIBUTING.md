@@ -39,9 +39,44 @@ CodeLens uses a modular engine architecture. To add a new analysis capability:
 4. **Implement the engine** following the pattern of existing engines (return `{status, workspace, findings, summary}`)
 5. **Add a command module** in `commands/yourfeature.py` with `add_args(subparser)` and `execute(args)` functions
 6. **Add tests** in `tests/`
-7. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, `README.md`, and `CHANGELOG.md`
+7. **Sync command counts** — see "Syncing Command Counts" below; do NOT hand-edit the count in `README.md`, `SKILL.md`, `SKILL-QUICK.md`, `pyproject.toml`, `skill.json`, or `scripts/mcp_server.py`
+8. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, `README.md`, and `CHANGELOG.md`
 
 Commands auto-register via `commands/__init__.py` — no manual wiring needed.
+
+### Syncing Command Counts (issue #38)
+
+The number of CLI commands and MCP tools must never be hand-edited in
+documentation or metadata files — it drifts every time a command is added or
+removed. The single source of truth is the runtime `COMMAND_REGISTRY` (and
+`_TOOL_DEFINITIONS` for MCP static tools). The `scripts/sync_command_count.py`
+helper propagates the runtime count into every doc/metadata file.
+
+When you add or remove a command:
+
+```bash
+# 1. Run the sync helper in --check mode to see what would change:
+PYTHONPATH=scripts python3 scripts/sync_command_count.py --check
+
+# 2. Apply the changes:
+PYTHONPATH=scripts python3 scripts/sync_command_count.py --apply
+
+# 3. Update the strict regression sentinel in tests/test_integration.py
+#    (TestModuleStructure.test_command_registry_has_all_commands)
+#    to match the new len(COMMAND_REGISTRY). This is the ONE place where
+#    the count is intentionally hardcoded — it is the regression anchor.
+
+# 4. Verify:
+PYTHONPATH=scripts python3 -m pytest tests/test_command_count.py tests/test_integration.py::TestModuleStructure -v
+```
+
+The test suite enforces this in CI:
+
+- `tests/test_command_count.py::test_all_docs_in_sync_with_command_registry`
+  fails if any doc/metadata file mentions a stale count.
+- `tests/test_integration.py::TestModuleStructure::test_command_registry_has_all_commands`
+  fails if `len(COMMAND_REGISTRY)` changes in either direction (strict `==`,
+  not `>=`).
 
 ### Adding New Language Parsers
 
