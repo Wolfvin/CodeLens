@@ -1052,6 +1052,38 @@ def db_exists(workspace: str, db_path: Optional[str] = None) -> bool:
     return os.path.exists(path)
 
 
+def db_is_populated(db_path: str) -> bool:
+    """Return True if the SQLite db at ``db_path`` exists and has data.
+
+    "Populated" means the file exists, can be opened as SQLite, and the
+    ``symbols`` table contains at least one row — the table populated by
+    both ``scan`` (via ``insert_symbols_batch``) and ``migrate_from_json``.
+
+    Used to distinguish a real migrated/scan-populated db from an empty
+    or corrupt one. Callers:
+
+    - ``codelens._registry_exists`` treats an empty/corrupt db as "no
+      valid registry" so auto-setup still runs (issue #35).
+    - ``commands.migrate.cmd_migrate`` only skips re-migration when the
+      db is actually populated — otherwise an empty db shell created by
+      ``store_scan_result`` (which only writes to ``analysis_cache``,
+      not ``symbols``) would block the real JSON→SQLite migration.
+
+    Any error (missing file, corrupt db, missing table, locked) returns
+    False so callers fall through to the safe default.
+    """
+    if not os.path.exists(db_path):
+        return False
+    try:
+        conn = sqlite3.connect(db_path, timeout=2.0)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0] > 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
 def get_registry(workspace: str, db_path: Optional[str] = None) -> PersistentRegistry:
     """Get a PersistentRegistry instance for the workspace."""
     return PersistentRegistry(workspace, db_path)

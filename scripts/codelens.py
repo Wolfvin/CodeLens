@@ -232,14 +232,38 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
 # ─── Auto-Setup: Registry Bootstrap ────────────────────────────
 
 def _registry_exists(workspace: str) -> bool:
-    """Check if a valid registry exists for the workspace."""
+    """Check if a valid registry exists for the workspace.
+
+    A registry is considered valid when at least one of these is true:
+
+    1. A legacy JSON registry file exists (``backend.json`` or
+       ``frontend.json``) — the pre-migration state used by older
+       workspaces. Preserved so unmigrated workspaces keep working.
+    2. A populated SQLite database exists at ``.codelens/codelens.db``
+       — the post-migration state. "Populated" means the file exists
+       AND the ``symbols`` table has at least one row, so an empty or
+       corrupt db is NOT treated as a valid registry (issue #35).
+
+    Without path 2, a workspace that ran ``migrate`` and then deleted
+    its JSON files was treated as having no registry, triggering an
+    unnecessary ``init + scan`` on every command and discarding the
+    migrated SQLite data.
+    """
     codelens_dir = os.path.join(workspace, ".codelens")
     if not os.path.isdir(codelens_dir):
         return False
-    # Check for at least one registry file
+
+    # Path 1: legacy JSON registry — still works for unmigrated workspaces.
     backend_json = os.path.join(codelens_dir, "backend.json")
     frontend_json = os.path.join(codelens_dir, "frontend.json")
-    return os.path.exists(backend_json) or os.path.exists(frontend_json)
+    if os.path.exists(backend_json) or os.path.exists(frontend_json):
+        return True
+
+    # Path 2: migrated SQLite registry — must exist AND be populated,
+    # so an empty/corrupt db does not falsely satisfy the check (issue #35).
+    from persistent_registry import db_is_populated
+    db_path = os.path.join(codelens_dir, "codelens.db")
+    return db_is_populated(db_path)
 
 
 def _auto_setup(workspace: str) -> Dict[str, Any]:
