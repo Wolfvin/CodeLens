@@ -58,6 +58,35 @@ def fresh_client(tmp_workspace):
     return OSVClient(workspace=tmp_workspace, ttl=DEFAULT_TTL, offline=True)
 
 
+@pytest.fixture
+def app_fixture_copy():
+    """Copy a named app fixture to a temp dir; cleaned up after the test.
+
+    Returns a function ``copy(name) -> path`` that copies
+    ``FIXTURES_DIR/<name>`` into a fresh temp dir and returns its path.
+    The temp dir is removed when the test finishes.
+
+    Using a temp copy (instead of running scans directly on the shared
+    fixture directory) prevents side-effects like ``.codelens/osv_cache.db``
+    from being written into the fixture and leaking into other tests.
+    """
+    copies: list = []
+
+    def _copy(name: str) -> str:
+        src = os.path.join(FIXTURES_DIR, name)
+        if not os.path.isdir(src):
+            pytest.skip(f"fixture {name!r} not available")
+        dst = tempfile.mkdtemp(prefix=f"codelens_vuln_{name}_")
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+        copies.append(dst)
+        return dst
+
+    yield _copy
+
+    for d in copies:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def _make_pkg(name="lodash", version="4.17.15", ecosystem="npm"):
     """Build an OSVPackage with a supported ecosystem by default."""
     return OSVPackage(name=name, version=version, ecosystem=ecosystem)
@@ -398,10 +427,10 @@ class TestMaxAge:
 class TestScanVulnerabilitiesCacheInfo:
     """End-to-end: ``scan_vulnerabilities()`` output includes ``cache_info``."""
 
-    def test_clean_app_no_deps_has_cache_info(self):
+    def test_clean_app_no_deps_has_cache_info(self, app_fixture_copy):
         """``clean_app`` has no dependency files → empty ``cache_info``."""
-        fixture = os.path.join(FIXTURES_DIR, "clean_app")
-        result = scan_vulnerabilities(fixture, offline=True)
+        workspace = app_fixture_copy("clean_app")
+        result = scan_vulnerabilities(workspace, offline=True)
         assert result["status"] == "ok"
         assert "cache_info" in result
         info = result["cache_info"]
@@ -410,10 +439,10 @@ class TestScanVulnerabilitiesCacheInfo:
         assert info["stale_packages"] == []
         assert info["ttl_hours"] == 24.0
 
-    def test_vulnerable_app_has_stale_cache_info(self):
+    def test_vulnerable_app_has_stale_cache_info(self, app_fixture_copy):
         """``vulnerable_app`` has npm deps; offline mode → all stale."""
-        fixture = os.path.join(FIXTURES_DIR, "vulnerable_app")
-        result = scan_vulnerabilities(fixture, offline=True)
+        workspace = app_fixture_copy("vulnerable_app")
+        result = scan_vulnerabilities(workspace, offline=True)
         assert result["status"] == "ok"
         assert "cache_info" in result
         info = result["cache_info"]
@@ -423,10 +452,10 @@ class TestScanVulnerabilitiesCacheInfo:
         # npm packages from vulnerable_app's package.json
         assert "lodash@4.17.15" in info["stale_packages"]
 
-    def test_cache_info_shape(self):
+    def test_cache_info_shape(self, app_fixture_copy):
         """``cache_info`` dict has exactly the keys specified in issue #30."""
-        fixture = os.path.join(FIXTURES_DIR, "clean_app")
-        result = scan_vulnerabilities(fixture, offline=True)
+        workspace = app_fixture_copy("clean_app")
+        result = scan_vulnerabilities(workspace, offline=True)
         info = result["cache_info"]
         expected_keys = {
             "last_refresh",
@@ -437,10 +466,10 @@ class TestScanVulnerabilitiesCacheInfo:
         }
         assert set(info.keys()) == expected_keys
 
-    def test_cache_info_is_additive(self):
+    def test_cache_info_is_additive(self, app_fixture_copy):
         """Adding cache_info must not remove or rename existing output keys."""
-        fixture = os.path.join(FIXTURES_DIR, "clean_app")
-        result = scan_vulnerabilities(fixture, offline=True)
+        workspace = app_fixture_copy("clean_app")
+        result = scan_vulnerabilities(workspace, offline=True)
         # Pre-issue-#30 output keys must still be present.
         for key in (
             "status",
