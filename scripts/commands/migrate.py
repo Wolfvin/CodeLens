@@ -4,7 +4,7 @@ import os
 from typing import Dict, Any
 
 from utils import logger
-from persistent_registry import PersistentRegistry, db_exists, is_sqlite_available
+from persistent_registry import PersistentRegistry, db_exists, db_is_populated, is_sqlite_available
 from commands import register_command
 
 
@@ -51,10 +51,16 @@ def cmd_migrate(workspace: str, db_path: str = None, verify: bool = False) -> Di
 
     # Step 2: Check if migration is needed
     effective_db_path = db_path or os.path.join(workspace, ".codelens", "codelens.db")
-    if os.path.exists(effective_db_path):
+    # Only skip if the db is actually populated. ``scan`` creates an empty
+    # db shell via ``store_scan_result`` (which writes to ``analysis_cache``
+    # but not ``symbols``), so a bare ``os.path.exists`` check here would
+    # skip the real JSON→SQLite migration and leave ``symbols`` empty —
+    # which in turn makes ``_registry_exists`` return False after the JSON
+    # files are deleted (issue #35).
+    if db_is_populated(effective_db_path):
         return {
             "status": "ok",
-            "message": "SQLite database already exists. Use --verify to check integrity.",
+            "message": "SQLite database already exists and is populated. Use --verify to check integrity.",
             "db_path": effective_db_path,
             "hint": "To re-migrate, delete the .codelens/codelens.db file first.",
         }

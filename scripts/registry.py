@@ -99,7 +99,15 @@ def save_config(workspace: str, config: Dict[str, Any]) -> None:
 
 
 def load_frontend_registry(workspace: str) -> Dict[str, Any]:
-    """Load frontend.json registry."""
+    """Load frontend.json registry, falling back to SQLite if missing.
+
+    JSON is the primary source (pre-migrate workspaces). When the JSON
+    file is absent — e.g., a migrated workspace whose JSON files were
+    deleted post-migrate (issue #35) — fall back to the SQLite cache
+    populated by ``PersistentRegistry.store_frontend_registry`` during
+    ``codelens migrate``. If neither source has data, return an empty
+    registry.
+    """
     path = os.path.join(get_codelens_dir(workspace), 'frontend.json')
     if os.path.exists(path):
         try:
@@ -107,6 +115,34 @@ def load_frontend_registry(workspace: str) -> Dict[str, Any]:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             logger.debug("Failed to parse frontend registry, returning empty", exc_info=True)
+    # JSON missing or unreadable — try the SQLite cache (issue #35).
+    return _load_frontend_registry_from_sqlite(workspace)
+
+
+def _load_frontend_registry_from_sqlite(workspace: str) -> Dict[str, Any]:
+    """Load the frontend registry from the SQLite cache, or empty if unavailable.
+
+    Used as a fallback when ``frontend.json`` is missing (e.g., deleted
+    after ``migrate``). Returns an empty registry if SQLite is unavailable,
+    the db doesn't exist, or the cache row is absent — so callers always
+    get a well-formed dict.
+    """
+    try:
+        from persistent_registry import PersistentRegistry, is_sqlite_available
+        if not is_sqlite_available():
+            return _empty_frontend_registry(workspace)
+        reg = PersistentRegistry(workspace)
+        cached = reg.load_frontend_registry()
+        reg.close()
+        if cached:
+            return cached
+    except Exception:
+        logger.debug("SQLite frontend registry fallback failed", exc_info=True)
+    return _empty_frontend_registry(workspace)
+
+
+def _empty_frontend_registry(workspace: str) -> Dict[str, Any]:
+    """Return an empty frontend registry with the expected schema."""
     return {
         "last_updated": "",
         "workspace": workspace,
@@ -128,7 +164,15 @@ def save_frontend_registry(workspace: str, data: Dict[str, Any]) -> None:
 
 
 def load_backend_registry(workspace: str) -> Dict[str, Any]:
-    """Load backend.json registry."""
+    """Load backend.json registry, falling back to SQLite if missing.
+
+    JSON is the primary source (pre-migrate workspaces). When the JSON
+    file is absent — e.g., a migrated workspace whose JSON files were
+    deleted post-migrate (issue #35) — fall back to the SQLite cache
+    populated by ``PersistentRegistry.store_backend_registry`` during
+    ``codelens migrate``. If neither source has data, return an empty
+    registry.
+    """
     path = os.path.join(get_codelens_dir(workspace), 'backend.json')
     if os.path.exists(path):
         try:
@@ -136,6 +180,34 @@ def load_backend_registry(workspace: str) -> Dict[str, Any]:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             logger.debug("Failed to parse backend registry, returning empty", exc_info=True)
+    # JSON missing or unreadable — try the SQLite cache (issue #35).
+    return _load_backend_registry_from_sqlite(workspace)
+
+
+def _load_backend_registry_from_sqlite(workspace: str) -> Dict[str, Any]:
+    """Load the backend registry from the SQLite cache, or empty if unavailable.
+
+    Used as a fallback when ``backend.json`` is missing (e.g., deleted
+    after ``migrate``). Returns an empty registry if SQLite is unavailable,
+    the db doesn't exist, or the cache row is absent — so callers always
+    get a well-formed dict.
+    """
+    try:
+        from persistent_registry import PersistentRegistry, is_sqlite_available
+        if not is_sqlite_available():
+            return _empty_backend_registry(workspace)
+        reg = PersistentRegistry(workspace)
+        cached = reg.load_backend_registry()
+        reg.close()
+        if cached:
+            return cached
+    except Exception:
+        logger.debug("SQLite backend registry fallback failed", exc_info=True)
+    return _empty_backend_registry(workspace)
+
+
+def _empty_backend_registry(workspace: str) -> Dict[str, Any]:
+    """Return an empty backend registry with the expected schema."""
     return {
         "last_updated": "",
         "workspace": workspace,

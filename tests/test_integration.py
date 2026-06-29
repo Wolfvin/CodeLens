@@ -1,5 +1,5 @@
 """
-Integration smoke tests for all 41 CodeLens commands.
+Integration smoke tests for all 64 CodeLens commands.
 
 Tests that every command:
 1. Runs without crash (valid JSON output)
@@ -276,9 +276,39 @@ class TestModuleStructure:
         assert os.path.isdir(os.path.join(SCRIPT_DIR, 'formatters'))
 
     def test_command_registry_has_all_commands(self):
+        """Strict regression sentinel for command count (issue #38).
+
+        The previous assertion (``>= 41``) was trivially satisfied and would
+        not catch silent command loss — every command could disappear and the
+        test would still pass. This strict assertion fails whenever the
+        command count changes in either direction.
+
+        When this test fails, it means a command was added or removed. To fix:
+
+        1. Confirm the change is intentional (you meant to add/remove a command).
+        2. Update ``EXPECTED_COMMAND_COUNT`` below to match the new count.
+        3. Run ``python3 scripts/sync_command_count.py --apply`` to propagate
+           the new count to all documentation and metadata files
+           (README.md, SKILL.md, SKILL-QUICK.md, pyproject.toml, skill.json,
+           scripts/mcp_server.py, scripts/graph_model.py, this file's docstring).
+        4. Re-run the test suite to confirm green.
+
+        The sentinel is intentionally a literal — it is the one place where
+        the count is allowed to be hardcoded, because the test's whole purpose
+        is to detect drift against a frozen reference.
+        """
         sys.path.insert(0, SCRIPT_DIR)
         from commands import COMMAND_REGISTRY
-        assert len(COMMAND_REGISTRY) >= 41, f"Expected at least 41 commands, got {len(COMMAND_REGISTRY)}"
+        # Regression sentinel — see docstring above for update procedure.
+        EXPECTED_COMMAND_COUNT = 64
+        actual = len(COMMAND_REGISTRY)
+        assert actual == EXPECTED_COMMAND_COUNT, (
+            f"Command count drift detected: expected {EXPECTED_COMMAND_COUNT}, "
+            f"got {actual}. If intentional: (1) update EXPECTED_COMMAND_COUNT "
+            f"in this test, (2) run "
+            f"`PYTHONPATH=scripts python3 scripts/sync_command_count.py --apply` "
+            f"to sync all docs/metadata."
+        )
 
     def test_fallback_parsers_exist(self):
         fallback_dir = os.path.join(SCRIPT_DIR, 'parsers')

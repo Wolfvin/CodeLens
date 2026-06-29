@@ -232,14 +232,38 @@ def resolve_workspace(workspace_arg: Optional[str] = None) -> str:
 # ─── Auto-Setup: Registry Bootstrap ────────────────────────────
 
 def _registry_exists(workspace: str) -> bool:
-    """Check if a valid registry exists for the workspace."""
+    """Check if a valid registry exists for the workspace.
+
+    A registry is considered valid when at least one of these is true:
+
+    1. A legacy JSON registry file exists (``backend.json`` or
+       ``frontend.json``) — the pre-migration state used by older
+       workspaces. Preserved so unmigrated workspaces keep working.
+    2. A populated SQLite database exists at ``.codelens/codelens.db``
+       — the post-migration state. "Populated" means the file exists
+       AND the ``symbols`` table has at least one row, so an empty or
+       corrupt db is NOT treated as a valid registry (issue #35).
+
+    Without path 2, a workspace that ran ``migrate`` and then deleted
+    its JSON files was treated as having no registry, triggering an
+    unnecessary ``init + scan`` on every command and discarding the
+    migrated SQLite data.
+    """
     codelens_dir = os.path.join(workspace, ".codelens")
     if not os.path.isdir(codelens_dir):
         return False
-    # Check for at least one registry file
+
+    # Path 1: legacy JSON registry — still works for unmigrated workspaces.
     backend_json = os.path.join(codelens_dir, "backend.json")
     frontend_json = os.path.join(codelens_dir, "frontend.json")
-    return os.path.exists(backend_json) or os.path.exists(frontend_json)
+    if os.path.exists(backend_json) or os.path.exists(frontend_json):
+        return True
+
+    # Path 2: migrated SQLite registry — must exist AND be populated,
+    # so an empty/corrupt db does not falsely satisfy the check (issue #35).
+    from persistent_registry import db_is_populated
+    db_path = os.path.join(codelens_dir, "codelens.db")
+    return db_is_populated(db_path)
 
 
 def _auto_setup(workspace: str) -> Dict[str, Any]:
@@ -780,8 +804,28 @@ def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, in
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
+    # Command count is derived from COMMAND_REGISTRY at runtime so it can never
+    # drift from the actual number of registered commands (issue #38). The
+    # `--command-count` flag below prints it for scripts / CI; the description
+    # also includes it so `--help` is self-documenting.
+    from commands import COMMAND_REGISTRY as _cli_registry_for_count
+    _command_count = len(_cli_registry_for_count)
+
     parser = argparse.ArgumentParser(
-        description=f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence (Tree-sitter Edition)"
+        description=(
+            f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence "
+            f"(Tree-sitter Edition). {_command_count} commands available; run "
+            f"`python3 scripts/codelens.py --command-count` to print just the count."
+        )
+    )
+    # Quick introspection flag — prints the runtime command count and exits.
+    # Used by tests / CI / sync_command_count.py to verify the registry size.
+    parser.add_argument(
+        "--command-count",
+        action="store_true",
+        default=False,
+        help="Print the runtime command count (len(COMMAND_REGISTRY)) and exit. "
+             "Single source of truth for issue #38 reconciliation.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -845,6 +889,14 @@ def main():
             print(format_output(status, _default_format, "lsp-status"))
         except Exception as e:
             print(json.dumps({"status": "error", "error": str(e)}, indent=2))
+        sys.exit(0)
+
+    # Handle --command-count as a special top-level flag (issue #38):
+    # prints just the runtime command count and exits. Used by tests, CI,
+    # and sync_command_count.py to verify the registry size without parsing
+    # the full --help output.
+    if "--command-count" in sys.argv:
+        print(_command_count)
         sys.exit(0)
 
     # Pre-parse to capture global flags before subparser overwrites them
