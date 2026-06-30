@@ -88,8 +88,6 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_diff(data, lines)
     elif command == "dependents":
         _md_dependents(data, lines)
-    elif command == "validate":
-        _md_validate(data, lines)
     elif command == "dataflow":
         _md_dataflow(data, lines)
     elif command == "test-map":
@@ -1214,40 +1212,6 @@ def _md_dependents(data: Dict, lines: list) -> None:
             lines.append(f"- `{t}`")
         if len(transitive) > 20:
             lines.append(f"- ... and {len(transitive) - 20} more")
-        lines.append("")
-
-
-def _md_validate(data: Dict, lines: list) -> None:
-    """Markdown for validate command."""
-    total = data.get("total_issues", 0)
-    summary = data.get("summary", {})
-    rec = data.get("recommendation", "")
-    lines.append("## Registry Validation")
-    lines.append("")
-    icon = "PASS" if total == 0 else "FAIL"
-    lines.append(f"**Status:** {icon} ({total} issues)")
-    lines.append("")
-    lines.append(f"- Missing files: {summary.get('missing_files', 0)}")
-    lines.append(f"- Unregistered files: {summary.get('unregistered_files', 0)}")
-    lines.append(f"- Stale references: {summary.get('stale_references', 0)}")
-    lines.append(f"- Orphan entries: {summary.get('orphan_entries', 0)}")
-    lines.append("")
-    issues = data.get("issues", {})
-    if issues:
-        for cat in ["missing_files", "unregistered_files", "stale_references", "orphan_entries"]:
-            items = issues.get(cat, [])
-            if items:
-                lines.append(f"### {cat.replace('_', ' ').title()}")
-                for item in items[:10]:
-                    if isinstance(item, dict):
-                        lines.append(f"- `{item.get('file', item.get('path', ''))}` — {item.get('reason', '')}")
-                    else:
-                        lines.append(f"- `{item}`")
-                if len(items) > 10:
-                    lines.append(f"- ... and {len(items) - 10} more")
-                lines.append("")
-    if rec:
-        lines.append(f"**Recommendation:** {rec}")
         lines.append("")
 
 

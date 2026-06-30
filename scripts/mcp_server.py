@@ -4,7 +4,7 @@ CodeLens MCP Server — Model Context Protocol server for AI agent integration.
 
 Implements the MCP specification (2025-03-26) over stdio (JSON-RPC 2.0).
 Provides persistent server mode with in-memory registry caching, sub-millisecond
-query latency after initial scan, and automatic tool discovery for all 64 CodeLens commands.
+query latency after initial scan, and automatic tool discovery for all 63 CodeLens commands.
 
 Usage:
     python3 codelens.py serve                        # Start MCP server (stdio transport)
@@ -653,19 +653,6 @@ _TOOL_DEFINITIONS = {
     },
     "diff": {
         "description": "Compare registry snapshots to detect codebase changes over time.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "workspace": {
-                    "type": "string",
-                    "description": "Path to workspace root directory"
-                }
-            },
-            "required": ["workspace"]
-        }
-    },
-    "validate": {
-        "description": "Validate registry against file system. Detect stale registry entries.",
         "parameters": {
             "type": "object",
             "properties": {
