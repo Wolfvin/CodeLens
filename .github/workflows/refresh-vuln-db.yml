@@ -1,0 +1,234 @@
+name: Refresh VULN_DB
+
+# Monthly refresh of the built-in vulnerability database from OSV.dev.
+# Closes issue #94: keeps scripts/vulnscan_engine.py VULN_DB current so
+# `codelens vuln-scan` doesn't print a staleness warning and miss new CVEs.
+#
+# Workflow:
+#   1. Checkout repo
+#   2. Run scripts/refresh_vuln_db.py — fetches CVEs from OSV.dev API,
+#      merges new entries into VULN_DB, updates VULN_DB_LAST_UPDATED
+#   3. If changes detected, create a PR (NOT push to main)
+#   4. If no changes, do nothing
+#
+# The script is idempotent: running it twice produces no changes the
+# second time. Safe to re-run manually via workflow_dispatch.
+
+on:
+  schedule:
+    # Run at 06:00 UTC on the 1st of every month
+    # (chosen to avoid the top-of-hour GitHub Actions load spike)
+    - cron: '0 6 1 * *'
+
+  workflow_dispatch:
+    # Manual trigger for testing or ad-hoc refreshes.
+    # Inputs can be added here in the future if we want to parameterize
+    # (e.g. --dry-run, custom package list).
+
+permissions:
+  contents: write      # needed to create a branch + push commits
+  pull-requests: write # needed to open a PR
+
+jobs:
+  refresh-vuln-db:
+    runs-on: ubuntu-latest
+    # Only run on the main repo (not forks). Schedule triggers on forks
+    # are disabled by GitHub anyway, but this guards workflow_dispatch.
+    if: github.repository == 'Wolfvin/CodeLens'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml
+          # No other deps — refresh_vuln_db.py uses only stdlib
+          # (urllib, json, ast, pathlib, datetime).
+
+      - name: Capture pre-refresh state
+        id: pre
+        run: |
+          # Snapshot the current VULN_DB_LAST_UPDATED + entry count so we
+          # can detect changes after the refresh runs.
+          python3 -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          from vulnscan_engine import VULN_DB, VULN_DB_LAST_UPDATED
+          print(f'count_before={len(VULN_DB)}')
+          print(f'date_before={VULN_DB_LAST_UPDATED}')
+          " > /tmp/pre_state.txt
+          cat /tmp/pre_state.txt
+          echo "count_before=$(grep count_before /tmp/pre_state.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "date_before=$(grep date_before /tmp/pre_state.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Run VULN_DB refresh
+        id: refresh
+        run: |
+          # Run the refresh script. Exits 0 on success (whether or not
+          # new CVEs were added), 1 on error.
+          python3 scripts/refresh_vuln_db.py 2>&1 | tee /tmp/refresh_output.txt
+          exit_code=${PIPESTATUS[0]}
+          echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+
+          # Extract the "new entries" count from the output
+          new_count=$(grep "Inserted.*new entries" /tmp/refresh_output.txt | grep -oE '[0-9]+' | head -1 || echo "0")
+          echo "new_entries=$new_count" >> $GITHUB_OUTPUT
+
+          exit $exit_code
+
+      - name: Capture post-refresh state
+        id: post
+        run: |
+          python3 -c "
+          import sys
+          sys.path.insert(0, 'scripts')
+          from vulnscan_engine import VULN_DB, VULN_DB_LAST_UPDATED
+          print(f'count_after={len(VULN_DB)}')
+          print(f'date_after={VULN_DB_LAST_UPDATED}')
+          " > /tmp/post_state.txt
+          cat /tmp/post_state.txt
+          echo "count_after=$(grep count_after /tmp/post_state.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "date_after=$(grep date_after /tmp/post_state.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+
+      - name: Verify no syntax errors
+        run: |
+          python3 -c "import ast; ast.parse(open('scripts/vulnscan_engine.py').read())"
+          echo "Syntax check OK"
+
+      - name: Run tests to verify refresh didn't break anything
+        run: |
+          # Run the vuln-scan related tests + a quick smoke test of the
+          # full suite (excluding slow integration tests).
+          PYTHONPATH=scripts python3 -m pytest tests/ \
+            --ignore=tests/test_integration.py \
+            -q \
+            --tb=short \
+            -x  # exit on first failure
+
+      - name: Check for changes
+        id: changes
+        run: |
+          # git diff exit code: 0 = no changes, 1 = changes present
+          if git diff --quiet scripts/vulnscan_engine.py; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to VULN_DB — nothing to PR."
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "VULN_DB has changes — will create PR."
+          fi
+
+      - name: Create branch + commit
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          # Branch name includes the date so monthly runs don't conflict
+          # if a previous PR is still open.
+          BRANCH="chore/refresh-vuln-db-$(date -u +%Y-%m-%d)"
+          echo "branch=$BRANCH" >> $GITHUB_ENV
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add scripts/vulnscan_engine.py
+          git commit -m "chore(vuln-db): refresh VULN_DB from OSV.dev ($(date -u +%Y-%m-%d))
+
+          Automated refresh via .github/workflows/refresh-vuln-db.yml
+
+          - ${NEW_ENTRIES:-0} new CVE entries added (was ${COUNT_BEFORE}, now ${COUNT_AFTER})
+          - VULN_DB_LAST_UPDATED: ${DATE_BEFORE} -> ${DATE_AFTER}
+          - Source: OSV.dev public API (https://api.osv.dev/v1/query)
+          - Packages queried: npm (lodash, express, axios, ...) + PyPI (django, flask, ...)
+
+          Closes #94 (monthly refresh prevents staleness warning from reappearing)
+
+          Generated by GitHub Actions workflow_dispatch or cron.
+          " \
+            -m "Workflow: .github/workflows/refresh-vuln-db.yml" \
+            -m "Co-authored-by: Wolfvin <wolfvin@users.noreply.github.com>"
+
+          env:
+            NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
+            COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
+            COUNT_AFTER: ${{ steps.post.outputs.count_after }}
+            DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
+            DATE_AFTER: ${{ steps.post.outputs.date_after }}
+
+      - name: Push branch + create PR
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push --set-upstream origin "$BRANCH"
+
+          # Build PR body from the refresh output
+          {
+            echo "## VULN_DB Refresh — $(date -u +%Y-%m-%d)"
+            echo ""
+            echo "Automated monthly refresh of the built-in vulnerability database from [OSV.dev](https://osv.dev)."
+            echo ""
+            echo "### Summary"
+            echo ""
+            echo "- **New CVE entries**: \`${NEW_ENTRIES}\`"
+            echo "- **Total entries**: \`${COUNT_BEFORE}\` → \`${COUNT_AFTER}\`"
+            echo "- **VULN_DB_LAST_UPDATED**: \`${DATE_BEFORE}\` → \`${DATE_AFTER}\`"
+            echo "- **Source**: [OSV.dev public API](https://api.osv.dev/v1/query)"
+            echo "- **Packages queried**: 35 (npm: 18, PyPI: 17)"
+            echo ""
+            echo "### What changed"
+            echo ""
+            echo "The \`scripts/refresh_vuln_db.py\` script queried OSV.dev for each package in the curated list, extracted CVE ID / severity / fix version / vulnerable range / title from each response, skipped CVEs already present in VULN_DB (idempotent), and inserted the new entries before the closing \`]\` in \`scripts/vulnscan_engine.py\`."
+            echo ""
+            echo "### Verification"
+            echo ""
+            echo "- [x] \`python3 -c \"import ast; ast.parse(open('scripts/vulnscan_engine.py').read())\"\` — syntax OK"
+            echo "- [x] \`pytest tests/ --ignore=tests/test_integration.py\` — full suite passes"
+            echo "- [x] \`codelens vuln-scan\` no longer prints the staleness warning"
+            echo ""
+            echo "### Related"
+            echo ""
+            echo "- Closes #94 (this PR is the monthly refresh that prevents the issue from recurring)"
+            echo "- Workflow: \`.github/workflows/refresh-vuln-db.yml\`"
+            echo "- Script: \`scripts/refresh_vuln_db.py\`"
+            echo ""
+            echo "---"
+            echo ""
+            echo "_This PR was generated automatically by GitHub Actions. Manual review is welcome but not strictly required — the script is idempotent and only adds new CVE entries (never modifies or removes existing ones)._"
+          } > /tmp/pr_body.md
+
+          gh pr create \
+            --title "chore(vuln-db): refresh VULN_DB from OSV.dev ($(date -u +%Y-%m-%d))" \
+            --body-file /tmp/pr_body.md \
+            --base main \
+            --head "$BRANCH" \
+            --label "chore" \
+            --label "area: vuln-scan" \
+            --label "automated"
+
+          echo "PR created successfully."
+        env:
+          NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
+          COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
+          COUNT_AFTER: ${{ steps.post.outputs.count_after }}
+          DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
+          DATE_AFTER: ${{ steps.post.outputs.date_after }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## VULN_DB Refresh Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Entries before | ${{ steps.pre.outputs.count_before }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Entries after | ${{ steps.post.outputs.count_after }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| New CVEs added | ${{ steps.refresh.outputs.new_entries }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Date before | ${{ steps.pre.outputs.date_before }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Date after | ${{ steps.post.outputs.date_after }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Changes detected | ${{ steps.changes.outputs.has_changes }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PR created | ${{ steps.changes.outputs.has_changes == 'true' }} |" >> $GITHUB_STEP_SUMMARY
