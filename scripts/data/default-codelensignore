@@ -1,0 +1,44 @@
+# CodeLens default ignore patterns (issue #55)
+# Loaded as the lowest-priority tier of the 3-tier .codelensignore system:
+#   1. Workspace:  <project_root>/.codelensignore   (highest priority)
+#   2. User:       ~/.codelensignore
+#   3. Builtin:    scripts/data/default-codelensignore  (this file)
+#
+# Format: gitignore-spec syntax (see https://git-scm.com/docs/gitignore).
+# `!` negations in higher tiers override patterns in lower tiers.
+#
+# This file intentionally mirrors the historical DEFAULT_IGNORE_DIRS set from
+# utils.py so behavior is preserved when no workspace/user overrides exist.
+
+# ── Directories ────────────────────────────────────────────────
+node_modules/
+.git/
+__pycache__/
+.venv/
+venv/
+dist/
+build/
+.codelens/
+target/
+.next/
+.nuxt/
+.cache/
+vendor/
+env/
+.idea/
+.vscode/
+_archive/
+coverage/
+.pytest_cache/
+.tox/
+bin/
+obj/
+.terraform/
+.cargo/
+.rustup/
+storybook-static/
+.storybook/
+
+# ── File globs ─────────────────────────────────────────────────
+*.pyc
+*.pyo

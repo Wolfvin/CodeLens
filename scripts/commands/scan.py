@@ -12,6 +12,14 @@ from registry import (
     load_backend_registry, save_backend_registry,
     build_frontend_registry
 )
+# 3-tier .codelensignore support (issue #55). Module imports pathspec
+# lazily and gracefully degrades to fnmatch if pathspec is unavailable.
+try:
+    from codelensignore import is_ignored as _codelensignore_is_ignored
+    from codelensignore import suggest_ignore_directories as _suggest_ignore_dirs
+except ImportError:  # pragma: no cover — defensive: module lives in scripts/
+    _codelensignore_is_ignored = None
+    _suggest_ignore_dirs = None
 from framework_detect import detect_frameworks, get_recommended_config
 from incremental import (
     find_changed_files, update_mtimes_cache, remove_from_mtimes_cache,
@@ -55,10 +63,18 @@ def add_args(parser):
     parser.add_argument("--max-files", type=int, default=None,
                         help="Cap total files scanned (default: unlimited). "
                              "Used by auto-setup to prevent timeout on huge repos.")
+    parser.add_argument("--suggest-ignore", action="store_true",
+                        help="Print the top-10 largest directories (by total file "
+                             "size) that are NOT currently ignored by .codelensignore. "
+                             "Does not perform a scan; useful for tuning ignore rules.")
 
 
 def execute(args, workspace):
     """Execute the scan command."""
+    # --suggest-ignore short-circuits the normal scan flow.
+    if getattr(args, 'suggest_ignore', False):
+        return _run_suggest_ignore(workspace)
+
     incremental = getattr(args, 'incremental', False)
     plugins = getattr(args, 'plugins', None)
     max_files = getattr(args, 'max_files', None)
@@ -68,6 +84,34 @@ def execute(args, workspace):
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
     return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files)
+
+
+def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
+    """Handle ``scan --suggest-ignore`` — print top-10 largest non-ignored dirs.
+
+    Returns a dict suitable for the CLI formatter. Walks the workspace once,
+    sums per-directory file sizes (non-recursively), and returns the largest
+    directories not matched by the 3-tier ``.codelensignore`` system.
+    """
+    workspace = os.path.abspath(workspace)
+    if _suggest_ignore_dirs is None:  # pragma: no cover — defensive
+        return {
+            "status": "error",
+            "workspace": workspace,
+            "error": "codelensignore module unavailable",
+        }
+    top = _suggest_ignore_dirs(workspace, top_n=10)
+    return {
+        "status": "ok",
+        "workspace": workspace,
+        "command": "scan --suggest-ignore",
+        "suggestion_count": len(top),
+        "suggestions": top,
+        "hint": (
+            "Add these paths to .codelensignore (workspace or ~/.codelensignore) "
+            "to skip them in future scans."
+        ),
+    }
 
 
 def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None,
@@ -1240,8 +1284,15 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
     for root, dirs, filenames in os.walk(workspace):
         rel_root = os.path.relpath(root, workspace)
-        
+
         if should_ignore(rel_root, config):
+            dirs.clear()
+            continue
+
+        # 3-tier .codelensignore check (issue #55). Augments the existing
+        # config-based should_ignore() above; builtin patterns cover the
+        # historical DEFAULT_IGNORE_DIRS set so backward compat is preserved.
+        if _codelensignore_is_ignored is not None and _codelensignore_is_ignored(rel_root, workspace):
             dirs.clear()
             continue
 
@@ -1254,6 +1305,10 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
             rel_path = os.path.relpath(file_path, workspace)
 
             if should_ignore(rel_path, config):
+                continue
+
+            # 3-tier .codelensignore check for individual files.
+            if _codelensignore_is_ignored is not None and _codelensignore_is_ignored(rel_path, workspace):
                 continue
 
             ext = os.path.splitext(filename)[1].lower()
