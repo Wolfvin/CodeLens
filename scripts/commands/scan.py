@@ -1616,6 +1616,23 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
                 files["ruby"].append(file_path)
             elif filename == 'mix.exs':
                 files["elixir"].append(file_path)
+            else:
+                # ─── Issue #18: universal grammar loader fallback ──────
+                # For extensions/filenames not in the curated dispatch
+                # above, defer to ``universal_grammar_loader.detect_language``.
+                # Detected files are bucketed under their canonical language
+                # name (e.g. ``sql``, ``yaml``, ``toml``, ``terraform`` …)
+                # so downstream consumers can pick them up without modifying
+                # this hardcoded chain. Files with no detectable language
+                # are silently skipped (graceful degradation).
+                try:
+                    from universal_grammar_loader import detect_language as _detect_lang
+                except ImportError:  # pragma: no cover — module lives in scripts/
+                    _detect_lang = None
+                if _detect_lang is not None:
+                    detected = _detect_lang(file_path)
+                    if detected:
+                        files.setdefault(detected, []).append(file_path)
 
     return files
 

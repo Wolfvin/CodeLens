@@ -58,8 +58,17 @@ def _attach_baseline_confidence(result: Dict[str, Any], query_name: str, workspa
     user later passes ``--deep``, ``codelens.py`` post-processing calls
     ``enhance_query`` again with ``deep=True`` and may override this to HIGH or
     LOW based on LSP verification.
+
+    Even when the queried name is not found, we attach a default
+    ``confidence: "medium"`` so consumers always see the field (the response
+    still carries ``found: False`` so callers can distinguish).
     """
-    if not isinstance(result, dict) or not result.get("found"):
+    if not isinstance(result, dict):
+        return
+    if not result.get("found"):
+        # Name not in registry — still expose a baseline confidence so the
+        # response shape is stable for consumers expecting the field.
+        result.setdefault("confidence", "medium")
         return
     try:
         from hybrid_engine import create_hybrid_engine
