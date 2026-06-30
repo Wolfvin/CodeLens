@@ -24,7 +24,7 @@ the engine itself from becoming a secret-leaking vector.
 import os
 import re
 import math
-import signal
+import concurrent.futures
 from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
@@ -45,9 +45,41 @@ class _RegexTimeout(Exception):
     pass
 
 
-def _regex_timeout_handler(signum, frame):
-    """Signal handler for regex timeout."""
-    raise _RegexTimeout("Regex matching timed out")
+# Code-file extensions that also qualify for entropy-based scanning.
+# Centralised here so the timeout helper below is the single source of truth.
+_ENTROPY_EXTENSIONS = frozenset(
+    {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}
+)
+
+
+def _scan_file_with_timeout(content, rel_path, ext, is_test):
+    """Run pattern + entropy scanning for one file with a hard timeout.
+
+    Uses a worker thread via ``concurrent.futures.ThreadPoolExecutor`` so the
+    timeout works on Windows as well as POSIX. ``signal.SIGALRM`` is
+    POSIX-only and raises ``AttributeError`` on Windows, which previously
+    crashed ``codelens secrets`` on that platform. If scanning exceeds
+    ``PER_FILE_REGEX_TIMEOUT`` seconds, ``_RegexTimeout`` is raised and the
+    caller skips the file. The worker thread is a daemon on Python 3.9+ and
+    self-terminates when the (slow) regex eventually completes, so it does
+    not block process exit on modern Python.
+    """
+    def _do_scan():
+        file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
+        if ext in _ENTROPY_EXTENSIONS:
+            file_findings = file_findings + _scan_file_entropy(
+                content, rel_path, ext, is_test
+            )
+        return file_findings
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_do_scan)
+    try:
+        return future.result(timeout=PER_FILE_REGEX_TIMEOUT)
+    except concurrent.futures.TimeoutError:
+        raise _RegexTimeout()
+    finally:
+        executor.shutdown(wait=False)
 
 # ─── Configuration ─────────────────────────────────────────────
 
@@ -524,33 +556,14 @@ def detect_secrets(
             if _is_credential_template_file(rel_path, content):
                 continue
 
-            # Scan for patterns with per-file timeout protection
+            # Scan for patterns with per-file timeout protection.
+            # The timeout is enforced via a worker thread (cross-platform);
+            # see _scan_file_with_timeout for details.
             try:
-                # Set a per-file timeout to prevent catastrophic regex backtracking
-                old_handler = signal.signal(signal.SIGALRM, _regex_timeout_handler)
-                signal.alarm(PER_FILE_REGEX_TIMEOUT)
-                try:
-                    file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
-                    findings.extend(file_findings)
-
-                    # Entropy-based scanning for code files
-                    if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                        entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
-                        findings.extend(entropy_findings)
-                finally:
-                    signal.alarm(0)  # Cancel the alarm
-                    signal.signal(signal.SIGALRM, old_handler)
+                findings.extend(_scan_file_with_timeout(content, rel_path, ext, is_test))
             except _RegexTimeout:
                 skipped_regex_timeout += 1
                 logger.debug(f"Skipped {rel_path}: regex matching timed out ({PER_FILE_REGEX_TIMEOUT}s)")
-            except (OSError, ValueError):
-                # Signal may not be available on all platforms (e.g., Windows)
-                # Fall back to scanning without timeout
-                file_findings = _scan_file_patterns(content, rel_path, ext, is_test)
-                findings.extend(file_findings)
-                if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".py", ".rs"}:
-                    entropy_findings = _scan_file_entropy(content, rel_path, ext, is_test)
-                    findings.extend(entropy_findings)
 
     # ─── Phase 2: .env file scanning ──────────────────────────
     env_files = _scan_env_files(workspace)
