@@ -1,5 +1,5 @@
 """
-Integration smoke tests for all 65 CodeLens commands.
+Integration smoke tests for all 66 CodeLens commands.
 
 Tests that every command:
 1. Runs without crash (valid JSON output)

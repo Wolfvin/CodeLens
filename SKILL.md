@@ -1,10 +1,10 @@
 ---
 name: codelens
 description: >
-  CodeLens — AI-Native Code Intelligence. 65 commands for AI-powered code analysis,
+  CodeLens — AI-Native Code Intelligence. 66 commands for AI-powered code analysis,
   security auditing, quality scoring, AST-based taint analysis, live CVE scanning,
   and pre-write safety checks. Supports 28+ languages with tree-sitter + regex
-  fallback parsing. MCP server exposes 63 tools for AI agent integration.
+  fallback parsing. MCP server exposes 64 tools for AI agent integration.
   For quick command reference with validated output schemas, see SKILL-QUICK.md.
   For version history, see CHANGELOG.md.
 ---
