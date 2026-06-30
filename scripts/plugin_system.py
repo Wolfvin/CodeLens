@@ -520,7 +520,7 @@ def _parse_single_rule(data: Dict, plugin_name: str, file_path: str) -> Optional
         logger.debug(f"Skipping rule without id in {file_path}")
         return None
 
-    return PluginRule(
+    rule = PluginRule(
         id=str(rule_id),
         name=str(data.get("name", rule_id)),
         severity=str(data.get("severity", "info")),
@@ -536,6 +536,7 @@ def _parse_single_rule(data: Dict, plugin_name: str, file_path: str) -> Optional
         plugin_name=plugin_name,
         file_path=file_path,
     )
+    return rule
 
 
 # ─── Plugin Manager ──────────────────────────────────────────

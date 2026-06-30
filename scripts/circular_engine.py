@@ -420,8 +420,10 @@ def _classify_cycle_source(chain_files: List[str]) -> str:
     # Check if all files are in core directories (src/, lib/)
     def _is_core_path(f: str) -> bool:
         norm = '/' + f if not f.startswith('/') else f
-        return any(d in norm for d in ('/src/', '/lib/')) or \
-               any(f.startswith(d) for d in ('src/', 'lib/'))
+        return (
+            any(d in norm for d in ('/src/', '/lib/'))
+            or any(f.startswith(d) for d in ('src/', 'lib/'))
+        )
 
     all_core = all(_is_core_path(f) for f in chain_files)
 
