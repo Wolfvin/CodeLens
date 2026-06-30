@@ -13,7 +13,7 @@ NON-BREAKING by design:
 - New tables `graph_nodes` and `graph_edges` are additive (prefixed `graph_`
   to avoid colliding with any existing table name).
 - The flat registry tables and JSON files are untouched.
-- All 63 existing CLI commands continue to work unchanged.
+- All 65 existing CLI commands continue to work unchanged.
 
 Schema:
     graph_nodes(
