@@ -17,6 +17,7 @@ Usage::
     codelens rule-validate scripts/rules/python_security.yaml
     codelens rule-validate --strict scripts/rules/*.yaml
     codelens rule-validate --json scripts/rules/python_security.yaml
+    codelens rule-validate scripts/rules/   # validate every rule file in a directory
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ def add_args(parser):
     parser.add_argument(
         "rule_path",
         nargs="+",
-        help="Path(s) to rule YAML file(s) to validate (one or more)",
+        help="Path(s) to rule YAML file(s) to validate, or directory(ies) of rule files",
     )
     parser.add_argument(
         "--strict",
@@ -152,16 +153,36 @@ def execute(args, workspace):
         ``output`` string (human or JSON).
     """
     # Expand and deduplicate paths. ``args.rule_path`` is a list (nargs="+").
+    # Each entry may be either a single rule file OR a directory of rule files
+    # (issue #97): when a directory is given, enumerate the ``*.yaml``/``*.yml``
+    # rule files inside it rather than trying to ``open()`` the directory
+    # itself — ``read_text()`` on a directory raises ``IsADirectoryError`` on
+    # Linux/macOS and ``PermissionError`` on Windows.
     paths: List[Path] = []
     seen: set = set()
     for raw in args.rule_path:
         # Expand ``~`` and resolve to absolute. We don't follow symlinks
         # here — a missing file is reported as a validation error below.
         p = Path(os.path.expanduser(raw)).resolve()
-        if p in seen:
-            continue
-        seen.add(p)
-        paths.append(p)
+
+        if p.is_dir():
+            # Directory → enumerate rule files inside it (recursive, matching
+            # rule-test's behavior). Skip ``.test.yaml``/``.test.yml`` (test
+            # fixtures with a different schema) and hidden/dotfiles.
+            for entry in sorted(p.rglob("*.y*ml")):
+                if entry.name.endswith((".test.yaml", ".test.yml")):
+                    continue
+                if entry.name.startswith("."):
+                    continue
+                if entry in seen:
+                    continue
+                seen.add(entry)
+                paths.append(entry)
+        else:
+            if p in seen:
+                continue
+            seen.add(p)
+            paths.append(p)
 
     # Validate each path. Missing files produce a single-error result
     # rather than crashing — the validator's ``_parse_yaml`` already
