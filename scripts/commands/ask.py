@@ -619,8 +619,11 @@ def _dispatch_command(command: str, args: dict, workspace: str) -> Dict[str, Any
         from refactor_safe_engine import check_refactor_safety
         return check_refactor_safety(args.get("name", ""), workspace)
     elif command == "artifact-scan":
-        from commands.artifact_scan import cmd_artifact_scan
-        return cmd_artifact_scan(workspace, deep=False)
+        # artifact-scan is now a deprecated alias for binary-scan (issue #98).
+        # Delegate to the merged handler so the ask command stays consistent
+        # with the CLI surface.
+        from commands.binary_scan import cmd_binary_scan
+        return cmd_binary_scan(workspace, deep=False)
     else:
         return {"status": "error", "message": f"Unknown command: {command}"}
 
