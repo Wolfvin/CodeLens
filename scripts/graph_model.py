@@ -270,21 +270,6 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         # init_graph_schema already logged; continue anyway
         pass
 
-    # Wipe existing CALLS rows so re-scans don't accumulate duplicates.
-    # Only CALLS edges are managed by populate_graph_tables (they come
-    # from the flat backend registry). Other edge types (IMPORTS, etc.)
-    # are managed by their own builders and must survive re-population.
-    try:
-        conn.execute(
-            "DELETE FROM {} WHERE edge_type = 'CALLS'".format(GRAPH_EDGES_TABLE)
-        )
-        conn.execute("DELETE FROM {}".format(GRAPH_NODES_TABLE))
-    except sqlite3.Error as e:
-        logger.warning(f"populate_graph_tables: clear error: {e}")
-        conn.rollback()
-        conn.close()
-        return {"nodes": 0, "edges": 0}
-
     node_rows: List[Tuple[Any, ...]] = []
     for node in flat_nodes:
         node_id = node.get("id", "")
@@ -340,7 +325,31 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
             src_file, src_line, confidence, extra_json,
         ))
 
+    # ── Issue #10: RAM-first indexing — batch write in a single
+    # ``BEGIN EXCLUSIVE`` transaction. The node_rows + edge_rows are
+    # collected fully in memory (above) BEFORE opening the transaction;
+    # SQLite then holds an EXCLUSIVE write lock for the shortest possible
+    # window: one DELETE pass + one ``executemany`` for nodes + one for
+    # edges, all committed atomically. This replaces the previous flow
+    # where the schema-clear and the inserts lived in separate implicit
+    # transactions, doubling the lock-cycle count and interleaving
+    # poorly with concurrent readers.
+    #
+    # We disable the sqlite3 module's implicit BEGIN (isolation_level=None)
+    # so we can issue the EXCLUSIVE lock explicitly before any DML —
+    # otherwise the first DELETE would trigger a deferred BEGIN and the
+    # EXCLUSIVE upgrade would happen later under contention.
     try:
+        conn.isolation_level = None  # autocommit; we manage BEGIN/COMMIT
+        conn.execute("BEGIN EXCLUSIVE")
+        # Wipe existing CALLS rows so re-scans don't accumulate duplicates.
+        # Only CALLS edges are managed by populate_graph_tables (they come
+        # from the flat backend registry). Other edge types (IMPORTS, etc.)
+        # are managed by their own builders and must survive re-population.
+        conn.execute(
+            "DELETE FROM {} WHERE edge_type = 'CALLS'".format(GRAPH_EDGES_TABLE)
+        )
+        conn.execute("DELETE FROM {}".format(GRAPH_NODES_TABLE))
         if node_rows:
             conn.executemany(
                 "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
@@ -353,10 +362,13 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
                 "VALUES (?, ?, ?, ?, ?, ?, ?)".format(t=GRAPH_EDGES_TABLE),
                 edge_rows,
             )
-        conn.commit()
+        conn.execute("COMMIT")
     except sqlite3.Error as e:
-        logger.warning(f"populate_graph_tables: insert error: {e}")
-        conn.rollback()
+        logger.warning(f"populate_graph_tables: batch write error: {e}")
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
         conn.close()
         return {"nodes": 0, "edges": 0}
 
@@ -494,6 +506,13 @@ def incremental_graph_update(
     edges_refined = 0
     edges_unresolved = 0
 
+    # ── Issue #10: RAM-first indexing — collect all rows in memory
+    # BEFORE opening the write transaction. The SELECT in step 1 reads
+    # stale node_ids (a read-only operation that doesn't need an
+    # EXCLUSIVE lock); the rows for steps 4 + 5 are built entirely from
+    # the in-memory flat registry (loaded above). Only when all rows are
+    # ready do we open ``BEGIN EXCLUSIVE`` and run the DELETE + INSERT
+    # batch in one atomic transaction, minimizing lock duration.
     try:
         # ── Step 1: Identify stale node ids ──────────────────────
         # These are nodes whose file is in the changed set. Their ids
@@ -510,46 +529,9 @@ def incremental_graph_update(
         )
         affected_node_ids: Set[str] = {row[0] for row in cursor.fetchall()}
 
-        # ── Step 2: Delete affected edges ────────────────────────
-        # An edge is affected if ANY of:
-        #   - its originating file (`file` column) is in the changed set
-        #     (covers CALLS edges from changed files + IMPORTS edges
-        #     whose importer changed), OR
-        #   - its source_id references a stale node (covers the rare
-        #     case where a CALLS edge has a file column value that
-        #     doesn't match its source_id's file — defensive), OR
-        #   - its target_id references a stale node (covers cross-file
-        #     edges from an unchanged file into a changed file — the
-        #     target may have been renamed/moved, so the edge must be
-        #     dropped and re-resolved from the flat registry).
-        if affected_node_ids:
-            ph_nodes = ",".join("?" for _ in affected_node_ids)
-            params_nodes = tuple(affected_node_ids)
-            conn.execute(
-                "DELETE FROM {t} WHERE file IN ({phf}) "
-                "OR source_id IN ({phn}) "
-                "OR target_id IN ({phn})".format(
-                    t=GRAPH_EDGES_TABLE, phf=ph_files, phn=ph_nodes
-                ),
-                params_files + params_nodes + params_nodes,
-            )
-        else:
-            conn.execute(
-                "DELETE FROM {t} WHERE file IN ({phf})".format(
-                    t=GRAPH_EDGES_TABLE, phf=ph_files
-                ),
-                params_files,
-            )
-
-        # ── Step 3: Delete stale nodes ───────────────────────────
-        conn.execute(
-            "DELETE FROM {t} WHERE file IN ({phf})".format(
-                t=GRAPH_NODES_TABLE, phf=ph_files
-            ),
-            params_files,
-        )
-
-        # ── Step 4: Re-insert nodes from changed files ───────────
+        # ── Step 4 (pre-build): Re-insert nodes from changed files ──
+        # Built entirely from the in-memory flat registry — no DB reads
+        # inside the upcoming EXCLUSIVE transaction.
         node_rows: List[Tuple[Any, ...]] = []
         for node in flat_nodes:
             file_val = node.get("file", "")
@@ -573,14 +555,7 @@ def incremental_graph_update(
                 (node_id, node_type, name, file_val, line_val, extra_json)
             )
 
-        if node_rows:
-            conn.executemany(
-                "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
-                "VALUES (?, ?, ?, ?, ?, ?)".format(t=GRAPH_NODES_TABLE),
-                node_rows,
-            )
-
-        # ── Step 5: Re-insert CALLS edges touching changed files ─
+        # ── Step 5 (pre-build): Re-insert CALLS edges touching changed files ─
         # An edge qualifies for re-insertion if EITHER endpoint's file
         # (looked up via the flat registry's node_id → file map) is in
         # the changed set. Edges between two unchanged files are
@@ -644,6 +619,64 @@ def incremental_graph_update(
                 src_file, src_line, confidence, extra_json,
             ))
 
+        # ── Issue #10: single BEGIN EXCLUSIVE batch write ─────────
+        # All rows are now in memory. Open an EXCLUSIVE write lock and
+        # run steps 2 + 3 + 4-insert + 5-insert as one atomic batch:
+        # DELETE affected edges → DELETE stale nodes → INSERT new nodes
+        # → INSERT new edges, then COMMIT. Disabling isolation_level
+        # avoids the sqlite3 module's implicit deferred BEGIN so we get
+        # the EXCLUSIVE lock upfront (no upgrade deadlock risk).
+        conn.isolation_level = None  # autocommit; we manage BEGIN/COMMIT
+        conn.execute("BEGIN EXCLUSIVE")
+
+        # ── Step 2: Delete affected edges ────────────────────────
+        # An edge is affected if ANY of:
+        #   - its originating file (`file` column) is in the changed set
+        #     (covers CALLS edges from changed files + IMPORTS edges
+        #     whose importer changed), OR
+        #   - its source_id references a stale node (covers the rare
+        #     case where a CALLS edge has a file column value that
+        #     doesn't match its source_id's file — defensive), OR
+        #   - its target_id references a stale node (covers cross-file
+        #     edges from an unchanged file into a changed file — the
+        #     target may have been renamed/moved, so the edge must be
+        #     dropped and re-resolved from the flat registry).
+        if affected_node_ids:
+            ph_nodes = ",".join("?" for _ in affected_node_ids)
+            params_nodes = tuple(affected_node_ids)
+            conn.execute(
+                "DELETE FROM {t} WHERE file IN ({phf}) "
+                "OR source_id IN ({phn}) "
+                "OR target_id IN ({phn})".format(
+                    t=GRAPH_EDGES_TABLE, phf=ph_files, phn=ph_nodes
+                ),
+                params_files + params_nodes + params_nodes,
+            )
+        else:
+            conn.execute(
+                "DELETE FROM {t} WHERE file IN ({phf})".format(
+                    t=GRAPH_EDGES_TABLE, phf=ph_files
+                ),
+                params_files,
+            )
+
+        # ── Step 3: Delete stale nodes ───────────────────────────
+        conn.execute(
+            "DELETE FROM {t} WHERE file IN ({phf})".format(
+                t=GRAPH_NODES_TABLE, phf=ph_files
+            ),
+            params_files,
+        )
+
+        # ── Step 4 (insert): Re-insert nodes from changed files ──
+        if node_rows:
+            conn.executemany(
+                "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)".format(t=GRAPH_NODES_TABLE),
+                node_rows,
+            )
+
+        # ── Step 5 (insert): Re-insert CALLS edges touching changed files ─
         if edge_rows:
             conn.executemany(
                 "INSERT INTO {t} "
@@ -652,10 +685,13 @@ def incremental_graph_update(
                 edge_rows,
             )
 
-        conn.commit()
+        conn.execute("COMMIT")
     except sqlite3.Error as e:
         logger.warning("incremental_graph_update: db error: %s", e)
-        conn.rollback()
+        try:
+            conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
         conn.close()
         return zero_result
 

@@ -92,6 +92,19 @@ def add_args(parser):
     parser.add_argument("--verbose", action="store_true", default=False,
                         help="Print prefilter statistics and other diagnostic "
                              "information to stderr (issue #56).")
+    # Issue #10: RAM-first indexing — print a one-line timing breakdown
+    # to stderr after the scan completes. Off by default so the default
+    # scan output is byte-identical to the pre-#10 behavior (backward
+    # compat). The flag is a no-op for incremental scans that detect
+    # zero changes (no parse or write work happens in that case, so the
+    # stats line is suppressed).
+    parser.add_argument("--scan-stats", dest="scan_stats",
+                        action="store_true", default=False,
+                        help="Print scan timing breakdown to stderr after the "
+                             "scan completes (issue #10). Format: "
+                             "'Scan stats: N files, M nodes, K edges' + "
+                             "'Index time: Xs (parse: Ys, write: Zs)'. "
+                             "Off by default — does not affect scan output.")
 
 
 def execute(args, workspace):
@@ -105,13 +118,15 @@ def execute(args, workspace):
     max_files = getattr(args, 'max_files', None)
     use_prefilter = getattr(args, 'use_prefilter', True)
     verbose = getattr(args, 'verbose', False)
+    scan_stats = getattr(args, 'scan_stats', False)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
     return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files,
-                    use_prefilter=use_prefilter, verbose=verbose)
+                    use_prefilter=use_prefilter, verbose=verbose,
+                    scan_stats=scan_stats)
 
 
 def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
@@ -144,7 +159,7 @@ def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
 
 def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None,
              max_files: Optional[int] = None, use_prefilter: bool = True,
-             verbose: bool = False) -> Dict[str, Any]:
+             verbose: bool = False, scan_stats: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
 
@@ -157,6 +172,14 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     parsing. The prefilter is conservative (no false negatives) and a no-op
     when no rules are loaded.
     If verbose=True, print prefilter statistics to stderr.
+    If scan_stats=True (issue #10), print a one-line timing breakdown to
+    stderr after the scan completes:
+
+        Scan stats: 1240 files, 3091 nodes, 29285 edges
+        Index time: 2.3s (parse: 1.8s, write: 0.5s)
+
+    The breakdown is suppressed for incremental scans that detect zero
+    changes (no parse or write work happens in that case).
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -421,6 +444,16 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
             changed_files = set(changed + new)
 
     # Parsers are loaded lazily per-category below
+
+    # ─── Issue #10: RAM-first indexing — timing breakdown ──────────
+    # ``parse_start`` marks the entry into the file-parsing phase (HTML,
+    # CSS, JS, Rust, Python, etc.). ``parse_end`` is captured right
+    # before the graph-table write phase begins; ``write_end`` is
+    # captured after the post-scan refine pass (full scan) or after
+    # ``incremental_graph_update`` (incremental scan). The breakdown is
+    # only printed when the caller passes ``scan_stats=True`` — the
+    # default scan output stays byte-identical to the pre-#10 behavior.
+    _scan_stats_parse_start = time.perf_counter()
 
     # Parse HTML files
     html_data = []
@@ -1092,6 +1125,15 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         }
     save_backend_registry(workspace, backend_registry)
 
+    # ─── Issue #10: RAM-first indexing — parse phase end ─────────
+    # All file parsing (HTML, CSS, JS, Rust, Python, etc.) is complete
+    # and the flat registries are saved. The next phase writes the
+    # graph_nodes + graph_edges tables to SQLite in a single
+    # ``BEGIN EXCLUSIVE`` batch — that's the "write" portion of the
+    # scan-stats breakdown.
+    _scan_stats_parse_end = time.perf_counter()
+    _scan_stats_write_start = _scan_stats_parse_end
+
     # ─── Graph Data Model Population (issue #8 + #25) ────────────
     # After the flat backend registry is built, populate (full scan) or
     # incrementally update (incremental scan) the graph_nodes + graph_edges
@@ -1146,6 +1188,14 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
             }
         except Exception:
             logger.warning("Hybrid type resolution failed", exc_info=True)
+
+    # ─── Issue #10: RAM-first indexing — write phase end ─────────
+    # Both ``populate_graph_tables`` (full scan) and
+    # ``incremental_graph_update`` (incremental scan, includes an
+    # internal ``refine_call_edges`` call) are now complete. The
+    # ``write`` portion of the scan-stats breakdown covers all SQLite
+    # batch writes that happen after parsing.
+    _scan_stats_write_end = time.perf_counter()
 
     # ─── Git-aware scan bookmark (issue #14) ─────────────────────
     # After a successful scan, record the current HEAD SHA + branch so the
@@ -1323,6 +1373,51 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     if verbose and prefilter_stats is not None and prefilter_stats.checked > 0:
         import sys as _sys
         print(prefilter_stats.format_verbose_line(), file=_sys.stderr)
+
+    # ─── Issue #10: RAM-first indexing — scan-stats breakdown ───
+    # Print a two-line timing summary to stderr when ``--scan-stats`` was
+    # passed. The breakdown is suppressed for incremental scans that
+    # detected zero changes (no parse or write work happens in that
+    # case — ``_scan_stats_parse_start`` is set unconditionally at the
+    # top of the parse phase, but the no-changes short-circuit at L265
+    # returns before we get here, so we only need to guard against the
+    # ``changed_files is None`` case for incremental scans that DID
+    # reach this point with empty ``changed_files``).
+    #
+    # Output is to stderr so the default scan output (stdout JSON /
+    # formatted text) is byte-identical to the pre-#10 behavior.
+    if scan_stats:
+        _scan_stats_total_files = sum(
+            (count if isinstance(count, int) else 0)
+            for count in (result.get("files_scanned", {}) or {}).values()
+        )
+        _scan_stats_graph = result.get("graph", {}) or {}
+        _scan_stats_nodes = int(_scan_stats_graph.get("nodes", 0) or 0)
+        _scan_stats_edges = int(_scan_stats_graph.get("edges", 0) or 0)
+        _scan_stats_parse_s = max(
+            0.0, _scan_stats_parse_end - _scan_stats_parse_start
+        )
+        _scan_stats_write_s = max(
+            0.0, _scan_stats_write_end - _scan_stats_write_start
+        )
+        _scan_stats_total_s = _scan_stats_parse_s + _scan_stats_write_s
+        import sys as _scan_stats_sys
+        print(
+            "Scan stats: {f} files, {n} nodes, {e} edges".format(
+                f=_scan_stats_total_files,
+                n=_scan_stats_nodes,
+                e=_scan_stats_edges,
+            ),
+            file=_scan_stats_sys.stderr,
+        )
+        print(
+            "Index time: {t:.1f}s (parse: {p:.1f}s, write: {w:.1f}s)".format(
+                t=_scan_stats_total_s,
+                p=_scan_stats_parse_s,
+                w=_scan_stats_write_s,
+            ),
+            file=_scan_stats_sys.stderr,
+        )
 
     # Add plugin rules data if plugins were requested
     if plugin_rules_data is not None:
