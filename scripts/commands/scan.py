@@ -2,6 +2,7 @@
 
 import os
 import json
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
@@ -49,6 +50,16 @@ from parsers.fallback_gdscript import parse_gdscript_fallback
 from parsers.fallback_kotlin import parse_kotlin_fallback
 from parsers.fallback_objc import parse_objc_fallback
 
+# Issue #56: regex prefilter — skip files that definitely won't match any
+# rule before expensive tree-sitter parsing. Conservative: when in doubt,
+# scan the file. See scripts/prefilter.py for the guarantee contract.
+try:
+    from prefilter import build_prefilter, should_scan_file, PrefilterStats
+except ImportError:  # pragma: no cover — defensive: module lives in scripts/
+    build_prefilter = None
+    should_scan_file = None
+    PrefilterStats = None
+
 from commands import register_command
 
 
@@ -67,6 +78,20 @@ def add_args(parser):
                         help="Print the top-10 largest directories (by total file "
                              "size) that are NOT currently ignored by .codelensignore. "
                              "Does not perform a scan; useful for tuning ignore rules.")
+    # Issue #56: regex prefilter — skip files that definitely won't match
+    # any rule before tree-sitter parsing. Active by default (no-op when no
+    # rules are loaded). --no-prefilter disables it entirely.
+    parser.add_argument("--no-prefilter", dest="use_prefilter",
+                        action="store_false", default=True,
+                        help="Disable the regex prefilter (issue #56). By default "
+                             "the scan skips files that contain none of the literal "
+                             "tokens from loaded rules, before tree-sitter parsing. "
+                             "Pass this flag to force-parse every discovered file. "
+                             "The prefilter is conservative (no false negatives) — "
+                             "use this flag only for debugging or benchmarking.")
+    parser.add_argument("--verbose", action="store_true", default=False,
+                        help="Print prefilter statistics and other diagnostic "
+                             "information to stderr (issue #56).")
 
 
 def execute(args, workspace):
@@ -78,12 +103,15 @@ def execute(args, workspace):
     incremental = getattr(args, 'incremental', False)
     plugins = getattr(args, 'plugins', None)
     max_files = getattr(args, 'max_files', None)
+    use_prefilter = getattr(args, 'use_prefilter', True)
+    verbose = getattr(args, 'verbose', False)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files)
+    return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files,
+                    use_prefilter=use_prefilter, verbose=verbose)
 
 
 def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
@@ -115,7 +143,8 @@ def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
 
 
 def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] = None,
-             max_files: Optional[int] = None) -> Dict[str, Any]:
+             max_files: Optional[int] = None, use_prefilter: bool = True,
+             verbose: bool = False) -> Dict[str, Any]:
     """
     Scan the workspace and build/update the registry.
 
@@ -123,6 +152,11 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     If plugins is provided, load plugin rules for the scan.
     If max_files is provided and > 0, cap the total number of discovered files
     that get parsed (used by auto-setup to prevent timeout on huge repos).
+    If use_prefilter=True (default), apply the regex prefilter (issue #56) to
+    skip files that definitely won't match any loaded rule before tree-sitter
+    parsing. The prefilter is conservative (no false negatives) and a no-op
+    when no rules are loaded.
+    If verbose=True, print prefilter statistics to stderr.
     """
     workspace = os.path.abspath(workspace)
     config = load_config(workspace)
@@ -145,6 +179,74 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     # unchanged but parsing/registry-build cost is bounded.
     if max_files is not None and max_files > 0:
         files = _cap_discovered_files(files, max_files)
+
+    # ─── Issue #56: regex prefilter ──────────────────────────────
+    # Build a conservative regex prefilter from loaded rules and skip files
+    # that definitely won't match before expensive tree-sitter parsing.
+    # The prefilter is a no-op when no rules are loaded (returns None →
+    # should_scan_file always returns True). --no-prefilter disables the
+    # entire code path. Plugin rules are loaded here (early) so the
+    # prefilter can use them; the same rules are reused below for
+    # plugin_rules_data so we don't double-load.
+    prefilter_stats = PrefilterStats() if PrefilterStats is not None else None
+    prefilter = None
+    plugin_rules = []  # populated when plugins is set; reused for plugin_rules_data
+    if use_prefilter and build_prefilter is not None:
+        # Load plugin rules early so the prefilter can use them.
+        # We reuse this list later for plugin_rules_data to avoid a
+        # double-load. If plugins is falsy, no rules are loaded and the
+        # prefilter stays None (no-op).
+        if plugins:
+            try:
+                from plugin_system import get_plugin_manager
+                _pf_mgr = get_plugin_manager(workspace)
+                _pf_mgr.discover_plugins()
+                if "all" in plugins:
+                    plugin_rules = _pf_mgr.get_rules()
+                else:
+                    for _pf_name in plugins:
+                        _pf_mgr.load_plugin(_pf_name)
+                    plugin_rules = [r for r in _pf_mgr.get_rules()
+                                    if r.plugin_name in plugins]
+            except Exception as e:
+                logger.warning(f"Failed to load plugin rules for prefilter: {e}")
+                plugin_rules = []
+        # Build the prefilter from whatever rules we have. PluginRule
+        # objects expose .to_dict(); raw rule dicts are passed as-is.
+        rule_dicts = []
+        for r in plugin_rules:
+            if hasattr(r, "to_dict"):
+                rule_dicts.append(r.to_dict())
+            elif isinstance(r, dict):
+                rule_dicts.append(r)
+        try:
+            prefilter = build_prefilter(rule_dicts)
+        except Exception:
+            # Conservative: never let prefilter build crash the scan.
+            logger.debug("build_prefilter failed", exc_info=True)
+            prefilter = None
+
+        # Apply the prefilter to each category's file list. We filter the
+        # lists in place so the parsing loops below don't need to change.
+        # Stats are tracked across all categories.
+        if prefilter is not None and should_scan_file is not None:
+            _pf_start = time.time()
+            for _cat, _file_list in files.items():
+                if not _file_list:
+                    continue
+                _kept = []
+                for _path in _file_list:
+                    _passed = should_scan_file(_path, prefilter)
+                    if prefilter_stats is not None:
+                        prefilter_stats.record(_passed)
+                    if _passed:
+                        _kept.append(_path)
+                files[_cat] = _kept
+            if prefilter_stats is not None:
+                prefilter_stats.elapsed_sec = time.time() - _pf_start
+        # If prefilter is None (no rules / no tokens), no filtering happens
+        # and prefilter_stats stays at zeros — which is correct: 0 files
+        # checked by the prefilter because it was a no-op.
 
     # Check if incremental scan is possible
     changed_files = None
@@ -1070,20 +1172,36 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     update_mtimes_cache(workspace, all_files)
 
     # ─── Plugin Rules Integration ──────────────────────
+    # Note: plugin_rules was already loaded above (early, for the prefilter)
+    # when use_prefilter=True and plugins is set. When use_prefilter=False,
+    # plugin_rules is empty and we load it here instead. This avoids a
+    # double-load in the common (prefilter active) path.
     plugin_rules_data = None
     if plugins:
         try:
-            from plugin_system import get_plugin_manager
-            mgr = get_plugin_manager(workspace)
-            mgr.discover_plugins()
-
-            if "all" in plugins:
-                plugin_rules = mgr.get_rules()
+            if plugin_rules:
+                # Already loaded by the prefilter block — reuse it. We
+                # still need a plugin manager for get_rules_yaml().
+                from plugin_system import get_plugin_manager
+                mgr = get_plugin_manager(workspace)
+                mgr.discover_plugins()
+                # Make sure the requested plugins are loaded into the
+                # manager so get_rules_yaml returns their rules.
+                if "all" not in plugins:
+                    for plugin_name in plugins:
+                        mgr.load_plugin(plugin_name)
             else:
-                # Load only specified plugins
-                for plugin_name in plugins:
-                    mgr.load_plugin(plugin_name)
-                plugin_rules = [r for r in mgr.get_rules() if r.plugin_name in plugins]
+                # Prefilter was disabled (or build_prefilter unavailable) —
+                # load plugin rules here for the metadata block below.
+                from plugin_system import get_plugin_manager
+                mgr = get_plugin_manager(workspace)
+                mgr.discover_plugins()
+                if "all" in plugins:
+                    plugin_rules = mgr.get_rules()
+                else:
+                    for plugin_name in plugins:
+                        mgr.load_plugin(plugin_name)
+                    plugin_rules = [r for r in mgr.get_rules() if r.plugin_name in plugins]
 
             plugin_rules_data = {
                 "total_rules": len(plugin_rules),
@@ -1186,7 +1304,25 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
             "last_indexed_sha": git_bookmark.get("sha"),
             "last_indexed_branch": git_bookmark.get("branch"),
         },
+        # Issue #56: regex prefilter stats. Always present (even when the
+        # prefilter was a no-op) so consumers can tell whether filtering
+        # happened. When use_prefilter=False or no rules were loaded,
+        # checked/passed/skipped are all 0.
+        "prefilter": {
+            "enabled": use_prefilter and prefilter is not None,
+            "stats": prefilter_stats.to_dict() if prefilter_stats is not None else {
+                "checked": 0, "passed": 0, "skipped": 0,
+                "skip_percent": 0.0, "elapsed_sec": 0.0,
+            },
+        },
     }
+
+    # Issue #56: print prefilter stats to stderr when --verbose. Matches
+    # the documented one-line format from the issue spec:
+    #   Prefilter: 1240 files checked, 387 passed, 853 skipped (68%) in 0.3s
+    if verbose and prefilter_stats is not None and prefilter_stats.checked > 0:
+        import sys as _sys
+        print(prefilter_stats.format_verbose_line(), file=_sys.stderr)
 
     # Add plugin rules data if plugins were requested
     if plugin_rules_data is not None:
