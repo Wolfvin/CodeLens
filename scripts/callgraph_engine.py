@@ -176,10 +176,13 @@ class CallEdge:
         return hash((self.caller, self.callee, self.file_path, self.line))
 
     def __eq__(self, other):
-        if not isinstance(other, CallEdge):
-            return False
-        return (self.caller == other.caller and self.callee == other.callee
-                and self.file_path == other.file_path and self.line == other.line)
+        return (
+            isinstance(other, CallEdge)
+            and self.caller == other.caller
+            and self.callee == other.callee
+            and self.file_path == other.file_path
+            and self.line == other.line
+        )
 
 
 @dataclass

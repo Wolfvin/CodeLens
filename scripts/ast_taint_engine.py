@@ -2710,14 +2710,14 @@ class ASTTaintAnalyzer:
     def _extract_return_taint(self, func_def: FunctionDef,
                                final_state: TaintState,
                                language: str) -> Optional[TaintState]:
-        """Inspect `return` statements in a function body for tainted data.
+        """Inspect return statements in a function body for tainted data.
 
-        Walks the function body AST looking for `return` nodes.  For each
+        Walks the function body AST looking for return nodes.  For each
         return, resolves the returned expression to a variable name and
         checks if that variable is tainted in *final_state*.
 
-        Returns a TaintState containing the taint info of any tainted
-        return expressions, or None if no return carries taint.
+        Yields a TaintState containing the taint info of any tainted
+        return-expressions, or None if no return carries taint.
         """
         if not func_def.body_node or not self._detector:
             return None

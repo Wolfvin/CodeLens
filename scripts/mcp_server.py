@@ -1264,11 +1264,12 @@ class MCPServer:
             return self._dispatch_request(method, params, msg_id)
 
         # No method — invalid request
-        return {
+        error_response = {
             "jsonrpc": "2.0",
             "id": msg_id,
-            "error": {"code": -32600, "message": "Invalid Request: missing method"}
+            "error": {"code": -32600, "message": "Invalid Request: missing method"},
         }
+        return error_response
 
     def _dispatch_notification(self, method: str, params: Any) -> None:
         """Handle JSON-RPC notifications (no response expected)."""

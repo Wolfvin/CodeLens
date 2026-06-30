@@ -73,7 +73,10 @@ def generate_dashboard(
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(html)
     except IOError as e:
-        return {"status": "error", "error": f"Failed to write dashboard: {e}"}
+        return {
+            "status": "error",
+            "error": f"Failed to write dashboard: {e}",
+        }
 
     return {
         "status": "ok",
@@ -1462,7 +1465,7 @@ def _render_comparison_section(comparison: Optional[Dict]) -> str:
     overall = summary.get("overall", "unchanged")
     overall_color = "#22c55e" if overall == "improved" else "#ef4444" if overall == "degraded" else "#64748b"
 
-    return f"""<div class="card">
+    html = f"""<div class="card">
         <div class="card-title">Snapshot Comparison</div>
         <div style="text-align:center;margin-bottom:20px">
           <span style="font-size:20px;font-weight:800;color:{overall_color}">Overall: {overall.upper()}</span>
@@ -1475,3 +1478,4 @@ def _render_comparison_section(comparison: Optional[Dict]) -> str:
         </div>
         {''.join(rows)}
       </div>"""
+    return html

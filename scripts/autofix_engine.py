@@ -197,29 +197,14 @@ class DebugLeakHandler(FixHandler):
             # Check it's a simple console.log (not in a catch block)
             if "catch" in file_lines[max(0, line_idx - 3):line_idx]:
                 return None  # Don't remove console.error in catch blocks
-            return {
-                "replacement_lines": None,  # Delete the line
-                "confidence": 0.95,
-                "risk": RISK_SAFE,
-                "description": f"Remove debug statement: {stripped[:60]}",
-            }
+            return {"replacement_lines": None, "confidence": 0.95, "risk": RISK_SAFE, "description": f"Remove debug statement: {stripped[:60]}"}
         elif categories == "print_statement":
             # Don't remove print in __main__ blocks
             if '__main__' in ''.join(file_lines[max(0, line_idx - 10):line_idx]):
                 return None
-            return {
-                "replacement_lines": None,
-                "confidence": 0.90,
-                "risk": RISK_SAFE,
-                "description": f"Remove print statement: {stripped[:60]}",
-            }
+            return {"replacement_lines": None, "confidence": 0.90, "risk": RISK_SAFE, "description": f"Remove print statement: {stripped[:60]}"}
         elif categories in ("debugger", "pdb", "breakpoint"):
-            return {
-                "replacement_lines": None,
-                "confidence": 0.98,
-                "risk": RISK_SAFE,
-                "description": f"Remove debugger statement: {stripped[:60]}",
-            }
+            return {"replacement_lines": None, "confidence": 0.98, "risk": RISK_SAFE, "description": f"Remove debugger statement: {stripped[:60]}"}
 
         return None
 
@@ -302,12 +287,7 @@ class ImportCleanupHandler(FixHandler):
         if line_idx < 0 or line_idx >= len(file_lines):
             return None
 
-        return {
-            "replacement_lines": None,
-            "confidence": 0.85,
-            "risk": RISK_MODERATE,
-            "description": f"Remove unused import on line {line_idx + 1}",
-        }
+        return {"replacement_lines": None, "confidence": 0.85, "risk": RISK_MODERATE, "description": f"Remove unused import on line {line_idx + 1}"}
 
 
 # ─── Auto-Fix Engine ────────────────────────────────────────
