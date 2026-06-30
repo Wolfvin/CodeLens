@@ -18,7 +18,7 @@ Usage:
     python3 codelens.py circular <workspace>           # Detect circular dependencies
     python3 codelens.py context <name> <workspace>     # Get rich symbol context
     python3 codelens.py dependents <file> <workspace>  # Module-level import tracking
-    python3 codelens.py validate <workspace>           # Validate registry vs file system
+    python3 codelens.py registry-validate <workspace>  # Validate registry vs file system
     python3 codelens.py dataflow <workspace>           # Trace data flow source→sink
     python3 codelens.py smell <workspace>              # Detect code smells
     python3 codelens.py side-effect <workspace> [--name func]  # Analyze function side effects
@@ -1038,7 +1038,7 @@ def main():
         "secrets", "dataflow", "vuln-scan", "env-check", "entrypoints",
         "api-map", "state-map", "handbook", "analyze", "test-map",
         "stack-trace", "config-drift", "type-infer", "ownership",
-        "regex-audit", "a11y", "css-deep", "diff", "ask", "validate",
+        "regex-audit", "a11y", "css-deep", "diff", "ask",
         "taint", "dashboard", "history",
     }
 

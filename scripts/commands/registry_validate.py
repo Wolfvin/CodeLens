@@ -1,9 +1,9 @@
 """registry-validate command — Validate registry against file system.
 
 Renamed from `validate` in v8.x to make room for `rule-validate` (rule YAML
-validation). The old `validate` command name still works as a deprecated alias
-(see ``scripts/commands/validate.py``) but prints a one-line stderr warning
-and will be removed in a future release.
+validation). The deprecated `validate` alias was removed in issue #100 —
+use `registry-validate` for registry checks, or `rule-validate` for rule
+YAML validation.
 """
 
 import sys
@@ -38,7 +38,7 @@ def execute(args, workspace):
 
 register_command(
     "registry-validate",
-    "Validate registry against file system (renamed from `validate`)",
+    "Validate registry against file system",
     add_args,
     execute,
 )

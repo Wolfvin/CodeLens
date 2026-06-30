@@ -2,12 +2,12 @@
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 64 CLI commands, an MCP server with 62 tools (51 static + 11 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 63 CLI commands, an MCP server with 61 tools (50 static + 11 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
 
 ## Features
 
-- **64 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
-- **MCP Server (62 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 51 statically-defined tools + 11 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
+- **63 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
+- **MCP Server (61 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 50 statically-defined tools + 11 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
 - **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
@@ -82,7 +82,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 |---------|-------------|
 | `init [workspace]` | Initialize `.codelens` config with auto-detected frameworks |
 | `scan [workspace] [--incremental] [--full] [--max-files N]` | Scan workspace and build registry |
-| `validate [workspace]` | Validate registry vs file system |
+| `registry-validate [workspace]` | Validate registry vs file system |
 | `detect [workspace]` | Detect frameworks and show recommended config |
 | `watch [workspace] [--git-mode] [--interval SECS]` | Start file watcher (default: watchdog; `--git-mode` polls `git diff --name-only`) |
 | `git-status [workspace]` | Show git-aware scan state: HEAD SHA, last-indexed SHA, changed files, re-scan recommendation |
@@ -225,8 +225,8 @@ codelens/
 │   ├── changelog.md               # Older changelog (per-version highlights)
 │   └── agent-integration.md       # AI agent integration guide
 ├── scripts/
-│   ├── codelens.py                # CLI entry point (64 commands registered)
-│   ├── mcp_server.py              # MCP JSON-RPC server (62 tools)
+│   ├── codelens.py                # CLI entry point (63 commands registered)
+│   ├── mcp_server.py              # MCP JSON-RPC server (61 tools)
 │   ├── registry.py                # Registry read/write/build
 │   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
 │   ├── base_parser.py             # Base tree-sitter parser

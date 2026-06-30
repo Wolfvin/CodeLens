@@ -1,5 +1,5 @@
 """
-Integration smoke tests for all 64 CodeLens commands.
+Integration smoke tests for all 63 CodeLens commands.
 
 Tests that every command:
 1. Runs without crash (valid JSON output)
@@ -50,7 +50,7 @@ def parse_json(stdout):
 
 NO_ARGS_COMMANDS = [
     "scan", "list", "handbook", "symbols", "trace", "impact",
-    "outline", "missing-refs", "circular", "dependents", "validate",
+    "outline", "missing-refs", "circular", "dependents",
     "dataflow", "smell", "side-effect", "dead-code", "test-map",
     "config-drift", "type-infer", "ownership", "secrets",
     "entrypoints", "api-map", "state-map", "env-check", "debug-leak",
@@ -300,7 +300,7 @@ class TestModuleStructure:
         sys.path.insert(0, SCRIPT_DIR)
         from commands import COMMAND_REGISTRY
         # Regression sentinel — see docstring above for update procedure.
-        EXPECTED_COMMAND_COUNT = 64
+        EXPECTED_COMMAND_COUNT = 63
         actual = len(COMMAND_REGISTRY)
         assert actual == EXPECTED_COMMAND_COUNT, (
             f"Command count drift detected: expected {EXPECTED_COMMAND_COUNT}, "
