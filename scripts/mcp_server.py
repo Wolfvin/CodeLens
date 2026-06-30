@@ -34,7 +34,8 @@ import signal
 import threading
 import time
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 # Add scripts directory to path
@@ -1115,6 +1116,11 @@ class MCPServer:
         self._client_info = {}
         self._command_registry = None  # Lazy loaded
         self._workspace_registries: Dict[str, Dict[str, Any]] = {}  # In-memory registry cache
+        # Hook manager (issue #47 Phase 1) — defaults to all hooks disabled.
+        # Bound to a workspace lazily on first tool call so the manager
+        # picks up the auto-detected workspace.
+        self._hook_manager: Optional[HookManager] = None
+        self._hook_workspace: Optional[str] = None
 
     # ─── Lifecycle ────────────────────────────────────────
 
@@ -1199,6 +1205,14 @@ class MCPServer:
                 self._watcher.stop()
             except Exception:
                 pass
+        # Shut down the hook manager (issue #47) so pending hook tasks
+        # are cancelled and the worker threads exit cleanly.
+        if self._hook_manager is not None:
+            try:
+                self._hook_manager.shutdown()
+            except Exception:
+                pass
+            self._hook_manager = None
         elapsed = time.time() - self._start_time
         stats = self._cache.stats()
         print(
@@ -1444,7 +1458,7 @@ class MCPServer:
         if cmd_name not in ("scan", "init"):
             cached = self._cache.get(cache_key)
             if cached is not None:
-                return {
+                response = {
                     "content": [{
                         "type": "text",
                         "text": json.dumps(cached, ensure_ascii=False)
@@ -1452,6 +1466,11 @@ class MCPServer:
                     "isError": False,
                     "_cached": True
                 }
+                # Surface any hook notifications that have arrived since the
+                # last tool call (issue #47). Even cached responses must
+                # drain the queue so the agent doesn't miss warnings.
+                self._attach_pending_hooks(response)
+                return response
 
         # Execute the command
         try:
@@ -1466,7 +1485,7 @@ class MCPServer:
             if cmd_name == "scan" and workspace:
                 self._load_registry_to_memory(workspace)
 
-            return {
+            response = {
                 "content": [{
                     "type": "text",
                     "text": json.dumps(result, ensure_ascii=False, default=str)
@@ -1474,9 +1493,21 @@ class MCPServer:
                 "isError": False
             }
 
+            # ─── Post-tool hook (issue #47) ──────────────────────────
+            # Schedule the (opt-in) post_tool hook non-blocking. Even when
+            # disabled this call is <1 ms — it does an enabled-flag check
+            # and returns. Failures here must never break the response.
+            self._maybe_run_post_tool_hook(tool_name, arguments, workspace)
+            # Attach any *previously* queued hook notifications to this
+            # response. (The hook we just scheduled will surface on the
+            # next call — that's by design: hooks are non-blocking.)
+            self._attach_pending_hooks(response)
+
+            return response
+
         except Exception as e:
             traceback.print_exc(file=sys.stderr)
-            return {
+            response = {
                 "content": [{
                     "type": "text",
                     "text": json.dumps({
@@ -1488,6 +1519,103 @@ class MCPServer:
                 }],
                 "isError": True
             }
+            # Even on errors we drain pending hook notifications so the
+            # agent doesn't lose them — issue #47 spec calls for hook
+            # results to be surfaced via "next tool response".
+            self._attach_pending_hooks(response)
+            return response
+
+    # ─── Hook integration (issue #47) ─────────────────────
+
+    def _get_hook_manager(self, workspace: str) -> "Optional[HookManager]":
+        """Lazily create the HookManager bound to ``workspace``.
+
+        The manager is bound to the first workspace we see and re-used for
+        the lifetime of the server. ``.codelens/hooks.json`` lives at the
+        workspace root, so switching workspaces would silently change the
+        config — we treat the first workspace as authoritative to keep
+        behavior predictable for the agent.
+        """
+        if not workspace:
+            return None
+        workspace = os.path.abspath(workspace)
+        if self._hook_manager is None:
+            try:
+                self._hook_manager = HookManager(
+                    workspace=workspace,
+                    send_notification=self._send_hook_notification,
+                )
+                self._hook_workspace = workspace
+            except Exception as exc:
+                # Hook manager construction must never break the server.
+                print(
+                    f"[CodeLens MCP] failed to construct HookManager: {exc}",
+                    file=sys.stderr,
+                )
+                return None
+        return self._hook_manager
+
+    def _maybe_run_post_tool_hook(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        workspace: str,
+    ) -> None:
+        """Fire the post_tool hook if enabled (issue #47).
+
+        Wrapped in try/except so any failure inside the hook subsystem
+        (config parse error, executor closed, hook bug) leaves the MCP
+        tool response untouched.
+        """
+        try:
+            manager = self._get_hook_manager(workspace)
+            if manager is None:
+                return
+            manager.after_tool_call(tool_name, arguments, workspace)
+        except Exception as exc:
+            try:
+                print(
+                    f"[CodeLens MCP] post_tool hook dispatch failed: {exc}",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+
+    def _attach_pending_hooks(self, response: Dict[str, Any]) -> None:
+        """Drain queued hook notifications and attach them to ``response``.
+
+        Adds a ``_hooks`` field to the response payload (in addition to
+        the standard MCP fields). The MCP spec does not define this field,
+        but the issue #47 spec explicitly allows hook results to be
+        "added to next tool response" — agents ignore unknown top-level
+        fields by spec.
+        """
+        try:
+            manager = self._hook_manager
+            if manager is None:
+                return
+            pending = manager.drain_pending()
+            if pending:
+                response["_hooks"] = pending
+        except Exception:
+            pass
+
+    def _send_hook_notification(self, notification: Dict[str, Any]) -> None:
+        """Push a hook notification to the agent via stdout JSON-RPC.
+
+        The MCP spec allows the server to send unsolicited
+        ``notifications/message`` payloads at any time. We write them
+        inline to stdout (the same channel used for responses) — agents
+        route them by ``method``.
+        """
+        try:
+            payload = json.dumps(notification, ensure_ascii=False)
+            sys.stdout.write(payload + "\n")
+            sys.stdout.flush()
+        except Exception:
+            # If stdout is closed (e.g. during shutdown), silently drop.
+            pass
+
 
     def _handle_resources_list(self) -> Dict[str, Any]:
         """Handle resources/list request. Expose codebase registries as resources."""
@@ -1804,6 +1932,371 @@ class _ArgsNamespace:
 
     def __repr__(self):
         return f"_ArgsNamespace(workspace={self.workspace!r}, args={self._arguments!r})"
+
+
+# ─── MCP Hook Manager (issue #47, Phase 1: post_tool) ────────────────
+
+
+class HookManager:
+    """Manages opt-in MCP hooks that auto-trigger scan/check after AI writes.
+
+    Implements Phase 1 of issue #47. The manager:
+
+    1. Reads ``.codelens/hooks.json`` from the workspace on construction,
+       creating the file with default content (all hooks ``enabled: false``)
+       if it does not exist yet.
+    2. After every MCP tool call that *might* modify a file, the
+       :meth:`after_tool_call` method schedules the ``post_tool`` hook
+       non-blocking in a :class:`ThreadPoolExecutor`. The hook itself is
+       implemented in :mod:`mcp_hooks.post_tool`.
+    3. When the hook surfaces a new critical/high finding, the manager
+       enqueues an MCP ``notifications/message`` payload that the caller
+       can either emit immediately via stdout or attach to the *next*
+       ``tools/call`` response as a ``_hooks`` field.
+
+    Design constraints (issue #47):
+
+    - **Default disabled**: every hook defaults to ``enabled: false`` — the
+      user must opt in explicitly via ``.codelens/hooks.json``.
+    - **Non-blocking**: ``after_tool_call`` returns in <<1 ms (it only
+      schedules the executor). Hook failures are caught, logged to stderr,
+      and never propagated to the caller. The MCP server stays alive.
+    - **Performance target**: <500 ms added latency to the original tool
+      call. Because the hook runs entirely off the request thread, the
+      only synchronous cost is argument inspection that decides whether
+      to fire the hook at all.
+
+    The class is intentionally usable in isolation (no MCPServer required)
+    so unit tests can exercise config loading, hook dispatch, and
+    notification buffering without booting the full server.
+    """
+
+    #: Path of the hooks config file, relative to the workspace root.
+    CONFIG_PATH = os.path.join(".codelens", "hooks.json")
+
+    def __init__(
+        self,
+        workspace: Optional[str] = None,
+        max_workers: int = 2,
+        send_notification: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
+        """Create a hook manager bound to ``workspace``.
+
+        Parameters
+        ----------
+        workspace:
+            Workspace root used to locate ``.codelens/hooks.json`` and to
+            pass through to the hook implementation. Falls back to the
+            current working directory if ``None``.
+        max_workers:
+            Size of the underlying ThreadPoolExecutor. Default 2 is enough
+            for the post_tool hook — hooks share the pool.
+        send_notification:
+            Optional callback invoked with each MCP notification dict the
+            hook produces. The MCPServer wires this to its stdout writer so
+            notifications reach the agent in real time. If ``None``, the
+            notifications are buffered in :attr:`_pending` and surfaced via
+            :meth:`drain_pending` (useful for tests and for the
+            "attach to next response" mode).
+        """
+        self._workspace = workspace or os.getcwd()
+        self._send_notification = send_notification
+        self._lock = threading.Lock()
+        self._pending: List[Dict[str, Any]] = []
+        self._executor: Optional[ThreadPoolExecutor] = None
+        try:
+            self._executor = ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="codelens-hook",
+            )
+        except RuntimeError:
+            # Interpreter shutdown in progress — leave executor as None,
+            # hooks will be no-ops. Server is going down anyway.
+            self._executor = None
+        self._config: Dict[str, Any] = self._load_or_create_config(self._workspace)
+
+    # ─── Config ────────────────────────────────────────────
+
+    @staticmethod
+    def _default_config() -> Dict[str, Any]:
+        """Return a fresh deep copy of the default (all-disabled) config."""
+        from mcp_hooks.post_tool import DEFAULT_CONFIG
+
+        # json round-trip for a robust deep copy across Python versions.
+        return json.loads(json.dumps(DEFAULT_CONFIG))
+
+    @classmethod
+    def _load_or_create_config(cls, workspace: str) -> Dict[str, Any]:
+        """Load ``.codelens/hooks.json`` from ``workspace``.
+
+        If the file does not exist, create it with the default config
+        (all hooks disabled — opt-in). If the file exists but is
+        unreadable or malformed, fall back to defaults silently so a
+        corrupted config never breaks the MCP server.
+
+        Missing per-hook keys are backfilled from the defaults so the rest
+        of the manager can rely on the schema being complete.
+        """
+        default = cls._default_config()
+        if not workspace or not os.path.isdir(workspace):
+            return default
+        config_path = os.path.join(workspace, cls.CONFIG_PATH)
+        try:
+            if not os.path.isfile(config_path):
+                os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(default, f, indent=2, ensure_ascii=False)
+                return default
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                return default
+
+            # Merge: start from defaults so newly-added hooks appear.
+            merged = default
+            hooks_block = loaded.get("hooks")
+            if isinstance(hooks_block, dict):
+                merged_hooks = dict(default.get("hooks", {}))
+                for name, cfg in hooks_block.items():
+                    if not isinstance(cfg, dict):
+                        continue
+                    base = dict(merged_hooks.get(name, {"enabled": False}))
+                    base.update(cfg)
+                    merged_hooks[name] = base
+                merged = dict(default)
+                merged["hooks"] = merged_hooks
+            return merged
+        except (OSError, json.JSONDecodeError, TypeError):
+            return default
+
+    def reload_config(self) -> None:
+        """Re-read the config file from disk (call after the user edits it)."""
+        with self._lock:
+            self._config = self._load_or_create_config(self._workspace)
+
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Snapshot of the merged config dict."""
+        with self._lock:
+            # Return a shallow copy so callers can't mutate the live view.
+            return dict(self._config)
+
+    @property
+    def workspace(self) -> str:
+        return self._workspace
+
+    def is_enabled(self, hook_name: str) -> bool:
+        """Return ``True`` only when ``hook_name`` is explicitly enabled.
+
+        Defaults to ``False`` for unknown hooks — opt-in.
+        """
+        with self._lock:
+            hooks_block = self._config.get("hooks", {})
+        if not isinstance(hooks_block, dict):
+            return False
+        cfg = hooks_block.get(hook_name, {})
+        if not isinstance(cfg, dict):
+            return False
+        # Only an explicit truthy bool enables a hook.
+        return bool(cfg.get("enabled", False))
+
+    def severity_threshold(self, hook_name: str) -> str:
+        """Return the configured severity threshold for ``hook_name``.
+
+        Falls back to ``"high"`` for unknown hooks / malformed entries —
+        matches the issue #47 default schema.
+        """
+        with self._lock:
+            hooks_block = self._config.get("hooks", {})
+        if not isinstance(hooks_block, dict):
+            return "high"
+        cfg = hooks_block.get(hook_name, {})
+        if not isinstance(cfg, dict):
+            return "high"
+        sev = cfg.get("severity_threshold", "high")
+        if not isinstance(sev, str) or not sev.strip():
+            return "high"
+        return sev.strip().lower()
+
+    # ─── Hook dispatch ────────────────────────────────────
+
+    def after_tool_call(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        workspace: Optional[str] = None,
+        on_complete: Optional[Callable[["PostToolHookResult"], None]] = None,
+    ) -> None:
+        """Schedule the post_tool hook non-blocking.
+
+        This is the *only* method :class:`MCPServer` calls after every
+        tool call. It never raises: any internal error is logged to stderr
+        and swallowed so the MCP server stays alive.
+
+        ``on_complete`` is invoked from the worker thread once the hook
+        finishes (success or failure). Tests use it to wait for the
+        async hook deterministically.
+
+        Parameters
+        ----------
+        tool_name:
+            The MCP tool name (e.g. ``codelens_query``).
+        arguments:
+            The MCP tool call arguments dict (``params.arguments``).
+            Snapshotted before submission so later mutations don't race.
+        workspace:
+            Optional workspace override. Defaults to the manager's
+            workspace.
+        on_complete:
+            Optional callback invoked with the :class:`PostToolHookResult`
+            when the hook finishes. Failures in the callback are swallowed.
+        """
+        if not self.is_enabled("post_tool"):
+            # Hook disabled — fast path with zero side effects.
+            return
+        if self._executor is None:
+            # Server is shutting down — silently no-op.
+            return
+        ws = workspace or self._workspace or ""
+        if not ws:
+            return
+        if not isinstance(arguments, dict):
+            arguments = {}
+        # Shallow-copy arguments so the worker thread sees a stable snapshot
+        # even if the caller mutates the dict after we return.
+        args_snapshot = dict(arguments)
+        severity = self.severity_threshold("post_tool")
+        try:
+            self._executor.submit(
+                self._run_post_tool_blocking,
+                tool_name,
+                args_snapshot,
+                ws,
+                severity,
+                on_complete,
+            )
+        except RuntimeError:
+            # Executor was shut down between the None check and submit.
+            pass
+
+    def _run_post_tool_blocking(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        workspace: str,
+        severity_threshold: str,
+        on_complete: Optional[Callable[["PostToolHookResult"], None]],
+    ) -> None:
+        """Worker entry point — runs the hook and buffers/forwards the result.
+
+        Wrapped in a try/except so a bug in the hook implementation can
+        never take down the executor thread (which would leak the pool).
+        """
+        try:
+            from mcp_hooks.post_tool import run_post_tool_hook
+
+            result = run_post_tool_hook(arguments, workspace, severity_threshold)
+        except Exception as exc:  # pragma: no cover — defensive guard
+            try:
+                print(
+                    f"[CodeLens MCP] post_tool hook crashed: {exc}",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+            return
+
+        # Surface critical/high findings to the agent.
+        notification = self._result_to_notification(result, tool_name)
+        if notification is not None:
+            self._emit_notification(notification)
+
+        if on_complete is not None:
+            try:
+                on_complete(result)
+            except Exception:
+                # Callback failures must not break the worker thread.
+                pass
+
+    def _result_to_notification(
+        self,
+        result: "PostToolHookResult",
+        tool_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Build an MCP ``notifications/message`` payload from a hook result.
+
+        Returns ``None`` when the hook did not surface anything worth
+        notifying the agent about (no critical/high findings, hook did
+        not trigger, or hook errored without findings).
+        """
+        if not getattr(result, "triggered", False):
+            return None
+        if not (result.critical_count or result.high_count):
+            return None
+        return {
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": {
+                "level": "warning",
+                "data": {
+                    "source": "codelens.post_tool_hook",
+                    "tool": tool_name,
+                    "file": result.file_path,
+                    "workspace": result.workspace,
+                    "severity_threshold": result.severity_threshold,
+                    "critical_count": result.critical_count,
+                    "high_count": result.high_count,
+                    "message": result.message,
+                    "elapsed_ms": round(result.elapsed_ms, 2),
+                    "error": result.error,
+                },
+            },
+        }
+
+    def _emit_notification(self, notification: Dict[str, Any]) -> None:
+        """Either forward the notification via the callback or buffer it."""
+        if self._send_notification is not None:
+            try:
+                self._send_notification(notification)
+                return
+            except Exception:
+                # Forwarding failed — fall through and buffer so the
+                # notification still surfaces via the next tool response.
+                pass
+        with self._lock:
+            self._pending.append(notification)
+
+    # ─── Pending notification queue ───────────────────────
+
+    def drain_pending(self) -> List[Dict[str, Any]]:
+        """Atomically return and clear all queued hook notifications."""
+        with self._lock:
+            pending = list(self._pending)
+            self._pending.clear()
+        return pending
+
+    def pending_notifications(self) -> List[Dict[str, Any]]:
+        """Return a copy of the queued hook notifications (does not clear)."""
+        with self._lock:
+            return list(self._pending)
+
+    # ─── Lifecycle ────────────────────────────────────────
+
+    def shutdown(self) -> None:
+        """Cancel queued hook tasks and shut down the executor.
+
+        Called by :class:`MCPServer` during graceful shutdown.
+        """
+        executor = self._executor
+        self._executor = None
+        if executor is None:
+            return
+        try:
+            # cancel_futures added in Python 3.9 — fall back gracefully.
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:  # pragma: no cover — Python <3.9 fallback
+            executor.shutdown(wait=False)
 
 
 # ─── HTTP/SSE Transport (Optional) ────────────────────────────────────
