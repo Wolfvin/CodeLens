@@ -36,6 +36,18 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from collections import defaultdict
 from utils import DEFAULT_IGNORE_DIRS, logger
 
+# SCA lockfile/manifest parsers (Issue #53 — 14 new formats).
+# Optional import: if sca_parsers/ is removed or renamed, vuln-scan
+# falls back to the inline parsers below.
+try:
+    from sca_parsers import parse_lockfile as _sca_parse_lockfile
+    from sca_parsers import PARSER_REGISTRY as _SCA_PARSER_REGISTRY
+    _HAS_SCA_PARSERS = True
+except ImportError:  # pragma: no cover - defensive
+    _HAS_SCA_PARSERS = False
+    _SCA_PARSER_REGISTRY = {}
+    _sca_parse_lockfile = None  # type: ignore
+
 # OSV.dev integration (optional — graceful fallback if unavailable)
 try:
     from osv_client import OSVClient, OSVQueryBuilder, OSVPackage, OSVVulnerability, ECOSYSTEM_MAP
@@ -48,7 +60,8 @@ except ImportError:
 DEPENDENCY_FILE_PATTERNS = {
     "npm": {
         "manifest": ["package.json"],
-        "lockfile": ["package-lock.json", "npm-shrinkwrap.json", "bun.lock", "yarn.lock"],
+        "lockfile": ["package-lock.json", "npm-shrinkwrap.json", "bun.lock",
+                     "yarn.lock", "pnpm-lock.yaml"],
     },
     "rust": {
         "manifest": ["Cargo.toml"],
@@ -65,6 +78,42 @@ DEPENDENCY_FILE_PATTERNS = {
     "nimble": {
         "manifest": [],  # Populated dynamically from *.nimble files
         "lockfile": ["nimble.lock"],
+    },
+    # ── Issue #53: additional ecosystems via sca_parsers ───────────
+    # Each new format is parsed by a dedicated module in scripts/sca_parsers/.
+    # If sca_parsers is not importable, these entries are still walked but
+    # _parse_lock_file will return [] for them (graceful no-op).
+    "gem": {
+        "manifest": ["Gemfile"],
+        "lockfile": ["Gemfile.lock"],
+    },
+    "composer": {
+        "manifest": ["composer.json"],
+        "lockfile": ["composer.lock"],
+    },
+    "nuget": {
+        "manifest": [],  # .csproj/.vbproj are extension-matched, not filename
+        "lockfile": ["packages.lock.json"],
+    },
+    "pub": {
+        "manifest": ["pubspec.yaml"],
+        "lockfile": ["pubspec.lock"],
+    },
+    "swiftpm": {
+        "manifest": ["Package.swift"],
+        "lockfile": ["Package.resolved"],
+    },
+    "gradle": {
+        "manifest": ["build.gradle", "build.gradle.kts"],
+        "lockfile": ["gradle.lockfile"],
+    },
+    "maven": {
+        "manifest": ["pom.xml"],
+        "lockfile": [],
+    },
+    "hex": {
+        "manifest": ["mix.exs"],
+        "lockfile": ["mix.lock"],
     },
 }
 
@@ -3285,26 +3334,52 @@ def _parse_lock_file(
     except IOError:
         return findings
 
-    if ecosystem == "npm":
-        if rel_path.endswith("bun.lock"):
-            packages = _parse_bun_lock(content)
-        elif rel_path.endswith("yarn.lock"):
-            packages = _parse_yarn_lock(content)
-        else:
-            packages = _parse_npm_lock(content)
-    elif ecosystem == "rust":
-        packages = _parse_cargo_lock(content)
-    elif ecosystem == "pip":
-        if rel_path.endswith("poetry.lock"):
-            packages = _parse_poetry_lock(content)
-        elif rel_path.endswith("Pipfile.lock"):
-            packages = _parse_pipfile_lock(content)
+    # ── Issue #53: prefer modular sca_parsers when available ───────
+    # sca_parsers handles all NEW formats (Gemfile.lock, pnpm-lock.yaml,
+    # pubspec.lock, composer.lock, packages.lock.json, Package.resolved,
+    # gradle.lockfile, mix.lock) plus yarn.lock, Pipfile.lock. When the
+    # file is in the sca_parsers registry we delegate to it and skip the
+    # legacy inline branch (which doesn't know about the new formats).
+    packages: List[Tuple[str, str]] = []
+    handled_by_sca = False
+    if _HAS_SCA_PARSERS:
+        basename = os.path.basename(lock_path)
+        if basename in _SCA_PARSER_REGISTRY:
+            try:
+                sca_deps, sca_ecosystem = _sca_parse_lockfile(lock_path)
+            except Exception as exc:
+                logger.debug("sca_parsers failed for %s: %s", rel_path, exc)
+                sca_deps, sca_ecosystem = [], None
+            if sca_deps is not None:
+                handled_by_sca = True
+                # Use the ecosystem reported by sca_parsers when available,
+                # falling back to the caller-provided ecosystem for VULN_DB
+                # lookups (they must agree in practice).
+                lookup_ecosystem = sca_ecosystem or ecosystem
+                packages = [(d.name, d.version) for d in sca_deps]
+                ecosystem = lookup_ecosystem
+
+    if not handled_by_sca:
+        if ecosystem == "npm":
+            if rel_path.endswith("bun.lock"):
+                packages = _parse_bun_lock(content)
+            elif rel_path.endswith("yarn.lock"):
+                packages = _parse_yarn_lock(content)
+            else:
+                packages = _parse_npm_lock(content)
+        elif ecosystem == "rust":
+            packages = _parse_cargo_lock(content)
+        elif ecosystem == "pip":
+            if rel_path.endswith("poetry.lock"):
+                packages = _parse_poetry_lock(content)
+            elif rel_path.endswith("Pipfile.lock"):
+                packages = _parse_pipfile_lock(content)
+            else:
+                return findings
+        elif ecosystem == "go":
+            packages = _parse_go_sum(content)
         else:
             return findings
-    elif ecosystem == "go":
-        packages = _parse_go_sum(content)
-    else:
-        return findings
 
     # Check each package against VULN_DB
     for pkg_name, pkg_version in packages:
@@ -3669,21 +3744,47 @@ def _parse_manifest_file(
     except IOError:
         return findings
 
-    if ecosystem == "npm" or ecosystem == "bun":
-        packages = _parse_package_json(content)
-    elif ecosystem == "rust":
-        packages = _parse_cargo_toml(content)
-    elif ecosystem == "pip":
-        if rel_path.endswith("Pipfile"):
-            packages = _parse_pipfile(content)
-        elif rel_path.endswith("pyproject.toml"):
-            packages = _parse_pyproject_toml(content)
+    # ── Issue #53: sca_parsers covers pom.xml, build.gradle, Pipfile,
+    # pyproject.toml and requirements.txt. We delegate to it for the
+    # NEW manifest ecosystems (maven, gradle) and the new formats
+    # (Pipfile, pyproject.toml, requirements.txt) ONLY when the file
+    # is in the registry AND the inline parser below would not handle
+    # it (i.e., the new ecosystems).
+    packages: List[Tuple[str, str]] = []
+    handled_by_sca = False
+    if _HAS_SCA_PARSERS:
+        basename = os.path.basename(manifest_path)
+        if basename in _SCA_PARSER_REGISTRY and ecosystem in (
+            "maven", "gradle", "gem", "composer", "nuget", "pub",
+            "swiftpm", "hex",
+        ):
+            try:
+                sca_deps, sca_ecosystem = _sca_parse_lockfile(manifest_path)
+            except Exception as exc:
+                logger.debug("sca_parsers manifest failed for %s: %s", rel_path, exc)
+                sca_deps, sca_ecosystem = [], None
+            if sca_deps is not None:
+                handled_by_sca = True
+                packages = [(d.name, d.version) for d in sca_deps]
+                if sca_ecosystem:
+                    ecosystem = sca_ecosystem
+
+    if not handled_by_sca:
+        if ecosystem == "npm" or ecosystem == "bun":
+            packages = _parse_package_json(content)
+        elif ecosystem == "rust":
+            packages = _parse_cargo_toml(content)
+        elif ecosystem == "pip":
+            if rel_path.endswith("Pipfile"):
+                packages = _parse_pipfile(content)
+            elif rel_path.endswith("pyproject.toml"):
+                packages = _parse_pyproject_toml(content)
+            else:
+                packages = _parse_requirements_txt(content)
+        elif ecosystem == "go":
+            packages = _parse_go_mod(content)
         else:
-            packages = _parse_requirements_txt(content)
-    elif ecosystem == "go":
-        packages = _parse_go_mod(content)
-    else:
-        return findings
+            return findings
 
     # Check each package against VULN_DB
     # Bun uses npm packages, so also check npm ecosystem for bun

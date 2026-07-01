@@ -1,0 +1,46 @@
+{
+  "version": 2,
+  "frameworks": {
+    ".NETCoreApp,Version=v6.0": {
+      "dependencies": {
+        "Newtonsoft.Json": {
+          "type": "Direct",
+          "requested": "[13.0.1, )",
+          "resolved": "13.0.1",
+          "contentHash": "abc"
+        },
+        "Microsoft.NET.Test.Sdk": {
+          "type": "Direct",
+          "requested": "[17.6.0, )",
+          "resolved": "17.6.0",
+          "contentHash": "def"
+        },
+        "System.Text.Json": {
+          "type": "Transitive",
+          "resolved": "6.0.0",
+          "contentHash": "ghi"
+        },
+        "NUnit": {
+          "type": "Transitive",
+          "resolved": "3.13.3",
+          "contentHash": "jkl"
+        }
+      }
+    },
+    ".NETCoreApp,Version=v8.0": {
+      "dependencies": {
+        "Newtonsoft.Json": {
+          "type": "Direct",
+          "requested": "[13.0.3, )",
+          "resolved": "13.0.3",
+          "contentHash": "mno"
+        },
+        "Serilog": {
+          "type": "Direct",
+          "resolved": "3.0.1",
+          "contentHash": "pqr"
+        }
+      }
+    }
+  }
+}

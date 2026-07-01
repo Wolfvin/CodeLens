@@ -1,0 +1,27 @@
+# requirements.txt fixture for Issue #53 SCA parser tests.
+# Covers: exact pin, range, extras, environment marker, URL spec,
+# unpinned, and pip `-r`/`-c` options that must be skipped.
+
+# Pinned
+django==4.2.13
+requests>=2.31.0
+flask[async]~=2.3.2
+# Comment line - should be ignored
+numpy>=1.24.0,<2.0.0
+pandas==2.0.3 ; python_version >= '3.9'
+
+# Unpinned
+pyyaml
+pytest
+
+# Pip options (skipped)
+-r requirements-extra.txt
+-c constraints.txt
+-e .
+--index-url https://pypi.org/simple
+
+# URL spec
+pdfminer @ https://github.com/pdfminer/pdfminer.six/archive/refs/tags/20220319.tar.gz
+
+# Marker
+dataclasses-json>=0.5.7 ; python_version < '3.10'
