@@ -180,3 +180,113 @@ function fail() {
             assert result["stats"]["total_dead_code"] == 0
         finally:
             shutil.rmtree(ws, ignore_errors=True)
+
+    # ─── Issue #105 regression tests ────────────────────────────────
+    # These patterns must NOT be flagged as unreachable. They are the
+    # PEP 8-friendly early-return pattern that workers were previously
+    # forced to wrap in `else:` to satisfy the scanner.
+
+    def test_issue_105_early_return_then_final_return(self):
+        """Early return inside `if` + final return after should NOT be flagged."""
+        code = """def f(condition):
+    if condition:
+        return None
+    return {"key": "value"}
+"""
+        ws = self._create_workspace(code, "app.py")
+        try:
+            result = detect_dead_code(ws)
+            assert result["status"] == "ok"
+            unreachable = result.get("results", {}).get("unreachable", [])
+            assert len(unreachable) == 0, \
+                f"False positive: {unreachable}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_issue_105_multiline_return_after_early_return(self):
+        """Multi-line dict return after early return should NOT be flagged.
+
+        This is the exact reproduction of issue #105. Before the fix, the
+        scanner reported line 5 (the dict body) as unreachable because the
+        multi-line return detection skipped the `return {` line without
+        resetting the terminal flag from the previous `return None` inside
+        the `if` block.
+        """
+        code = """def _detect_vulns(workspace, max_items):
+    from vulnscan_engine import scan_vulnerabilities
+    vuln = scan_vulnerabilities(workspace)
+    total = vuln.get("stats", {}).get("total_vulnerabilities", 0)
+    if total == 0:
+        return None
+    return {
+        "category": "vulnerabilities",
+        "total": total,
+        "top_items": vuln.get("vulnerabilities", [])[:max_items],
+    }
+"""
+        ws = self._create_workspace(code, "app.py")
+        try:
+            result = detect_dead_code(ws)
+            assert result["status"] == "ok"
+            unreachable = result.get("results", {}).get("unreachable", [])
+            assert len(unreachable) == 0, \
+                f"False positive on multi-line dict return: {unreachable}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_issue_105_chained_early_returns(self):
+        """Multiple chained early returns + final return should NOT be flagged."""
+        code = """def g(x):
+    if x is None:
+        return None
+    if x < 0:
+        return -1
+    if x > 100:
+        return 100
+    return x
+"""
+        ws = self._create_workspace(code, "app.py")
+        try:
+            result = detect_dead_code(ws)
+            assert result["status"] == "ok"
+            unreachable = result.get("results", {}).get("unreachable", [])
+            assert len(unreachable) == 0, \
+                f"False positive on chained early returns: {unreachable}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_issue_105_nested_if_early_return(self):
+        """Nested if/return + outer returns should NOT be flagged."""
+        code = """def m(x, y):
+    if x:
+        if y:
+            return None
+        return 1
+    return 2
+"""
+        ws = self._create_workspace(code, "app.py")
+        try:
+            result = detect_dead_code(ws)
+            assert result["status"] == "ok"
+            unreachable = result.get("results", {}).get("unreachable", [])
+            assert len(unreachable) == 0, \
+                f"False positive on nested if early return: {unreachable}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    def test_issue_105_genuinely_unreachable_still_detected(self):
+        """Sanity check: genuinely unreachable code after unconditional
+        return must still be detected after the fix."""
+        code = """def f():
+    return None
+    print("unreachable")
+"""
+        ws = self._create_workspace(code, "app.py")
+        try:
+            result = detect_dead_code(ws)
+            assert result["status"] == "ok"
+            unreachable = result.get("results", {}).get("unreachable", [])
+            assert len(unreachable) >= 1, \
+                f"Regression: genuinely unreachable code not detected: {unreachable}"
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
