@@ -39,11 +39,42 @@ def add_args(parser):
                         help="Return all callers/callees (no limit)")
     parser.add_argument("--fuzzy", action="store_true",
                         help="Enable fuzzy/substring matching (case-insensitive)")
+    parser.add_argument(
+        "--additional-paths",
+        default=None,
+        metavar="PATHS",
+        help=(
+            "Comma-separated list of additional repo root paths to search "
+            "across (issue #15 cross-repo intelligence). When provided, the "
+            "query loads and merges registries from all repos and resolves "
+            "cross-repo call edges. Example: "
+            "'--additional-paths ../lib/shared,../services/worker'."
+        ),
+    )
 
 
 def execute(args, workspace):
     limit = None if getattr(args, 'all', False) else getattr(args, 'limit', 20)
     fuzzy = getattr(args, 'fuzzy', False)
+
+    # ── Cross-repo path (issue #15) ──
+    # When --additional-paths is provided, delegate to the cross-repo
+    # engine which merges registries from all repos and resolves
+    # cross-repo call edges. The result shape is compatible with the
+    # single-repo query result, so downstream formatting (compact, ai,
+    # etc.) works unchanged.
+    additional_paths_raw = getattr(args, 'additional_paths', None)
+    if additional_paths_raw:
+        from crossrepo_engine import query_cross_repo, _parse_additional_paths
+        additional_paths = _parse_additional_paths(additional_paths_raw)
+        result = query_cross_repo(
+            args.name, workspace, additional_paths,
+            fuzzy=fuzzy, limit=limit if limit else 20,
+        )
+        _attach_baseline_confidence(result, args.name, workspace)
+        return result
+
+    # ── Single-repo path (default, unchanged) ──
     result = cmd_query(args.name, workspace, args.domain, args.file, limit=limit, fuzzy=fuzzy)
     _attach_baseline_confidence(result, args.name, workspace)
     return result
