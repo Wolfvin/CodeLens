@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codelens"
 version = "8.2.0"
-description = "Live Codebase Reference Intelligence — 75 commands for AI-powered code analysis, security auditing, and quality scoring"
+description = "Live Codebase Reference Intelligence — 69 commands for AI-powered code analysis, security auditing, and quality scoring"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
@@ -74,13 +74,22 @@ all = [
     "codelens[grammars,watch,rules,lsp,dev]",
 ]
 
-# Entry point removed — codelens is run directly via python3 codelens.py
-# The scripts/ directory uses sys.path-based imports, not a proper Python package.
-# To install as a package, add __init__.py and convert to absolute imports.
+# Issue #54 Phase 1: entry point for ``pip install codelens`` / ``pipx install codelens``.
+# The codelens package (codelens/__init__.py) is a thin wrapper that delegates
+# to scripts/codelens.py — the legacy implementation.
+[project.scripts]
+codelens = "codelens:main"
 
+# Install both the new codelens/ package AND the legacy scripts/ directory
+# (which contains the actual implementation). The scripts/ dir has no
+# __init__.py so its subdirs (commands/, formatters/, etc.) are found as
+# packages and its top-level .py files become importable modules.
 [tool.setuptools.packages.find]
-where = ["scripts"]
-include = ["*"]
+where = [".", "scripts"]
+include = ["codelens", "codelens.*", "commands", "commands.*", "formatters", "formatters.*", "parsers", "parsers.*", "plugins", "plugins.*"]
+# Note: scripts/codelens.py is auto-discovered as a top-level py-module
+# named "codelens" which would shadow the codelens/ package. We handle
+# this in setup.py by explicitly excluding it — see setup.py for details.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

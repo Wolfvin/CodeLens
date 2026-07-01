@@ -116,7 +116,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | "Cross-file taint" | `dataflow` | `taint` (taint is single-file, AST-deep) |
 | "Auto-fix issues" | `fix` | `check` (check just gates, doesn't fix) |
 
-## All 75 Commands
+## All 69 Commands
 
 ### Setup & Lifecycle (8+)
 `init` · `scan [--incremental] [--max-files N] [--full]` · `registry-validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status` (issue #33: `codelens --lsp-status` top-level flag is an alias of `codelens lsp-status` — both delegate to `hybrid_engine.get_lsp_status()` and return the identical payload)
@@ -148,9 +148,9 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Tooling (1)
 `plugin <install|list|search|update|info|validate>`
 
-**Total: 75 commands** (auto-registered via `commands/__init__.py`; rerun `python3 scripts/sync_command_count.py --apply` after adding/removing a command)
+**Total: 69 commands** (auto-registered via `commands/__init__.py`; rerun `python3 scripts/sync_command_count.py --apply` after adding/removing a command)
 
-## MCP Server (73 Tools)
+## MCP Server (67 Tools)
 
 Start the MCP server for AI agent integration:
 
@@ -158,10 +158,10 @@ Start the MCP server for AI agent integration:
 python3 scripts/codelens.py serve
 ```
 
-Exposes 73 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
+Exposes 67 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
 - 50 statically-defined tools (full JSON schemas in `mcp_server.py`)
-- 17 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
-- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`). Use `format: "graphml"` for graph-producing commands (`scan`/`trace`/`impact`/`circular`) — emits GraphML 1.0 XML that opens in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3).
+- 13 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
+- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
 - `watch` and `serve` itself are excluded (long-running)
 
 See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.

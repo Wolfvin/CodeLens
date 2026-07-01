@@ -1,0 +1,92 @@
+name: Publish to PyPI
+
+# Issue #54 Phase 1: publish codelens to PyPI on tag push.
+# Triggers on tags matching v*.*.* (e.g. v8.2.0, v8.3.0-rc1).
+# Uses trusted publishing (OIDC) — no PyPI API token needed.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:  # Allow manual trigger for testing
+
+permissions:
+  contents: read
+  id-token: write  # Required for PyPI trusted publishing (OIDC)
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version detection
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist and wheel
+        run: |
+          python -m build
+
+      - name: Verify distributions
+        run: |
+          twine check dist/*
+
+      - name: List built artifacts
+        run: |
+          ls -la dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build
+    environment: pypi  # Requires manual approval for first-time publishes
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing via OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No password/token — uses GitHub OIDC trusted publishing.
+        # Configure at https://pypi.org/manage/account/publishing/
+        # with environment "pypi" and this workflow's name.
+
+  publish-testpypi:
+    name: Publish to TestPyPI (on manual trigger)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    environment: testpypi
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI (trusted publishing via OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
