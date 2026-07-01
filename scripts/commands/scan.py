@@ -1523,9 +1523,30 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
         # 3-tier .codelensignore check (issue #55). Augments the existing
         # config-based should_ignore() above; builtin patterns cover the
         # historical DEFAULT_IGNORE_DIRS set so backward compat is preserved.
+        #
+        # Issue #120: do NOT ``dirs.clear()`` when the directory matches a
+        # .codelensignore pattern — a ``!``-negation deeper in the tree
+        # (e.g. ``src/`` ignored but ``!src/utils.py`` re-included) must
+        # still be honored. Per-file checks below will filter individual
+        # files; we only prune subdirectories via the config-based
+        # ``should_ignore`` above (which has no negation semantics).
         if _codelensignore_is_ignored is not None and _codelensignore_is_ignored(rel_root, workspace):
-            dirs.clear()
-            continue
+            # Don't recurse into subdirectories of an ignored directory
+            # ONLY when there are no negation patterns that could re-include
+            # descendants. Quick heuristic: if any pattern starts with ``!``,
+            # keep recursing so per-file negation works. Otherwise prune
+            # for performance (avoids walking node_modules/ subtrees).
+            _has_negation = False
+            try:
+                from codelensignore import load_patterns
+                _pats = load_patterns(workspace)
+                _has_negation = any(p.startswith('!') for p in _pats)
+            except Exception:
+                _has_negation = True  # Safe default: keep recursing
+            if not _has_negation:
+                dirs.clear()
+                continue
+            # Else: fall through and let per-file checks filter
 
         if '.codelens' in root:
             dirs.clear()
