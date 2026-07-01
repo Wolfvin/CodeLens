@@ -461,6 +461,22 @@ def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict
                     open_count = stripped.count('(') + stripped.count('[') + stripped.count('{')
                     close_count = stripped.count(')') + stripped.count(']') + stripped.count('}')
                     if open_count > close_count:
+                        # v10 (issue #105): Before skipping, check if we've already
+                        # exited the block that contained the previous terminal
+                        # statement. The classic false-positive pattern is:
+                        #     if x:
+                        #         return None       # terminal at indent 8
+                        #     return {              # indent 4 — multiline start
+                        #         "k": "v",          # indent 8 — was flagged as
+                        #     }                      #   unreachable (same indent
+                        #                            #   as the terminal inside if)
+                        # The previous terminal was inside an `if` block; the
+                        # current return is in the outer scope (lower indent),
+                        # so the previous terminal is no longer relevant.
+                        # Reset it so the multi-line return body is not flagged.
+                        current_indent = len(line) - len(line.lstrip())
+                        if found_terminal and terminal_indent > 0 and current_indent < terminal_indent:
+                            found_terminal = False
                         continue  # Return expression continues on the next line
                 found_terminal = True
                 terminal_line = i  # 0-based: next line has i+1 > i = True
