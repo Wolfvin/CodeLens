@@ -325,6 +325,22 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
             src_file, src_line, confidence, extra_json,
         ))
 
+    # ── Issue #114: dedupe node_rows by node_id.
+    # The flat registry can produce multiple nodes with the same
+    # ``node_id`` (file:line:fn) when e.g. a class and its __init__
+    # method share the same line, or when two declarations collide on
+    # the same line number. The graph_nodes.node_id column has a UNIQUE
+    # constraint, so a bare INSERT would raise sqlite3.IntegrityError
+    # and roll back the entire batch — leaving the graph empty.
+    # Dedupe by node_id (last occurrence wins, matching the "last match
+    # wins" semantics of the flat registry) before the batch insert.
+    if node_rows:
+        seen: Dict[str, Tuple[Any, ...]] = {}
+        for row in node_rows:
+            # row[0] is node_id
+            seen[row[0]] = row
+        node_rows = list(seen.values())
+
     # ── Issue #10: RAM-first indexing — batch write in a single
     # ``BEGIN EXCLUSIVE`` transaction. The node_rows + edge_rows are
     # collected fully in memory (above) BEFORE opening the transaction;
@@ -351,8 +367,10 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         )
         conn.execute("DELETE FROM {}".format(GRAPH_NODES_TABLE))
         if node_rows:
+            # Issue #114: use INSERT OR REPLACE as defense-in-depth
+            # against UNIQUE constraint violations even after dedup.
             conn.executemany(
-                "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
+                "INSERT OR REPLACE INTO {t} (node_id, node_type, name, file, line, extra_json) "
                 "VALUES (?, ?, ?, ?, ?, ?)".format(t=GRAPH_NODES_TABLE),
                 node_rows,
             )
@@ -669,9 +687,15 @@ def incremental_graph_update(
         )
 
         # ── Step 4 (insert): Re-insert nodes from changed files ──
+        # Issue #114: dedupe + INSERT OR REPLACE to avoid UNIQUE
+        # constraint violations on duplicate node_ids.
         if node_rows:
+            _seen_inc: Dict[str, Tuple[Any, ...]] = {}
+            for _row in node_rows:
+                _seen_inc[_row[0]] = _row
+            node_rows = list(_seen_inc.values())
             conn.executemany(
-                "INSERT INTO {t} (node_id, node_type, name, file, line, extra_json) "
+                "INSERT OR REPLACE INTO {t} (node_id, node_type, name, file, line, extra_json) "
                 "VALUES (?, ?, ?, ?, ?, ?)".format(t=GRAPH_NODES_TABLE),
                 node_rows,
             )
