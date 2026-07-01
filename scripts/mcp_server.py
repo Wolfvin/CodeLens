@@ -1099,6 +1099,65 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "manage-adr": {
+        "description": (
+            "Architecture Decision Records (ADR) manager — persistent memory "
+            "of *why* the codebase is structured the way it is, so agents "
+            "don't propose refactors that violate intentional constraints. "
+            "Backed by SQLite at .codelens/adrs.db. Actions: "
+            "create <title> [context] [decision] [status], "
+            "list [status_filter], get <id>, "
+            "update <id> [title] [context] [decision] [status], "
+            "deprecate <id> [superseded_by], delete <id>. "
+            "Statuses: proposed (default), accepted, deprecated, rejected. "
+            "Prefer 'deprecate' over 'delete' to preserve history."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "list", "get", "update", "deprecate", "delete"],
+                    "description": "ADR action to perform"
+                },
+                "id": {
+                    "type": "integer",
+                    "description": "ADR id (required for get/update/deprecate/delete). Positive integer."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short title (required for create, optional for update). E.g. 'Use SQLite over PostgreSQL'."
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Background and constraints driving the decision (optional for create/update)."
+                },
+                "decision": {
+                    "type": "string",
+                    "description": "The decision itself — what was chosen and why (optional for create/update)."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["proposed", "accepted", "deprecated", "rejected"],
+                    "description": "ADR status. Default for create is 'proposed'."
+                },
+                "superseded_by": {
+                    "type": "integer",
+                    "description": "Id of the replacement ADR (optional, for deprecate action). Must exist and differ from id."
+                },
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["proposed", "accepted", "deprecated", "rejected"],
+                    "description": "Filter list action by status (optional)."
+                }
+            },
+            "required": ["workspace", "action"]
+        }
+    },
 }
 
 
