@@ -189,12 +189,17 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
 
 def format_output(data: Any, format_type: str = "json", command: str = "",
                   workspace: str = "") -> str:
-    """Format output data as JSON, Markdown, AI (normalized schema), SARIF, Compact, or GraphML.
+    """Format output data as JSON, Markdown, AI (normalized schema), SARIF, Compact, GraphML, or Phase 2 formatters.
 
     GraphML (issue #59 Phase 3) emits a GraphML 1.0 XML document for
     graph-producing commands (scan, trace, impact, circular). Non-graph
     commands produce a single-node placeholder graph so the format is
     always valid XML.
+
+    Phase 2 (issue #52) added: ``text``, ``junit-xml``, ``emacs``,
+    ``vim``, ``gitlab-sast``. These consume :class:`formatters.base.Finding`
+    objects via :func:`formatters.base.extract_findings` — single
+    extraction path, consistent across all Phase 2 formatters.
     """
     if format_type == "ai":
         normalized = _normalize_to_ai(data, command)
@@ -213,5 +218,21 @@ def format_output(data: Any, format_type: str = "json", command: str = "",
         # placeholder so the format is always valid, never raises.
         from formatters.graphml import format_graphml
         return format_graphml(data, command, workspace)
+    # ─── Phase 2 formatters (issue #52) ───
+    if format_type == "text":
+        from formatters.text import format_text
+        return format_text(data, command, workspace)
+    if format_type == "junit-xml":
+        from formatters.junit_xml import format_junit_xml
+        return format_junit_xml(data, command, workspace)
+    if format_type == "emacs":
+        from formatters.emacs import format_emacs
+        return format_emacs(data, command, workspace)
+    if format_type == "vim":
+        from formatters.vim import format_vim
+        return format_vim(data, command, workspace)
+    if format_type == "gitlab-sast":
+        from formatters.gitlab_sast import format_gitlab_sast
+        return format_gitlab_sast(data, command, workspace)
     # Default: JSON
     return json.dumps(data, indent=2, ensure_ascii=False)

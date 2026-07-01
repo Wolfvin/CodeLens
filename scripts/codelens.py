@@ -889,8 +889,12 @@ def main():
         # graph-producing commands (scan/trace/impact/circular); other commands
         # produce a single-node placeholder so the format is always valid.
         if "format" not in existing_dests:
-            sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact", "graphml"], default=None,
-                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient single-char keys), or graphml (GraphML 1.0 XML for graph-producing commands)")
+            sub.add_argument("--format", "-f",
+                             choices=["json", "markdown", "ai", "sarif", "compact", "graphml",
+                                      # Phase 2 (issue #52): 5 new formatters
+                                      "text", "junit-xml", "emacs", "vim", "gitlab-sast"],
+                             default=None,
+                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient single-char keys), graphml (GraphML 1.0 XML for graph-producing commands), text (human-readable table), junit-xml (Jenkins/GitLab CI), emacs (compile-mode), vim (quickfix), or gitlab-sast (GitLab security dashboard)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
