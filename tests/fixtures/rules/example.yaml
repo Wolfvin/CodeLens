@@ -1,0 +1,47 @@
+rules:
+  - id: py.assert-eq-true
+    languages: [python]
+    severity: WARNING
+    message: "Use assertEqual instead of `assert X == True` (truthy comparison)"
+    patterns:
+      - pattern: assert $X == True
+      - pattern-not: assert $X is True
+    metadata:
+      category: best-practice
+      cwe: "CWE-1024"
+
+  - id: py.eval-builtin
+    languages: [python]
+    severity: ERROR
+    message: "Avoid eval() — code injection risk"
+    patterns:
+      - pattern: eval($X)
+
+  - id: py.exec-builtin
+    languages: [python]
+    severity: ERROR
+    message: "Avoid exec() — code injection risk"
+    patterns:
+      - pattern: exec($X)
+
+  - id: py.os-system-injection
+    languages: [python]
+    severity: ERROR
+    message: "User-controlled shell invocation — prefer subprocess with shell=False"
+    patterns:
+      - pattern-either:
+          - pattern: os.system($X)
+          - pattern: subprocess.call($X, shell=True)
+          - pattern: subprocess.run($X, shell=True)
+          - pattern: subprocess.Popen($X, shell=True)
+
+  - id: py.bare-except
+    languages: [python]
+    severity: INFO
+    message: "Bare `except:` swallows all errors including KeyboardInterrupt"
+    patterns:
+      - pattern: |
+          try:
+              $...BODY
+          except:
+              $...HANDLER

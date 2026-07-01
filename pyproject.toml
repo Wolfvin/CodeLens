@@ -54,12 +54,24 @@ grammars = [
 watch = [
     "watchdog",
 ]
+# Issue #46: Semgrep-compat YAML rule engine — Phase 1.
+# PyYAML is already required transitively but listed for clarity.
+rules = [
+    "PyYAML>=6.0",
+]
+# Issue #48: Native LSP 3.17 server via `codelens lsp`.
+# pygls + lsprotocol provide the JSON-RPC + LSP type bindings.
+lsp = [
+    "pygls>=2.0",
+    "lsprotocol>=2024.0",
+    "tree-sitter-python>=0.23",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
 ]
 all = [
-    "codelens[grammars,watch,dev]",
+    "codelens[grammars,watch,rules,lsp,dev]",
 ]
 
 # Entry point removed — codelens is run directly via python3 codelens.py

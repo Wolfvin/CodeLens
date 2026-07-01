@@ -1,0 +1,14 @@
+rules:
+  - id: py.ellipsis-function-call
+    languages: [python]
+    severity: INFO
+    message: "Function call matched with ellipsis metavar"
+    patterns:
+      - pattern: $FN($...ARGS)
+
+  - id: py.ellipsis-tuple
+    languages: [python]
+    severity: INFO
+    message: "Tuple with ellipsis metavar"
+    patterns:
+      - pattern: ($X, $...REST)

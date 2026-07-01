@@ -105,6 +105,17 @@ def add_args(parser):
                              "'Scan stats: N files, M nodes, K edges' + "
                              "'Index time: Xs (parse: Ys, write: Zs)'. "
                              "Off by default — does not affect scan output.")
+    # Issue #46: Semgrep-compatible YAML rule engine — additive flag.
+    # When supplied, the rule engine (scripts/rule_engine.py) runs after
+    # the tree-sitter scan completes and prints one finding per match to
+    # stderr. Backward compat: omitting the flag keeps scan output byte-
+    # identical to the pre-#46 behavior.
+    parser.add_argument("--rule-file", dest="rule_files",
+                        action="append", default=None,
+                        metavar="<path.yaml>",
+                        help="Path to a Semgrep-compatible YAML rule file "
+                             "(issue #46). May be passed multiple times. "
+                             "Additive — does not change default scan behavior.")
 
 
 def execute(args, workspace):
@@ -119,14 +130,77 @@ def execute(args, workspace):
     use_prefilter = getattr(args, 'use_prefilter', True)
     verbose = getattr(args, 'verbose', False)
     scan_stats = getattr(args, 'scan_stats', False)
+    rule_files = getattr(args, 'rule_files', None)
     # Only auto-enable incremental if the user didn't explicitly request a full scan
     # and the registry already exists. We check for explicit --incremental flag.
     # Note: When user runs "scan" without --incremental, they expect a full scan.
     # Auto-incremental was causing confusion where 2nd scan would miss changes.
     # Now: explicit --incremental for incremental, bare "scan" for full scan.
-    return cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files,
-                    use_prefilter=use_prefilter, verbose=verbose,
-                    scan_stats=scan_stats)
+    result = cmd_scan(workspace, incremental, plugins=plugins, max_files=max_files,
+                      use_prefilter=use_prefilter, verbose=verbose,
+                      scan_stats=scan_stats)
+
+    # Issue #46: run the Semgrep-compat rule engine after the scan completes.
+    # Additive — when --rule-file is omitted, _run_rule_files is a no-op and
+    # the scan output stays byte-identical to the pre-#46 behavior.
+    if rule_files:
+        _run_rule_files(workspace, rule_files, verbose=verbose)
+
+    return result
+
+
+def _run_rule_files(workspace: str, rule_files: list, verbose: bool = False) -> None:
+    """Issue #46 — run the Semgrep-compatible rule engine across the workspace.
+
+    Walks the workspace and runs :mod:`rule_engine` against every Python file.
+    Findings are printed to stderr (one per line) so they don't pollute the
+    machine-readable scan result on stdout. Failures (parse errors, missing
+    rule files) are logged but never crash the scan — the rule engine is
+    strictly additive.
+
+    Phase 1: Python-only. Non-Python files are skipped silently.
+    """
+    try:
+        from rule_engine import run_rules_against_file, format_match_for_cli
+    except ImportError as exc:
+        import sys
+        print(f"codelens: rule engine unavailable (--rule-file ignored): {exc}",
+              file=sys.stderr)
+        return
+
+    workspace = os.path.abspath(workspace)
+    py_exts = {".py", ".pyw", ".pyi"}
+    for dirpath, _dirs, files in os.walk(workspace):
+        # Respect .codelensignore if available — skip ignored dirs entirely
+        if _codelensignore_is_ignored is not None:
+            try:
+                if _codelensignore_is_ignored(dirpath + os.sep, workspace):
+                    continue
+            except Exception:
+                pass
+        for name in files:
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in py_exts:
+                continue
+            file_path = os.path.join(dirpath, name)
+            if _codelensignore_is_ignored is not None:
+                try:
+                    if _codelensignore_is_ignored(file_path, workspace):
+                        continue
+                except Exception:
+                    pass
+            result = run_rules_against_file(file_path, rule_files)
+            if result.error:
+                import sys
+                print(f"codelens: {result.error}", file=sys.stderr)
+                continue
+            for m in result.matches:
+                import sys
+                print(format_match_for_cli(m, file_path), file=sys.stderr)
+            if verbose and result.matches:
+                import sys
+                print(f"codelens: {file_path}: {len(result.matches)} rule finding(s)",
+                      file=sys.stderr)
 
 
 def _run_suggest_ignore(workspace: str) -> Dict[str, Any]:
