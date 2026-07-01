@@ -2,8 +2,10 @@
 Universal Tree-Sitter Grammar Loader for CodeLens (issue #18)
 =============================================================
 
-Auto-detects and loads tree-sitter grammars for 158+ languages from PyPI
-``tree-sitter-<lang>`` packages.
+Auto-detects and loads tree-sitter grammars for 100+ languages from PyPI
+``tree-sitter-<lang>`` packages. The number of supported languages is
+determined by the entries in :data:`EXTENSION_MAP`; call
+:func:`supported_languages` for the exact count at runtime.
 
 Public API
 ----------
@@ -486,12 +488,28 @@ def _normalize_language_name(language: str) -> str:
     return language.strip().lower().replace("-", "_").replace(" ", "_")
 
 
+# ── Module name overrides ────────────────────────────────────────
+# Some languages share a single Python wheel with another language and
+# therefore expose a non-default module name. Notably ``tsx`` and
+# ``typescript`` both ship in the ``tree-sitter-typescript`` wheel whose
+# import name is ``tree_sitter_typescript`` (there is no
+# ``tree_sitter_tsx`` module on PyPI).
+MODULE_NAME_OVERRIDES: dict = {
+    "tsx": "tree_sitter_typescript",
+}
+
+
 def _import_module_name(language: str) -> str:
     """Return the Python module name to import for a given language.
 
     Almost all tree-sitter packages use ``tree_sitter_<lang>`` (snake_case).
+    Languages listed in :data:`MODULE_NAME_OVERRIDES` ship under a different
+    module name (e.g. ``tsx`` → ``tree_sitter_typescript``).
     """
-    return "tree_sitter_" + _normalize_language_name(language)
+    norm = _normalize_language_name(language)
+    if norm in MODULE_NAME_OVERRIDES:
+        return MODULE_NAME_OVERRIDES[norm]
+    return "tree_sitter_" + norm
 
 
 def _package_name(language: str) -> str:
