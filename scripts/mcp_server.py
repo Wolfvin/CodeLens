@@ -986,6 +986,119 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    # ── Issue #121: MCP tools for commands added in #107, #109, #110 ──
+    "arch-metrics": {
+        "description": (
+            "Compute architecture metrics: fan-in, fan-out, instability "
+            "(fan_out / (fan_in + fan_out)), and god-module flags. Requires "
+            "a prior 'scan' to populate the graph. Useful for spotting "
+            "highly-depended-on modules (low instability) vs. leaf modules "
+            "(high instability) and detecting god modules with excessive fan-in."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "markdown", "ai", "sarif", "compact"],
+                    "description": "Output format (default: ai — normalized schema)",
+                    "default": "ai"
+                },
+                "top": {
+                    "type": "integer",
+                    "description": "Limit results to top N modules by instability (default: 50)",
+                    "default": 50
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
+    "memory": {
+        "description": (
+            "Serena-style markdown memory system for cross-session AI context. "
+            "Actions: write <name> <content>, read <name>, list, delete <name>. "
+            "Memories are stored as .codelens/memories/<name>.md (project scope) "
+            "or ~/.codelens/memories/global/<name>.md (global scope). 'mem:NAME' "
+            "references in content are validated — broken refs emit warnings but "
+            "the write always succeeds."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["write", "read", "list", "delete"],
+                    "description": "Memory action to perform"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Memory name (required for write/read/delete). Must start with a letter; letters/digits/_/-/. only."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Memory content in markdown (required for write). May include 'mem:NAME' references."
+                }
+            },
+            "required": ["workspace", "action"]
+        }
+    },
+    "export-snapshot": {
+        "description": (
+            "Export the CodeLens graph (nodes + edges + metadata) as a "
+            "compressed .codelens.gz snapshot for sharing across team members "
+            "or CI environments. Snapshot contains graph metadata only — no "
+            "file content. Companion to import-snapshot."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "output": {
+                    "type": "string",
+                    "description": "Output path (default: <workspace>/.codelens/snapshot.codelens.gz)"
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
+    "import-snapshot": {
+        "description": (
+            "Import a CodeLens snapshot (.codelens.gz) into the workspace DB. "
+            "Useful for CI: run scan on a build machine, export snapshot, "
+            "import on developer machines to skip the parse cost. Mode "
+            "'replace' (default) wipes existing graph; 'merge' adds to it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "input": {
+                    "type": "string",
+                    "description": "Input snapshot path (default: <workspace>/.codelens/snapshot.codelens.gz)"
+                },
+                "merge": {
+                    "type": "boolean",
+                    "description": "Merge with existing graph instead of replacing (default: False)",
+                    "default": False
+                }
+            },
+            "required": ["workspace"]
+        }
+    },
 }
 
 
