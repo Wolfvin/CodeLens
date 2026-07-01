@@ -1099,6 +1099,48 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "query-graph": {
+        "description": (
+            "Query the code graph with a Cypher-subset query (issue #9). "
+            "Replaces 3-5 chained trace/impact/context calls with one "
+            "expressive query. Read-only — safe for CI. "
+            "Supported: MATCH (var:Label)-[:EDGE_TYPE]->(var2), "
+            "WHERE var.prop = 'val' / CONTAINS / IS NULL / NOT EXISTS { pattern }, "
+            "RETURN var.prop, LIMIT n. "
+            "Labels: function, class, file, module, route, type, interface. "
+            "Edge types: CALLS, IMPORTS, DEFINES, INHERITS, IMPLEMENTS, USES_TYPE. "
+            "Examples: "
+            "\"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\"; "
+            "\"MATCH (f:Function) WHERE NOT EXISTS { ()-[:CALLS]->(f) } RETURN f.name\" (dead code); "
+            "\"MATCH (c:Class)-[:INHERITS]->(p:Class) RETURN c.name, p.name\"."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Cypher-subset query. Must start with MATCH. "
+                        "Example: \"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\""
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (overrides LIMIT in query if set). Default: no limit.",
+                },
+                "validate": {
+                    "type": "boolean",
+                    "description": "Validate query syntax without executing it (default: False).",
+                    "default": False,
+                },
+            },
+            "required": ["workspace", "query"]
+        }
+    },
 }
 
 
