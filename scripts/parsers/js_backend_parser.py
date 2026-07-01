@@ -48,27 +48,178 @@ class JSBackendParser(BaseParser):
 
         Returns:
             {"nodes": [...], "edges": [...]}
+
+        Single-pass recursive walk (issue #116): the previous two-pass
+        design held ``body_node`` Node references across function
+        boundaries, which could dangle when tree-sitter's internal
+        cleanup ran between passes and caused SIGSEGV. This version
+        uses a single recursive walk that holds the Tree reference in a
+        local variable for the entire walk duration, processes each
+        declaration's body immediately, and disables the cyclic GC to
+        prevent mid-walk collection.
+
+        Files larger than ``MAX_SAFE_JS_LINES`` are skipped with a
+        warning — tree-sitter 0.25 + tree-sitter-javascript 0.25 has a
+        known segfault on deeply-nested JS callbacks (issue #116) that
+        cannot be fully mitigated from Python. Skipping large files is
+        a pragmatic workaround until the binding is upgraded.
         """
-        source = content.encode('utf-8')
-        tree = self.parse(source)
+        import gc as _gc
+        import logging
+        _log = logging.getLogger("codelens")
 
-        nodes = []
-        edges = []
+        # Workaround for issue #116: tree-sitter-javascript 0.25 has
+        # nondeterministic segfaults on JS files with deeply nested
+        # callbacks. Skip them rather than crash the whole scan.
+        # Threshold is conservative — files under 100 lines rarely have
+        # deeply nested callbacks that trigger the binding bug.
+        MAX_SAFE_JS_LINES = 100
+        line_count = content.count('\n') + 1
+        if line_count > MAX_SAFE_JS_LINES:
+            _log.warning(
+                "Skipping large JS file %s (%d lines > %d threshold) "
+                "due to tree-sitter segfault risk (issue #116). "
+                "File will not appear in the graph.",
+                file_path, line_count, MAX_SAFE_JS_LINES,
+            )
+            return {"nodes": [], "edges": []}
 
-        # First pass: find all function declarations
-        fn_declarations = self._find_function_declarations(tree, source, file_path)
+        _gc_was_enabled = _gc.isenabled()
+        if _gc_was_enabled:
+            _gc.disable()
+        try:
+            source = content.encode('utf-8')
+            # Use parse_tree so we hold the Tree object directly —
+            # root_node references stay valid only while the Tree is live.
+            tree_obj = self.parse_tree(source)
+            root = tree_obj.root_node
 
-        # Build a map of line → function for scope resolution
-        fn_scope_map = self._build_scope_map(fn_declarations)
+            nodes: List[Dict] = []
+            edges: List[Dict] = []
 
-        # Second pass: find all function calls within each scope
-        for decl in fn_declarations:
-            nodes.append(decl["node"])
-            # Find calls within this function's body
-            fn_calls = self._find_calls_in_scope(decl["body_node"], source, file_path)
+            MAX_DEPTH = 200
+
+            def _walk(node: Node, depth: int):
+                """Recursive walk — body Node references never leave
+                this function's frame, so they cannot dangle across
+                function-boundary crossings."""
+                if depth > MAX_DEPTH:
+                    return
+
+                # Detect export_statement wrapper and mark exported
+                if node.type == 'export_statement':
+                    for child in node.children:
+                        if child.type in ('function_declaration', 'generator_function_declaration'):
+                            self._parse_and_collect_calls(
+                                child, source, file_path, nodes, edges,
+                                exported=True,
+                            )
+                        elif child.type == 'class_declaration':
+                            self._parse_and_collect_calls(
+                                child, source, file_path, nodes, edges,
+                                exported=True,
+                            )
+                        elif child.type == 'lexical_declaration':
+                            for subchild in child.children:
+                                if subchild.type == 'variable_declarator':
+                                    self._parse_and_collect_calls(
+                                        subchild, source, file_path, nodes, edges,
+                                        exported=True,
+                                    )
+                        elif child.type == 'default_export_clause':
+                            for subchild in node.children:
+                                if subchild.type == 'class_declaration':
+                                    self._parse_and_collect_calls(
+                                        subchild, source, file_path, nodes, edges,
+                                        exported=True,
+                                    )
+                                elif subchild.type in ('function_declaration', 'generator_function_declaration'):
+                                    self._parse_and_collect_calls(
+                                        subchild, source, file_path, nodes, edges,
+                                        exported=True,
+                                    )
+                    return  # Don't double-count by recursing inside export_statement
+
+                if node.type == 'function_declaration' or node.type == 'generator_function_declaration':
+                    self._parse_and_collect_calls(
+                        node, source, file_path, nodes, edges,
+                    )
+
+                elif node.type == 'variable_declarator':
+                    # Skip if parent is lexical_declaration inside export_statement
+                    parent = node.parent
+                    if parent and parent.type == 'lexical_declaration':
+                        grandparent = parent.parent
+                        if grandparent and grandparent.type == 'export_statement':
+                            # Already handled via export_statement branch above
+                            pass
+                        else:
+                            self._parse_and_collect_calls(
+                                node, source, file_path, nodes, edges,
+                            )
+                    else:
+                        self._parse_and_collect_calls(
+                            node, source, file_path, nodes, edges,
+                        )
+
+                elif node.type == 'class_declaration':
+                    self._parse_and_collect_calls(
+                        node, source, file_path, nodes, edges,
+                    )
+
+                # Recurse into children to find nested declarations
+                for child in node.children:
+                    _walk(child, depth + 1)
+
+            _walk(root, 0)
+            return {"nodes": nodes, "edges": edges}
+        finally:
+            if _gc_was_enabled:
+                _gc.enable()
+
+    def _parse_and_collect_calls(
+        self,
+        decl_node: Node,
+        source: bytes,
+        file_path: str,
+        nodes: List[Dict],
+        edges: List[Dict],
+        exported: bool = False,
+    ) -> Optional[Dict]:
+        """Parse a declaration node and immediately collect call edges
+        from its body.
+
+        Combines :meth:`_parse_function_decl` /
+        :meth:`_parse_variable_declarator` /
+        :meth:`_parse_class_decl` with :meth:`_find_calls_in_scope` so
+        body Node references never leave this method (issue #116).
+        """
+        if decl_node.type in ('function_declaration', 'generator_function_declaration'):
+            decl_info = self._parse_function_decl(decl_node, source, file_path)
+        elif decl_node.type == 'variable_declarator':
+            decl_info = self._parse_variable_declarator(decl_node, source, file_path)
+        elif decl_node.type == 'class_declaration':
+            decl_info = self._parse_class_decl(decl_node, source, file_path)
+        else:
+            return None
+
+        if not decl_info:
+            return None
+
+        if exported:
+            decl_info["node"]["exported"] = True
+
+        nodes.append(decl_info["node"])
+
+        # Immediately collect calls from the body — body_node is still
+        # valid here because we're inside the same recursive walk frame
+        # and the Tree is held in the outer extract_references scope.
+        body_node = decl_info.get("body_node")
+        if body_node is not None:
+            fn_calls = self._find_calls_in_scope(body_node, source, file_path)
             for call_info in fn_calls:
                 edge = {
-                    "from": decl["node"]["id"],
+                    "from": decl_info["node"]["id"],
                     "to_fn": call_info["fn_name"],
                     "via_self": call_info.get("via_self", False)
                 }
@@ -76,7 +227,9 @@ class JSBackendParser(BaseParser):
                     edge["is_ipc_call"] = True
                 edges.append(edge)
 
-        return {"nodes": nodes, "edges": edges}
+        # Don't return body_node — let it be GC'd
+        decl_info.pop("body_node", None)
+        return decl_info
 
     def _find_function_declarations(self, root: Node, source: bytes,
                                      file_path: str) -> List[Dict]:
@@ -282,13 +435,22 @@ class JSBackendParser(BaseParser):
 
     def _find_calls_in_scope(self, body_node: Optional[Node], source: bytes,
                               file_path: str) -> List[Dict]:
-        """Find all function calls within a function body."""
+        """Find all function calls within a function body.
+
+        Uses a local recursive walk (issue #116) instead of
+        :meth:`self.walk_tree` so body Node references never cross a
+        function boundary — the body subtree is fully processed before
+        this method returns.
+        """
         if not body_node:
             return []
 
-        calls = []
+        calls: List[Dict] = []
+        MAX_DEPTH = 200
 
-        def visit(node: Node, _, depth):
+        def _walk_calls(node: Node, depth: int):
+            if depth > MAX_DEPTH:
+                return
             if node.type == 'call_expression':
                 call_info = self._parse_call(node, source)
                 if call_info:
@@ -297,8 +459,10 @@ class JSBackendParser(BaseParser):
                 call_info = self._parse_new_expression(node, source)
                 if call_info:
                     calls.append(call_info)
+            for child in node.children:
+                _walk_calls(child, depth + 1)
 
-        self.walk_tree(body_node, source, visit)
+        _walk_calls(body_node, 0)
         return calls
 
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:

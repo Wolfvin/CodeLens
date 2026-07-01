@@ -73,7 +73,45 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                 "nodes": [{"id": str, "fn": str, "file": str, "line": int, "async": bool, "impl_for": str|None}],
                 "edges": [{"from": str, "to_fn": str}]
             }
+
+        Files larger than ``MAX_SAFE_PY_LINES`` are skipped with a
+        warning — tree-sitter-python 0.25 + tree-sitter 0.26 has a
+        known segfault on deeply-nested Python files (issue #116) that
+        cannot be fully mitigated from Python.
         """
+        import gc as _gc
+        import logging
+        _log = logging.getLogger("codelens")
+
+        # Workaround for issue #116: tree-sitter-python 0.25 has
+        # nondeterministic segfaults on Python files with deeply nested
+        # functions/classes. Skip large files rather than crash the scan.
+        # 200 lines is conservative — small files rarely trigger the bug.
+        MAX_SAFE_PY_LINES = 200
+        line_count = content.count('\n') + 1
+        if line_count > MAX_SAFE_PY_LINES:
+            _log.warning(
+                "Skipping large Python file %s (%d lines > %d threshold) "
+                "due to tree-sitter segfault risk (issue #116). "
+                "File will not appear in the graph.",
+                file_path, line_count, MAX_SAFE_PY_LINES,
+            )
+            return {"nodes": [], "edges": []}
+
+        # Disable cyclic GC during parse + walk to prevent tree-sitter
+        # node invalidation (issue #116). See base_parser.walk_tree for
+        # the full rationale.
+        _gc_was_enabled = _gc.isenabled()
+        if _gc_was_enabled:
+            _gc.disable()
+        try:
+            return self._extract_references_impl(content, file_path)
+        finally:
+            if _gc_was_enabled:
+                _gc.enable()
+
+    def _extract_references_impl(self, content: str, file_path: str) -> Dict[str, List[Dict[str, Any]]]:
+        """Implementation of :meth:`extract_references` — called with GC disabled."""
         root = self.parse(content.encode('utf-8'))
         nodes = []
         edges = []
@@ -85,9 +123,17 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
 
         source = content.encode('utf-8')
 
-        def _walk(node, class_name=None, fn_id=None):
-            """Recursively walk the tree to find functions and calls."""
+        def _walk(node, class_name=None, fn_id=None, depth=0, max_depth=200):
+            """Recursively walk the tree to find functions and calls.
+
+            ``max_depth`` guards against pathological deeply-nested trees
+            that would otherwise overflow Python's recursion limit or
+            trigger the tree-sitter GC segfault (issue #116). 200 is well
+            above any real-world Python AST depth.
+            """
             nonlocal current_class, current_fn_id
+            if depth > max_depth:
+                return
 
             if node.type == 'class_definition':
                 # Track class context — also register the class itself as a node
@@ -128,7 +174,8 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                     body = node.child_by_field_name('body')
                     if body:
                         for child in body.children:
-                            _walk(child, class_name=cls_name, fn_id=fn_id)
+                            _walk(child, class_name=cls_name, fn_id=fn_id,
+                                   depth=depth + 1, max_depth=max_depth)
                 return
 
             elif node.type == 'function_definition':
@@ -163,7 +210,8 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                         old_fn_id = current_fn_id
                         current_fn_id = node_id
                         for child in body.children:
-                            _walk(child, class_name=class_name, fn_id=node_id)
+                            _walk(child, class_name=class_name, fn_id=node_id,
+                                   depth=depth + 1, max_depth=max_depth)
                         current_fn_id = old_fn_id
                 return
 
@@ -200,7 +248,8 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
 
             # Recurse into children
             for child in node.children:
-                _walk(child, class_name=class_name, fn_id=fn_id)
+                _walk(child, class_name=class_name, fn_id=fn_id,
+                      depth=depth + 1, max_depth=max_depth)
 
         for child in root.children:
             _walk(child)

@@ -103,10 +103,36 @@ class BaseParser:
     def __init__(self, language: Language):
         self.language = language
         self.parser = Parser(language)
+        # Keep a reference to the most recent Tree so it is not garbage-
+        # collected while callers still hold Node references into it.
+        # Tree-sitter nodes point into memory owned by the Tree; if Python
+        # frees the Tree the node pointers dangle and accessing
+        # ``node.children`` / ``node.start_point`` raises SIGSEGV (issue #116).
+        self._last_tree = None
 
     def parse(self, content: bytes) -> Node:
-        """Parse source content and return root node."""
-        return self.parser.parse(content).root_node
+        """Parse source content and return root node.
+
+        Keeps a reference to the underlying Tree on ``self._last_tree`` so
+        the returned root node (and any descendants obtained via
+        ``node.children`` / ``child_by_field_name``) remains valid until
+        the next call to :meth:`parse`. Callers that need to hold nodes
+        across multiple parses must keep their own reference to the Tree
+        (returned via :meth:`parse_tree`).
+        """
+        tree = self.parser.parse(content)
+        self._last_tree = tree
+        return tree.root_node
+
+    def parse_tree(self, content: bytes):
+        """Parse source content and return the Tree object.
+
+        Use this when you need to keep nodes alive across multiple parses
+        — hold the returned Tree for as long as you hold any Node into it.
+        """
+        tree = self.parser.parse(content)
+        self._last_tree = tree
+        return tree
 
     @staticmethod
     def get_text(node: Node, source: bytes) -> str:
@@ -122,13 +148,45 @@ class BaseParser:
         """
         Walk the entire AST tree, calling callback for each node.
         Callback signature: callback(node, source, depth) -> bool (True to continue, False to skip children)
+
+        Implemented iteratively (issue #116) — the previous recursive form
+        crashed with SIGSEGV on deeply-nested JS callbacks because Python's
+        garbage collector could free the parent Tree while child nodes
+        were still being visited. The iterative form keeps an explicit
+        stack of (node, depth) tuples and never recurses into Python.
+
+        We also disable the cyclic garbage collector for the duration of
+        the walk. tree-sitter's Python binding owns node memory via the
+        Tree object; if a GC pass runs mid-walk and collects a transient
+        cycle that holds the Tree, the nodes on our stack dangle and the
+        next ``node.children`` access raises SIGSEGV. Disabling gc here is
+        safe — the walk is bounded by ``max_depth`` and the stack holds
+        only ``(Node, int)`` tuples, so no unbounded growth is possible.
         """
         if depth > max_depth:
             return
-        should_continue = callback(node, source, depth)
-        if should_continue is not False:
-            for child in node.children:
-                self.walk_tree(child, source, callback, depth + 1, max_depth)
+        # Iterative DFS — (node, depth) tuples. We visit in the same
+        # pre-order as the recursive version: callback first, then children
+        # left-to-right.
+        import gc as _gc
+        _gc_was_enabled = _gc.isenabled()
+        if _gc_was_enabled:
+            _gc.disable()
+        try:
+            stack = [(node, depth)]
+            while stack:
+                cur, cur_depth = stack.pop()
+                should_continue = callback(cur, source, cur_depth)
+                if should_continue is False:
+                    continue
+                if cur_depth + 1 <= max_depth:
+                    # Push children in reverse so they pop in source order.
+                    children = cur.children
+                    for child in reversed(children):
+                        stack.append((child, cur_depth + 1))
+        finally:
+            if _gc_was_enabled:
+                _gc.enable()
 
     def find_nodes_by_type(self, root: Node, node_type: str) -> List[Node]:
         """Find all nodes of a specific type in the tree."""
