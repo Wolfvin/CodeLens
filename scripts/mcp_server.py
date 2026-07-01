@@ -1853,6 +1853,15 @@ class MCPServer:
                 "available_commands": sorted(self._command_registry.keys())
             }
 
+        # Issue #58, Phase 1: validate any agent-supplied ``file`` /
+        # ``path`` argument stays inside the workspace. This is the
+        # MCP-side enforcement point — the most agent-driven read
+        # surface. Refusals return a structured error so the agent
+        # can self-correct instead of getting an opaque crash.
+        path_error = self._validate_path_args(arguments, workspace)
+        if path_error is not None:
+            return path_error
+
         # Build an args namespace from the arguments dict
         args = _ArgsNamespace(arguments, workspace)
 
@@ -1870,6 +1879,67 @@ class MCPServer:
             return _normalize_to_ai(result, cmd_name)
 
         return {"status": "ok", "items": [result]}
+
+    # Argument names that agents can use to point CodeLens at a file.
+    # Kept narrow on purpose — only arguments that directly translate
+    # to a filesystem read are validated here. ``workspace`` itself is
+    # resolved separately by the MCP server's workspace resolution
+    # layer and is NOT agent-controlled per-call.
+    _PATH_LIKE_ARGS = frozenset({"file", "path", "file_path"})
+
+    def _validate_path_args(
+        self,
+        arguments: Dict[str, Any],
+        workspace: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Validate agent-supplied path-like arguments stay in ``workspace``.
+
+        Returns ``None`` if all path-like args are safe (or absent),
+        otherwise returns a structured error dict suitable for direct
+        return to the MCP client.
+
+        Phase 1 scope: only refuses paths that lexically/symlink-escape
+        the workspace. Does NOT refuse relative paths (those are
+        resolved against ``workspace`` by the commands themselves,
+        which is the desired behavior).
+        """
+        if not workspace:
+            return None
+        try:
+            from security.path_traversal import (
+                PathRefusalError,
+                resolve_path_within_project,
+            )
+        except ImportError:
+            # If the security module isn't available, degrade to
+            # pre-issue-#58 behavior rather than blocking all calls.
+            return None
+
+        for arg_name in self._PATH_LIKE_ARGS:
+            if arg_name not in arguments:
+                continue
+            raw = arguments[arg_name]
+            if not isinstance(raw, str) or not raw:
+                continue
+            # Resolve relative paths against the workspace before
+            # checking — this matches how commands consume them.
+            candidate = raw if os.path.isabs(raw) else os.path.join(workspace, raw)
+            try:
+                resolve_path_within_project(workspace, candidate)
+            except PathRefusalError as exc:
+                return {
+                    "status": "error",
+                    "error": "path_refusal",
+                    "message": str(exc),
+                    "argument": arg_name,
+                    "value": raw,
+                    "workspace": workspace,
+                    "suggestion": (
+                        "Use a path that resolves inside the workspace root. "
+                        "Relative paths are resolved against the workspace."
+                    ),
+                }
+        return None
 
     def _detect_workspace(self) -> str:
         """Auto-detect workspace from current directory."""
