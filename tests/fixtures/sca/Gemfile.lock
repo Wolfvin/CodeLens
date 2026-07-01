@@ -1,0 +1,32 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rake (13.0.6)
+    nokogiri (1.13.10)
+    rails (7.0.8)
+      actioncable (= 7.0.8)
+      actionmailbox (= 7.0.8)
+    actioncable (7.0.8)
+    actionmailbox (7.0.8)
+    actiontext (7.0.8)
+    concurrent-ruby (1.2.2)
+    i18n (1.14.1)
+      concurrent-ruby (~> 1.0)
+    minitest (5.18.0)
+    thread_safe (0.3.6)
+    tzinfo (2.0.6)
+      concurrent-ruby (~> 1.0)
+    zeitwerk (2.6.8)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  nokogiri
+  rails (~> 7.0.8)
+
+RUBY VERSION
+   ruby 3.1.2p20
+
+BUNDLED WITH
+   2.3.7
