@@ -116,30 +116,48 @@ def find_changed_files(
             get_changed_files as _git_changed,
             get_untracked_files as _git_untracked,
             get_last_indexed_sha as _git_last_sha,
+            get_current_sha as _git_current_sha,
         )
         if db_path is None:
             db_path = os.path.join(workspace, ".codelens", "codelens.db")
         last_sha = _git_last_sha(workspace, db_path)
         if last_sha:
-            git_changed_rel = set(_git_changed(workspace, since_sha=last_sha))
-            git_untracked_rel = set(_git_untracked(workspace))
-            all_rel = git_changed_rel | git_untracked_rel
+            # Issue #117: verify the workspace is STILL a git repo before
+            # trusting the git-diff result. A stale last_indexed_sha from
+            # a previous scan (when the workspace was a git repo) would
+            # cause _git_changed / _git_untracked to silently return []
+            # — which is indistinguishable from "no changes" and would
+            # skip the mtime fallback, missing real file modifications.
+            # The check is cheap (git rev-parse HEAD) and None-safe.
+            current_sha = _git_current_sha(workspace)
+            if current_sha is None:
+                # Workspace is no longer a git repo (or git unavailable).
+                # Fall through to mtime path so changes are still detected.
+                logger.debug(
+                    "last_indexed_sha=%s is stale (workspace no longer a git "
+                    "repo); falling back to mtime-based change detection",
+                    last_sha[:12],
+                )
+            else:
+                git_changed_rel = set(_git_changed(workspace, since_sha=last_sha))
+                git_untracked_rel = set(_git_untracked(workspace))
+                all_rel = git_changed_rel | git_untracked_rel
 
-            changed_abs: List[str] = []
-            deleted_rel: List[str] = []
-            for rel in all_rel:
-                abs_path = os.path.join(workspace, rel)
-                if os.path.exists(abs_path):
-                    changed_abs.append(abs_path)
-                else:
-                    # File was deleted between last SHA and now.
-                    deleted_rel.append(rel)
+                changed_abs: List[str] = []
+                deleted_rel: List[str] = []
+                for rel in all_rel:
+                    abs_path = os.path.join(workspace, rel)
+                    if os.path.exists(abs_path):
+                        changed_abs.append(abs_path)
+                    else:
+                        # File was deleted between last SHA and now.
+                        deleted_rel.append(rel)
 
-            # In git mode, "new" files (untracked + just-added) are folded
-            # into the changed set — both are files that need re-parsing.
-            # Keep new=[] so the caller's `set(changed + new)` union still
-            # works without double-counting.
-            return changed_abs, [], deleted_rel
+                # In git mode, "new" files (untracked + just-added) are folded
+                # into the changed set — both are files that need re-parsing.
+                # Keep new=[] so the caller's `set(changed + new)` union still
+                # works without double-counting.
+                return changed_abs, [], deleted_rel
     except Exception:
         logger.debug("git-aware find_changed_files failed; falling back to mtime", exc_info=True)
 
