@@ -208,6 +208,14 @@ def _outline_javascript(content: str, detail: str) -> Dict:
     """Outline for JavaScript files."""
     outline = {"imports": [], "functions": [], "classes": [], "exports": [], "variables": []}
 
+    # Workaround for issue #116: tree-sitter-javascript 0.25 segfaults
+    # on files with deeply nested callbacks. Use regex fallback for
+    # files over 100 lines.
+    line_count = content.count('\n') + 1
+    if line_count > 100:
+        _extract_js_outline_regex(content, outline, detail)
+        return outline
+
     try:
         from grammar_loader import get_grammar_loader
         loader = get_grammar_loader()
@@ -296,6 +304,13 @@ def _outline_rust(content: str, detail: str) -> Dict:
 def _outline_python(content: str, detail: str) -> Dict:
     """Outline for Python files."""
     outline = {"imports": [], "functions": [], "classes": [], "variables": []}
+
+    # Workaround for issue #116: tree-sitter-python 0.25 segfaults on
+    # large files. Use regex fallback for files over 200 lines.
+    line_count = content.count('\n') + 1
+    if line_count > 200:
+        _extract_python_outline_regex(content, outline, detail)
+        return outline
 
     try:
         from grammar_loader import get_grammar_loader
