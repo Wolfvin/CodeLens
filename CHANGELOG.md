@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Distribution & Packaging Overhaul — Phase 1 (issue #54)
+
+CodeLens is now installable via `pip install codelens` (or `pipx install
+codelens`) and ships a `codelens` console script on `PATH`. This is
+Phase 1 of the multi-phase distribution epic — Phase 2 (Docker), Phase 3
+(self-contained binary), Phase 4 (Homebrew/Scoop/Nix), Phase 5 (release
+signing), and Phase 6 (auto-update) are tracked as follow-up work.
+
+**What changed**
+
+- **`pyproject.toml`** — added `[project.scripts] codelens = "codelens:main"`
+  console-script entry point. Added `[tool.setuptools] package-dir = {"" =
+  "scripts"}` mapping so top-level .py files in `scripts/` install as
+  importable top-level modules (`import codelens`, `import utils`, `import
+  <engine>`) and subdirs install as top-level packages (`import commands`,
+  `import formatters`, ...). This preserves the existing sys.path-based
+  import style used throughout the codebase and test suite — no source
+  refactor required. Added an explicit `py-modules = [...]` list (73
+  top-level .py modules) because setuptools auto-discovers *packages*
+  (dirs with `__init__.py`) but not flat .py modules. Added `include-
+  package-data = true` so non-Python data files declared in `MANIFEST.in`
+  are bundled into the wheel.
+- **`MANIFEST.in`** — new file. Declares `recursive-include scripts/data`,
+  `scripts/rules/*.yaml`, `scripts/plugins/*.yaml` so the builtin ignore
+  file, the AST-taint rule packs, and the OWASP Top 10 / Compliance plugin
+  manifests + rule YAMLs are bundled into the wheel. Without these rules,
+  `pip install codelens` would install the Python modules but drop the
+  data files — every rule / plugin / ignore-pattern lookup would silently
+  fall back to empty.
+- **`scripts/{data,rules,plugins,plugins/owasp_top10,plugins/compliance}/__init__.py`**
+  — new empty packaging markers. Setuptools only bundles non-Python files
+  for *packages* (dirs with `__init__.py`); without these markers the
+  data dirs would not be discovered and their non-Python contents would
+  drop out of the wheel even with `include-package-data = true`. Runtime
+  code resolves these directories via filesystem paths (`os.path.dirname
+  (os.path.abspath(__file__))`), so importing these markers is never
+  required at runtime.
+- **`.github/workflows/publish-pypi.yml`** — new workflow. Triggered by
+  `v*` tag pushes. Builds sdist + wheel, runs `check-wheel-contents` and
+  `twine check`, verifies the `codelens = codelens:main` entry point is
+  registered, verifies all 8 required data files are bundled, then
+  publishes to PyPI via the Trusted Publisher (OIDC) flow — no API token
+  secret required. Manual `workflow_dispatch` with `dry_run=true` is
+  supported for release dry-runs.
+- **`tests/test_packaging.py`** — new test module (20 tests). Guards
+  every packaging invariant: entry point declared, `package-dir` mapping
+  present, `include-package-data` enabled, `py-modules` list matches
+  `scripts/*.py` exactly (catches new engines added without updating the
+  list), required subpackages listed in `packages.find.include`, plugins
+  glob present, `MANIFEST.in` exists and lists the data globs, all 5
+  `__init__.py` packaging markers exist, and the built wheel contains
+  the entry point + all 8 required data files + every declared
+  py-module. The wheel-build tests are skipped when `build` is not
+  importable (e.g. minimal CI envs without the `dev` extra).
+- **`README.md`** — new Installation section with both `pip install` and
+  `git clone` paths, documention of what's bundled in the wheel, and
+  explicit backward-compat note that `python3 scripts/codelens.py` is
+  NOT deprecated — it remains the recommended way to run from a source
+  checkout.
+
+**Backward compatibility**
+
+`python3 scripts/codelens.py <command>` continues to work unchanged.
+The existing test suite (`tests/test_cli.py`, `tests/test_codelens.py`,
+`tests/test_hybrid_engine.py`) imports `from codelens import ...` after
+inserting `scripts/` into `sys.path` — this pattern continues to work
+because the `package-dir = {"" = "scripts"}` mapping installs
+`scripts/codelens.py` as a top-level module named `codelens`, matching
+the existing import contract.
+
+No source files in `scripts/` were moved or renamed. No internal
+imports were refactored. The full `scripts/` → `codelens/` package
+refactor proposed in the issue's Phase 1 scope is deferred to a
+follow-up PR — the `package-dir` mapping achieves the same pip-
+installability outcome without the risk of breaking 863 tests.
+
+**Verified**
+
+- `python -m build --wheel` produces a 4.3MB wheel containing 221 files
+  (73 top-level .py modules, 7 subpackages with their .py files, 5
+  `__init__.py` packaging markers, 8 non-Python data files, dist-info).
+- `pip install codelens-8.2.0-py3-none-any.whl` into a fresh venv +
+  `codelens --help` works, `codelens init /tmp/ws` + `codelens scan
+  /tmp/ws` + `codelens query hello /tmp/ws --lite` works end-to-end,
+  `codelens plugin list` discovers both builtin rule packs (owasp-top10,
+  compliance) from the installed wheel, `codelens taint /tmp/ws` runs
+  with `treesitter_available: true`.
+- Existing test suite: 134/134 pass on the focused subset
+  (`test_packaging`, `test_version_consistency`, `test_command_count`,
+  `test_cli`, `test_codelens`, `test_command_registry`). 3 failures in
+  `test_universal_grammar_loader.py` are pre-existing (network-dependent
+  grammar auto-install) and not caused by this PR.
+
 ### LSP Status Entry-Point Unification (issue #33)
 
 The `codelens --lsp-status` top-level flag (intercepted in

@@ -1,0 +1,25 @@
+# CodeLens MANIFEST.in — issue #54 Phase 1
+#
+# Ensure non-Python assets shipped in scripts/ are bundled into the sdist
+# AND the wheel (via ``include-package-data = true`` in pyproject.toml).
+#
+# Without these rules, ``pip install codelens`` would install the Python
+# modules but drop the built-in ignore file, the security rule YAMLs,
+# and the plugin manifests — CodeLens would still run but every rule /
+# plugin / ignore-pattern lookup would silently fall back to empty.
+
+recursive-include scripts/data *
+recursive-include scripts/rules *.yaml *.yml
+recursive-include scripts/plugins *.yaml *.yml
+
+# PyPI rendering helpers
+include README.md
+include CHANGELOG.md
+include LICENSE.txt
+include SECURITY.md
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include SKILL.md
+include SKILL-QUICK.md
+include skill.json
+include pyproject.toml

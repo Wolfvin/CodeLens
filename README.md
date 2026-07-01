@@ -2,12 +2,12 @@
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 68 CLI commands, an MCP server with 66 tools (54 static + 12 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 69 CLI commands, an MCP server with 67 tools (54 static + 13 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
 
 ## Features
 
-- **68 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
-- **MCP Server (66 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 54 statically-defined tools + 12 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
+- **69 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
+- **MCP Server (67 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 54 statically-defined tools + 13 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
 - **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
@@ -225,8 +225,8 @@ codelens/
 │   ├── changelog.md               # Older changelog (per-version highlights)
 │   └── agent-integration.md       # AI agent integration guide
 ├── scripts/
-│   ├── codelens.py                # CLI entry point (68 commands registered)
-│   ├── mcp_server.py              # MCP JSON-RPC server (66 tools)
+│   ├── codelens.py                # CLI entry point (69 commands registered)
+│   ├── mcp_server.py              # MCP JSON-RPC server (67 tools)
 │   ├── registry.py                # Registry read/write/build
 │   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
 │   ├── base_parser.py             # Base tree-sitter parser
@@ -311,17 +311,80 @@ codelens/
 
 ## Installation
 
+CodeLens ships as a Python package on PyPI (issue #54 Phase 1). Pick the
+install method that matches your workflow:
+
+### Option 1 — `pip` / `pipx` (recommended for end users)
+
+```bash
+# Plain pip — installs the `codelens` console script on PATH
+pip install codelens
+
+# Or pipx — isolated environment, no system Python pollution
+pipx install codelens
+
+# With optional extras (grammar wheels, LSP server, watch mode)
+pip install "codelens[grammars,lsp,watch]"
+
+# All extras (grammars + lsp + watch + dev tooling)
+pip install "codelens[all]"
+
+# Verify
+codelens --help
+```
+
+After install, the `codelens` command is on your `PATH` and every CLI
+command works without ever touching the source tree:
+
+```bash
+codelens init /path/to/workspace
+codelens scan /path/to/workspace
+codelens query "btn-primary" /path/to/workspace --domain frontend
+```
+
+### Option 2 — `git clone` (recommended for contributors / development)
+
 ```bash
 # Clone the repository
 git clone https://github.com/Wolfvin/CodeLens.git
 cd CodeLens
 
-# Run setup
+# Install runtime deps + tree-sitter grammar wheels
 bash setup.sh
 
-# Verify
+# Verify (legacy invocation — still supported, prints a deprecation
+# hint recommending `codelens` once pip-installed)
 python3 scripts/codelens.py --help
+
+# Or install in editable mode from the clone to get both worlds:
+pip install -e .
+codelens --help
 ```
+
+### Backward compatibility
+
+The legacy `python3 scripts/codelens.py <command>` invocation continues
+to work for development workflows (running tests, debugging engines,
+hacking on the codebase). It is **not** deprecated — it's the
+recommended way to run CodeLens from a source checkout without
+installing. The `pip install codelens` path is for end users who want
+a stable binary on their `PATH`.
+
+### What's bundled in the wheel
+
+The wheel includes every top-level Python module in `scripts/`, every
+sub-package (`commands/`, `formatters/`, `parsers/`, `plugins/`, ...),
+and every non-Python data file:
+
+- `data/default-codelensignore` — builtin ignore patterns
+- `rules/python_security.yaml`, `rules/javascript_security.yaml` —
+  builtin AST-taint rule packs
+- `plugins/owasp_top10/{plugin.yaml,rules/*.yaml}` — OWASP Top 10 pack
+- `plugins/compliance/{plugin.yaml,rules/*.yaml}` — PCI-DSS + HIPAA pack
+
+Rule packs and plugin manifests are resolved at runtime via filesystem
+paths relative to the installed module — no environment variables or
+extra config required.
 
 ## Integration with AI Agents
 
