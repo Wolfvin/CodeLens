@@ -1133,18 +1133,20 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
-    "manage-adr": {
+    "query-graph": {
         "description": (
-            "Architecture Decision Records (ADR) manager — persistent memory "
-            "of *why* the codebase is structured the way it is, so agents "
-            "don't propose refactors that violate intentional constraints. "
-            "Backed by SQLite at .codelens/adrs.db. Actions: "
-            "create <title> [context] [decision] [status], "
-            "list [status_filter], get <id>, "
-            "update <id> [title] [context] [decision] [status], "
-            "deprecate <id> [superseded_by], delete <id>. "
-            "Statuses: proposed (default), accepted, deprecated, rejected. "
-            "Prefer 'deprecate' over 'delete' to preserve history."
+            "Query the code graph with a Cypher-subset query (issue #9). "
+            "Replaces 3-5 chained trace/impact/context calls with one "
+            "expressive query. Read-only — safe for CI. "
+            "Supported: MATCH (var:Label)-[:EDGE_TYPE]->(var2), "
+            "WHERE var.prop = 'val' / CONTAINS / IS NULL / NOT EXISTS { pattern }, "
+            "RETURN var.prop, LIMIT n. "
+            "Labels: function, class, file, module, route, type, interface. "
+            "Edge types: CALLS, IMPORTS, DEFINES, INHERITS, IMPLEMENTS, USES_TYPE. "
+            "Examples: "
+            "\"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\"; "
+            "\"MATCH (f:Function) WHERE NOT EXISTS { ()-[:CALLS]->(f) } RETURN f.name\" (dead code); "
+            "\"MATCH (c:Class)-[:INHERITS]->(p:Class) RETURN c.name, p.name\"."
         ),
         "parameters": {
             "type": "object",
@@ -1153,43 +1155,24 @@ _TOOL_DEFINITIONS = {
                     "type": "string",
                     "description": "Path to workspace root directory"
                 },
-                "action": {
+                "query": {
                     "type": "string",
-                    "enum": ["create", "list", "get", "update", "deprecate", "delete"],
-                    "description": "ADR action to perform"
+                    "description": (
+                        "Cypher-subset query. Must start with MATCH. "
+                        "Example: \"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\""
+                    ),
                 },
-                "id": {
+                "limit": {
                     "type": "integer",
-                    "description": "ADR id (required for get/update/deprecate/delete). Positive integer."
+                    "description": "Max results to return (overrides LIMIT in query if set). Default: no limit.",
                 },
-                "title": {
-                    "type": "string",
-                    "description": "Short title (required for create, optional for update). E.g. 'Use SQLite over PostgreSQL'."
+                "validate": {
+                    "type": "boolean",
+                    "description": "Validate query syntax without executing it (default: False).",
+                    "default": False,
                 },
-                "context": {
-                    "type": "string",
-                    "description": "Background and constraints driving the decision (optional for create/update)."
-                },
-                "decision": {
-                    "type": "string",
-                    "description": "The decision itself — what was chosen and why (optional for create/update)."
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["proposed", "accepted", "deprecated", "rejected"],
-                    "description": "ADR status. Default for create is 'proposed'."
-                },
-                "superseded_by": {
-                    "type": "integer",
-                    "description": "Id of the replacement ADR (optional, for deprecate action). Must exist and differ from id."
-                },
-                "status_filter": {
-                    "type": "string",
-                    "enum": ["proposed", "accepted", "deprecated", "rejected"],
-                    "description": "Filter list action by status (optional)."
-                }
             },
-            "required": ["workspace", "action"]
+            "required": ["workspace", "query"]
         }
     },
 }
