@@ -873,9 +873,12 @@ def main():
 
         # Detect which args the command already defines
         existing_dests = set()
+        existing_option_strings = set()
         for action in sub._actions:
             if hasattr(action, 'dest'):
                 existing_dests.add(action.dest)
+            if hasattr(action, 'option_strings'):
+                existing_option_strings.update(action.option_strings)
         _existing_subparser_args[cmd_name] = existing_dests
 
         # Add --format to each subparser (UNLESS the command defines its own).
@@ -884,7 +887,14 @@ def main():
         # a text table, not JSON. Skipping the global add here lets that
         # command-specific format work without an argparse conflict.
         if "format" not in existing_dests:
-            sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
+            # Issue #62 Phase 1: ``affected`` command uses ``-f`` for
+            # ``--filter``. Avoid the ``-f`` shortcut clash by only adding
+            # the global ``-f`` shortcut when the command doesn't already
+            # claim it. The long form ``--format`` is always safe.
+            format_args = ["--format"]
+            if "-f" not in existing_option_strings:
+                format_args.append("-f")
+            sub.add_argument(*format_args, choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
                              help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), or compact (token-efficient single-char keys)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
