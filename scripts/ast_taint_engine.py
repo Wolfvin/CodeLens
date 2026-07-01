@@ -3480,18 +3480,33 @@ class ASTTaintAnalyzer:
     # ─── Workspace Analysis ───────────────────────────────────
 
     def analyze_workspace(self, workspace: str, rules_dir: str = None,
-                          language: str = None) -> Dict[str, Any]:
+                          language: str = None,
+                          cross_file: bool = False) -> Dict[str, Any]:
         """Run taint analysis across an entire workspace.
 
         Args:
             workspace: Path to workspace root.
             rules_dir: Directory containing YAML rule files.
             language: Filter to a specific language.
+            cross_file: If True, enable cross-file (inter-procedural
+                across files) taint analysis. This consolidates the
+                former ``crossfile_taint_engine.analyze_cross_file_taint``
+                into this single entry point (issue #49 Phase 1).
 
         Returns:
             Dict with status, findings, stats, and recommendations.
         """
         workspace = os.path.abspath(workspace)
+
+        # Issue #49 Phase 1: cross-file mode delegates to the cross-file
+        # analyzer. The cross-file logic was previously in
+        # crossfile_taint_engine.py; it is now invoked through this
+        # unified entry point. The crossfile_taint_engine.py module
+        # remains as a thin compat wrapper.
+        if cross_file:
+            return self._analyze_cross_file(workspace, rules_dir=rules_dir,
+                                             language=language)
+
         start_time = time.time()
 
         # Load rules
@@ -3594,6 +3609,95 @@ class ASTTaintAnalyzer:
             "treesitter_available": TREE_SITTER_AVAILABLE,
             "recommendations": self._generate_recommendations(unique_findings),
             "engine": "ast_taint",
+        }
+
+    # ─── Cross-File Analysis (issue #49 Phase 1) ────────────────
+    #
+    # The cross-file taint analysis logic was previously in
+    # ``crossfile_taint_engine.py``. It is now invoked through this
+    # method when ``analyze_workspace(cross_file=True)`` is called.
+    # The ``crossfile_taint_engine.py`` module remains as a thin compat
+    # wrapper that delegates to this method, preserving the public API
+    # ``analyze_cross_file_taint()`` for existing callers (``taint
+    # --cross-file``, ``check`` command).
+
+    def _analyze_cross_file(self, workspace: str, rules_dir: str = None,
+                             language: str = None) -> Dict[str, Any]:
+        """Run cross-file taint analysis.
+
+        Delegates to the cross-file analyzer implementation. This method
+        exists so that ``ast_taint_engine.analyze_workspace(cross_file=True)``
+        is the single entry point for all taint analysis (issue #49 Phase 1).
+
+        Args:
+            workspace: Path to workspace root.
+            rules_dir: Directory containing YAML rule files.
+            language: Filter to a specific language.
+
+        Returns:
+            Dict with status, findings, stats, and recommendations.
+        """
+        # Lazy import to avoid circular dependency at module load time.
+        # crossfile_taint_engine imports from ast_taint_engine for the
+        # intra-file analysis pass, so we import it here at call time.
+        try:
+            from crossfile_taint_engine import (
+                CrossFileTaintAnalyzer as _CrossFileTaintAnalyzer,
+            )
+        except ImportError as e:
+            logger.warning(
+                "cross-file taint analysis requested but "
+                "crossfile_taint_engine module unavailable: %s", e
+            )
+            # Fall back to intra-file analysis
+            return self.analyze_workspace(workspace, rules_dir=rules_dir,
+                                          language=language, cross_file=False)
+
+        # Auto-detect languages (mirrors crossfile_taint_engine behavior)
+        if language is None:
+            languages = []
+            if any(os.path.exists(os.path.join(workspace, m)) for m in
+                   ('requirements.txt', 'pyproject.toml', 'setup.py')):
+                languages.append("python")
+            if any(os.path.exists(os.path.join(workspace, m)) for m in
+                   ('package.json', 'tsconfig.json')):
+                languages.extend(["javascript", "typescript"])
+            if not languages:
+                languages = ["python"]
+        else:
+            languages = [language]
+
+        all_findings = []
+        total_stats = {}
+
+        for lang in languages:
+            analyzer = _CrossFileTaintAnalyzer(workspace, rules_dir=rules_dir)
+            result = analyzer.analyze(language=lang)
+            all_findings.extend(result.get("findings", []))
+            total_stats[lang] = result.get("stats", {})
+
+        # Combine results
+        by_severity = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for f in all_findings:
+            sev = f.get("severity", "medium")
+            by_severity[sev] = by_severity.get(sev, 0) + 1
+
+        risk = "critical" if by_severity.get("critical", 0) > 0 else \
+               "high" if by_severity.get("high", 0) > 0 else \
+               "medium" if by_severity.get("medium", 0) > 0 else "low"
+
+        return {
+            "status": "ok",
+            "risk": risk,
+            "total_findings": len(all_findings),
+            "findings": all_findings,
+            "stats": {
+                "languages_analyzed": languages,
+                "by_severity": by_severity,
+                "per_language": total_stats,
+            },
+            "engine": "ast_taint",
+            "cross_file": True,
         }
 
     def _load_rules(self, rules_dir: str = None) -> List[Dict]:
@@ -3732,11 +3836,24 @@ def analyze_file(file_path: str, content: str = None,
 
 
 def analyze_workspace(workspace: str, rules_dir: str = None,
-                      language: str = None) -> Dict[str, Any]:
-    """Convenience function to analyze an entire workspace."""
+                      language: str = None,
+                      cross_file: bool = False) -> Dict[str, Any]:
+    """Convenience function to analyze an entire workspace.
+
+    Args:
+        workspace: Path to workspace root.
+        rules_dir: Directory containing YAML rule files.
+        language: Filter to a specific language.
+        cross_file: If True, enable cross-file taint analysis (issue #49
+            Phase 1). Replaces ``crossfile_taint_engine.analyze_cross_file_taint``.
+
+    Returns:
+        Dict with status, findings, stats, and recommendations.
+    """
     analyzer = ASTTaintAnalyzer()
     return analyzer.analyze_workspace(workspace, rules_dir=rules_dir,
-                                      language=language)
+                                      language=language,
+                                      cross_file=cross_file)
 
 
 def is_available() -> bool:

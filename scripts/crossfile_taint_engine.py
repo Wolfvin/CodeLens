@@ -1,20 +1,24 @@
 """
 Cross-File Taint Analysis Engine for CodeLens — v2
 
+.. deprecated:: 8.3 (issue #49 Phase 1)
+    The public entry point ``analyze_cross_file_taint()`` is now a thin
+    compat wrapper that delegates to ``ast_taint_engine.analyze_workspace(
+    cross_file=True)``. New code should call ``ast_taint_engine`` directly.
+
+    This module still houses the cross-file analysis **implementation**
+    (``CrossFileTaintAnalyzer``, CFG/call-graph builders) — only the
+    public convenience function was consolidated. The implementation
+    classes are imported by ``ast_taint_engine._analyze_cross_file()``
+    at call time (lazy import to avoid circular dependency).
+
 Builds a real Control Flow Graph (CFG) using tree-sitter (when available) or
 regex-based AST approximation, then performs inter-procedural taint analysis
 that crosses file boundaries.
 
-Key Improvements over v1 (semantic_engine.py):
-1. CFG construction: Real basic blocks with branches (if/else, for, while, try)
-2. Inter-procedural analysis: Tracks taint through function calls across files
-3. Path-sensitive: Differentiates if/else branches for taint propagation
-4. Cross-file: Builds a project-wide call graph and propagates taint across files
-5. Context-sensitive: Different call sites get different taint results
-
 Architecture:
-  Phase 1: Build per-file CFGs (CFGNode → CFGEdge graph)
-  Phase 2: Build project-wide call graph (function → function)
+  Phase 1: Build per-file CFGs (CFGNode -> CFGEdge graph)
+  Phase 2: Build project-wide call graph (function -> function)
   Phase 3: Identify taint sources (from YAML rules)
   Phase 4: Forward taint propagation through CFG + call graph
   Phase 5: Check taint arrival at sinks
@@ -899,7 +903,38 @@ class CrossFileTaintAnalyzer:
 
 def analyze_cross_file_taint(workspace: str, language: str = None,
                               rules_dir: str = None) -> Dict[str, Any]:
-    """Convenience function for cross-file taint analysis."""
+    """Convenience function for cross-file taint analysis.
+
+    .. deprecated:: 8.3 (issue #49 Phase 1)
+        Use ``ast_taint_engine.analyze_workspace(cross_file=True)`` instead.
+        This function is kept as a thin compat wrapper that delegates to
+        the unified entry point. The ``CrossFileTaintAnalyzer`` class and
+        supporting CFG/call-graph infrastructure remain in this module
+        as the implementation backend.
+
+    This function delegates to ``ast_taint_engine.analyze_workspace`` with
+    ``cross_file=True``. If the AST taint engine is unavailable (e.g.
+    tree-sitter not installed), it falls back to the original inline
+    implementation below.
+    """
+    try:
+        from ast_taint_engine import (
+            analyze_workspace as _ast_analyze_workspace,
+            is_available as _ast_is_available,
+        )
+        if _ast_is_available():
+            return _ast_analyze_workspace(
+                workspace, rules_dir=rules_dir,
+                language=language, cross_file=True,
+            )
+    except ImportError:
+        logger.debug(
+            "ast_taint_engine unavailable; falling back to inline "
+            "crossfile_taint_engine implementation"
+        )
+
+    # Fallback: original inline implementation (kept for environments
+    # where ast_taint_engine cannot be imported).
     # Auto-detect languages
     if language is None:
         languages = []

@@ -32,38 +32,42 @@ def execute(args, workspace):
     no_ast = getattr(args, 'no_ast', False)
     use_ast = getattr(args, 'ast', False)
 
-    # Determine which engine to use
-    # Default: AST engine (when tree-sitter available), unless --no-ast
-    # --ast flag explicitly requests it (same as default behavior)
-    ast_engine_available = False
-    if not no_ast:
-        try:
-            from ast_taint_engine import is_available, analyze_workspace as ast_analyze_workspace
-            ast_engine_available = is_available()
-        except ImportError:
-            ast_engine_available = False
-
-    if cross_file:
-        try:
-            from crossfile_taint_engine import analyze_cross_file_taint
-            result = analyze_cross_file_taint(workspace, language=language)
-        except ImportError:
-            # Fallback to AST or intra-file analysis
-            if ast_engine_available:
-                result = ast_analyze_workspace(workspace, language=language)
-                result["cross_file"] = False
-                result["cross_file_fallback"] = True
-            else:
-                from semantic_engine import analyze_workspace
-                result = analyze_workspace(workspace, language=language)
-                result["cross_file"] = False
-                result["cross_file_fallback"] = True
-    elif ast_engine_available:
-        result = ast_analyze_workspace(workspace, language=language)
-    else:
+    # Issue #49 Phase 1: unified entry point through ast_taint_engine.
+    # The AST engine now handles both intra-file (default) and cross-file
+    # (--cross-file flag) modes. The old crossfile_taint_engine and
+    # semantic_engine are still available as fallbacks but are deprecated.
+    #
+    # Engine selection:
+    #   --no-ast            -> semantic_engine (regex, deprecated)
+    #   --cross-file        -> ast_taint_engine with cross_file=True
+    #   default             -> ast_taint_engine (intra-file)
+    if no_ast:
+        # Explicit regex fallback (deprecated path)
         from semantic_engine import analyze_workspace
         result = analyze_workspace(workspace, language=language)
         result["engine"] = "semantic_regex"
+        result["cross_file"] = False
+    else:
+        try:
+            from ast_taint_engine import is_available, analyze_workspace as ast_analyze_workspace
+            if is_available():
+                result = ast_analyze_workspace(
+                    workspace, language=language, cross_file=cross_file
+                )
+            else:
+                # tree-sitter not installed — fall back to semantic_engine
+                from semantic_engine import analyze_workspace
+                result = analyze_workspace(workspace, language=language)
+                result["engine"] = "semantic_regex"
+                result["cross_file"] = False
+                result["cross_file_fallback"] = cross_file
+        except ImportError:
+            # ast_taint_engine module unavailable — fall back to semantic_engine
+            from semantic_engine import analyze_workspace
+            result = analyze_workspace(workspace, language=language)
+            result["engine"] = "semantic_regex"
+            result["cross_file"] = False
+            result["cross_file_fallback"] = cross_file
 
     # Optionally enhance with secrets findings
     if getattr(args, 'with_secrets', False):
