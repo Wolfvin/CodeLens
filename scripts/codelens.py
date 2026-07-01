@@ -1332,4 +1332,17 @@ def main():
 
 
 if __name__ == "__main__":
+    # Issue #54 Phase 1: ``python3 scripts/codelens.py`` is the legacy
+    # invocation. After ``pip install codelens`` the ``codelens`` console
+    # script (or ``python -m codelens``) is preferred. This legacy entry
+    # point remains fully supported — the warning is informational only.
+    import warnings as _w
+    _w.warn(
+        "Running codelens via 'python3 scripts/codelens.py' is the legacy "
+        "mode. For a better experience, 'pip install codelens' and use the "
+        "'codelens' command directly (issue #54 Phase 1). This legacy mode "
+        "will continue to work.",
+        DeprecationWarning,
+        stacklevel=1,
+    )
     main()
