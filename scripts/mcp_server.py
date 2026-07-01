@@ -1099,6 +1099,49 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    # ── Issue #9: Cypher-subset graph query engine ──
+    "query-graph": {
+        "description": (
+            "Cypher-subset structural query over the code graph (graph_nodes + graph_edges). "
+            "Replaces 3-5 trace/impact/context tool calls for typical structural questions. "
+            "Supported clauses: MATCH, WHERE, RETURN, LIMIT. "
+            "Predicates: =, !=, <, >, <=, >=, CONTAINS, IS NULL, IS NOT NULL, "
+            "EXISTS { pattern }, NOT EXISTS { pattern }, AND, OR, NOT. "
+            "Node labels: Function, Class, File, Module, Route, Type, Interface. "
+            "Edge types: CALLS, IMPORTS, DEFINES, INHERITS, IMPLEMENTS, USES_TYPE. "
+            "Read-only — no write clauses. Default LIMIT 100, hard cap 1000. "
+            "Examples: "
+            "\"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\" | "
+            "\"MATCH (f:Function) WHERE NOT EXISTS { ()-[:CALLS]->(f) } RETURN f.name\" (dead code) | "
+            "\"MATCH (c:Class)-[:INHERITS]->(p) WHERE p.name = 'BaseModel' RETURN c.name\""
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Cypher-subset query string. Must contain MATCH ... RETURN. "
+                        "Example: \"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\""
+                    )
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Custom SQLite db path (default: <workspace>/.codelens/codelens.db)"
+                },
+                "explain": {
+                    "type": "boolean",
+                    "description": "Show the translated SQL and parameters without executing the query",
+                    "default": False
+                }
+            },
+            "required": ["query", "workspace"]
+        }
+    },
 }
 
 
