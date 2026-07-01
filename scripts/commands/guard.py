@@ -433,8 +433,15 @@ def _analyze_file(workspace: str, rel_path: str) -> List[Dict]:
     if not os.path.exists(abs_path):
         return issues
 
-    from utils import safe_read_file
-    content = safe_read_file(abs_path)
+    # Issue #58, Phase 1: validate the agent-supplied path stays inside
+    # the workspace before reading. ``--file`` on `guard pre` / `guard
+    # post` is the most direct agent-controlled file-read surface, so
+    # it's the highest-leverage place to enforce path confinement.
+    # ``safe_read_file_within_project`` returns None on refusal (and
+    # logs the refusal at WARNING level), which preserves the legacy
+    # "empty issues list" behavior for unreadable files.
+    from utils import safe_read_file_within_project
+    content = safe_read_file_within_project(abs_path, workspace)
     if not content:
         return issues
 
