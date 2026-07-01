@@ -78,7 +78,7 @@ _TOOL_DEFINITIONS = {
         }
     },
     "query": {
-        "description": "Look up a symbol (function/class/variable/CSS class/ID) in the codebase registry. Returns action recommendation (CREATE/EXTEND/ASK/STOP).",
+        "description": "Look up a symbol (function/class/variable/CSS class/ID) in the codebase registry. Returns action recommendation (CREATE/EXTEND/ASK/STOP). Supports cross-repo search via additional_paths (issue #15).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -108,6 +108,11 @@ _TOOL_DEFINITIONS = {
                     "type": "integer",
                     "description": "Max callers/callees to return (default: 20)",
                     "default": 20
+                },
+                "additional_paths": {
+                    "type": "string",
+                    "description": "Comma-separated additional repo root paths for cross-repo search (issue #15). When provided, merges registries from all repos and resolves cross-repo call edges. Example: '../lib/shared,../services/worker'",
+                    "default": None
                 }
             },
             "required": ["name", "workspace"]
