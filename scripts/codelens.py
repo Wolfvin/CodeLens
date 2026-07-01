@@ -877,9 +877,14 @@ def main():
                 existing_dests.add(action.dest)
         _existing_subparser_args[cmd_name] = existing_dests
 
-        # Add --format to each subparser (safe: no command defines its own --format)
-        sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
-                         help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), or compact (token-efficient single-char keys)")
+        # Add --format to each subparser (UNLESS the command defines its own).
+        # Issue #64: ``doctor`` defines its own ``--format`` with choices
+        # ``["text", "json"]`` because its default human-readable output is
+        # a text table, not JSON. Skipping the global add here lets that
+        # command-specific format work without an argparse conflict.
+        if "format" not in existing_dests:
+            sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
+                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), or compact (token-efficient single-char keys)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
@@ -1272,12 +1277,26 @@ def main():
                 logger.warning(f"Suppression processing failed: {e}", exc_info=True)
 
         # ─── Format and print output ──
-        print(format_output(result, args.format, format_command, workspace))
+        # doctor (issue #64) prints its own human-readable text table when
+        # ``--format text`` is used, and signals via ``_doctor_printed_text``
+        # so the dispatcher skips the generic JSON formatter (which would
+        # otherwise dump the result dict a second time). In ``--format json``
+        # mode doctor does NOT print itself, and the normal formatter handles
+        # the JSON serialization.
+        if not (args.command == "doctor" and isinstance(result, dict)
+                and result.get("_doctor_printed_text")):
+            print(format_output(result, args.format, format_command, workspace))
 
-        # ─── Exit code for check command (CI quality gate) ──
+        # ─── Exit codes for CI-quality-gate commands ──
         if args.command == "check" and isinstance(result, dict):
             if result.get("gate") == "failed":
                 sys.exit(1)
+        # doctor (issue #64): exit 0=ok / 1=warning / 2=critical.
+        # The exit code lets CI pipelines gate on doctor failures.
+        if args.command == "doctor" and isinstance(result, dict):
+            exit_code = result.get("exit_code", 0)
+            if exit_code:
+                sys.exit(exit_code)
 
     except FileNotFoundError as e:
         error_result = {
