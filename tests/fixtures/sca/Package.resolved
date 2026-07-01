@@ -1,0 +1,31 @@
+{
+  "object": {
+    "pins": [
+      {
+        "package": "Alamofire",
+        "repositoryURL": "https://github.com/Alamofire/Alamofire.git",
+        "state": {
+          "revision": "abc123def456abc123def456abc123def456abcd",
+          "version": "5.8.0"
+        }
+      },
+      {
+        "package": "SwiftLint",
+        "repositoryURL": "https://github.com/realm/SwiftLint.git",
+        "state": {
+          "revision": "def456abc123def456abc123def456abc123def0",
+          "version": "0.53.0"
+        }
+      },
+      {
+        "package": "KeychainAccess",
+        "repositoryURL": "https://github.com/kishikawakatsumi/KeychainAccess.git",
+        "state": {
+          "revision": "ghi789jkl012ghi789jkl012ghi789jkl012ghi7",
+          "version": "4.2.2"
+        }
+      }
+    ]
+  },
+  "version": 1
+}

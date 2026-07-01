@@ -192,6 +192,51 @@ def safe_read_file(file_path: str, max_size: int = MAX_FILE_SIZE) -> Optional[st
         return None
 
 
+def safe_read_file_within_project(
+    file_path: str,
+    project_root: str,
+    max_size: int = MAX_FILE_SIZE,
+) -> Optional[str]:
+    """Read a file after confirming it resolves inside ``project_root``.
+
+    Composes :func:`safe_read_file` with
+    :func:`scripts.security.path_traversal.resolve_path_within_project`
+    so that agent-supplied paths cannot escape the workspace via
+    symlinks or ``..`` traversal (issue #58, Phase 1).
+
+    Args:
+        file_path: Path to read. May be absolute, relative, or
+            contain ``..`` / symlinks.
+        project_root: The workspace root the read must stay inside.
+        max_size: Maximum file size in bytes (same default as
+            :func:`safe_read_file`).
+
+    Returns:
+        File content as string, or ``None`` if the path escapes the
+        project root, the file is too large, or the read fails for
+        any other I/O reason. The refusal is logged at WARNING level
+        so agents see why their read returned nothing.
+    """
+    try:
+        from security.path_traversal import resolve_path_within_project, PathRefusalError
+    except ImportError:
+        # Defensive: if the scripts/security package is unavailable
+        # (e.g., older install that hasn't pulled the new files),
+        # fall back to the legacy behavior rather than crash. The
+        # path_traversal module is the security boundary; without it
+        # we degrade to pre-issue-#58 behavior.
+        logger.debug("security.path_traversal unavailable; falling back to safe_read_file")
+        return safe_read_file(file_path, max_size=max_size)
+
+    try:
+        resolved = resolve_path_within_project(project_root, file_path)
+    except PathRefusalError as exc:
+        logger.warning("Path refusal: %s", exc)
+        return None
+
+    return safe_read_file(resolved, max_size=max_size)
+
+
 def time_budget_expired(start_time: float, budget_sec: float = GLOBAL_TIMEOUT_SEC) -> bool:
     """Check if a time budget has expired.
 

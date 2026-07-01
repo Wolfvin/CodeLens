@@ -24,6 +24,16 @@ def add_args(parser):
     parser.add_argument('--commands', nargs='+',
                         default=['secrets', 'dead-code', 'smell', 'complexity', 'debug-leak', 'circular', 'taint'],
                         help='Commands to run for the quality gate (default: core analysis)')
+    # Issue #46: Semgrep-compatible YAML rule engine — additive flag.
+    # When supplied, the rule engine runs over the workspace and any
+    # findings above --severity are added to the gate's finding list.
+    parser.add_argument('--rule-file', dest='rule_files',
+                        action='append', default=None,
+                        metavar='<path.yaml>',
+                        help='Path to a Semgrep-compatible YAML rule file '
+                             '(issue #46). May be passed multiple times. '
+                             'Additive — rule findings are merged into the '
+                             'quality-gate result.')
 
 
 def execute(args, workspace):
@@ -122,6 +132,48 @@ def execute(args, workspace):
         if severity_order.get(f.get('severity', 'medium'), 2) <= min_sev
     ]
 
+    # Issue #46: merge Semgrep-compat rule-engine findings into the gate.
+    # Rule severities (CRITICAL/HIGH/MEDIUM/LOW/INFO/ERROR/WARNING/HINT)
+    # are normalized to the gate's severity vocabulary before filtering.
+    rule_findings_count = 0
+    rule_files = getattr(args, 'rule_files', None)
+    if rule_files:
+        try:
+            from rule_engine import run_rules_against_file
+            import os
+            sev_map = {
+                'CRITICAL': 'critical', 'HIGH': 'high',
+                'MEDIUM': 'medium', 'LOW': 'low', 'INFO': 'info',
+                'ERROR': 'critical', 'WARNING': 'high',
+                'HINT': 'low',
+            }
+            py_exts = {".py", ".pyw", ".pyi"}
+            for dirpath, _dirs, files in os.walk(workspace):
+                for name in files:
+                    if os.path.splitext(name)[1].lower() not in py_exts:
+                        continue
+                    file_path = os.path.join(dirpath, name)
+                    rr = run_rules_against_file(file_path, rule_files)
+                    if rr.error:
+                        errors.append(f"rule-engine: {rr.error}")
+                        continue
+                    for m in rr.matches:
+                        gate_sev = sev_map.get(m.severity.upper(), 'medium')
+                        if severity_order.get(gate_sev, 2) <= min_sev:
+                            relevant_findings.append({
+                                'severity': gate_sev,
+                                'rule_id': m.rule_id,
+                                'message': m.message,
+                                'file': file_path,
+                                'line': m.range.start_point[0] + 1,
+                                'column': m.range.start_point[1] + 1,
+                                'category': 'rule-engine',
+                                'metavariables': m.metavariables,
+                            })
+                            rule_findings_count += 1
+        except ImportError as exc:
+            errors.append(f"rule-engine unavailable: {exc}")
+
     # Count by severity
     by_severity = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'info': 0}
     for f in relevant_findings:
@@ -171,6 +223,7 @@ def execute(args, workspace):
         "health_score": health_score,
         "total_findings": len(all_findings),
         "relevant_findings": len(relevant_findings),
+        "rule_findings": rule_findings_count,
         "findings": relevant_findings,
         "by_severity": by_severity,
         "commands_run": command_results,

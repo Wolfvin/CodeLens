@@ -1,0 +1,8 @@
+%{
+  "absinthe": {:hex, :absinthe, "1.7.6", "0a1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcd", [:mix], [], :hexpm},
+  "phoenix": {:hex, :phoenix, "1.7.10", "1b1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcd", [:mix], [{:ecto, "~> 3.4", [hex: :ecto, repo: "hexpm", optional: false]}], :hexpm},
+  "ecto": {:hex, :ecto, "3.10.3", "2c1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcd", [:mix], [{:decimal, "~> 2.0", [hex: :decimal, repo: "hexpm", optional: false]}], :hexpm},
+  "decimal": {:hex, :decimal, "2.1.1", "3d1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcd", [:mix], [], :hexpm},
+  "phoenix_live_view": {:hex, :phoenix_live_view, "0.20.1", "4e1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcd", [:mix], [], :hexpm},
+  "git_dep": {:git, "https://github.com/foo/bar.git", "abc123def456abc123def456abc123def456abcd", branch: "main"}
+}

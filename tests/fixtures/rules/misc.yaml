@@ -1,0 +1,31 @@
+# Edge-case rules — exercise the parser's validation paths.
+# Each rule here is intentionally minimal so the matcher can be tested
+# in isolation against a small target file.
+rules:
+  - id: py.return-none
+    languages: [python]
+    severity: INFO
+    message: "Function returns None explicitly — may be redundant"
+    patterns:
+      - pattern: return None
+
+  - id: py.raise-generic-exception
+    languages: [python]
+    severity: WARNING
+    message: "Raise a specific exception type instead of bare Exception"
+    patterns:
+      - pattern: raise Exception($MSG)
+
+  - id: py.pass-statement
+    languages: [python]
+    severity: HINT
+    message: "Pass statement — empty block"
+    patterns:
+      - pattern: pass
+
+  - id: py.break-in-loop
+    languages: [python]
+    severity: HINT
+    message: "Break statement found"
+    patterns:
+      - pattern: break

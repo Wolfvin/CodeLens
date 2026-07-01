@@ -1,0 +1,12 @@
+rules:
+  - id: py.hardcoded-password
+    languages: [python]
+    severity: ERROR
+    message: "Hardcoded password assignment detected"
+    patterns:
+      - pattern-either:
+          - pattern: $PWD = "$VALUE"
+          - pattern: $PWD = '$VALUE'
+      - pattern-not: $PWD = None
+    metadata:
+      cwe: "CWE-798"

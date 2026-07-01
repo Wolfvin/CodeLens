@@ -1,0 +1,7 @@
+rules:
+  - id: py.print-debug
+    languages: [python]
+    severity: HINT
+    message: "Remove debug print() before shipping"
+    patterns:
+      - pattern-regex: 'print\([''"]debug[: ].*[''"]\s*,?\s*\)'
