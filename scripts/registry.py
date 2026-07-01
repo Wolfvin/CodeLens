@@ -66,7 +66,15 @@ def ensure_codelens_dir(workspace: str) -> str:
 
 
 def load_config(workspace: str) -> Dict[str, Any]:
-    """Load codelens.config.json, or return defaults."""
+    """Load codelens.config.json, or return defaults.
+
+    The ``workspace_roots`` field (issue #15 Phase 1) is a list of
+    additional repo paths that are part of the same logical workspace
+    as the primary ``workspace``. Cross-repo intelligence features
+    (trace --cross-repo, combined architecture) read this list to
+    resolve symbols + edges across multiple indexed repos. Phase 1
+    only stores the list; Phase 2 will consume it in scan + trace.
+    """
     config_path = os.path.join(get_codelens_dir(workspace), 'codelens.config.json')
     defaults = {
         "frontend_paths": ["src/client/", "public/", "frontend/", "static/", "templates/"],
@@ -78,7 +86,11 @@ def load_config(workspace: str) -> Dict[str, Any]:
         "vue_mode": False,
         "svelte_mode": False,
         "tailwind_mode": False,
-        "css_preprocessor": None
+        "css_preprocessor": None,
+        # issue #15 Phase 1: additional repo roots that belong to the
+        # same logical workspace. Empty by default — single-repo mode.
+        # Use `codelens init --add-repo <path>` to append entries.
+        "workspace_roots": []
     }
     if os.path.exists(config_path):
         try:
@@ -96,6 +108,111 @@ def save_config(workspace: str, config: Dict[str, Any]) -> None:
     config_path = os.path.join(codelens_dir, 'codelens.config.json')
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+def get_workspace_roots(workspace: str) -> list:
+    """Return all repo roots that belong to the logical workspace.
+
+    Issue #15 Phase 1: the primary workspace is always first in the
+    list, followed by every path in ``config["workspace_roots"]``.
+    Paths are normalized to absolute form + deduplicated (preserving
+    order) so callers can iterate without worrying about duplicates
+    or relative paths.
+
+    Relative paths in ``workspace_roots`` are resolved against the
+    primary workspace (not CWD) — this matches the user mental model
+    of "paths in the config are relative to where .codelens/ lives".
+
+    Returns:
+        List of absolute directory paths. Always non-empty (contains
+        at least the primary workspace). Non-existent paths are
+        silently skipped — the caller is expected to have validated
+        them at init time, and a path that no longer exists is not
+        an error condition at read time.
+    """
+    workspace = os.path.abspath(workspace)
+    config = load_config(workspace)
+    roots = [workspace]
+    seen = {workspace}
+    for extra in config.get("workspace_roots", []):
+        # Skip None / empty / whitespace-only entries (defensive —
+        # users sometimes hand-edit the JSON and leave blank lines).
+        if not extra or not str(extra).strip():
+            continue
+        extra_str = str(extra).strip()
+        # Resolve relative paths against the primary workspace, NOT
+        # CWD. ``os.path.abspath`` resolves against CWD which would
+        # give different results depending on where CodeLens is
+        # invoked from. Joining with the workspace first makes the
+        # resolution deterministic.
+        if not os.path.isabs(extra_str):
+            abs_extra = os.path.abspath(os.path.join(workspace, extra_str))
+        else:
+            abs_extra = os.path.abspath(extra_str)
+        if abs_extra in seen:
+            continue
+        seen.add(abs_extra)
+        roots.append(abs_extra)
+    return roots
+
+
+def add_workspace_root(workspace: str, repo_path: str) -> Dict[str, Any]:
+    """Append ``repo_path`` to the workspace's ``workspace_roots`` config.
+
+    Issue #15 Phase 1: idempotent — if ``repo_path`` is already in the
+    list (after absolute-path normalization), this is a no-op. The
+    primary workspace itself cannot be added as an additional root
+    (that would be redundant — it's always first in
+    :func:`get_workspace_roots`).
+
+    Args:
+        workspace: The primary workspace root (where ``.codelens/``
+            lives).
+        repo_path: An additional repo path to register. Must be an
+            existing directory.
+
+    Returns:
+        Dict with the updated ``workspace_roots`` list + a ``status``
+        field (``"ok"`` on success, ``"skipped"`` when the path was
+        already registered, ``"error"`` when the path does not exist
+        or is the primary workspace itself).
+    """
+    workspace = os.path.abspath(workspace)
+    repo_path = os.path.abspath(repo_path)
+
+    if repo_path == workspace:
+        return {
+            "status": "skipped",
+            "reason": "repo_path is the primary workspace — already always first in workspace_roots",
+            "workspace_roots": get_workspace_roots(workspace),
+        }
+
+    if not os.path.isdir(repo_path):
+        return {
+            "status": "error",
+            "reason": f"repo_path does not exist or is not a directory: {repo_path}",
+            "workspace_roots": get_workspace_roots(workspace),
+        }
+
+    config = load_config(workspace)
+    roots = config.get("workspace_roots", [])
+    # Normalize existing entries to absolute paths for the dedup check
+    abs_roots = [os.path.abspath(r) for r in roots]
+    if repo_path in abs_roots:
+        return {
+            "status": "skipped",
+            "reason": f"repo_path already registered: {repo_path}",
+            "workspace_roots": get_workspace_roots(workspace),
+        }
+
+    roots.append(repo_path)
+    config["workspace_roots"] = roots
+    save_config(workspace, config)
+    return {
+        "status": "ok",
+        "reason": f"added {repo_path} to workspace_roots",
+        "workspace_roots": get_workspace_roots(workspace),
+    }
 
 
 def load_frontend_registry(workspace: str) -> Dict[str, Any]:
