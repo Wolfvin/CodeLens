@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "codelens"
 version = "8.2.0"
-description = "Live Codebase Reference Intelligence — 68 commands for AI-powered code analysis, security auditing, and quality scoring"
+description = "Live Codebase Reference Intelligence — 69 commands for AI-powered code analysis, security auditing, and quality scoring"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
@@ -69,18 +69,77 @@ lsp = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    "build",
+    "twine",
 ]
 all = [
     "codelens[grammars,watch,rules,lsp,dev]",
 ]
 
-# Entry point removed — codelens is run directly via python3 codelens.py
-# The scripts/ directory uses sys.path-based imports, not a proper Python package.
-# To install as a package, add __init__.py and convert to absolute imports.
+# Phase 1 (issue #54): `codelens` console script entry point.
+# `codelens:main` resolves to the top-level `main()` function in
+# `scripts/codelens.py` — installed as a top-level module via the
+# `package-dir = {"" = "scripts"}` mapping below. Backward compat is
+# preserved: `python3 scripts/codelens.py <cmd>` continues to work
+# for development workflows.
+[project.scripts]
+codelens = "codelens:main"
+
+# ─── Packaging layout (issue #54 Phase 1) ─────────────────────────────────
+# `scripts/` is the source root. Top-level .py files become top-level
+# importable modules (codelens, utils, registry, *_engine, ...); subdirs
+# with __init__.py (commands, formatters, parsers, security, memories,
+# sca_parsers, mcp_hooks, data, rules, plugins, plugins/*) become
+# top-level packages. This preserves the existing sys.path-based
+# `from commands import ...` / `import codelens` style used throughout
+# the codebase and tests, while making `pip install codelens` produce a
+# fully importable + runnable install.
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+include-package-data = true
+# Top-level .py modules in scripts/ — must be listed explicitly because
+# setuptools only auto-discovers *packages* (dirs with __init__.py), not
+# flat .py modules. When a new top-level engine/script is added to
+# scripts/, append its stem here. The packaging smoke test in
+# tests/test_packaging.py fails if a top-level .py file is missing from
+# this list.
+py-modules = [
+    "a11y_engine", "apimap_engine", "architecture_engine", "ast_taint_engine",
+    "autofix_engine", "base_engine", "base_parser", "callgraph_engine",
+    "circular_engine", "codelens", "codelensignore", "complexity_engine",
+    "configdrift_engine", "context_engine", "convention_engine",
+    "crossfile_taint_engine", "cssdeep_engine", "dashboard_engine",
+    "dataflow_engine", "deadcode_engine", "debugleak_engine",
+    "dependents_engine", "diff_engine", "edge_resolver", "entrypoints_engine",
+    "envcheck_engine", "framework_detect", "git_aware", "grammar_loader",
+    "graph_model", "history_engine", "hybrid_engine", "hybrid_type_resolver",
+    "impact_engine", "incremental", "lsp_client", "lsp_server", "mcp_server",
+    "missing_refs", "osv_client", "outline_engine", "ownership_engine",
+    "perfhint_engine", "persistent_registry", "plugin_system",
+    "pre_commit_hook", "prefilter", "refactor_safe_engine", "refresh_vuln_db",
+    "regexaudit_engine", "registry", "rule_engine", "rule_matcher",
+    "rule_pattern_parser", "rule_test_runner", "rule_validator", "search_engine",
+    "secrets_engine", "semantic_engine", "sideeffect_engine", "smell_engine",
+    "snapshot_io", "stacktrace_engine", "statemap_engine", "suppression",
+    "sync_command_count", "testmap_engine", "trace_engine", "typeinfer_engine",
+    "universal_grammar_loader", "utils", "validate_engine", "vulnscan_engine",
+]
 
 [tool.setuptools.packages.find]
 where = ["scripts"]
-include = ["*"]
+include = [
+    "commands",
+    "formatters",
+    "parsers",
+    "security",
+    "memories",
+    "sca_parsers",
+    "mcp_hooks",
+    "data",
+    "rules",
+    "plugins",
+    "plugins.*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

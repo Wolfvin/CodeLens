@@ -1,0 +1,188 @@
+name: Publish to PyPI
+
+# Issue #54 Phase 1 — Distribution & packaging overhaul.
+#
+# Triggered by tag pushes matching ``v*`` (e.g. ``v8.2.0``, ``v8.2.0rc1``).
+# Builds a pure-Python wheel + sdist and publishes to PyPI using the
+# Trusted Publisher (OIDC) flow — no API token secret required, the
+# PyPI project must be configured to trust this exact workflow file.
+#
+# Trusted Publisher setup (one-time, on PyPI):
+#   https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+#     Publisher:  GitHub
+#     Owner:      Wolfvin
+#     Repo:       CodeLens
+#     Workflow:   publish-pypi.yml
+#     Env:        pypi
+#
+# Phase 2+ (Docker, binary, Homebrew, signing) will be added as
+# separate workflow files — this one stays PyPI-only.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Allow manual dispatch for release dry-runs (builds but does not publish).
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only, skip upload (true|false)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+# Prevent two tag pushes from racing to publish the same release.
+concurrency:
+  group: pypi-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    outputs:
+      wheel: ${{ steps.collect.outputs.wheel }}
+      sdist: ${{ steps.collect.outputs.sdist }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is not needed for build, but ``include-package-data``
+          # relies on VCS-tracked files being present — default checkout is
+          # shallow but does include all tracked files for the tagged commit.
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade build twine check-wheel-contents
+
+      - name: Show environment
+        run: |
+          python --version
+          pip show build twine check-wheel-contents | grep -E "^(Name|Version):"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m build --outdir dist/
+          ls -la dist/
+
+      - name: Check wheel contents
+        run: |
+          check-wheel-contents dist/*.whl
+          echo "--- wheel file listing ---"
+          python - <<'PY'
+          import zipfile, sys, glob
+          for whl in glob.glob("dist/*.whl"):
+              print(f"# {whl}")
+              with zipfile.ZipFile(whl) as z:
+                  for name in sorted(z.namelist()):
+                      print(f"  {name}")
+          PY
+
+      - name: Verify metadata
+        run: |
+          twine check dist/*
+
+      - name: Verify console script entry point is registered
+        run: |
+          python - <<'PY'
+          import zipfile, glob, re
+          entry_re = re.compile(r"^codelens\s*=\s*codelens:main\s*$", re.M)
+          found = False
+          for whl in glob.glob("dist/*.whl"):
+              with zipfile.ZipFile(whl) as z:
+                  for name in z.namelist():
+                      if name.endswith("entry_points.txt"):
+                          txt = z.read(name).decode("utf-8")
+                          print(f"--- {name} ---\n{txt}")
+                          if entry_re.search(txt):
+                              found = True
+          if not found:
+              print("ERROR: `codelens = codelens:main` entry point not found in any entry_points.txt")
+              sys.exit(1)
+          print("OK: entry point registered")
+          PY
+
+      - name: Verify rule/plugin data files are bundled
+        run: |
+          python - <<'PY'
+          import zipfile, glob, sys
+          required = [
+              "data/default-codelensignore",
+              "rules/python_security.yaml",
+              "rules/javascript_security.yaml",
+              "plugins/owasp_top10/plugin.yaml",
+              "plugins/owasp_top10/rules/owasp_top10.yaml",
+              "plugins/compliance/plugin.yaml",
+              "plugins/compliance/rules/hipaa.yaml",
+              "plugins/compliance/rules/pci_dss.yaml",
+          ]
+          for whl in glob.glob("dist/*.whl"):
+              with zipfile.ZipFile(whl) as z:
+                  names = set(z.namelist())
+              missing = [r for r in required if r not in names]
+              if missing:
+                  print(f"ERROR: missing data files in {whl}: {missing}")
+                  sys.exit(1)
+              print(f"OK: all {len(required)} required data files present in {whl}")
+              break
+          PY
+
+      - name: Collect artifact names
+        id: collect
+        run: |
+          WHEEL=$(ls dist/*.whl | head -n1)
+          SDIST=$(ls dist/*.tar.gz | head -n1)
+          echo "wheel=$WHEEL" >> "$GITHUB_OUTPUT"
+          echo "sdist=$SDIST" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: codelens-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip upload on manual dry-run OR on non-tag pushes.
+    if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/codelens/
+    permissions:
+      # Required for PyPI Trusted Publishing (OIDC).
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: codelens-dist
+          path: dist/
+
+      - name: List artifacts to publish
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        # Trusted Publisher flow — no API token needed. The PyPI project
+        # must pre-configure this workflow as a trusted publisher.
+        # https://docs.pypi.org/trusted-publishers/
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Skip on manual dispatch when dry_run=true (defensive — also
+          # guarded by the job-level ``if``).
+          skip-existing: true
+          print-hash: true
