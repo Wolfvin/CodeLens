@@ -884,8 +884,12 @@ def main():
         # a text table, not JSON. Skipping the global add here lets that
         # command-specific format work without an argparse conflict.
         if "format" not in existing_dests:
-            sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
-                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), or compact (token-efficient single-char keys)")
+            sub.add_argument("--format", "-f",
+                             choices=["json", "markdown", "ai", "sarif", "compact",
+                                      # Phase 2 (issue #52): 5 new formatters
+                                      "text", "junit-xml", "emacs", "vim", "gitlab-sast"],
+                             default=None,
+                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient), text (human-readable table), junit-xml (Jenkins/GitLab CI), emacs (compile-mode), vim (quickfix), or gitlab-sast (GitLab security dashboard)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
