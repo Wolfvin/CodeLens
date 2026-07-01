@@ -1,6 +1,18 @@
 """
 Semantic Rules Engine for CodeLens — Taint analysis for vulnerability detection.
 
+.. deprecated:: 8.3 (issue #49 Phase 1)
+    This regex-based engine is deprecated. Use ``ast_taint_engine`` (default,
+    AST-based with tree-sitter) or ``ast_taint_engine.analyze_workspace(
+    cross_file=True)`` for cross-file analysis. The AST engine provides
+    strictly better coverage with fewer false positives.
+
+    Deprecation path:
+    - v8.3 (now): deprecation warning printed to stderr on every use
+    - v8.4: ``taint --no-ast`` will use ``ast_taint_engine`` with regex
+      fallback mode (no tree-sitter) instead of this module
+    - v9.0: this module will be removed entirely
+
 Design Goals:
 - Track data flow from sources (user input) to sinks (dangerous operations)
 - Verify if sanitizers exist in the taint path
@@ -9,17 +21,45 @@ Design Goals:
 - Confidence levels based on path certainty
 
 Confidence Levels:
-- high: Direct source→sink with no sanitizer (definite finding)
-- medium: Indirect source→sink through variable assignment
-- low: Possible source→sink but path uncertain
+- high: Direct source to sink with no sanitizer (definite finding)
+- medium: Indirect source to sink through variable assignment
+- low: Possible source to sink but path uncertain
 """
 
 import os
 import re
+import sys
+import warnings
 import yaml
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from utils import logger
+
+
+# Issue #49 Phase 1: emit a one-time deprecation warning when this module
+# is used for analysis. We use a module-level flag so the warning prints
+# at most once per process, not once per call.
+_SEMANTIC_ENGINE_DEPRECATION_WARNED = False
+
+
+def _emit_deprecation_warning() -> None:
+    """Print a deprecation warning to stderr (once per process)."""
+    global _SEMANTIC_ENGINE_DEPRECATION_WARNED
+    if _SEMANTIC_ENGINE_DEPRECATION_WARNED:
+        return
+    _SEMANTIC_ENGINE_DEPRECATION_WARNED = True
+    msg = (
+        "[codelens] WARNING: semantic_engine (regex-based taint analysis) is "
+        "deprecated (issue #49 Phase 1). Use ast_taint_engine (default) or "
+        "ast_taint_engine.analyze_workspace(cross_file=True) for cross-file "
+        "analysis. This module will be removed in v9.0."
+    )
+    print(msg, file=sys.stderr)
+    warnings.warn(
+        "semantic_engine is deprecated; use ast_taint_engine instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
 
 # ─── Rule Loading ────────────────────────────────────────────
@@ -76,12 +116,16 @@ def filter_rules_by_language(rules: List[Dict], language: str) -> List[Dict]:
 class TaintAnalyzer:
     """Per-file taint analysis engine.
 
+    .. deprecated:: 8.3 (issue #49 Phase 1)
+        Use ``ast_taint_engine.ASTTaintAnalyzer`` instead.
+
     Builds a simple control flow graph from Python/JS source,
     then tracks tainted data from sources through assignments
     and function calls to sinks.
     """
 
     def __init__(self, rules: List[Dict], language: str = "python"):
+        _emit_deprecation_warning()
         self.rules = filter_rules_by_language(rules, language)
         self.language = language
         self.findings: List[Dict] = []
@@ -300,7 +344,12 @@ class TaintAnalyzer:
 # ─── Workspace-Level Analysis ────────────────────────────────
 
 def analyze_workspace(workspace: str, language: str = None) -> Dict[str, Any]:
-    """Run taint analysis across an entire workspace."""
+    """Run taint analysis across an entire workspace.
+
+    .. deprecated:: 8.3 (issue #49 Phase 1)
+        Use ``ast_taint_engine.analyze_workspace()`` instead.
+    """
+    _emit_deprecation_warning()
     rules = load_rules()
     if not rules:
         return {
