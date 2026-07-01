@@ -46,6 +46,7 @@ Usage:
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
     python3 codelens.py migrate <workspace>            # Migrate JSON registry to SQLite
     python3 codelens.py lsp-status                     # Check LSP server availability
+    python3 codelens.py lsp [--rule-file x.yaml] [--tcp --port 2087]  # Run as native LSP 3.17 server (issue #48)
     python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
     python3 codelens.py dashboard <workspace>           # Generate HTML visualization dashboard
     python3 codelens.py history <workspace>             # Show historical trend data

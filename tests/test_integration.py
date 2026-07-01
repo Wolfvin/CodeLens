@@ -1,5 +1,5 @@
 """
-Integration smoke tests for all 67 CodeLens commands.
+Integration smoke tests for all 68 CodeLens commands.
 
 Tests that every command:
 1. Runs without crash (valid JSON output)
@@ -300,7 +300,7 @@ class TestModuleStructure:
         sys.path.insert(0, SCRIPT_DIR)
         from commands import COMMAND_REGISTRY
         # Regression sentinel — see docstring above for update procedure.
-        EXPECTED_COMMAND_COUNT = 67
+        EXPECTED_COMMAND_COUNT = 68
         actual = len(COMMAND_REGISTRY)
         assert actual == EXPECTED_COMMAND_COUNT, (
             f"Command count drift detected: expected {EXPECTED_COMMAND_COUNT}, "
