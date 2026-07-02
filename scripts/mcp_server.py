@@ -1234,6 +1234,12 @@ class MCPServer:
         # picks up the auto-detected workspace.
         self._hook_manager: Optional[HookManager] = None
         self._hook_workspace: Optional[str] = None
+        # Staleness detector (issue #66 Phase 1). Holds a per-workspace
+        # cache with a short TTL so we don't re-stat the whole tree on
+        # every MCP tool call. The detector is thread-safe (internal
+        # ``threading.Lock``); the MCP server dispatches tool calls in
+        # a thread pool, so this matters.
+        self._staleness_detector = None  # lazy — see _get_staleness_detector
 
     # ─── Lifecycle ────────────────────────────────────────
 
@@ -1583,6 +1589,12 @@ class MCPServer:
                 # last tool call (issue #47). Even cached responses must
                 # drain the queue so the agent doesn't miss warnings.
                 self._attach_pending_hooks(response)
+                # Issue #66 Phase 1: attach staleness banner on cached
+                # read-tool responses too. The banner is a property of
+                # the workspace, not the call — cached responses get
+                # the same warning as fresh ones.
+                if cmd_name not in ("scan", "init"):
+                    self._attach_staleness_banner(response, workspace)
                 return response
 
         # Execute the command
@@ -1597,6 +1609,10 @@ class MCPServer:
             # If scan, also cache the registry in memory
             if cmd_name == "scan" and workspace:
                 self._load_registry_to_memory(workspace)
+                # Issue #66 Phase 1: a scan refreshes the index, so any
+                # cached staleness verdict is now stale itself. Drop it
+                # so the next read tool re-probes against the new state.
+                self._invalidate_staleness_cache(workspace)
 
             response = {
                 "content": [{
@@ -1615,6 +1631,13 @@ class MCPServer:
             # response. (The hook we just scheduled will surface on the
             # next call — that's by design: hooks are non-blocking.)
             self._attach_pending_hooks(response)
+            # Issue #66 Phase 1: attach staleness banner on read tools.
+            # Skip mutating commands (scan/init) — they're the user's
+            # remediation path, not analysis calls. The banner on a
+            # scan response would be noise (the scan just fixed the
+            # staleness).
+            if cmd_name not in ("scan", "init"):
+                self._attach_staleness_banner(response, workspace)
 
             return response
 
@@ -1636,6 +1659,12 @@ class MCPServer:
             # agent doesn't lose them — issue #47 spec calls for hook
             # results to be surfaced via "next tool response".
             self._attach_pending_hooks(response)
+            # Issue #66 Phase 1: still attach the staleness banner on
+            # error responses — if the user is in a stale workspace,
+            # that context is more useful than the error itself. The
+            # error is almost certainly caused by the stale index.
+            if cmd_name not in ("scan", "init"):
+                self._attach_staleness_banner(response, workspace)
             return response
 
     # ─── Hook integration (issue #47) ─────────────────────
@@ -1712,6 +1741,108 @@ class MCPServer:
                 response["_hooks"] = pending
         except Exception:
             pass
+
+    # ─── Staleness banner (issue #66 Phase 1) ──────────────────
+
+    def _get_staleness_detector(self):
+        """Lazily construct the :class:`sync.pending.StaleFileDetector`.
+
+        Lazy construction keeps the import out of the server's startup
+        path — if the sync subpackage ever fails to import (e.g. a
+        missing dependency in a stripped-down install), the server
+        still starts and only staleness detection is degraded.
+        """
+        if self._staleness_detector is None:
+            try:
+                from sync.pending import StaleFileDetector
+                self._staleness_detector = StaleFileDetector()
+            except Exception as exc:
+                # Don't cache the failure — next call may succeed if
+                # the import error was transient (e.g. a filesystem
+                # race during package install).
+                print(
+                    f"[CodeLens MCP] staleness detector init failed: {exc}",
+                    file=sys.stderr,
+                )
+                return None
+        return self._staleness_detector
+
+    def _attach_staleness_banner(
+        self, response: Dict[str, Any], workspace: str
+    ) -> None:
+        """Prepend a staleness banner to the tool response text.
+
+        Called on every read-tool call (i.e. not ``scan`` / ``init``).
+        The banner is prepended to the first content block's ``text``
+        field so the agent sees it before the tool's actual output.
+
+        Why prepend (not append)?
+            Agents read tool output top-to-bottom. If the banner is at
+            the bottom, the agent may have already acted on stale data
+            before reaching it. Prepending ensures the warning is the
+            first thing the agent sees.
+
+        Why mutate the response in place?
+            The response is constructed fresh on every call (no shared
+            state between calls). Mutating it is simpler and faster
+            than building a wrapper.
+
+        Failure isolation:
+            Any exception in staleness detection is caught and logged
+            to stderr. The banner is a nice-to-have — it must never
+            break a tool call. This matches the pattern used by
+            ``_attach_pending_hooks`` above.
+        """
+        if not workspace:
+            return
+        try:
+            detector = self._get_staleness_detector()
+            if detector is None:
+                return
+            stale = detector.detect(workspace)
+            if not stale:
+                return
+            from sync.pending import format_staleness_banner
+            banner = format_staleness_banner(stale)
+            if not banner:
+                return
+
+            # Attach the banner as a structured field so agents that
+            # pattern-match on JSON keys can detect it, AND prepend it
+            # to the first text content block so agents that read only
+            # the text see it. Both paths ensure the warning surfaces.
+            response["_staleness"] = {
+                "stale_count": len(stale),
+                "banner": banner,
+            }
+            content = response.get("content")
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict) and "text" in first:
+                    first["text"] = banner + "\n\n" + first["text"]
+        except Exception as exc:
+            print(
+                f"[CodeLens MCP] staleness banner attach failed: {exc}",
+                file=sys.stderr,
+            )
+
+    def _invalidate_staleness_cache(self, workspace: str) -> None:
+        """Drop cached staleness results for ``workspace`` after a scan.
+
+        A scan refreshes the index — any cached staleness verdict is now
+        stale itself. Called from ``_handle_tools_call`` after a
+        successful ``scan`` command.
+        """
+        try:
+            detector = self._staleness_detector
+            if detector is not None:
+                detector.invalidate(workspace)
+        except Exception as exc:
+            # Non-fatal — the cache will expire on its own TTL.
+            print(
+                f"[CodeLens MCP] staleness cache invalidate failed: {exc}",
+                file=sys.stderr,
+            )
 
     def _send_hook_notification(self, notification: Dict[str, Any]) -> None:
         """Push a hook notification to the agent via stdout JSON-RPC.
