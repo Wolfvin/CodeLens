@@ -391,13 +391,19 @@ def _build_results(command: str, findings: List[Dict], workspace: str) -> List[D
     return results
 
 
-def to_sarif(data: Dict, command: str = "", workspace: str = "") -> Dict:
+def to_sarif(data: Dict, command: str = "", workspace: str = "",
+             automation_guid: Optional[str] = None) -> Dict:
     """Convert CodeLens output to SARIF v2.1.0 format.
 
     Args:
         data: CodeLens command output dict
         command: Command name (e.g., "secrets", "dead-code")
         workspace: Workspace root path
+        automation_guid: Optional SARIF ``automationDetails.guid`` —
+            used by CI integrations (issue #57 Phase 1) to group
+            related runs (e.g. all runs sharing the same baseline
+            SHA). When None, no ``automationDetails`` block is emitted
+            (backward-compat with existing callers).
 
     Returns:
         SARIF v2.1.0 compliant dict
@@ -443,6 +449,17 @@ def to_sarif(data: Dict, command: str = "", workspace: str = "") -> Dict:
         }],
     }
 
+    # Issue #57 Phase 1: automationDetails.guid lets CI dashboards
+    # (GitHub code scanning, SonarQube) group related runs under one
+    # logical "automation" identity. The guid is stable per baseline
+    # SHA so e.g. every PR run against the same base SHA shows up as
+    # the same automation row.
+    if automation_guid:
+        run["automationDetails"] = {
+            "guid": automation_guid,
+            "id": {"text": f"codelens/baseline/{automation_guid}"},
+        }
+
     # Add workspace info
     if workspace:
         run["originalUriBaseIds"] = {
@@ -460,7 +477,8 @@ def to_sarif(data: Dict, command: str = "", workspace: str = "") -> Dict:
     return sarif
 
 
-def format_sarif(data: Dict, command: str = "", workspace: str = "") -> str:
+def format_sarif(data: Dict, command: str = "", workspace: str = "",
+                 automation_guid: Optional[str] = None) -> str:
     """Format CodeLens output as SARIF JSON string."""
-    sarif = to_sarif(data, command, workspace)
+    sarif = to_sarif(data, command, workspace, automation_guid=automation_guid)
     return json.dumps(sarif, indent=2, ensure_ascii=False)
