@@ -797,11 +797,16 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                     refs = js_be_parser.extract_references(content, rel_path)
                 else:
                     refs = parse_js_backend_fallback(content, rel_path)
-                js_backend_data.append({
+                item = {
                     "path": rel_path,
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
-                })
+                }
+                # Issue #163: surface files that fell back to regex
+                # due to tree-sitter binding segfault risk.
+                if refs.get("skipped_from_tree_sitter"):
+                    item["skipped_from_tree_sitter"] = refs["skipped_from_tree_sitter"]
+                js_backend_data.append(item)
             except IOError:
                 logger.debug(f"Failed to read JS backend file: {path}")
 
@@ -853,11 +858,16 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                     refs = py_parser.extract_references(content, os.path.relpath(path, workspace))
                 else:
                     refs = parse_python_fallback(content, os.path.relpath(path, workspace))
-                python_data.append({
+                item = {
                     "path": os.path.relpath(path, workspace),
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
-                })
+                }
+                # Issue #163: surface files that fell back to regex
+                # due to tree-sitter binding segfault risk.
+                if refs.get("skipped_from_tree_sitter"):
+                    item["skipped_from_tree_sitter"] = refs["skipped_from_tree_sitter"]
+                python_data.append(item)
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
@@ -1352,6 +1362,16 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
     except Exception:
         logger.debug("final graph_stats query failed", exc_info=True)
 
+    # Issue #163: aggregate files that fell back to regex because
+    # tree-sitter 0.26 has a nondeterministic SIGSEGV on large files
+    # (issue #116). Surface them in the scan output so callers know
+    # coverage is partial — silent skip was the original bug.
+    _skipped_from_tree_sitter = []
+    for _item in (js_backend_data + python_data + rust_data):
+        _skip = _item.get("skipped_from_tree_sitter")
+        if _skip:
+            _skipped_from_tree_sitter.append(_skip)
+
     result = {
         "status": "ok",
         "workspace": workspace,
@@ -1439,6 +1459,12 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                 "skip_percent": 0.0, "elapsed_sec": 0.0,
             },
         },
+        # Issue #163: files that used regex fallback instead of
+        # tree-sitter due to the binding segfault risk on large files
+        # (issue #116). Each entry has: file, lines, threshold, reason,
+        # fallback_used. Empty list means all files were parsed with
+        # tree-sitter (full AST accuracy).
+        "skipped_from_tree_sitter": _skipped_from_tree_sitter,
     }
 
     # Issue #56: print prefilter stats to stderr when --verbose. Matches

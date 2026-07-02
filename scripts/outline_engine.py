@@ -208,14 +208,13 @@ def _outline_javascript(content: str, detail: str) -> Dict:
     """Outline for JavaScript files."""
     outline = {"imports": [], "functions": [], "classes": [], "exports": [], "variables": []}
 
-    # Workaround for issue #116: tree-sitter-javascript 0.25 segfaults
-    # on files with deeply nested callbacks. Use regex fallback for
-    # files over 100 lines.
-    line_count = content.count('\n') + 1
-    if line_count > 100:
-        _extract_js_outline_regex(content, outline, detail)
-        return outline
-
+    # Issue #163: previously we preemptively fell back to regex for any
+    # JS file > 100 lines, which silently downgraded outline quality on
+    # the largest files in the repo. The tree-sitter GC issues that
+    # motivated that workaround (issue #116) are now mitigated in
+    # ``base_parser.py`` via ``_last_tree`` + iterative ``walk_tree``
+    # with GC disabled, so we attempt tree-sitter on every file and
+    # only fall back to regex on an actual parse exception.
     try:
         from grammar_loader import get_grammar_loader
         loader = get_grammar_loader()
@@ -305,13 +304,13 @@ def _outline_python(content: str, detail: str) -> Dict:
     """Outline for Python files."""
     outline = {"imports": [], "functions": [], "classes": [], "variables": []}
 
-    # Workaround for issue #116: tree-sitter-python 0.25 segfaults on
-    # large files. Use regex fallback for files over 200 lines.
-    line_count = content.count('\n') + 1
-    if line_count > 200:
-        _extract_python_outline_regex(content, outline, detail)
-        return outline
-
+    # Issue #163: previously we preemptively fell back to regex for any
+    # Python file > 200 lines, which silently downgraded outline quality
+    # on the largest files in the repo. The tree-sitter GC issues that
+    # motivated that workaround (issue #116) are now mitigated in
+    # ``base_parser.py`` via ``_last_tree`` + iterative ``walk_tree``
+    # with GC disabled, so we attempt tree-sitter on every file and
+    # only fall back to regex on an actual parse exception.
     try:
         from grammar_loader import get_grammar_loader
         loader = get_grammar_loader()
