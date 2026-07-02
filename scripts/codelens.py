@@ -1286,9 +1286,9 @@ def main():
         # and the normal formatter handles the JSON serialization.
         _already_printed = (
             isinstance(result, dict)
-            and (result.get("_doctor_printed_text") or result.get("_sessions_printed_text"))
+            and (result.get("_doctor_printed_text") or result.get("_sessions_printed_text") or result.get("_orient_printed_text"))
         )
-        if not (args.command in ("doctor", "sessions") and _already_printed):
+        if not (args.command in ("doctor", "sessions", "orient") and _already_printed):
             print(format_output(result, args.format, format_command, workspace))
 
         # ─── Exit codes for CI-quality-gate commands ──
