@@ -336,5 +336,6 @@ CodeLens v8.0+ adds 7 major capability pillars over v7.x:
 5. **Cross-File Dataflow Engine** (`dataflow` v2) — Workspace-wide call graph with import resolution (`from/import`, `require` destructuring) and bidirectional taint propagation.
 6. **OWASP Top 10 + Compliance Mapping** — 89 rules total (A01-A10 + PCI-DSS requirements 1-12 + HIPAA 45 CFR § 164.312).
 7. **CI/CD Quality Gate** (`check` command) — Exits non-zero on failure, SARIF output for GitHub Advanced Security / VS Code.
+8. **Gitleaks-Backed Secrets Scanner** (`secrets` command, issue #159) — When [gitleaks](https://github.com/gitleaks/gitleaks) is installed, `codelens secrets` uses it as the primary backend for 600+ maintained rules and entropy scoring. Falls back to the built-in regex scanner when gitleaks is unavailable (opt-in upgrade, never a hard dependency). Use `--no-gitleaks` to force the regex backend. Install: `brew install gitleaks` / `go install github.com/gitleaks/gitleaks/v8@latest` / [GitHub releases](https://github.com/gitleaks/gitleaks/releases).
 
 v8.1 follows up with F1 benchmark improvements (avg F1 0.803 → 0.872), circular engine depth fixes (F1 0.667 → 1.000), dead-code engine fixes (F1 0.800 → 0.952), and AST taint depth enhancements (return-value propagation, scope-hierarchical TaintState, branch condition refinement).
