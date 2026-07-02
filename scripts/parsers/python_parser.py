@@ -74,29 +74,73 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                 "edges": [{"from": str, "to_fn": str}]
             }
 
-        Files larger than ``MAX_SAFE_PY_LINES`` are skipped with a
-        warning — tree-sitter-python 0.25 + tree-sitter 0.26 has a
-        known segfault on deeply-nested Python files (issue #116) that
-        cannot be fully mitigated from Python.
+        Issue #116 mitigation strategy (revised, issue #163):
+
+        The original workaround silently skipped Python files above
+        ``MAX_SAFE_PY_LINES = 200`` — but this caused the most complex
+        files in a codebase (the ones most worth analyzing) to be
+        invisible to all downstream engines. On Wolfvin/Regrets the
+        ``scripts/validate.py`` file (2361 lines) was silently dropped,
+        along with ~40% of the codebase.
+
+        The actual root cause (issue #116) is a tree-sitter 0.26
+        Python binding bug: Node references become invalid during
+        deep AST walks, even with cyclic GC disabled and ``_last_tree``
+        held. The segfault is nondeterministic but reliably triggers
+        on files above ~500 lines. This cannot be fixed from Python —
+        it requires a binding upgrade (tracked in #116).
+
+        Mitigations applied here (issue #163):
+        1. ``BaseParser._last_tree`` + ``self.parse()`` — keep the
+           Tree alive on the parser instance (see ``base_parser.py``).
+        2. ``_gc.disable()`` around the walk — prevents cyclic GC
+           from running mid-walk.
+        3. ``MAX_SAFE_PY_LINES`` threshold — files above this many
+           lines use the REGEX FALLBACK parser instead of tree-sitter.
+           This gives partial coverage (function/class declarations
+           and direct calls) instead of zero coverage. The fallback
+           result includes a ``skipped_from_tree_sitter`` field so
+           callers know tree-sitter was not used and why.
+
+        The threshold (500 lines) is conservative because the binding
+        bug is nondeterministic — we picked the largest value that
+        passed 5 consecutive runs on synthetic and real-world test
+        files. Raising it further would reintroduce the segfault.
         """
         import gc as _gc
         import logging
         _log = logging.getLogger("codelens")
 
-        # Workaround for issue #116: tree-sitter-python 0.25 has
-        # nondeterministic segfaults on Python files with deeply nested
-        # functions/classes. Skip large files rather than crash the scan.
-        # 200 lines is conservative — small files rarely trigger the bug.
-        MAX_SAFE_PY_LINES = 200
+        # Issue #163: threshold for tree-sitter vs regex fallback.
+        # Below: tree-sitter (full AST accuracy).
+        # Above: regex fallback (partial coverage, no segfault).
+        MAX_SAFE_PY_LINES = 500
         line_count = content.count('\n') + 1
         if line_count > MAX_SAFE_PY_LINES:
-            _log.warning(
-                "Skipping large Python file %s (%d lines > %d threshold) "
-                "due to tree-sitter segfault risk (issue #116). "
-                "File will not appear in the graph.",
+            _log.info(
+                "[python_parser] %s (%d lines > %d threshold) — "
+                "using regex fallback. tree-sitter 0.26 binding has "
+                "nondeterministic SIGSEGV on large Python files (issue #116). "
+                "Fallback gives partial coverage (declarations + direct calls).",
                 file_path, line_count, MAX_SAFE_PY_LINES,
             )
-            return {"nodes": [], "edges": []}
+            try:
+                from parsers.fallback_python import parse_python_fallback
+                result = parse_python_fallback(content, file_path)
+            except Exception as exc:
+                _log.error(
+                    "[python_parser] regex fallback also failed on %s: %s",
+                    file_path, exc,
+                )
+                result = {"nodes": [], "edges": []}
+            result["skipped_from_tree_sitter"] = {
+                "file": file_path,
+                "lines": line_count,
+                "threshold": MAX_SAFE_PY_LINES,
+                "reason": "tree_sitter_binding_segfault_risk",
+                "fallback_used": "regex",
+            }
+            return result
 
         # Disable cyclic GC during parse + walk to prevent tree-sitter
         # node invalidation (issue #116). See base_parser.walk_tree for
@@ -106,6 +150,28 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
             _gc.disable()
         try:
             return self._extract_references_impl(content, file_path)
+        except Exception as exc:
+            # Defensive: tree-sitter should not raise on valid input,
+            # but if it does (OOM on pathological file, binding bug,
+            # etc.) we log loudly and fall back to regex — never silent.
+            _log.error(
+                "[python_parser] tree-sitter parse failed on %s: %s. "
+                "Falling back to regex.",
+                file_path, exc,
+            )
+            try:
+                from parsers.fallback_python import parse_python_fallback
+                result = parse_python_fallback(content, file_path)
+            except Exception:
+                result = {"nodes": [], "edges": []}
+            result["skipped_from_tree_sitter"] = {
+                "file": file_path,
+                "lines": line_count,
+                "threshold": MAX_SAFE_PY_LINES,
+                "reason": "tree_sitter_parse_exception",
+                "fallback_used": "regex",
+            }
+            return result
         finally:
             if _gc_was_enabled:
                 _gc.enable()

@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Large-File Silent-Skip Replaced with Explicit Regex Fallback (issue #163)
+
+CodeLens silently skipped files above hardcoded line thresholds to
+avoid a tree-sitter 0.26 binding segfault (tracked in #116):
+
+- JavaScript: files > 100 lines → skipped (returned `{"nodes": [], "edges": []}`)
+- Python: files > 200 lines → skipped
+
+This caused the most complex files in a codebase — the ones most
+worth analyzing — to be invisible to all downstream engines
+(`complexity`, `dead-code`, `smell`, `entrypoints`). On
+Wolfvin/Regrets ~40% of the codebase was silently dropped, including
+the worst hotspots (`scripts/validate.js` 2730 lines,
+`scripts/validate.py` 2361 lines).
+
+**Root cause investigation:** the tree-sitter 0.26 Python binding has
+a nondeterministic SIGSEGV on large files. Existing mitigations
+(`BaseParser._last_tree`, `parse_tree()`, `_gc.disable()`) reduce
+crash frequency but do not eliminate it. Verified by stress-testing
+synthetic and real-world files: crashes begin at ~250 lines for JS
+and ~500 lines for Python. The bug cannot be fixed from Python — it
+requires a binding upgrade.
+
+**Fix (issue #163):** instead of silently skipping, large files now
+use the REGEX FALLBACK parser (`parse_js_backend_fallback` /
+`parse_python_fallback`), which gives partial coverage (function
+declarations + direct calls) instead of zero coverage. The result
+includes a `skipped_from_tree_sitter` field so callers know
+tree-sitter was not used and why. The scan command aggregates all
+such entries into a top-level `skipped_from_tree_sitter` list in its
+JSON output.
+
+Additional hardening applied to `JSBackendParser`:
+- Iterative DFS walk replaces recursive `_walk` (prevents Python
+  stack frames from holding stale Node references across function
+  boundaries — reduces crash frequency on smaller files).
+- Iterative DFS in `_find_calls_in_scope` for the same reason.
+
+Thresholds raised: JS 100 → 250, Python 200 → 500 (largest values
+that passed 5 consecutive stress-test runs without SIGSEGV).
+
+`outline_engine.py` similarly no longer preemptively falls back to
+regex for JS files > 100 lines or Python files > 200 lines — it
+attempts tree-sitter first and only falls back on actual parse
+exception.
+
 ### LSP Status Entry-Point Unification (issue #33)
 
 The `codelens --lsp-status` top-level flag (intercepted in
