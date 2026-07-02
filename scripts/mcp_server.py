@@ -1234,6 +1234,13 @@ class MCPServer:
         # picks up the auto-detected workspace.
         self._hook_manager: Optional[HookManager] = None
         self._hook_workspace: Optional[str] = None
+        # Worktree mismatch cache (issue #66 Phase 4). Detection
+        # shells out to git twice — too expensive to repeat on every
+        # MCP tool call. Cache the result per workspace for the
+        # server's lifetime. ``None`` means "not yet probed";
+        # ``{}`` (empty dict) means "probed, no mismatch"; a
+        # populated dict means "probed, mismatch present".
+        self._worktree_mismatch_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 
     # ─── Lifecycle ────────────────────────────────────────
 
@@ -1566,6 +1573,30 @@ class MCPServer:
         if not workspace:
             workspace = self._detect_workspace()
 
+        # Probe worktree mismatch EARLY — before any command execution.
+        # Why: read commands like ``list`` / ``query`` trigger
+        # ``ensure_codelens_dir(workspace)`` as a side effect of
+        # loading the registry, which creates ``.codelens/`` in the
+        # worktree. If we probed after execution, the worktree would
+        # appear to have its own index and the mismatch would never
+        # fire. Probing here caches the *pre-execution* state so the
+        # banner reflects what the user actually configured, not what
+        # we just created for them. (issue #66 Phase 4)
+        #
+        # Wrapped in try/except so a detection bug never breaks a
+        # user's tool call — the banner is a nice-to-have, not a
+        # critical path. The ``_get_worktree_mismatch`` method itself
+        # also catches exceptions, but we double-wrap here so even a
+        # bug in the caching logic doesn't escape.
+        if cmd_name not in ("scan", "init"):
+            try:
+                self._get_worktree_mismatch(workspace)
+            except Exception as exc:
+                print(
+                    f"[CodeLens MCP] worktree early-probe failed: {exc}",
+                    file=sys.stderr,
+                )
+
         # Check cache for non-mutating commands
         cache_key = f"cmd:{workspace}:{cmd_name}:{json.dumps(arguments, sort_keys=True, ensure_ascii=False)}"
         if cmd_name not in ("scan", "init"):
@@ -1583,6 +1614,12 @@ class MCPServer:
                 # last tool call (issue #47). Even cached responses must
                 # drain the queue so the agent doesn't miss warnings.
                 self._attach_pending_hooks(response)
+                # Attach worktree-mismatch banner (issue #66 Phase 4) on
+                # read tools. Cached responses get the same banner as fresh
+                # ones — the warning is a property of the workspace, not
+                # the call. Mutating commands (scan, init) skip the banner
+                # because they're the user's fix path.
+                self._attach_worktree_banner(response, workspace)
                 return response
 
         # Execute the command
@@ -1597,6 +1634,13 @@ class MCPServer:
             # If scan, also cache the registry in memory
             if cmd_name == "scan" and workspace:
                 self._load_registry_to_memory(workspace)
+                # A scan is the moment the index becomes fresh — drop
+                # any cached worktree-mismatch verdict so the next read
+                # tool re-probes against the new state. (If the user
+                # just ran ``codelens init -i`` in the worktree, the
+                # mismatch is now resolved and the banner should
+                # disappear.)
+                self._worktree_mismatch_cache.pop(os.path.abspath(workspace), None)
 
             response = {
                 "content": [{
@@ -1615,6 +1659,11 @@ class MCPServer:
             # response. (The hook we just scheduled will surface on the
             # next call — that's by design: hooks are non-blocking.)
             self._attach_pending_hooks(response)
+            # Attach worktree-mismatch banner on read tools (issue
+            # #66 Phase 4). Skip mutating commands (scan/init) — they're
+            # the user's remediation path, not analysis calls.
+            if cmd_name not in ("scan", "init"):
+                self._attach_worktree_banner(response, workspace)
 
             return response
 
@@ -1636,6 +1685,11 @@ class MCPServer:
             # agent doesn't lose them — issue #47 spec calls for hook
             # results to be surfaced via "next tool response".
             self._attach_pending_hooks(response)
+            # And still attach the worktree banner — if the user is in
+            # a misconfigured worktree, that context is more useful
+            # than the error itself. The error is almost certainly
+            # caused by the wrong index being loaded.
+            self._attach_worktree_banner(response, workspace)
             return response
 
     # ─── Hook integration (issue #47) ─────────────────────
@@ -1711,6 +1765,100 @@ class MCPServer:
             if pending:
                 response["_hooks"] = pending
         except Exception:
+            pass
+
+    def _get_worktree_mismatch(self, workspace: str) -> Optional[Dict[str, Any]]:
+        """Return cached worktree mismatch record for ``workspace``.
+
+        Probes :func:`sync.worktree.detect_worktree_index_mismatch`
+        exactly once per workspace per server lifetime — detection
+        shells out to ``git`` twice, which is too expensive to repeat
+        on every MCP tool call. The result is cached in
+        ``self._worktree_mismatch_cache`` keyed by absolute workspace
+        path.
+
+        Returns ``None`` when there is no mismatch, when git is not
+        available, or when the workspace is not under git control —
+        callers treat ``None`` as "no banner to show".
+
+        Returns a populated dict (with ``mismatch=True`` and the full
+        mismatch record) when the workspace is a worktree using a
+        foreign index. Callers attach this to the tool response so
+        agents can surface the warning.
+
+        Args:
+            workspace: Absolute path to the workspace root. Empty
+                strings return ``None`` without probing.
+
+        Why this lives on the server, not on each command:
+        ---------------------------------------------------
+        The mismatch is a property of *where the server is running*,
+        not of *which command is being called*. Caching it at the
+        server level means a single git probe per workspace, shared
+        across all read tools.
+        """
+        if not workspace:
+            return None
+        ws_key = os.path.abspath(workspace)
+        cached = self._worktree_mismatch_cache.get(ws_key, None)
+        # Note: ``None`` (default from .get) means "not yet probed".
+        # A probed "no mismatch" is stored as an empty dict ``{}`` to
+        # distinguish it from "never probed". This is documented at
+        # the cache field declaration.
+        if cached is None:
+            try:
+                from sync.worktree import detect_worktree_index_mismatch
+
+                mismatch = detect_worktree_index_mismatch(ws_key)
+                if mismatch and mismatch.get("mismatch"):
+                    self._worktree_mismatch_cache[ws_key] = mismatch
+                else:
+                    # Probed, no mismatch — store sentinel to skip
+                    # future git probes for this workspace.
+                    self._worktree_mismatch_cache[ws_key] = {}
+            except Exception as exc:
+                # Detection failure must never break a tool call.
+                # Log to stderr (mirrors HookManager pattern) and
+                # cache the "no mismatch" sentinel so we don't retry
+                # on every subsequent call.
+                print(
+                    f"[CodeLens MCP] worktree mismatch detection failed: {exc}",
+                    file=sys.stderr,
+                )
+                self._worktree_mismatch_cache[ws_key] = {}
+        result = self._worktree_mismatch_cache.get(ws_key)
+        # Return the populated dict only if it has ``mismatch=True``.
+        if result and result.get("mismatch"):
+            return result
+        return None
+
+    def _attach_worktree_banner(self, response: Dict[str, Any], workspace: str) -> None:
+        """Attach a worktree-mismatch banner to ``response`` if needed.
+
+        Adds a ``_worktree_warning`` field to the response payload.
+        The field is a dict with the full mismatch record plus a
+        human-readable ``banner`` string. Agents that know about the
+        field surface the banner; agents that don't ignore it (per
+        MCP spec — unknown top-level fields are ignored).
+
+        Why a separate field rather than prepending to ``content``:
+        Prepending text to the ``content`` array would corrupt the
+        JSON payload that agents parse out of the second content
+        item. A top-level field keeps the JSON response intact while
+        still surfacing the warning prominently.
+        """
+        try:
+            mismatch = self._get_worktree_mismatch(workspace)
+            if not mismatch:
+                return
+            from sync.worktree import format_worktree_banner
+
+            response["_worktree_warning"] = {
+                "banner": format_worktree_banner(mismatch),
+                "mismatch": mismatch,
+            }
+        except Exception:
+            # Banner attachment must never break a tool response.
             pass
 
     def _send_hook_notification(self, notification: Dict[str, Any]) -> None:
