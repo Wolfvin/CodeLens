@@ -589,7 +589,17 @@ def detect_secrets(
     # ─── Generate recommendations ─────────────────────────────
     recommendations = _generate_recommendations(findings, env_exposed, stats)
 
-    return {
+    # v8.2 (issue #5): enrich every finding with a confidence score so
+    # agents can rank actionable vs. needs-review findings. Pattern matches
+    # score high; entropy-based detections score lower (could be hashes /
+    # UUIDs); test-file findings are heavily discounted. See
+    # scripts/confidence.py for the model.
+    try:
+        from confidence import enrich_findings as _enrich_findings
+    except ImportError:
+        _enrich_findings = None
+
+    payload = {
         "status": "ok",
         "workspace": workspace,
         "severity_filter": severity,
@@ -602,6 +612,11 @@ def detect_secrets(
         "files_skipped_oversized": skipped_oversized,
         "files_skipped_regex_timeout": skipped_regex_timeout,
     }
+
+    if _enrich_findings is not None:
+        payload = _enrich_findings("secrets", payload)
+
+    return payload
 
 # ─── Pattern-based Scanner ─────────────────────────────────────
 

@@ -4,6 +4,21 @@ import json
 from typing import Any, Dict
 from formatters.markdown import to_markdown
 
+# v8.2 (issue #5): every AI-normalized output carries a schema_version so
+# downstream agents can detect breaking changes and migrate gracefully.
+# The version follows the CodeLens release version. Bump on any breaking
+# change to the normalized schema (added/removed/renamed top-level keys,
+# changed item shape, etc.).
+try:
+    from confidence import stamp_schema_version, SCHEMA_VERSION
+except ImportError:  # pragma: no cover - defensive
+    SCHEMA_VERSION = "8.2"
+
+    def stamp_schema_version(payload):
+        if isinstance(payload, dict) and "schema_version" not in payload:
+            payload["schema_version"] = SCHEMA_VERSION
+        return payload
+
 
 def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     """Normalize command output to consistent AI-friendly schema.
@@ -20,17 +35,17 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     }
     """
     if not isinstance(data, dict):
-        return {"status": "ok", "items": [data]}
+        return stamp_schema_version({"status": "ok", "items": [data]})
 
     status = data.get("status", "ok")
     if status == "error":
-        return {
+        return stamp_schema_version({
             "status": "error",
             "command": data.get("command", command),
             "error": data.get("error", ""),
             "error_type": data.get("error_type", ""),
             "suggestion": data.get("suggestion", ""),
-        }
+        })
 
     result = {
         "status": status,
@@ -165,6 +180,10 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     if "_auto_setup" in data:
         result["auto_setup"] = data["_auto_setup"]
 
+    # v8.2 (issue #5): stamp every AI-normalized output with schema_version
+    # so downstream agents can detect breaking changes and migrate.
+    stamp_schema_version(result)
+
     return result
 
 
@@ -182,5 +201,12 @@ def format_output(data: Any, format_type: str = "json", command: str = "",
     if format_type == "compact":
         from formatters.compact import format_compact
         return format_compact(data, command, workspace)
-    # Default: JSON
+    # Default: JSON — stamp schema_version so raw JSON consumers also get the
+    # version signal (issue #5). Mutates a copy so the caller's dict is not
+    # modified in place (raw JSON should reflect what the engine returned,
+    # plus the version stamp).
+    if isinstance(data, dict):
+        stamped = dict(data)
+        stamp_schema_version(stamped)
+        return json.dumps(stamped, indent=2, ensure_ascii=False)
     return json.dumps(data, indent=2, ensure_ascii=False)

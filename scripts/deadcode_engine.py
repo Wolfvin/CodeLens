@@ -295,7 +295,17 @@ def detect_dead_code(
     # Build categories dict (same as results, for API compatibility)
     categories_dict = {k: v for k, v in results.items() if v}
 
-    return {
+    # v8.2 (issue #5): enrich every finding with a confidence score so
+    # agents can rank actionable vs. needs-review findings. Scores are
+    # category-driven with modifier adjustments (test files, library API,
+    # downgraded severity, etc.). See scripts/confidence.py for the model.
+    try:
+        from confidence import enrich_findings
+    except ImportError:
+        # Defensive: never let confidence scoring break the engine.
+        enrich_findings = None
+
+    payload = {
         "status": "ok",
         "workspace": workspace,
         "stats": {
@@ -313,6 +323,11 @@ def detect_dead_code(
         "timed_out": timed_out,
         "duration_ms": int((time.time() - start_time) * 1000),
     }
+
+    if enrich_findings is not None:
+        payload = enrich_findings("dead_code", payload)
+
+    return payload
 
 def _detect_unreachable_code(content: str, ext: str, rel_path: str) -> List[Dict]:
     """Detect code that comes after return/throw/break/continue and is therefore unreachable.
