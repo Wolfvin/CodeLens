@@ -1,0 +1,78 @@
+name: Require Design Doc
+
+# CI check for issue #67 Phase 1: any PR that adds a feature-class file
+# (new CLI command, new parser, new engine, new MCP hook) MUST also add:
+#   - at least one new .md under docs/design/
+#   - at least one new .md under docs/plans/
+#
+# Exemptions:
+#   - PRs labeled: skip-design-doc, bug, chore, dependencies, refactor,
+#     documentation, test
+#   - PRs that do not add any feature-class file
+#
+# The actual logic lives in scripts/check_design_doc.py. This workflow
+# just wires up the GitHub events and passes PR metadata (labels) to the
+# script via environment variables.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # Run on any PR targeting main. The script is a no-op if no
+    # feature-class files are added, so we don't need path filters.
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check-design-doc:
+    runs-on: ubuntu-latest
+    if: github.repository == 'Wolfvin/CodeLens'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history for git diff vs base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch base branch
+        run: |
+          # The pull_request event gives us github.event.pull_request.base.ref
+          # but the local clone only has the PR head. Fetch the base so the
+          # diff works.
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+
+      - name: Run design-doc check
+        env:
+          # Pass PR labels to the script as a comma-separated string.
+          # The script reads GITHUB_PR_LABELS and applies exemptions.
+          GITHUB_PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          python3 scripts/check_design_doc.py \
+            --base "origin/${{ github.event.pull_request.base.ref }}" \
+            --head HEAD \
+            --repo-root .
+
+      - name: Annotate PR on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: [
+                '## Design doc check failed',
+                '',
+                'This PR adds feature-class file(s) but is missing the required design and/or plan documentation.',
+                '',
+                'See the error in the **Require Design Doc** workflow run for details, or read [`docs/design/README.md`](https://github.com/Wolfvin/CodeLens/blob/main/docs/design/README.md) and [`CONTRIBUTING.md`](https://github.com/Wolfvin/CodeLens/blob/main/CONTRIBUTING.md#design-documents--implementation-plans) for the policy.',
+                '',
+                'If this PR is genuinely too small to warrant a design doc (e.g., adding a single flag to an existing command), apply the `skip-design-doc` label and explain why in the PR description.',
+              ].join('\n')
+            });

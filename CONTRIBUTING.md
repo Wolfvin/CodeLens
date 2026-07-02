@@ -35,14 +35,86 @@ CodeLens uses a modular engine architecture. To add a new analysis capability:
 
 1. **Check existing issues** for similar proposals
 2. **Decide: plugin or built-in?** — Since v8.0, CodeLens supports plugins (rule_pack / engine / formatter / command). If your analysis is self-contained, ship it as a plugin (see `scripts/plugin_system.py`). If it needs tight integration with the registry or other engines, add it as built-in.
-3. **For built-in engines**: Follow the naming convention `yourfeature_engine.py`
-4. **Implement the engine** following the pattern of existing engines (return `{status, workspace, findings, summary}`)
-5. **Add a command module** in `commands/yourfeature.py` with `add_args(subparser)` and `execute(args)` functions
-6. **Add tests** in `tests/`
-7. **Sync command counts** — see "Syncing Command Counts" below; do NOT hand-edit the count in `README.md`, `SKILL.md`, `SKILL-QUICK.md`, `pyproject.toml`, `skill.json`, or `scripts/mcp_server.py`
-8. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, `README.md`, and `CHANGELOG.md`
+3. **Write a design doc** — see [Design Documents & Implementation Plans](#design-documents--implementation-plans) below. The CI check enforces this for any PR that adds a feature-class file.
+4. **For built-in engines**: Follow the naming convention `yourfeature_engine.py` (top-level file under `scripts/`)
+5. **Implement the engine** following the pattern of existing engines (return `{status, workspace, findings, summary}`)
+6. **Add a command module** in `commands/yourfeature.py` with `add_args(subparser)` and `execute(args)` functions
+7. **Add tests** in `tests/`
+8. **Sync command counts** — see "Syncing Command Counts" below; do NOT hand-edit the count in `README.md`, `SKILL.md`, `SKILL-QUICK.md`, `pyproject.toml`, `skill.json`, or `scripts/mcp_server.py`
+9. **Update documentation** in `SKILL.md`, `SKILL-QUICK.md`, `README.md`, and `CHANGELOG.md`
 
 Commands auto-register via `commands/__init__.py` — no manual wiring needed.
+
+### Design Documents & Implementation Plans
+
+Any PR that adds a **feature-class** file MUST also add a design doc and an
+implementation plan. This is enforced by the
+`Require Design Doc` GitHub Actions workflow (see
+`.github/workflows/require-design-doc.yml`).
+
+#### What counts as a feature-class file?
+
+A PR is feature-class if it adds any new file matching one of these patterns:
+
+| Pattern | Meaning |
+|---|---|
+| `scripts/commands/<name>.py` | New CLI command |
+| `scripts/parsers/<name>_parser.py` | New tree-sitter language parser |
+| `scripts/<name>_engine.py` | New top-level analysis engine |
+| `scripts/mcp_hooks/<name>.py` | New MCP hook |
+
+`__init__.py` files, fallback parsers (`fallback_<lang>.py`), test files, and
+pure docs changes are NOT feature-class.
+
+#### What do I need to add?
+
+For a feature-class PR, add **both**:
+
+1. **A design doc** at `docs/design/<feature>.md`
+   - Copy `docs/design/template.md` and fill in the sections.
+   - The design doc captures WHY the feature exists and WHAT trade-offs were
+     considered. It is the record of decisions, not a tutorial.
+2. **An implementation plan** at `docs/plans/<feature>.md`
+   - Copy `docs/plans/template.md` and fill in the phases.
+   - Each phase should be independently mergeable. If a phase has more than
+     ~10 files or ~500 lines, split it.
+
+The CI check (script: `scripts/check_design_doc.py`) verifies both files
+exist. `template.md` and `README.md` do NOT count — you must add a
+feature-specific doc.
+
+#### Exemptions
+
+If your PR is feature-class by the file pattern but the change is genuinely
+too small to warrant a full design doc (e.g., adding a single flag to an
+existing command, or restoring a previously-removed command), apply the
+`skip-design-doc` label to the PR and explain why in the PR description.
+
+Other labels that exempt a PR from the requirement: `bug`, `chore`,
+`dependencies`, `refactor`, `documentation`, `test`.
+
+#### Running the check locally
+
+Before pushing:
+
+```bash
+# From repo root, with your feature branch checked out:
+python3 scripts/check_design_doc.py --base origin/main --head HEAD
+```
+
+Exit code 0 = compliant, 1 = missing docs. The script is the same one CI
+runs, so a local pass guarantees a CI pass (assuming labels match).
+
+#### Existing design docs
+
+Backfilled design docs for features that shipped before this convention:
+
+- [`docs/design/taint-engine.md`](docs/design/taint-engine.md) — AST taint analysis (issue #49)
+- [`docs/design/mcp-server.md`](docs/design/mcp-server.md) — MCP server architecture
+- [`docs/design/plugin-system.md`](docs/design/plugin-system.md) — Plugin system
+- [`docs/design/graph-model.md`](docs/design/graph-model.md) — SQLite graph model
+
+Use these as examples of the expected depth and tone.
 
 ### Syncing Command Counts (issue #38)
 

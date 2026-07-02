@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Design Document & Implementation Plan Convention (issue #67 Phase 1)
+
+CodeLens now has a convention for capturing design decisions and
+implementation plans as Markdown files in the repo, enforced by CI.
+
+**What's new:**
+
+- `docs/design/template.md` — template for design docs (Problem, Goal,
+  Changes, Trade-offs, Open Questions, Findings).
+- `docs/plans/template.md` — template for implementation plans
+  (phase-based checklist with acceptance criteria).
+- `docs/design/README.md`, `docs/plans/README.md` — usage guides for
+  both directories.
+- Four backfilled design docs for features that shipped before the
+  convention existed:
+  - `docs/design/taint-engine.md` — AST taint analysis (issue #49)
+  - `docs/design/mcp-server.md` — MCP server architecture
+  - `docs/design/plugin-system.md` — Plugin system
+  - `docs/design/graph-model.md` — SQLite graph model (v8.2)
+- `scripts/check_design_doc.py` — CI check that enforces the
+  requirement. A PR that adds any new file matching
+  `scripts/commands/<name>.py`, `scripts/parsers/<name>_parser.py`,
+  `scripts/<name>_engine.py`, or `scripts/mcp_hooks/<name>.py` MUST
+  also add at least one new `.md` under `docs/design/` AND one under
+  `docs/plans/`. Template and README files do NOT count.
+- `.github/workflows/require-design-doc.yml` — GitHub Actions workflow
+  that runs the check on every PR (opened, synchronized, reopened,
+  labeled, unlabeled). Posts a comment on the PR explaining how to
+  fix the failure.
+- `CONTRIBUTING.md` — new "Design Documents & Implementation Plans"
+  section documenting the requirement, exemptions, and how to run the
+  check locally.
+- `tests/test_check_design_doc.py` — full test coverage for the
+  check script, including end-to-end tests with a real temp git repo.
+
+**Exemptions:** PRs labeled `skip-design-doc`, `bug`, `chore`,
+`dependencies`, `refactor`, `documentation`, or `test` are exempt.
+PRs that do not add any feature-class file are also exempt (no-op).
+
+**Scope note:** This is Phase 1 only. Phase 2 (VitePress homepage at
+`codelens.dev`) and Phase 3 (live demo with interactive dashboard)
+remain open — they are multi-week content projects tracked in issue
+#67.
+
 ### LSP Status Entry-Point Unification (issue #33)
 
 The `codelens --lsp-status` top-level flag (intercepted in
