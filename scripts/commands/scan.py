@@ -768,6 +768,12 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
 
     # Parse JS Backend files
     js_backend_data = tsx_backend_data.copy()
+    # Issue #163: collect files explicitly skipped by parsers (e.g. files
+    # above the absolute hard limit of 10,000 lines). Each parser may
+    # return a ``skipped`` list in its refs dict — we aggregate them here
+    # so the scan result can report incomplete coverage to the caller
+    # instead of silently dropping files.
+    skipped_files: list = []
     if files["js_backend"]:
         js_be_parser = None
         try:
@@ -802,6 +808,8 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
+                # Issue #163: aggregate explicit skip entries
+                skipped_files.extend(refs.get("skipped", []))
             except IOError:
                 logger.debug(f"Failed to read JS backend file: {path}")
 
@@ -830,6 +838,8 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
+                # Issue #163: aggregate explicit skip entries
+                skipped_files.extend(refs.get("skipped", []))
             except IOError:
                 logger.debug(f"Failed to read Rust file: {path}")
 
@@ -858,6 +868,8 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
                     "nodes": refs.get("nodes", []),
                     "edges": refs.get("edges", [])
                 })
+                # Issue #163: aggregate explicit skip entries
+                skipped_files.extend(refs.get("skipped", []))
             except IOError:
                 logger.debug(f"Failed to read Python file: {path}")
 
@@ -1395,6 +1407,12 @@ def cmd_scan(workspace: str, incremental: bool = False, plugins: Optional[list] 
         "elixir_parsed": len(elixir_data),
         "dart_parsed": len(dart_data),
         "swift_parsed": len(swift_data),
+        # Issue #163: files explicitly skipped by parsers (e.g. > 10,000
+        # lines). Always present — empty list means no files were skipped
+        # and coverage is complete. Each entry: {"file": str, "reason":
+        # str, "lines": int}. Replaces the previous silent-skip behavior
+        # where large files would vanish from the graph without trace.
+        "skipped_files": skipped_files,
         "scala_parsed": len(scala_data),
         "shell_parsed": len(shell_data),
         "gdscript_parsed": len(gdscript_data),
