@@ -907,6 +907,13 @@ def main():
             sub.add_argument("--db-path", default=None, metavar="PATH",
                              help="Custom path for SQLite database file")
 
+        # Issue #157: --diff-base <ref> on every subparser so it works both
+        # before and after the subcommand (matches --db-path / --format pattern).
+        if "diff_base" not in existing_dests:
+            sub.add_argument("--diff-base", default=None, metavar="REF",
+                             help="Git ref to diff against — only findings from "
+                                  "changed files are reported (issue #157)")
+
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
@@ -914,6 +921,14 @@ def main():
                         help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default. compact = token-efficient single-char keys)")
     parser.add_argument("--db-path", default=None,
                         help="Custom path for SQLite database (default: .codelens/codelens.db)")
+    # Issue #157: --diff-base <ref> restricts analysis to files changed
+    # relative to <ref>. Pre-filter layer: commands still scan the full
+    # workspace, but findings from unchanged files are filtered out of
+    # the result. Empty diff → early exit with a clear message.
+    parser.add_argument("--diff-base", default=None, metavar="REF",
+                        help="Git ref (branch/tag/SHA/HEAD~1) to diff against. "
+                             "Only findings from files changed relative to REF "
+                             "are reported. Useful for CI PR checks. (issue #157)")
 
     # ─── Parse and dispatch ─────────────────────────────
 
@@ -943,6 +958,7 @@ def main():
     global_deep = False
     global_disable_suppression = False
     global_ignore_pattern = None
+    global_diff_base = None  # issue #157
 
     i = 1
     while i < len(sys.argv):
@@ -985,6 +1001,12 @@ def main():
             global_ignore_pattern = sys.argv[i + 1]
         elif arg.startswith('--codelens-ignore-pattern='):
             global_ignore_pattern = arg.split('=', 1)[1]
+        # Issue #157: --diff-base <ref> (space form)
+        elif arg == '--diff-base' and i + 1 < len(sys.argv):
+            global_diff_base = sys.argv[i + 1]
+        # Issue #157: --diff-base=<ref> (equals form)
+        elif arg.startswith('--diff-base='):
+            global_diff_base = arg.split('=', 1)[1]
         i += 1
 
     args = parser.parse_args()
@@ -1033,6 +1055,53 @@ def main():
     workspace = resolve_workspace(getattr(args, 'workspace', None))
     if workspace != (getattr(args, 'workspace', None) or ""):
         print(f"[CodeLens] Auto-detected workspace: {workspace}", file=sys.stderr)
+
+    # ─── Issue #157: --diff-base <ref> ───────────────────────────
+    # Build the DiffScope once, before command execution. If the diff is
+    # empty, early-exit with a clear message. The scope is attached to
+    # ``args`` so commands that want to do in-engine pre-filtering can
+    # access it (none do yet — this is a post-filter layer for now).
+    diff_scope = None
+    # Resolve --diff-base: global pre-parse value or subparser value.
+    # argparse stores --diff-base as ``diff_base`` on the subparser too,
+    # but since it's a global flag, the pre-parse value is authoritative.
+    diff_base_ref = global_diff_base or getattr(args, 'diff_base', None)
+    if diff_base_ref:
+        from diff_scope import DiffScope, DiffScopeError
+        try:
+            diff_scope = DiffScope.from_ref(workspace, diff_base_ref)
+        except DiffScopeError as exc:
+            error_result = {
+                "status": "error",
+                "command": args.command,
+                "error": str(exc),
+                "error_type": "diff_scope_error",
+                "suggestion": (
+                    "Ensure the workspace is a git repository and the ref "
+                    "exists. Use `git rev-parse --verify <ref>` to check."
+                ),
+            }
+            print(format_output(error_result, args.format, args.command), file=sys.stderr)
+            sys.exit(1)
+        if diff_scope.is_empty:
+            # Empty diff → early exit per issue #157 DoD
+            empty_result = {
+                "status": "ok",
+                "command": args.command,
+                "message": f"No changed files relative to {diff_base_ref!r}",
+                "diff_scope": diff_scope.summary(),
+                "stats": {},
+                "findings": [],
+            }
+            print(format_output(empty_result, args.format, args.command, workspace))
+            sys.exit(0)
+        # Attach to args so commands can opt-in to in-engine pre-filtering
+        args.diff_scope = diff_scope
+        print(
+            f"[CodeLens] --diff-base {diff_base_ref!r}: {diff_scope.changed_count} "
+            f"file(s) in scope",
+            file=sys.stderr,
+        )
 
     # ─── Auto-setup: if command needs registry and none exists, bootstrap it ────
     # Commands that need a registry to work meaningfully
@@ -1275,6 +1344,59 @@ def main():
                 pass  # suppression module not available
             except Exception as e:
                 logger.warning(f"Suppression processing failed: {e}", exc_info=True)
+
+        # ─── Issue #157: --diff-base post-filter ──
+        # Drop findings from files not in the changed-file allowlist. This
+        # is a post-filter layer — commands still scan the full workspace,
+        # but findings from unchanged files are removed before output.
+        # Commands that produce graph data (trace, impact, circular, scan)
+        # are NOT filtered because their results are structural (node/edge
+        # graphs) rather than file-keyed findings — filtering them would
+        # silently corrupt the graph.
+        if diff_scope is not None and isinstance(result, dict) and args.command in (
+            "secrets", "smell", "complexity", "dead-code", "debug-leak",
+            "circular", "taint", "vuln-scan", "check", "analyze",
+            "missing-refs", "side-effect", "perf-hint", "regex-audit",
+            "a11y", "css-deep", "dataflow", "stack-trace", "config-drift",
+            "ownership", "test-map",
+        ):
+            _FILTER_KEYS = (
+                "findings", "leaks", "hints", "issues", "violations",
+                "matches", "chains", "results",
+            )
+            total_before = 0
+            total_after = 0
+            for key in _FILTER_KEYS:
+                val = result.get(key)
+                if isinstance(val, list):
+                    before = len(val)
+                    result[key] = diff_scope.filter_findings(val)
+                    total_before += before
+                    total_after += len(result[key])
+                elif isinstance(val, dict):
+                    # Category-keyed (dead-code by_category, smell by_category)
+                    for sub_key, sub_val in val.items():
+                        if isinstance(sub_val, list):
+                            before = len(sub_val)
+                            val[sub_key] = diff_scope.filter_findings(sub_val)
+                            total_before += before
+                            total_after += len(val[sub_key])
+            # Also filter the flat ``findings`` list that some commands
+            # (e.g., ``check``) produce at the top level.
+            if "findings" in result and isinstance(result["findings"], list):
+                # Already filtered above if ``findings`` is in _FILTER_KEYS,
+                # but ``check`` stores them under ``findings`` — covered.
+                pass
+            # Attach diff_scope summary so consumers can see what was filtered
+            result["diff_scope"] = diff_scope.summary()
+            result["diff_scope"]["findings_before_filter"] = total_before
+            result["diff_scope"]["findings_after_filter"] = total_after
+            if total_before != total_after:
+                print(
+                    f"[CodeLens] --diff-base: {total_before - total_after} "
+                    f"finding(s) from unchanged files filtered out",
+                    file=sys.stderr,
+                )
 
         # ─── Format and print output ──
         # Some commands (doctor issue #64 Phase 1, sessions issue #64

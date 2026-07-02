@@ -32,6 +32,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | `--limit N` / `--offset N` | Pagination on list-type commands (`list`, `search`, `trace`, `symbols`, `outline`). Default limit=20 (issue #17). `--top N` is an alias for `--limit N --offset 0` |
 | `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
 | `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
+| `--diff-base REF` | Git ref (branch/tag/SHA/`HEAD~1`) to diff against. Only findings from files changed relative to REF are reported. Empty diff → early exit. Useful for CI PR checks. Works on all analysis commands (issue #157) |
 
 ### Lite Mode Per Command
 
