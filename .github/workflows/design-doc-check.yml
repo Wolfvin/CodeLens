@@ -1,0 +1,56 @@
+# Design Doc Check — issue #67 Phase 1
+#
+# This workflow runs the design doc checker on every PR. It detects
+# "new feature" PRs (by file pattern) and fails if no design doc is
+# included in docs/design/. The check is bypassable via the
+# 'skip-design-doc' PR label.
+#
+# The check is informational on first failure — the PR author can either
+# add a design doc or add the bypass label, then re-push.
+
+name: Design Doc Check
+
+on:
+  pull_request:
+    branches: [main]
+    # Only run when files that could trigger the check are changed. This
+    # avoids wasting CI minutes on doc-only or test-only PRs.
+    paths:
+      - 'scripts/commands/**'
+      - 'scripts/formatters/**'
+      - 'scripts/parsers/**'
+      - 'scripts/*_engine.py'
+      - 'docs/design/**'
+      - '.github/workflows/design-doc-check.yml'
+      - 'scripts/check_design_doc.py'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: Design Doc Required
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # We need the full PR diff, not just the merge commit. fetch-depth 0
+          # gets the full history so the check script can inspect the PR's
+          # changed files via the GitHub API instead.
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run design doc check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/check_design_doc.py
