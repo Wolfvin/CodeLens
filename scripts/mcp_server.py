@@ -1043,8 +1043,8 @@ _TOOL_DEFINITIONS = {
                 },
                 "format": {
                     "type": "string",
-                    "enum": ["json", "markdown", "ai", "sarif", "compact"],
-                    "description": "Output format (default: ai — normalized schema)",
+                    "enum": ["json", "markdown", "ai", "sarif", "compact", "graphml"],
+                    "description": "Output format (default: ai — normalized schema). graphml = GraphML XML for graph-producing commands.",
                     "default": "ai"
                 },
                 "top": {
@@ -1188,13 +1188,17 @@ _TOOL_DEFINITIONS = {
 
 # Format enum shared by every tool's inputSchema (issue #17).
 # compact = token-efficient single-char keys + abbreviated types.
+# graphml = GraphML 1.0 XML for graph-producing commands (issue #59 Phase 3).
 _FORMAT_PROPERTY = {
     "type": "string",
-    "enum": ["json", "markdown", "ai", "sarif", "compact"],
+    "enum": ["json", "markdown", "ai", "sarif", "compact", "graphml"],
     "description": (
         "Output format. 'ai' (default) is the normalized schema; 'compact' "
         "uses single-character keys and abbreviated types to cut tokens "
-        "40-70%. 'json'/'markdown'/'sarif' are the legacy verbose forms."
+        "40-70%. 'json'/'markdown'/'sarif' are the legacy verbose forms. "
+        "'graphml' emits a GraphML 1.0 XML document for graph-producing "
+        "commands (scan/trace/impact/circular); other commands produce a "
+        "single-node placeholder graph."
     ),
     "default": "ai",
 }
@@ -1561,9 +1565,11 @@ class MCPServer:
         """Handle tools/list request. Returns all CodeLens commands as MCP tools.
 
         Every tool's inputSchema gets a ``format`` property added with the
-        enum ``[json, markdown, ai, sarif, compact]`` (issue #17). The MCP
-        server always returns AI-formatted results by default; the ``format``
-        parameter lets agents opt into the token-efficient ``compact`` form.
+        enum ``[json, markdown, ai, sarif, compact, graphml]`` (issue #17,
+        extended by issue #59 Phase 3 for graphml). The MCP server always
+        returns AI-formatted results by default; the ``format`` parameter
+        lets agents opt into the token-efficient ``compact`` form or the
+        GraphML XML form for graph-producing commands.
         """
         tools = []
         for cmd_name, tool_def in sorted(_TOOL_DEFINITIONS.items()):
@@ -1608,7 +1614,7 @@ class MCPServer:
     def _infer_schema_from_command(self, cmd_name: str, cmd_info: Dict[str, Any]) -> Dict[str, Any]:
         """Infer a JSON Schema for a command based on its argument parser.
 
-        Includes the ``format`` enum (json/markdown/ai/sarif/compact) so
+        Includes the ``format`` enum (json/markdown/ai/sarif/compact/graphml) so
         agents can opt into compact output for any dynamically-discovered
         command (issue #17).
         """

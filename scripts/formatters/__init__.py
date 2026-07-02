@@ -189,7 +189,13 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
 
 def format_output(data: Any, format_type: str = "json", command: str = "",
                   workspace: str = "") -> str:
-    """Format output data as JSON, Markdown, AI (normalized schema), SARIF, or Compact."""
+    """Format output data as JSON, Markdown, AI (normalized schema), SARIF, Compact, or GraphML.
+
+    GraphML (issue #59 Phase 3) emits a GraphML 1.0 XML document for
+    graph-producing commands (scan, trace, impact, circular). Non-graph
+    commands produce a single-node placeholder graph so the format is
+    always valid XML.
+    """
     if format_type == "ai":
         normalized = _normalize_to_ai(data, command)
         return json.dumps(normalized, indent=2, ensure_ascii=False)
@@ -201,12 +207,11 @@ def format_output(data: Any, format_type: str = "json", command: str = "",
     if format_type == "compact":
         from formatters.compact import format_compact
         return format_compact(data, command, workspace)
-    # Default: JSON — stamp schema_version so raw JSON consumers also get the
-    # version signal (issue #5). Mutates a copy so the caller's dict is not
-    # modified in place (raw JSON should reflect what the engine returned,
-    # plus the version stamp).
-    if isinstance(data, dict):
-        stamped = dict(data)
-        stamp_schema_version(stamped)
-        return json.dumps(stamped, indent=2, ensure_ascii=False)
+    if format_type == "graphml":
+        # Issue #59 Phase 3 — GraphML export for graph-producing commands
+        # (scan/trace/impact/circular). Non-graph commands emit a single-node
+        # placeholder so the format is always valid, never raises.
+        from formatters.graphml import format_graphml
+        return format_graphml(data, command, workspace)
+    # Default: JSON
     return json.dumps(data, indent=2, ensure_ascii=False)
