@@ -33,7 +33,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install tree-sitter pyyaml pytest pytest-cov
+          pip install tree-sitter pyyaml pytest pytest-cov pygls lsprotocol
           # Install optional grammar packages for full parser coverage
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true

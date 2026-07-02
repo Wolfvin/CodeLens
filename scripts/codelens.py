@@ -46,7 +46,6 @@ Usage:
     python3 codelens.py ask <question> [workspace]     # Ask a natural language question about the codebase
     python3 codelens.py migrate <workspace>            # Migrate JSON registry to SQLite
     python3 codelens.py lsp-status                     # Check LSP server availability
-    python3 codelens.py lsp [--rule-file x.yaml] [--tcp --port 2087]  # Run as native LSP 3.17 server (issue #48)
     python3 codelens.py taint <workspace>              # Semantic taint analysis for vulnerability detection
     python3 codelens.py dashboard <workspace>           # Generate HTML visualization dashboard
     python3 codelens.py history <workspace>             # Show historical trend data
@@ -1278,14 +1277,18 @@ def main():
                 logger.warning(f"Suppression processing failed: {e}", exc_info=True)
 
         # ─── Format and print output ──
-        # doctor (issue #64) prints its own human-readable text table when
-        # ``--format text`` is used, and signals via ``_doctor_printed_text``
-        # so the dispatcher skips the generic JSON formatter (which would
-        # otherwise dump the result dict a second time). In ``--format json``
-        # mode doctor does NOT print itself, and the normal formatter handles
-        # the JSON serialization.
-        if not (args.command == "doctor" and isinstance(result, dict)
-                and result.get("_doctor_printed_text")):
+        # Some commands (doctor issue #64 Phase 1, sessions issue #64
+        # Phase 2) print their own human-readable output directly and
+        # signal via ``_doctor_printed_text`` / ``_sessions_printed_text``
+        # so the dispatcher skips the generic JSON formatter (which
+        # would otherwise dump the result dict a second time). In
+        # ``--format json`` mode these commands do NOT print themselves,
+        # and the normal formatter handles the JSON serialization.
+        _already_printed = (
+            isinstance(result, dict)
+            and (result.get("_doctor_printed_text") or result.get("_sessions_printed_text"))
+        )
+        if not (args.command in ("doctor", "sessions") and _already_printed):
             print(format_output(result, args.format, format_command, workspace))
 
         # ─── Exit codes for CI-quality-gate commands ──
