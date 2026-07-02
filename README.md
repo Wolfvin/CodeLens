@@ -7,7 +7,7 @@ CodeLens is an AI-native code intelligence platform that gives AI agents **full 
 ## Features
 
 - **70 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
-- **MCP Server (68 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 54 statically-defined tools + 14 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
+- **MCP Server (68 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 54 statically-defined tools + 14 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`)
 - **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
@@ -284,7 +284,7 @@ codelens/
 │   ├── pre_commit_hook.py         # Git pre-commit hook integration
 │   ├── utils.py                   # Shared utilities (version, helpers)
 │   ├── commands/                  # One file per CLI command (auto-registered, 64 commands)
-│   ├── formatters/                # Output formatters (markdown, sarif, compact)
+│   ├── formatters/                # Output formatters (markdown, sarif, compact, graphml)
 │   ├── parsers/                   # Tree-sitter + fallback parsers
 │   │   ├── html_parser.py, css_parser.py, js_frontend_parser.py, js_backend_parser.py
 │   │   ├── rust_parser.py, python_parser.py, tsx_parser.py, ts_backend_parser.py
@@ -338,8 +338,9 @@ CodeLens ships with a native MCP server (55 tools) for direct AI agent integrati
 python3 scripts/codelens.py serve
 ```
 
-Every MCP tool accepts a `format` parameter with the enum `[json, markdown, ai, sarif, compact]`.
-For high-volume agent workflows, pass `format: "compact"` to cut token usage ~50%. Example:
+Every MCP tool accepts a `format` parameter with the enum `[json, markdown, ai, sarif, compact, graphml]`.
+For high-volume agent workflows, pass `format: "compact"` to cut token usage ~50%.
+For graph-producing commands (`scan`, `trace`, `impact`, `circular`), pass `format: "graphml"` to emit a GraphML 1.0 XML document that opens directly in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3). Example:
 
 ```json
 // tools/call with format=compact
@@ -371,6 +372,12 @@ python3 scripts/codelens.py check /path/to/workspace --severity high --max-findi
 
 # SARIF output for GitHub Advanced Security / VS Code
 python3 scripts/codelens.py check /path/to/workspace --format sarif > codelens.sarif
+
+# GraphML export — opens in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3)
+python3 scripts/codelens.py scan /path/to/workspace --format graphml > codelens.graphml
+python3 scripts/codelens.py trace main /path/to/workspace --format graphml > trace.graphml
+python3 scripts/codelens.py impact my_function /path/to/workspace --format graphml > impact.graphml
+python3 scripts/codelens.py circular /path/to/workspace --format graphml > cycles.graphml
 ```
 
 ### Plugin System
