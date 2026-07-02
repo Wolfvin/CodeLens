@@ -395,7 +395,7 @@ _LIST_COMMANDS = {
     "secrets", "a11y", "css-deep", "regex-audit", "vuln-scan",
     "side-effect", "missing-refs", "circular", "list", "env-check",
     "test-map", "ownership", "entrypoints", "api-map", "state-map",
-    "dataflow", "search", "symbols", "summary", "taint",
+    "dataflow", "search", "symbols", "summary", "taint", "deps-audit",
 }
 
 # Sort strategies per command for --top (sort by relevance before truncating)
@@ -406,6 +406,7 @@ _SORT_STRATEGIES = {
     "perf-hint": ("severity", True),          # sort by severity desc
     "secrets": ("severity", True),            # sort by severity desc
     "vuln-scan": ("severity", True),          # sort by severity desc
+    "deps-audit": ("severity", True),         # sort by severity desc (issue #158)
     "a11y": ("severity", True),               # sort by severity desc
     "css-deep": ("severity", True),           # sort by severity desc
     "regex-audit": ("severity", True),        # sort by severity desc
