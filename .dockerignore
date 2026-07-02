@@ -1,0 +1,72 @@
+# CodeLens .dockerignore — keep build context lean (Phase 2, issue #54)
+# Excludes files that are not needed inside the container image.
+
+# Version control — never needed in image, and .git is large.
+.git
+.gitignore
+.gitattributes
+
+# CI / GitHub metadata
+.github/
+.gitlab-ci.yml
+
+# Tests — not run inside the container, excluded to shrink context.
+# (The maximal image installs pytest as an extra, but tests themselves
+#  are not copied in. Run tests on the host or in a dedicated CI job.)
+tests/
+pytest.ini
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Benchmarks + intentional vulnerable fixtures (would pollute scan results
+# if accidentally scanned from inside the container).
+benchmarks/
+
+# VS Code extension — separate concern, shipped via the VS Code marketplace.
+vscode-codelens/
+
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# CodeLens own runtime state — must never be baked into the image.
+.codelens/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docs (installed via pip or viewed on GitHub; not needed in image)
+docs/
+*.md
+!README.md
+
+# Docker files themselves — not needed inside the image.
+Dockerfile
+Dockerfile.maximal
+.dockerignore
+.docker/
+
+# Logs
+*.log
+logs/
