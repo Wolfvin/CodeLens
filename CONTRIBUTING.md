@@ -183,11 +183,55 @@ When adding a new CLI command, create a new file in the `commands/` directory:
 ## Pull Request Process
 
 1. **Update documentation** — README.md, SKILL.md, SKILL-QUICK.md, changelog.md
-2. **Add tests** for new features
-3. **Ensure all tests pass** — `python3 -m pytest tests/ -v`
-4. **Follow the PR template** — describe changes, motivation, testing
-5. **One PR per feature** — keep PRs focused and reviewable
-6. **Update skill.json version** if adding new commands
+2. **Add a design doc** for new features (see "Design Doc Requirement" below)
+3. **Add tests** for new features
+4. **Ensure all tests pass** — `python3 -m pytest tests/ -v`
+5. **Follow the PR template** — describe changes, motivation, testing
+6. **One PR per feature** — keep PRs focused and reviewable
+7. **Update skill.json version** if adding new commands
+
+### Design Doc Requirement (issue #67 Phase 1)
+
+PRs that add a **new feature** must include a design doc in `docs/design/`.
+The CI check (`.github/workflows/design-doc-check.yml`) automatically
+detects new-feature PRs by file pattern and fails if no design doc is
+included.
+
+**What counts as a "new feature"?**
+
+| Pattern | Example | Requires design doc? |
+|---------|---------|---------------------|
+| New file in `scripts/commands/` | `commands/yourfeature.py` | Yes |
+| New `scripts/*_engine.py` | `yourfeature_engine.py` | Yes |
+| New file in `scripts/formatters/` | `formatters/yourformat.py` | Yes |
+| New parser (non-fallback) in `scripts/parsers/` | `parsers/yourlang_parser.py` | Yes |
+| Fallback parser | `parsers/fallback_yourlang.py` | No (regex shadow of existing parser) |
+| Bug fix (modified file) | any existing file | No |
+| Test addition | `tests/test_*.py` | No |
+| Documentation change | `*.md` | No |
+
+**How to write a design doc:**
+
+1. Copy `docs/design/template.md` to `docs/design/NNNN-feature-name.md`
+   - `NNNN` is the next available number (zero-padded to 4 digits)
+   - `feature-name` is a short kebab-case slug
+2. Fill in the sections: Problem, Goal, Changes, Trade-offs, Open Questions,
+   Migration / Rollout
+3. The **Trade-offs** section is the most important — document alternatives
+   considered and why they were rejected. This prevents future contributors
+   from re-litigating decisions without context.
+4. See `docs/design/0001-taint-engine.md` through `0004-graph-model.md` for
+   retroactive examples documenting existing features.
+
+**Bypassing the check:**
+
+If a feature is genuinely trivial (e.g., a one-line command alias) and a
+design doc would be pure overhead, add the `skip-design-doc` label to the
+PR. Use this sparingly — the check exists to ensure design decisions are
+recorded for future contributors.
+
+See `docs/README.md` for full details on the design doc and implementation
+plan convention.
 
 ### PR Title Format
 
