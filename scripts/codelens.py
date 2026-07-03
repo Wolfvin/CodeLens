@@ -68,6 +68,70 @@ Smart Defaults:
 """
 
 import sys
+import io
+
+
+def _force_utf8_stdio() -> None:
+    """Force UTF-8 encoding on ``sys.stdout`` and ``sys.stderr``.
+
+    Without this, Windows crashes with ``UnicodeEncodeError`` when commands
+    emit Unicode characters like ``'\u2192'`` (the ``\u2192`` arrow used in
+    trace paths such as ``sidepanel.ts \u2192 auth/google-auth-cache.ts``).
+    The default Windows stdout encoding (``cp1252`` or similar) cannot
+    represent those characters (issue #179).
+
+    Behaviour:
+
+    - On Linux/macOS ``sys.stdout.encoding`` is already ``utf-8`` \u2014 no-op.
+    - Under pytest's ``capsys`` capture, ``encoding`` is also ``utf-8`` \u2014 no-op.
+    - On Windows without ``PYTHONUTF8=1``, both streams are re-wrapped as
+      ``TextIOWrapper(buffer, encoding='utf-8', errors='replace')``. The
+      ``errors='replace'`` policy means any byte that still cannot be
+      rendered by the terminal becomes ``?`` instead of raising.
+    - Streams without a ``.buffer`` attribute (IDLE REPL, some custom
+      capture objects) are skipped to avoid breaking those environments.
+
+    The old stream's buffer is ``detach()``-ed before the new wrapper is
+    built, so that garbage-collection of the old ``TextIOWrapper`` does
+    not close the underlying buffer (which would make the new wrapper
+    unusable with ``ValueError: I/O operation on closed file``).
+
+    Runs unconditionally at module import time, before any user-code
+    imports that might emit Unicode output.
+    """
+    for _name in ('stdout', 'stderr'):
+        _stream = getattr(sys, _name, None)
+        if _stream is None:
+            continue
+        _encoding = (getattr(_stream, 'encoding', None) or '').lower().replace('-', '')
+        if _encoding == 'utf8':
+            continue
+        _buffer = getattr(_stream, 'buffer', None)
+        if _buffer is None:
+            continue
+        # Detach the buffer from the old wrapper so its __del__/close
+        # does not close the buffer out from under the new wrapper.
+        # Best-effort: some custom stream classes lack detach() or
+        # raise on it; in that case we proceed anyway (the new wrapper
+        # is still created and the old wrapper's close, if any, will
+        # simply no-op on a NULLed buffer).
+        _detach = getattr(_stream, 'detach', None)
+        if callable(_detach):
+            try:
+                _detach()
+            except Exception:
+                pass
+        setattr(
+            sys,
+            _name,
+            io.TextIOWrapper(_buffer, encoding='utf-8', errors='replace'),
+        )
+
+
+# Run before any other imports that might emit Unicode output to stdout/stderr.
+_force_utf8_stdio()
+
+
 import os
 import json
 import argparse
