@@ -1,3 +1,7 @@
+# @WHO:   scripts/baseline_diff.py
+# @WHAT:  Baseline diff engine — compare current findings against saved baseline for CI strict mode
+# @PART:  ci
+# @ENTRY: diff_findings(), save_baseline(), filter_to_changed_files()
 """
 CodeLens baseline diff engine (issue #57, Phase 1).
 

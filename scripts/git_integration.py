@@ -1,3 +1,7 @@
+# @WHO:   scripts/git_integration.py
+# @WHAT:  CI/CD git integration helpers — staged/working-tree/diff-vs file lists + CI env detection
+# @PART:  ci
+# @ENTRY: list_staged_files(), list_working_tree_changes(), list_diff_vs(), resolve_baseline_sha()
 """
 CodeLens CI/CD git integration helpers (issue #57, Phase 1).
 

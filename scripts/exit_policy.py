@@ -1,3 +1,7 @@
+# @WHO:   scripts/exit_policy.py
+# @WHAT:  Exit-code policy evaluator — strict-mode / severity-threshold gate for CI
+# @PART:  ci
+# @ENTRY: evaluate_exit_policy()
 """
 CodeLens exit-code policy evaluator (issue #57, Phase 2).
 
