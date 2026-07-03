@@ -105,6 +105,24 @@ def execute(args, workspace):
             if line and not line.startswith("#"):
                 changed_files.append(line)
 
+    # Issue #176: argparse assigns ALL positional args to ``files`` (nargs="*")
+    # and leaves ``workspace`` as None. The CLI dispatcher then auto-detects
+    # workspace to cwd, which is wrong when the user explicitly passed a
+    # workspace path as the first positional arg.
+    #
+    # Heuristic: if the first item in ``files`` is an existing directory that
+    # differs from the auto-detected workspace, treat it as the intended
+    # workspace and remove it from the changed-files list. This is
+    # non-breaking: if the first arg is a file (not a dir), the old behavior
+    # is preserved.
+    import os
+    if changed_files and os.path.isdir(changed_files[0]):
+        first_arg_abs = os.path.abspath(changed_files[0])
+        ws_abs = os.path.abspath(workspace) if workspace else ""
+        if first_arg_abs != ws_abs:
+            workspace = first_arg_abs
+            changed_files.pop(0)
+
     if not changed_files:
         return {
             "status": "error",

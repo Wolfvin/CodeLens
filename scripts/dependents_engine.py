@@ -144,25 +144,40 @@ def get_affected_files(
 
     # Normalize changed files to workspace-relative paths
     all_known_files = set(import_graph.keys()) | set(reverse_graph.keys())
+    # Issue #176: normalize all known files to forward slashes for
+    # cross-platform matching. On Windows, os.path.relpath uses backslashes,
+    # but user input (e.g. from `git diff --name-only`) uses forward slashes.
+    all_known_files_norm = {f.replace('\\', '/') for f in all_known_files}
+    # Build a mapping from normalized -> original so we can resolve back.
+    norm_to_orig = {}
+    for f in all_known_files:
+        norm = f.replace('\\', '/')
+        norm_to_orig[norm] = f
+
     resolved_changed: List[str] = []
     unresolved: List[str] = []
     for cf in changed_files:
         cf = cf.strip()
         if not cf:
             continue
-        # Strip leading ./ and normalize
-        cf_norm = cf.replace('\\', '/').lstrip('./')
+        # Issue #176: replace backslashes with forward slashes (Windows
+        # compatibility), then strip leading "./" prefixes. The old code
+        # used lstrip("./") which is a char-set strip, not a prefix strip —
+        # it would corrupt "../foo.ts" into "foo.ts". Use a loop instead.
+        cf_norm = cf.replace('\\', '/')
+        while cf_norm.startswith('./'):
+            cf_norm = cf_norm[2:]
         # Try: absolute path -> relative
         if os.path.isabs(cf):
             try:
-                cf_rel = os.path.relpath(cf, workspace)
+                cf_rel = os.path.relpath(cf, workspace).replace('\\', '/')
             except ValueError:
                 cf_rel = cf_norm
         else:
             cf_rel = cf_norm
-        # Try direct match
-        if cf_rel in all_known_files:
-            resolved_changed.append(cf_rel)
+        # Try direct match (normalized forward-slash form)
+        if cf_rel in all_known_files_norm:
+            resolved_changed.append(norm_to_orig[cf_rel])
             continue
         # Try: maybe user passed full path that's already relative
         if os.path.isfile(os.path.join(workspace, cf_rel)):
@@ -171,16 +186,16 @@ def get_affected_files(
         # Try basename match (last resort — common in `git diff --name-only`
         # output where the user is in a subdirectory)
         basename = os.path.basename(cf_rel)
-        candidates = [f for f in all_known_files if os.path.basename(f) == basename]
+        candidates = [f for f in all_known_files_norm if os.path.basename(f) == basename]
         if len(candidates) == 1:
-            resolved_changed.append(candidates[0])
+            resolved_changed.append(norm_to_orig[candidates[0]])
         elif len(candidates) > 1:
             # Ambiguous — pick the one whose path-suffix matches cf_rel
             # (e.g., "scripts/foo.py" matches "scripts/foo.py" out of
             # multiple "foo.py" files). If still ambiguous, skip.
             suffix_match = [c for c in candidates if c.endswith(cf_rel) or cf_rel.endswith(c)]
             if len(suffix_match) == 1:
-                resolved_changed.append(suffix_match[0])
+                resolved_changed.append(norm_to_orig[suffix_match[0]])
             else:
                 unresolved.append(cf)
         else:
