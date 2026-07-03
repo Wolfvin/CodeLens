@@ -573,6 +573,192 @@ class TestCLISmoke:
         assert payload["stale_count"] == 0
 
 
+# ─── Regression: positional workspace arg (issue #178) ────────────────────
+
+
+class TestStalenessWorkspaceArgRegression:
+    """Regression tests for issue #178.
+
+    Issue #178 reported that ``codelens staleness /path/to/workspace``
+    printed usage and exited, unlike every other command which accepts
+    ``workspace`` as an optional positional. The root cause was an
+    argparse conflict guard regression (PR #171/#174) that has since
+    been fixed, but these tests pin the expected behavior so any future
+    regression is caught immediately.
+
+    Definition of Done (from issue #178):
+      - ``codelens staleness /path/to/workspace`` works without error
+      - ``codelens staleness`` (no args) still auto-detects as before
+      - Consistent with how other commands handle the optional ``workspace``
+        positional
+    """
+
+    def _run_cli(self, *args):
+        """Invoke ``codelens staleness`` with arbitrary args, capture result."""
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _SCRIPTS_DIR
+        env["PYTHONUTF8"] = "1"
+        return subprocess.run(
+            [
+                sys.executable,
+                os.path.join(_SCRIPTS_DIR, "codelens.py"),
+                "staleness",
+                *args,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+
+    def test_positional_workspace_exits_zero(self, tmp_path):
+        """``codelens staleness <workspace>`` exits 0 (issue #178 DoD #1).
+
+        Previously this printed usage and exited non-zero because the
+        positional ``workspace`` arg was not recognized. The argparse
+        registration in ``commands/staleness.py`` defines it with
+        ``nargs="?"``, so it must be accepted.
+        """
+        _write_mtimes(str(tmp_path), {})
+        result = self._run_cli(str(tmp_path))
+        assert result.returncode == 0, (
+            f"exit={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+    def test_positional_workspace_does_not_print_usage(self, tmp_path):
+        """``codelens staleness <workspace>`` must NOT print a usage message.
+
+        The issue report specifically said "prints usage, exits". A usage
+        print is the argparse signal for "args didn't parse". This test
+        asserts the usage line is absent from stdout AND stderr.
+        """
+        _write_mtimes(str(tmp_path), {})
+        result = self._run_cli(str(tmp_path))
+        # argparse prints "usage:" to stderr on parse failure.
+        assert "usage:" not in result.stderr, (
+            f"argparse printed usage to stderr — positional workspace not "
+            f"recognized.\nstderr={result.stderr}"
+        )
+        assert "usage:" not in result.stdout, (
+            f"argparse printed usage to stdout.\nstdout={result.stdout}"
+        )
+
+    def test_no_args_auto_detects_and_exits_zero(self, tmp_path, monkeypatch):
+        """``codelens staleness`` (no args) auto-detects workspace (issue #178 DoD #2).
+
+        Without a positional workspace, the command must fall back to
+        auto-detection (same as every other command). This test runs from
+        a temp directory with a ``.codelens/mtimes.json`` so auto-detect
+        resolves to the cwd.
+        """
+        _write_mtimes(str(tmp_path), {})
+        # Run from the temp workspace so auto-detect picks it up.
+        monkeypatch.chdir(str(tmp_path))
+        result = self._run_cli()
+        assert result.returncode == 0, (
+            f"exit={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+    def test_positional_workspace_with_json_format(self, tmp_path):
+        """``codelens staleness <workspace> --format json`` produces valid JSON.
+
+        Combines the positional arg with the format flag to verify they
+        don't conflict. This is the exact pattern used in CI pipelines.
+        """
+        _write_mtimes(str(tmp_path), {})
+        result = self._run_cli(str(tmp_path), "--format", "json")
+        assert result.returncode == 0, (
+            f"exit={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+        )
+        out = result.stdout
+        start = out.find("{")
+        assert start >= 0, f"no JSON in stdout:\n{out}"
+        payload = json.loads(out[start:])
+        assert payload["status"] == "ok"
+        assert payload["workspace"] == os.path.abspath(str(tmp_path))
+
+    def test_workspace_positional_is_optional_nargs_question(self):
+        """The ``workspace`` arg is registered with ``nargs="?"`` (optional).
+
+        Issue #178 DoD #3: "consistent with how other commands handle the
+        optional ``workspace`` positional". This test inspects the argparse
+        registration directly to ensure the positional stays optional.
+        A future refactor that accidentally makes it required (``nargs=None``
+        or removing ``nargs="?"``) would break this test.
+        """
+        import argparse
+        from commands import staleness as cmd
+
+        parser = argparse.ArgumentParser(prog="codelens staleness", add_help=False)
+        cmd.add_args(parser)
+        # Find the positional 'workspace' action.
+        workspace_action = None
+        for action in parser._actions:
+            if action.dest == "workspace":
+                workspace_action = action
+                break
+        assert workspace_action is not None, (
+            "staleness parser has no 'workspace' positional — regression of issue #178"
+        )
+        assert workspace_action.nargs == "?", (
+            f"workspace positional must be optional (nargs='?'), "
+            f"got nargs={workspace_action.nargs!r}"
+        )
+        assert workspace_action.default is None, (
+            f"workspace default should be None (triggers auto-detect), "
+            f"got {workspace_action.default!r}"
+        )
+
+    def test_workspace_positional_consistent_with_other_commands(self):
+        """``staleness`` accepts ``workspace`` the same way peer commands do.
+
+        Issue #178 emphasized inconsistency with "every other command".
+        This test compares the ``workspace`` positional registration
+        (nargs + default) against a representative peer (``scan``) to
+        pin the convention. If either side changes, this test flags it.
+        """
+        import argparse
+        from commands import staleness as staleness_cmd
+        from commands import scan as scan_cmd
+
+        def _get_workspace_action(add_args_fn):
+            parser = argparse.ArgumentParser(prog="probe", add_help=False)
+            add_args_fn(parser)
+            for action in parser._actions:
+                if action.dest == "workspace":
+                    return action
+            return None
+
+        staleness_ws = _get_workspace_action(staleness_cmd.add_args)
+        scan_ws = _get_workspace_action(scan_cmd.add_args)
+
+        assert staleness_ws is not None, "staleness missing workspace positional"
+        assert scan_ws is not None, "scan missing workspace positional"
+        # Both must be optional positionals (nargs="?").
+        assert staleness_ws.nargs == scan_ws.nargs == "?", (
+            f"staleness nargs={staleness_ws.nargs!r} vs scan nargs={scan_ws.nargs!r} "
+            f"— must both be '?' (issue #178 consistency)"
+        )
+
+    def test_help_shows_workspace_positional(self):
+        """``staleness --help`` lists ``[workspace]`` as a positional arg.
+
+        A regression that removes the positional would also remove it
+        from ``--help``. This test catches that.
+        """
+        result = self._run_cli("--help")
+        # argparse exits 0 on --help.
+        assert result.returncode == 0, (
+            f"exit={result.returncode}\nstderr={result.stderr}"
+        )
+        # The usage line should contain "workspace" as a positional.
+        help_text = result.stdout + result.stderr
+        assert "workspace" in help_text, (
+            f"staleness --help does not mention 'workspace' positional.\n"
+            f"stdout={result.stdout}\nstderr={result.stderr}"
+        )
+
+
 # ─── MCP server integration ────────────────────────────────────────────────
 
 

@@ -41,6 +41,10 @@ from commands import register_command
 
 
 def add_args(parser: argparse.ArgumentParser) -> None:
+    # Issue #178: `workspace` MUST stay an optional positional (nargs="?")
+    # to remain consistent with every other command (scan, query, trace, …).
+    # Removing nargs or making it required regresses the bug. Pinned by
+    # TestStalenessWorkspaceArgRegression in tests/test_staleness.py.
     parser.add_argument(
         "workspace",
         nargs="?",
