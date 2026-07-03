@@ -1,0 +1,95 @@
+# syntax=docker/dockerfile:1.6
+# CodeLens — maximal Docker image (Phase 2, issue #54)
+#
+# @WHO:   Dockerfile.maximal
+# @WHAT:  Maximal container image — core + all Python extras + pre-installed LSP servers (Python, JS/TS)
+# @PART:  distribution
+# @ENTRY: codelens (wrapper -> python3 /opt/codelens/scripts/codelens.py)
+#
+# Build:
+#   docker build -t codelens:maximal -f Dockerfile.maximal .
+#
+# Run:
+#   docker run --rm -v "$(pwd):/workspace" ghcr.io/wolfvin/codelens:maximal-latest scan /workspace
+#
+# Differences vs minimal Dockerfile:
+#   - Installs all Python extras (grammars + watch + rules + lsp + dev)
+#   - Pre-installs LSP servers for Python (python-lsp-server, ruff-lsp) and
+#     JS/TS (typescript-language-server, pyright) so `--deep` works out of the box
+#   - Includes Node.js LTS (required by the npm-based LSP servers above)
+#
+# Note: full LSP coverage (Rust analyzer, Go gopls, etc.) is pending the native
+# LSP server issue referenced in #54. This image covers the two most common
+# languages (Python, JS/TS) and is extensible.
+
+ARG PYTHON_VERSION=3.11
+
+FROM python:${PYTHON_VERSION}-slim AS base
+
+LABEL org.opencontainers.image.title="CodeLens (maximal)" \
+      org.opencontainers.image.description="CodeLens CLI + MCP server with all extras and pre-installed LSP servers" \
+      org.opencontainers.image.source="https://github.com/Wolfvin/CodeLens" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.authors="Wolfvin"
+
+# Runtime deps: git (ownership/diff commands), ca-certificates, curl.
+# Node.js + npm: required by typescript-language-server and pyright (JS/TS LSP).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git \
+        ca-certificates \
+        curl \
+        nodejs \
+        npm \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 1000 codelens \
+    && useradd --uid 1000 --gid codelens --create-home --shell /bin/bash codelens
+
+COPY --chown=codelens:codelens . /opt/codelens/
+
+# Install ALL Python extras matching pyproject.toml [project.optional-dependencies]
+# all = [grammars, watch, rules, lsp, dev]. Plus pip-based LSP servers for Python.
+RUN pip install --no-cache-dir \
+        "tree-sitter>=0.21.0" \
+        tree-sitter-html \
+        tree-sitter-css \
+        tree-sitter-javascript \
+        tree-sitter-typescript \
+        tree-sitter-rust \
+        tree-sitter-python \
+        watchdog \
+        "PyYAML>=6.0" \
+        "pygls>=2.0" \
+        "lsprotocol>=2024.0" \
+        "pytest>=7.0" \
+        "pytest-cov" \
+        "python-lsp-server[all]" \
+        "ruff-lsp"
+
+# Install JS/TS LSP servers globally via npm.
+RUN npm install -g --no-save \
+        pyright \
+        typescript-language-server \
+    && npm cache clean --force 2>/dev/null || true
+
+# Wrapper script (same as minimal — see Dockerfile for forward-compat notes).
+RUN printf '#!/bin/sh\nexec python3 /opt/codelens/scripts/codelens.py "$@"\n' \
+        > /usr/local/bin/codelens \
+    && chmod +x /usr/local/bin/codelens
+
+RUN mkdir -p /workspace \
+    && chown codelens:codelens /workspace
+
+USER codelens
+WORKDIR /workspace
+
+ENV CODELENS_CONFIG_DIR=/home/codelens/.codelens \
+    PYTHONUNBUFFERED=1 \
+    PYTHONUTF8=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+HEALTHCHECK --interval=30s --timeout=30s --start-period=15s --retries=3 \
+    CMD codelens --command-count > /dev/null 2>&1 || exit 1
+
+ENTRYPOINT ["codelens"]
