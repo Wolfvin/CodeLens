@@ -13,10 +13,13 @@ Design choices
   or any ~80 MB embedding model. Fast to import, deterministic, no native
   deps. Good enough for the majority of agent "find the right file" queries.
 * **Reads from the existing SQLite registry.** Symbol text is built from
-  fields already populated by ``persistent_registry`` — ``name``,
-  ``signature``, ``kind``, ``file_path``, ``language`` — so the index is
-  always in sync with the last ``scan`` result. No separate index file to
-  keep consistent.
+  the ``graph_nodes`` table populated by ``scan`` via
+  :func:`graph_model.populate_graph_tables` — fields ``name``,
+  ``node_type``, ``file``, ``line``, ``extra_json`` — so the index is
+  always in sync with the last ``scan`` result. No separate index file
+  to keep consistent. (Issue #188: previously read from the ``symbols``
+  table, which is never populated by the scan flow — see
+  :func:`_load_symbols_from_db` for details.)
 * **In-memory index, cached per (db_path, mtime).** Building the vocabulary
   is O(N_symbols) — for CodeLens's own 3000-node graph this is <100 ms.
   Cached so repeated ``semantic_query`` calls within a session are ~1 ms.
@@ -379,8 +382,34 @@ def clear_cache() -> None:
 def _load_symbols_from_db(db_path: str) -> List[Dict[str, Any]]:
     """Load all symbols from the SQLite registry at ``db_path``.
 
-    Returns an empty list if the database doesn't exist, the ``symbols``
-    table is missing, or SQLite is unavailable. Never raises — semantic
+    Reads from the ``graph_nodes`` table populated by ``scan`` via
+    :func:`graph_model.populate_graph_tables`. The legacy ``symbols``
+    table declared by ``persistent_registry`` is never populated by the
+    scan flow (issue #188) — only the graph tables are — so reading from
+    ``symbols`` returned an empty result set on every real workspace.
+
+    Column mapping (graph_nodes -> symbol dict consumed by this module):
+
+        node_id   -> id          (string node id, e.g. "auth/jwt.py:42")
+        name      -> name        (symbol name)
+        file      -> file_path   (relative file path)
+        node_type -> kind        (function|class|file|module|route|type|interface)
+        line      -> line_start  (1-indexed line number)
+        extra_json-> extra_json  (preserves async/impl_for/status/...)
+
+    Fields that ``graph_nodes`` does not carry (``signature``,
+    ``language``, ``line_end``, ``hash``) are defaulted to empty/None so
+    downstream consumers (:func:`_build_symbol_text`, :func:`semantic_query`
+    result construction) keep working unchanged. Signatures and language
+    are not part of the flat-registry node format produced by parsers
+    (see ``scripts/parsers/python_parser.py`` for a representative node),
+    so there is no signal loss in practice — the TF-IDF document is still
+    built from name + file_path + kind + extra_json, which is enough for
+    "find by meaning" queries.
+
+    Returns an empty list if the database doesn't exist, the
+    ``graph_nodes`` table is missing (e.g. workspace initialized but
+    never scanned), or SQLite is unavailable. Never raises — semantic
     search is a non-breaking add-on and should degrade gracefully to
     "no results" rather than crash the host command.
 
@@ -398,21 +427,47 @@ def _load_symbols_from_db(db_path: str) -> List[Dict[str, Any]]:
         conn = sqlite3.connect(db_path)
         try:
             conn.row_factory = sqlite3.Row
-            # Sanity-check that the symbols table exists. If the workspace
-            # has been initialized but never scanned, the db file exists
-            # but has no tables.
+            # Sanity-check that the graph_nodes table exists. If the
+            # workspace has been initialized but never scanned, the db
+            # file exists but has no graph tables.
             table = conn.execute(
                 "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='symbols'"
+                "WHERE type='table' AND name='graph_nodes'"
             ).fetchone()
             if table is None:
                 return []
-            rows = conn.execute("SELECT * FROM symbols").fetchall()
-            return [dict(r) for r in rows]
+            # Map graph_nodes columns to the symbol-dict shape expected
+            # by _build_symbol_text and semantic_query's result builder.
+            # Columns not present in graph_nodes are filled with defaults
+            # so the rest of the engine does not need to know about the
+            # source table.
+            rows = conn.execute(
+                """
+                SELECT
+                    node_id   AS id,
+                    name      AS name,
+                    node_type AS kind,
+                    file      AS file_path,
+                    line      AS line_start,
+                    extra_json AS extra_json
+                FROM graph_nodes
+                """
+            ).fetchall()
+            symbols: List[Dict[str, Any]] = []
+            for r in rows:
+                d = dict(r)
+                # Fill defaults for fields graph_nodes does not carry so
+                # _build_symbol_text / result construction keep working.
+                d.setdefault("line_end", None)
+                d.setdefault("language", "")
+                d.setdefault("signature", "")
+                d.setdefault("hash", "")
+                symbols.append(d)
+            return symbols
         finally:
             conn.close()
     except sqlite3.Error as e:
-        logger.debug(f"semantic_search_engine: failed to read symbols from {db_path}: {e}")
+        logger.debug(f"semantic_search_engine: failed to read graph_nodes from {db_path}: {e}")
         return []
 
 
