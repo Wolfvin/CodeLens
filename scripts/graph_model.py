@@ -191,6 +191,34 @@ def _parse_file_line_from_node_id(node_id: str) -> Tuple[str, int]:
     return (parts[0], 0)
 
 
+def _normalize_path_separators(value: str) -> str:
+    """Normalize backslashes to forward slashes in a path-like string.
+
+    Issue #177: On Windows, ``os.path.relpath()`` produces paths with
+    backslash separators (e.g. ``auth\\google-auth-cache.ts``). These
+    end up in node IDs (``auth\\google-auth-cache.ts:90``) and file
+    columns of ``graph_nodes`` / ``graph_edges``. Every downstream
+    command that does path lookups (``affected``, ``query-graph``,
+    ``semantic-query``) uses forward-slash input, so the mismatch
+    causes silent lookup failures.
+
+    The fix is applied at **write time** — here, in
+    :func:`populate_graph_tables` — so every downstream consumer reads
+    consistently-normalized IDs without each having to implement its
+    own normalization. This matches the issue #177 spec: "Normalize
+    node IDs to forward slashes at write time (during scan)".
+
+    Only the file-path portion is normalized — the line number and
+    function name (separated by colons) are left intact. Colons in
+    Windows drive letters (e.g. ``C:\\``) are rare in workspace-
+    relative paths and are preserved as-is since we only touch
+    backslashes, not colons.
+    """
+    if not value:
+        return value
+    return value.replace("\\", "/")
+
+
 def _map_node_type(flat_type: str) -> str:
     """Map a flat-registry node 'type' value to a graph node_type.
 
@@ -286,6 +314,14 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         node_type = _map_node_type(flat_type)
         file_val = node.get("file", "")
         line_val = node.get("line", 0)
+        # Issue #177: normalize backslashes to forward slashes so node
+        # IDs and file paths are consistent across platforms. Without
+        # this, Windows scans produce IDs like ``auth\file.ts:90`` that
+        # never match forward-slash lookups from affected/query-graph/
+        # semantic-query. Applied at write time (here) so all downstream
+        # consumers read normalized IDs without per-command fixes.
+        node_id = _normalize_path_separators(node_id)
+        file_val = _normalize_path_separators(file_val)
         # Preserve original fields that engines may still want (status, async, etc.)
         extra_keys = {k: v for k, v in node.items()
                       if k not in ("id", "fn", "name", "type", "file", "line")}
@@ -302,6 +338,12 @@ def populate_graph_tables(workspace: str, db_path: Optional[str] = None) -> Dict
         resolved = edge.get("resolved")
         via_self = edge.get("via_self", False)
         ipc = edge.get("ipc", False)
+
+        # Issue #177: normalize edge endpoints to forward slashes so
+        # they join correctly with the normalized node IDs above.
+        source_id = _normalize_path_separators(source_id)
+        if target_id:
+            target_id = _normalize_path_separators(target_id)
 
         # Confidence scoring:
         #   - resolved direct call: 1.0
@@ -472,6 +514,9 @@ def incremental_graph_update(
 
     # Normalize changed_files to workspace-relative paths. We accept any
     # iterable (list, set, tuple) and de-duplicate via a set.
+    # Issue #177: normalize backslashes to forward slashes so lookups
+    # against the flat registry's ``file`` field (which we also normalize
+    # below) succeed on both Unix and Windows.
     changed_rel_paths: Set[str] = set()
     for f in changed_files or []:
         if not f:
@@ -481,7 +526,7 @@ def incremental_graph_update(
         except (ValueError, OSError):
             continue
         if rel and rel != ".":
-            changed_rel_paths.add(rel)
+            changed_rel_paths.add(_normalize_path_separators(rel))
 
     zero_result: Dict[str, int] = {
         "nodes": 0,
@@ -522,8 +567,11 @@ def incremental_graph_update(
     # a 4-segment format (``file:line:class:Name``) that the heuristic
     # mis-parses — the lookup is authoritative because it comes from
     # the parsers' own ``file`` field.
+    # Issue #177: normalize both keys and values to forward slashes so
+    # lookups against ``changed_rel_paths`` (also normalized) succeed.
     node_id_to_file: Dict[str, str] = {
-        n.get("id", ""): n.get("file", "")
+        _normalize_path_separators(n.get("id", "")):
+            _normalize_path_separators(n.get("file", ""))
         for n in flat_nodes if n.get("id")
     }
 
@@ -559,7 +607,11 @@ def incremental_graph_update(
         node_rows: List[Tuple[Any, ...]] = []
         for node in flat_nodes:
             file_val = node.get("file", "")
-            if file_val not in changed_rel_paths:
+            # Issue #177: normalize for both the membership test and the
+            # stored value so incremental scans stay consistent with full
+            # scans (which also normalize at write time).
+            file_val_norm = _normalize_path_separators(file_val)
+            if file_val_norm not in changed_rel_paths:
                 continue
             node_id = node.get("id", "")
             if not node_id:
@@ -576,7 +628,8 @@ def incremental_graph_update(
                 json.dumps(extra_keys, default=str) if extra_keys else None
             )
             node_rows.append(
-                (node_id, node_type, name, file_val, line_val, extra_json)
+                (_normalize_path_separators(node_id), node_type, name,
+                 file_val_norm, line_val, extra_json)
             )
 
         # ── Step 5 (pre-build): Re-insert CALLS edges touching changed files ─
@@ -597,13 +650,21 @@ def incremental_graph_update(
                 continue  # skip malformed edges
             target_id = edge.get("to")  # may be None for unresolved
 
+            # Issue #177: normalize endpoints before lookup so the
+            # authoritative node_id → file map (which also stores
+            # normalized keys) matches correctly on both platforms.
+            source_id_norm = _normalize_path_separators(source_id)
+            target_id_norm = (
+                _normalize_path_separators(target_id) if target_id else None
+            )
+
             # Use the authoritative node_id → file map (not the
             # _parse_file_line_from_node_id heuristic) to decide whether
             # this edge touches a changed file. The heuristic mishandles
             # 4-segment class node_ids (``file:line:class:Name``).
-            src_file_lookup = node_id_to_file.get(source_id, "")
+            src_file_lookup = node_id_to_file.get(source_id_norm, "")
             tgt_file_lookup = (
-                node_id_to_file.get(target_id, "") if target_id else ""
+                node_id_to_file.get(target_id_norm, "") if target_id_norm else ""
             )
             if (src_file_lookup not in changed_rel_paths
                     and tgt_file_lookup not in changed_rel_paths):
@@ -615,7 +676,7 @@ def incremental_graph_update(
             ipc = edge.get("ipc", False)
 
             # Confidence scoring (mirrors populate_graph_tables).
-            if target_id:
+            if target_id_norm:
                 confidence = 0.9 if ipc else 1.0
             else:
                 confidence = 0.5
@@ -623,7 +684,9 @@ def incremental_graph_update(
             # Edge file/line: parsed from source id (where the call
             # originates). Matches populate_graph_tables' behavior so
             # the graph_edges.file column is identical between paths.
-            src_file, src_line = _parse_file_line_from_node_id(source_id)
+            # Issue #177: parse from the normalized id so src_file is
+            # forward-slash form too.
+            src_file, src_line = _parse_file_line_from_node_id(source_id_norm)
 
             extra: Dict[str, Any] = {}
             if to_fn:
@@ -639,7 +702,7 @@ def incremental_graph_update(
             )
 
             edge_rows.append((
-                source_id, target_id, EDGE_TYPE_CALLS,
+                source_id_norm, target_id_norm, EDGE_TYPE_CALLS,
                 src_file, src_line, confidence, extra_json,
             ))
 
