@@ -454,17 +454,16 @@ def _detect_vulns(workspace: str, max_items: int) -> Optional[Dict]:
     total = vuln.get("stats", {}).get("total_vulnerabilities", 0)
     if total == 0:
         return None
-    else:
-        return {
-            "category": "vulnerabilities",
-            "label": "Known CVEs",
-            "total": total,
-            "severity": "critical",
-            "by_severity": vuln.get("stats", {}).get("by_severity", {}),
-            "top_items": vuln.get("vulnerabilities", [])[:max_items],
-            "action": "Update vulnerable dependencies immediately — check npm audit, pip audit, cargo audit, or govulncheck",
-            "impact": "Known vulnerabilities can be exploited by attackers even without source code access",
-        }
+    return {
+        "category": "vulnerabilities",
+        "label": "Known CVEs",
+        "total": total,
+        "severity": "critical",
+        "by_severity": vuln.get("stats", {}).get("by_severity", {}),
+        "top_items": vuln.get("vulnerabilities", [])[:max_items],
+        "action": "Update vulnerable dependencies immediately — check npm audit, pip audit, cargo audit, or govulncheck",
+        "impact": "Known vulnerabilities can be exploited by attackers even without source code access",
+    }
 
 
 def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
@@ -473,16 +472,15 @@ def _detect_dataflow(workspace: str, max_items: int) -> Optional[Dict]:
     violations = df.get("stats", {}).get("violations", 0)
     if violations == 0:
         return None
-    else:
-        return {
-            "category": "dataflow_violations",
-            "label": "Unsafe Data Flows",
-            "total": violations,
-            "severity": "high",
-            "top_items": df.get("violations", [])[:max_items],
-            "action": "Add input sanitization and output encoding at every source→sink boundary",
-            "impact": "Untainted data flows can lead to SQL injection, XSS, and command injection attacks",
-        }
+    return {
+        "category": "dataflow_violations",
+        "label": "Unsafe Data Flows",
+        "total": violations,
+        "severity": "high",
+        "top_items": df.get("violations", [])[:max_items],
+        "action": "Add input sanitization and output encoding at every source→sink boundary",
+        "impact": "Untainted data flows can lead to SQL injection, XSS, and command injection attacks",
+    }
 
 
 def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
@@ -495,20 +493,19 @@ def _detect_env(workspace: str, max_items: int) -> Optional[Dict]:
     issues = undocumented  # Each undocumented var is an issue
     if issues == 0 and total_vars == 0:
         return None
-    else:
-        return {
-            "category": "env_issues",
-            "label": "Environment Issues",
-            "total": issues,
-            "severity": "medium",
-            "top_items": [{"name": v.get("name"), "is_required": v.get("is_required"),
-                             "has_fallback": v.get("has_fallback"),
-                             "documentation": v.get("documentation")}
-                            for v in env.get("variables", [])[:max_items]
-                            if not v.get("documentation")],
-            "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
-            "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
-        }
+    return {
+        "category": "env_issues",
+        "label": "Environment Issues",
+        "total": issues,
+        "severity": "medium",
+        "top_items": [{"name": v.get("name"), "is_required": v.get("is_required"),
+                         "has_fallback": v.get("has_fallback"),
+                         "documentation": v.get("documentation")}
+                        for v in env.get("variables", [])[:max_items]
+                        if not v.get("documentation")],
+        "action": "Review .env files, ensure secrets are not committed, add .env to .gitignore",
+        "impact": "Misconfigured environment variables can leak secrets or cause runtime failures",
+    }
 
 
 def _detect_smells(workspace: str, severity_filter: set, max_items: int) -> Optional[Dict]:
@@ -561,17 +558,16 @@ def _detect_complexity(workspace: str, max_items: int) -> Optional[Dict]:
     hotspots = comp.get("hotspots", [])
     if not hotspots:
         return None
-    else:
-        return {
-            "category": "complexity",
-            "label": "Complexity Hotspots",
-            "total": len(hotspots),
-            "severity": "high" if any(h.get("cyclomatic", 0) > 20 for h in hotspots) else "medium",
-            "avg_cyclomatic": comp.get("stats", {}).get("avg_cyclomatic", 0),
-            "top_items": hotspots[:max_items],
-            "action": "Refactor high-complexity functions by extracting helper methods, reducing branches, and simplifying conditionals",
-            "impact": "Complex functions are bug magnets — they're hard to test, understand, and maintain",
-        }
+    return {
+        "category": "complexity",
+        "label": "Complexity Hotspots",
+        "total": len(hotspots),
+        "severity": "high" if any(h.get("cyclomatic", 0) > 20 for h in hotspots) else "medium",
+        "avg_cyclomatic": comp.get("stats", {}).get("avg_cyclomatic", 0),
+        "top_items": hotspots[:max_items],
+        "action": "Refactor high-complexity functions by extracting helper methods, reducing branches, and simplifying conditionals",
+        "impact": "Complex functions are bug magnets — they're hard to test, understand, and maintain",
+    }
 
 
 def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
@@ -580,17 +576,16 @@ def _detect_dead_code(workspace: str, max_items: int) -> Optional[Dict]:
     total = dc.get("stats", {}).get("total_dead_code", 0)
     if total == 0:
         return None
-    else:
-        return {
-            "category": "dead_code",
-            "label": "Dead Code",
-            "total": total,
-            "severity": "medium",
-            "by_category": dc.get("stats", {}).get("by_category", {}),
-            "top_items": dc.get("results", {}).get("unreachable", [])[:max_items],
-            "action": "Remove dead code in batches with testing — start with unreachable code and unused exports",
-            "impact": "Dead code increases maintenance burden, confuses new developers, and bloats the codebase",
-        }
+    return {
+        "category": "dead_code",
+        "label": "Dead Code",
+        "total": total,
+        "severity": "medium",
+        "by_category": dc.get("stats", {}).get("by_category", {}),
+        "top_items": dc.get("results", {}).get("unreachable", [])[:max_items],
+        "action": "Remove dead code in batches with testing — start with unreachable code and unused exports",
+        "impact": "Dead code increases maintenance burden, confuses new developers, and bloats the codebase",
+    }
 
 
 def _detect_circular(workspace: str, max_items: int) -> Optional[Dict]:
@@ -623,17 +618,16 @@ def _detect_perf(workspace: str, max_items: int) -> Optional[Dict]:
     total = perf.get("stats", {}).get("total_hints", 0)
     if total == 0:
         return None
-    else:
-        return {
-            "category": "perf_hints",
-            "label": "Performance Issues",
-            "total": total,
-            "severity": perf.get("risk", "low"),
-            "by_category": perf.get("stats", {}).get("by_category", {}),
-            "top_items": perf.get("hints", [])[:max_items],
-            "action": "Address N+1 queries first (critical), then sync blocking, then memory leaks",
-            "impact": "Performance issues compound — N+1 queries scale linearly with data size, blocking calls freeze the event loop",
-        }
+    return {
+        "category": "perf_hints",
+        "label": "Performance Issues",
+        "total": total,
+        "severity": perf.get("risk", "low"),
+        "by_category": perf.get("stats", {}).get("by_category", {}),
+        "top_items": perf.get("hints", [])[:max_items],
+        "action": "Address N+1 queries first (critical), then sync blocking, then memory leaks",
+        "impact": "Performance issues compound — N+1 queries scale linearly with data size, blocking calls freeze the event loop",
+    }
 
 
 def _detect_config_drift(workspace: str, max_items: int) -> Optional[Dict]:
@@ -642,16 +636,15 @@ def _detect_config_drift(workspace: str, max_items: int) -> Optional[Dict]:
     total = drift.get("stats", {}).get("total_drift_items", 0)
     if total == 0:
         return None
-    else:
-        return {
-            "category": "config_drift",
-            "label": "Dependency Drift",
-            "total": total,
-            "severity": "low",
-            "top_items": drift.get("drift_items", [])[:max_items],
-            "action": "Update outdated dependencies to reduce security risk and get bug fixes",
-            "impact": "Outdated dependencies may contain unpatched security vulnerabilities",
-        }
+    return {
+        "category": "config_drift",
+        "label": "Dependency Drift",
+        "total": total,
+        "severity": "low",
+        "top_items": drift.get("drift_items", [])[:max_items],
+        "action": "Update outdated dependencies to reduce security risk and get bug fixes",
+        "impact": "Outdated dependencies may contain unpatched security vulnerabilities",
+    }
 
 
 def _detect_binaries(workspace: str, max_items: int) -> Optional[Dict]:
@@ -660,18 +653,17 @@ def _detect_binaries(workspace: str, max_items: int) -> Optional[Dict]:
     total = bins.get("stats", {}).get("total_artifacts", 0)
     if total == 0:
         return None
-    else:
-        return {
-            "category": "binary_artifacts",
-            "label": "Binary/Compiled Files",
-            "total": total,
-            "severity": "low",
-            "by_category": bins.get("stats", {}).get("by_category", {}),
-            "top_items": bins.get("findings", [])[:max_items],
-            "recommendations": bins.get("recommendations", []),
-            "action": "Add binary files to .gitignore and use build pipelines instead",
-            "impact": "Binary files bloat the repository, make diffs meaningless, and may contain vulnerable code",
-        }
+    return {
+        "category": "binary_artifacts",
+        "label": "Binary/Compiled Files",
+        "total": total,
+        "severity": "low",
+        "by_category": bins.get("stats", {}).get("by_category", {}),
+        "top_items": bins.get("findings", [])[:max_items],
+        "recommendations": bins.get("recommendations", []),
+        "action": "Add binary files to .gitignore and use build pipelines instead",
+        "impact": "Binary files bloat the repository, make diffs meaningless, and may contain vulnerable code",
+    }
 
 
 # ─── Helper Functions ──────────────────────────────────────
