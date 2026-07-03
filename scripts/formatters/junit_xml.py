@@ -1,3 +1,7 @@
+# @WHO:   scripts/formatters/junit_xml.py
+# @WHAT:  JUnit XML formatter — CI test-report integration for Jenkins/GitLab/CircleCI (issue #52 Phase 2)
+# @PART:  formatters
+# @ENTRY: format_junit_xml()
 """JUnit XML formatter for CodeLens (issue #52, Phase 2).
 
 Generates JUnit XML — the universal test-result format understood by

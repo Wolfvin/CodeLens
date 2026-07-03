@@ -1,3 +1,7 @@
+# @WHO:   scripts/formatters/gitlab_sast.py
+# @WHAT:  GitLab SAST JSON formatter — native security scan format for GitLab CI dashboard (issue #52 Phase 2)
+# @PART:  formatters
+# @ENTRY: format_gitlab_sast()
 """GitLab SAST JSON formatter for CodeLens (issue #52, Phase 2).
 
 Generates GitLab's native security scan JSON format for direct

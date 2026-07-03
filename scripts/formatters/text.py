@@ -1,3 +1,7 @@
+# @WHO:   scripts/formatters/text.py
+# @WHAT:  Text table formatter — human-readable ASCII table for terminal output (issue #52 Phase 2)
+# @PART:  formatters
+# @ENTRY: format_text()
 """Text table formatter for CodeLens (issue #52, Phase 2).
 
 Human-readable table output for terminal consumption:

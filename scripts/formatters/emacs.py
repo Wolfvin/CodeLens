@@ -1,3 +1,7 @@
+# @WHO:   scripts/formatters/emacs.py
+# @WHAT:  Emacs compilation-mode formatter — file:line:col: severity: message for compile-mode (issue #52 Phase 2)
+# @PART:  formatters
+# @ENTRY: format_emacs()
 """Emacs compilation-mode formatter for CodeLens (issue #52, Phase 2).
 
 Emits findings in the canonical Emacs ``compile-mode`` format::

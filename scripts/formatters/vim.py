@@ -1,3 +1,7 @@
+# @WHO:   scripts/formatters/vim.py
+# @WHAT:  Vim quickfix formatter — file:line:col: message for :make/quickfix nav (issue #52 Phase 2)
+# @PART:  formatters
+# @ENTRY: format_vim()
 """Vim quickfix formatter for CodeLens (issue #52, Phase 2).
 
 Emits findings in Vim's ``quickfix`` format::
