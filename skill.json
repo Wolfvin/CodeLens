@@ -1,7 +1,7 @@
 {
   "name": "codelens",
   "version": "8.2.0",
-  "description": "Live Codebase Reference Intelligence. 70 commands for AI-powered code analysis, security auditing, quality scoring, and pre-write safety checks. Supports 28+ languages with regex+AST hybrid parsing. Must activate before writing/editing/deleting any class, id, or function.",
+  "description": "Live Codebase Reference Intelligence. 73 commands for AI-powered code analysis, security auditing, quality scoring, and pre-write safety checks. Supports 28+ languages with regex+AST hybrid parsing. Must activate before writing/editing/deleting any class, id, or function.",
   "author": "codelens",
   "command_categories": {
     "setup": [
