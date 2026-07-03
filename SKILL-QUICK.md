@@ -29,6 +29,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | `--format ai` | Normalized: `{stats, items[], truncated, recommendations}` |
 | `--format compact` | Token-efficient: single-char keys + abbreviated types (issue #17). ~50% smaller than `json`. Best for high-volume MCP tool calls |
 | `--format sarif` | SARIF v2.1.0 output for GitHub Advanced Security / VS Code |
+| `--format graphml` | GraphML 1.0 XML for graph-producing commands (`scan`, `trace`, `impact`, `circular`). Opens in Gephi/Cytoscape/yEd/Neo4j. Other commands emit a single-node placeholder (issue #59 Phase 3) |
 | `--limit N` / `--offset N` | Pagination on list-type commands (`list`, `search`, `trace`, `symbols`, `outline`). Default limit=20 (issue #17). `--top N` is an alias for `--limit N --offset 0` |
 | `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
 | `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
@@ -115,7 +116,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | "Cross-file taint" | `dataflow` | `taint` (taint is single-file, AST-deep) |
 | "Auto-fix issues" | `fix` | `check` (check just gates, doesn't fix) |
 
-## All 71 Commands
+## All 75 Commands
 
 ### Setup & Lifecycle (8+)
 `init` · `scan [--incremental] [--max-files N] [--full]` · `registry-validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status` (issue #33: `codelens --lsp-status` top-level flag is an alias of `codelens lsp-status` — both delegate to `hybrid_engine.get_lsp_status()` and return the identical payload)
@@ -147,9 +148,9 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 ### Tooling (1)
 `plugin <install|list|search|update|info|validate>`
 
-**Total: 71 commands** (auto-registered via `commands/__init__.py`; rerun `python3 scripts/sync_command_count.py --apply` after adding/removing a command)
+**Total: 75 commands** (auto-registered via `commands/__init__.py`; rerun `python3 scripts/sync_command_count.py --apply` after adding/removing a command)
 
-## MCP Server (69 Tools)
+## MCP Server (73 Tools)
 
 Start the MCP server for AI agent integration:
 
@@ -157,9 +158,9 @@ Start the MCP server for AI agent integration:
 python3 scripts/codelens.py serve
 ```
 
-Exposes 69 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
+Exposes 73 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
 - 50 statically-defined tools (full JSON schemas in `mcp_server.py`)
-- 15 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
+- 17 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
 - Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
 - `watch` and `serve` itself are excluded (long-running)
 

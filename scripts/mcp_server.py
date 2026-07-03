@@ -78,7 +78,7 @@ _TOOL_DEFINITIONS = {
         }
     },
     "query": {
-        "description": "Look up a symbol (function/class/variable/CSS class/ID) in the codebase registry. Returns action recommendation (CREATE/EXTEND/ASK/STOP).",
+        "description": "Look up a symbol (function/class/variable/CSS class/ID) in the codebase registry. Returns action recommendation (CREATE/EXTEND/ASK/STOP). Supports cross-repo search via additional_paths (issue #15).",
         "parameters": {
             "type": "object",
             "properties": {
@@ -108,6 +108,11 @@ _TOOL_DEFINITIONS = {
                     "type": "integer",
                     "description": "Max callers/callees to return (default: 20)",
                     "default": 20
+                },
+                "additional_paths": {
+                    "type": "string",
+                    "description": "Comma-separated additional repo root paths for cross-repo search (issue #15). When provided, merges registries from all repos and resolves cross-repo call edges. Example: '../lib/shared,../services/worker'",
+                    "default": None
                 }
             },
             "required": ["name", "workspace"]
@@ -468,6 +473,40 @@ _TOOL_DEFINITIONS = {
                 }
             },
             "required": ["workspace"]
+        }
+    },
+    "semantic-query": {
+        "description": (
+            "Semantic symbol search via TF-IDF (issue #11). Finds symbols by "
+            "meaning, not just by name — e.g. querying 'user authentication flow' "
+            "can surface a function named verify_jwt_claims. Returns ranked symbols "
+            "with cosine-similarity scores. Pure-Python, zero dependencies; reads "
+            "from the existing SQLite registry so the index is always in sync with "
+            "the last 'scan' result."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Natural-language or code-fragment query, e.g. "
+                        "'user authentication flow', 'parse jwt', 'error handler'. "
+                        "Symbol names, signatures, kinds, and file paths are all "
+                        "included in the TF-IDF document for each symbol."
+                    )
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "top": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 10; use 0 for all).",
+                    "default": 10
+                }
+            },
+            "required": ["query", "workspace"]
         }
     },
     "vuln-scan": {
@@ -1004,8 +1043,8 @@ _TOOL_DEFINITIONS = {
                 },
                 "format": {
                     "type": "string",
-                    "enum": ["json", "markdown", "ai", "sarif", "compact"],
-                    "description": "Output format (default: ai — normalized schema)",
+                    "enum": ["json", "markdown", "ai", "sarif", "compact", "graphml"],
+                    "description": "Output format (default: ai — normalized schema). graphml = GraphML XML for graph-producing commands.",
                     "default": "ai"
                 },
                 "top": {
@@ -1099,6 +1138,48 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "query-graph": {
+        "description": (
+            "Query the code graph with a Cypher-subset query (issue #9). "
+            "Replaces 3-5 chained trace/impact/context calls with one "
+            "expressive query. Read-only — safe for CI. "
+            "Supported: MATCH (var:Label)-[:EDGE_TYPE]->(var2), "
+            "WHERE var.prop = 'val' / CONTAINS / IS NULL / NOT EXISTS { pattern }, "
+            "RETURN var.prop, LIMIT n. "
+            "Labels: function, class, file, module, route, type, interface. "
+            "Edge types: CALLS, IMPORTS, DEFINES, INHERITS, IMPLEMENTS, USES_TYPE. "
+            "Examples: "
+            "\"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\"; "
+            "\"MATCH (f:Function) WHERE NOT EXISTS { ()-[:CALLS]->(f) } RETURN f.name\" (dead code); "
+            "\"MATCH (c:Class)-[:INHERITS]->(p:Class) RETURN c.name, p.name\"."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Cypher-subset query. Must start with MATCH. "
+                        "Example: \"MATCH (f:Function)-[:CALLS]->(g) WHERE f.name = 'handleRequest' RETURN g.name, g.file\""
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results to return (overrides LIMIT in query if set). Default: no limit.",
+                },
+                "validate": {
+                    "type": "boolean",
+                    "description": "Validate query syntax without executing it (default: False).",
+                    "default": False,
+                },
+            },
+            "required": ["workspace", "query"]
+        }
+    },
 }
 
 
@@ -1107,13 +1188,17 @@ _TOOL_DEFINITIONS = {
 
 # Format enum shared by every tool's inputSchema (issue #17).
 # compact = token-efficient single-char keys + abbreviated types.
+# graphml = GraphML 1.0 XML for graph-producing commands (issue #59 Phase 3).
 _FORMAT_PROPERTY = {
     "type": "string",
-    "enum": ["json", "markdown", "ai", "sarif", "compact"],
+    "enum": ["json", "markdown", "ai", "sarif", "compact", "graphml"],
     "description": (
         "Output format. 'ai' (default) is the normalized schema; 'compact' "
         "uses single-character keys and abbreviated types to cut tokens "
-        "40-70%. 'json'/'markdown'/'sarif' are the legacy verbose forms."
+        "40-70%. 'json'/'markdown'/'sarif' are the legacy verbose forms. "
+        "'graphml' emits a GraphML 1.0 XML document for graph-producing "
+        "commands (scan/trace/impact/circular); other commands produce a "
+        "single-node placeholder graph."
     ),
     "default": "ai",
 }
@@ -1480,9 +1565,11 @@ class MCPServer:
         """Handle tools/list request. Returns all CodeLens commands as MCP tools.
 
         Every tool's inputSchema gets a ``format`` property added with the
-        enum ``[json, markdown, ai, sarif, compact]`` (issue #17). The MCP
-        server always returns AI-formatted results by default; the ``format``
-        parameter lets agents opt into the token-efficient ``compact`` form.
+        enum ``[json, markdown, ai, sarif, compact, graphml]`` (issue #17,
+        extended by issue #59 Phase 3 for graphml). The MCP server always
+        returns AI-formatted results by default; the ``format`` parameter
+        lets agents opt into the token-efficient ``compact`` form or the
+        GraphML XML form for graph-producing commands.
         """
         tools = []
         for cmd_name, tool_def in sorted(_TOOL_DEFINITIONS.items()):
@@ -1527,7 +1614,7 @@ class MCPServer:
     def _infer_schema_from_command(self, cmd_name: str, cmd_info: Dict[str, Any]) -> Dict[str, Any]:
         """Infer a JSON Schema for a command based on its argument parser.
 
-        Includes the ``format`` enum (json/markdown/ai/sarif/compact) so
+        Includes the ``format`` enum (json/markdown/ai/sarif/compact/graphml) so
         agents can opt into compact output for any dynamically-discovered
         command (issue #17).
         """
