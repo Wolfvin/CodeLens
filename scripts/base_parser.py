@@ -206,6 +206,57 @@ class BaseParser:
         self.walk_tree(root, b'', visitor)
         return results
 
+    # ─── Issue #43: YAML node-type registry (Approach 2 stepping stone) ──
+    #
+    # ``find_nodes_by_category`` is the config-driven counterpart of
+    # ``find_nodes_by_types``. Instead of passing a hardcoded set of
+    # node-type strings, the caller passes a language + semantic category
+    # (e.g. ``"python"``, ``"function_def"``) and the method looks up the
+    # concrete node types from ``scripts/languages/node_types.yaml``.
+    #
+    # This is purely additive — existing parsers continue to use
+    # ``find_nodes_by_type`` / ``find_nodes_by_types`` unchanged. New
+    # parsers and the future .scm engine (issue #43 Phase B) can use
+    # ``find_nodes_by_category`` to avoid hardcoding node types.
+    #
+    # Why a method on BaseParser (not a free function)?
+    #   ``find_nodes_by_types`` is already a method here and uses
+    #   ``self.walk_tree``. Keeping the category-based variant next to
+    #   it makes the API discoverable and lets subclasses override
+    #   both with the same pattern.
+
+    def find_nodes_by_category(self, root: Node, language: str, category: str) -> List[Node]:
+        """Find all nodes matching a semantic category from the YAML registry.
+
+        Args:
+            root: The AST root node to walk.
+            language: Language key in the YAML registry (e.g. ``"python"``,
+                ``"rust"``, ``"javascript"``).
+            category: Semantic category (e.g. ``"function_def"``, ``"call"``,
+                ``"import"``).
+
+        Returns:
+            List of nodes whose ``type`` matches any of the concrete node
+            types registered for ``language`` + ``category``.
+
+        Raises:
+            NodeTypeError: If the language or category is not in the YAML
+                registry. The error is allowed to propagate because it
+                signals a config bug, not a parse error — the caller
+                should fix the config, not catch the exception.
+
+        Example::
+
+            parser = PythonParser(language)
+            root = parser.parse(source)
+            # Instead of: parser.find_nodes_by_type(root, "function_definition")
+            # Use:        parser.find_nodes_by_category(root, "python", "function_def")
+            funcs = parser.find_nodes_by_category(root, "python", "function_def")
+        """
+        from languages import get_node_types
+        node_types = get_node_types(language, category)
+        return self.find_nodes_by_types(root, node_types)
+
     def find_parent_of_type(self, node: Node, parent_type: str) -> Optional[Node]:
         """Walk up the tree to find a parent of a specific type."""
         current = node.parent

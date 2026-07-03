@@ -1,0 +1,158 @@
+# @WHO:   scripts/languages/node_types.yaml
+# @WHAT:  Tree-sitter node-type registry — maps language+category to concrete AST node types (issue #43)
+# @PART:  languages
+# @ENTRY: -
+#
+# Issue #43 — Approach 2 (YAML node-type registry).
+#
+# Each language maps semantic categories (function_def, call, import, etc.)
+# to concrete tree-sitter node types. The categories are stable across
+# languages — ``function_def`` means "function definition" whether the
+# language is Python, Rust, or JS. This is the design property that the
+# future .scm engine (issue #43 Phase B) will exploit: a .scm query file
+# for one language maps 1:1 to a category here.
+#
+# Adding a new tree-sitter language:
+#   1. Add an entry here with the language's node types.
+#   2. The loader picks it up automatically (no code change).
+#   3. Future parsers can use ``find_nodes_by_category(root, lang, cat)``.
+#
+# Updating an existing language:
+#   - Just edit the YAML. No code change, no test change (unless the
+#     test asserts specific node types).
+#
+# Why YAML and not Python dicts?
+#   - Non-contributors can add a language without touching Python.
+#   - The same config is reusable by a future Rust core (PyO3) — YAML
+#     is language-agnostic.
+#   - Aligns with CodeLens's existing config patterns (codelens.config.json,
+#     plugin.yaml, hooks.json).
+
+# ─── Python ──────────────────────────────────────────────────────────
+python:
+  function_def:
+    - function_definition
+  class_def:
+    - class_definition
+  call:
+    - call
+  import:
+    - import_statement
+  decorator:
+    - decorator
+  # Identifier sub-types used for call-target resolution
+  identifier:
+    - identifier
+    - attribute
+
+# ─── Rust ────────────────────────────────────────────────────────────
+rust:
+  function_def:
+    - function_item
+  struct:
+    - struct_item
+  enum:
+    - enum_item
+  trait:
+    - trait_item
+  module:
+    - mod_item
+  const:
+    - const_item
+    - static_item
+  type_alias:
+    - type_item
+  macro:
+    - macro_definition
+  import:
+    - use_declaration
+  impl:
+    - impl_item
+  call:
+    - call_expression
+  # Identifier sub-types used for call-target resolution
+  identifier:
+    - identifier
+    - field_expression
+    - scoped_identifier
+
+# ─── JavaScript (backend / Node.js) ─────────────────────────────────
+javascript:
+  function_def:
+    - function_declaration
+    - generator_function_declaration
+  variable_declarator:
+    - variable_declarator
+  class_def:
+    - class_declaration
+  export:
+    - export_statement
+  import:
+    - import_statement
+  call:
+    - call_expression
+    - new_expression
+  identifier:
+    - identifier
+    - member_expression
+
+# ─── TypeScript (backend) ───────────────────────────────────────────
+typescript:
+  function_def:
+    - function_declaration
+    - generator_function_declaration
+  variable_declarator:
+    - variable_declarator
+  class_def:
+    - class_declaration
+  export:
+    - export_statement
+  import:
+    - import_statement
+  call:
+    - call_expression
+    - new_expression
+  identifier:
+    - identifier
+    - member_expression
+
+# ─── TSX (React) ────────────────────────────────────────────────────
+tsx:
+  function_def:
+    - function_declaration
+  variable_declarator:
+    - variable_declarator
+  class_def:
+    - class_declaration
+  export:
+    - export_statement
+  import:
+    - import_statement
+  call:
+    - call_expression
+    - new_expression
+  jsx_element:
+    - jsx_opening_element
+    - jsx_self_closing_element
+  jsx_attribute:
+    - jsx_attribute
+  identifier:
+    - identifier
+    - member_expression
+    - nested_identifier
+
+# ─── CSS ────────────────────────────────────────────────────────────
+css:
+  keyframes:
+    - keyframes_statement
+  class_selector:
+    - class_selector
+  id_selector:
+    - id_selector
+  pseudo_class_selector:
+    - pseudo_class_selector
+
+# ─── HTML ───────────────────────────────────────────────────────────
+html:
+  attribute:
+    - attribute
