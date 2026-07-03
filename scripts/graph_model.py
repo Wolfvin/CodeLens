@@ -13,7 +13,7 @@ NON-BREAKING by design:
 - New tables `graph_nodes` and `graph_edges` are additive (prefixed `graph_`
   to avoid colliding with any existing table name).
 - The flat registry tables and JSON files are untouched.
-- All 71 existing CLI commands continue to work unchanged.
+- All 76 existing CLI commands continue to work unchanged.
 
 Schema:
     graph_nodes(
@@ -66,6 +66,9 @@ NODE_TYPE_MODULE = "module"
 NODE_TYPE_ROUTE = "route"
 NODE_TYPE_TYPE = "type"
 NODE_TYPE_INTERFACE = "interface"
+# Dependency vulnerability node (issue #158: deps-audit stores findings as
+# graph nodes linked to the lock file that contained the vulnerable package).
+NODE_TYPE_DEPENDENCY_VULN = "dependency_vuln"
 
 # Edge types (per issue #8 spec)
 EDGE_TYPE_CALLS = "CALLS"
@@ -74,6 +77,9 @@ EDGE_TYPE_DEFINES = "DEFINES"
 EDGE_TYPE_INHERITS = "INHERITS"
 EDGE_TYPE_IMPLEMENTS = "IMPLEMENTS"
 EDGE_TYPE_USES_TYPE = "USES_TYPE"
+# Edge from a file node to a dependency_vuln node (issue #158). The source is
+# the lock file / manifest path, the target is the vuln node_id.
+EDGE_TYPE_HAS_VULN = "HAS_VULN"
 
 # Map flat-registry node "type" values to graph node_type.
 # Anything not in this map defaults to NODE_TYPE_FUNCTION.
