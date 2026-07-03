@@ -47,7 +47,11 @@ class JSBackendParser(BaseParser):
         Extract function nodes and edges from backend JS.
 
         Returns:
-            {"nodes": [...], "edges": [...]}
+            {
+                "nodes": [...],
+                "edges": [...],
+                "skipped": [{"file": str, "reason": str, "lines": int}]  # empty in normal operation
+            }
 
         Single-pass recursive walk (issue #116): the previous two-pass
         design held ``body_node`` Node references across function
@@ -58,31 +62,43 @@ class JSBackendParser(BaseParser):
         declaration's body immediately, and disables the cyclic GC to
         prevent mid-walk collection.
 
-        Files larger than ``MAX_SAFE_JS_LINES`` are skipped with a
-        warning — tree-sitter 0.25 + tree-sitter-javascript 0.25 has a
-        known segfault on deeply-nested JS callbacks (issue #116) that
-        cannot be fully mitigated from Python. Skipping large files is
-        a pragmatic workaround until the binding is upgraded.
+        Issue #163: the previous MAX_SAFE_JS_LINES=100 threshold was
+        removed because it silently skipped the most complex (and
+        therefore most analysis-worthy) files in real codebases — e.g.
+        ``scripts/regret.js`` at 2,731 lines was invisible to
+        ``complexity``. The actual root-cause fix for the issue #116
+        segfault is the single-pass walk + ``gc.disable()`` + holding
+        the Tree reference via ``self.parse_tree()`` (all in place).
+
+        Files above ``ABSOLUTE_HARD_LIMIT_LINES`` (10,000) are still
+        skipped — they are almost always minified/generated code. The
+        skip is now explicit: the file appears in the ``skipped[]`` list
+        with reason ``file_too_large`` so the caller knows coverage is
+        incomplete (issue #163 DoD: "silent skip replaced with explicit
+        skipped[] list").
         """
         import gc as _gc
         import logging
         _log = logging.getLogger("codelens")
 
-        # Workaround for issue #116: tree-sitter-javascript 0.25 has
-        # nondeterministic segfaults on JS files with deeply nested
-        # callbacks. Skip them rather than crash the whole scan.
-        # Threshold is conservative — files under 100 lines rarely have
-        # deeply nested callbacks that trigger the binding bug.
-        MAX_SAFE_JS_LINES = 100
+        ABSOLUTE_HARD_LIMIT_LINES = 10_000
         line_count = content.count('\n') + 1
-        if line_count > MAX_SAFE_JS_LINES:
+        if line_count > ABSOLUTE_HARD_LIMIT_LINES:
             _log.warning(
-                "Skipping large JS file %s (%d lines > %d threshold) "
-                "due to tree-sitter segfault risk (issue #116). "
-                "File will not appear in the graph.",
-                file_path, line_count, MAX_SAFE_JS_LINES,
+                "Skipping extremely large JS file %s (%d lines > %d hard limit). "
+                "Use .codelensignore to exclude if this is minified code. "
+                "File recorded in skipped[] list (issue #163).",
+                file_path, line_count, ABSOLUTE_HARD_LIMIT_LINES,
             )
-            return {"nodes": [], "edges": []}
+            return {
+                "nodes": [],
+                "edges": [],
+                "skipped": [{
+                    "file": file_path,
+                    "reason": "file_too_large",
+                    "lines": line_count,
+                }],
+            }
 
         _gc_was_enabled = _gc.isenabled()
         if _gc_was_enabled:
@@ -99,16 +115,26 @@ class JSBackendParser(BaseParser):
 
             MAX_DEPTH = 200
 
-            def _walk(node: Node, depth: int):
-                """Recursive walk — body Node references never leave
-                this function's frame, so they cannot dangle across
-                function-boundary crossings."""
+            # Issue #116/#163: iterative DFS walk. The previous recursive
+            # form held Node references in Python frames across function
+            # boundaries; combined with tree-sitter 0.26's binding this
+            # caused SIGSEGV on large JS files with deeply-nested callback
+            # chains. The iterative form holds an explicit (node, depth)
+            # stack — Node references never cross a Python function call
+            # boundary, which avoids the binding's GC invalidation bug.
+            # ``keep_alive`` pins every Node we visit for the duration of
+            # the walk so reference counting can't free them mid-walk.
+            keep_alive: List[Node] = [root]
+            stack: List[Tuple[Node, int]] = [(root, 0)]
+            while stack:
+                node, depth = stack.pop()
                 if depth > MAX_DEPTH:
-                    return
+                    continue
 
                 # Detect export_statement wrapper and mark exported
                 if node.type == 'export_statement':
                     for child in node.children:
+                        keep_alive.append(child)
                         if child.type in ('function_declaration', 'generator_function_declaration'):
                             self._parse_and_collect_calls(
                                 child, source, file_path, nodes, edges,
@@ -121,6 +147,7 @@ class JSBackendParser(BaseParser):
                             )
                         elif child.type == 'lexical_declaration':
                             for subchild in child.children:
+                                keep_alive.append(subchild)
                                 if subchild.type == 'variable_declarator':
                                     self._parse_and_collect_calls(
                                         subchild, source, file_path, nodes, edges,
@@ -128,6 +155,7 @@ class JSBackendParser(BaseParser):
                                     )
                         elif child.type == 'default_export_clause':
                             for subchild in node.children:
+                                keep_alive.append(subchild)
                                 if subchild.type == 'class_declaration':
                                     self._parse_and_collect_calls(
                                         subchild, source, file_path, nodes, edges,
@@ -138,7 +166,7 @@ class JSBackendParser(BaseParser):
                                         subchild, source, file_path, nodes, edges,
                                         exported=True,
                                     )
-                    return  # Don't double-count by recursing inside export_statement
+                    continue  # Don't double-count by recursing inside export_statement
 
                 if node.type == 'function_declaration' or node.type == 'generator_function_declaration':
                     self._parse_and_collect_calls(
@@ -167,12 +195,14 @@ class JSBackendParser(BaseParser):
                         node, source, file_path, nodes, edges,
                     )
 
-                # Recurse into children to find nested declarations
-                for child in node.children:
-                    _walk(child, depth + 1)
+                # Push children in reverse so they pop in source order
+                if depth + 1 <= MAX_DEPTH:
+                    children = node.children
+                    for child in reversed(children):
+                        keep_alive.append(child)
+                        stack.append((child, depth + 1))
 
-            _walk(root, 0)
-            return {"nodes": nodes, "edges": edges}
+            return {"nodes": nodes, "edges": edges, "skipped": []}
         finally:
             if _gc_was_enabled:
                 _gc.enable()
@@ -437,10 +467,15 @@ class JSBackendParser(BaseParser):
                               file_path: str) -> List[Dict]:
         """Find all function calls within a function body.
 
-        Uses a local recursive walk (issue #116) instead of
-        :meth:`self.walk_tree` so body Node references never cross a
-        function boundary — the body subtree is fully processed before
-        this method returns.
+        Issue #116/#163: iterative DFS walk. The previous recursive form
+        caused SIGSEGV on large JS files with deeply-nested callback
+        chains — the tree-sitter 0.26 binding invalidates Node pointers
+        when Python frames holding them are entered/exited repeatedly.
+        The iterative form holds an explicit (node, depth) stack and a
+        ``keep_alive`` list that pins every visited Node for the
+        duration of the walk so reference counting can't free them
+        mid-walk. Symmetric with the iterative walk used in
+        :meth:`extract_references`.
         """
         if not body_node:
             return []
@@ -448,9 +483,12 @@ class JSBackendParser(BaseParser):
         calls: List[Dict] = []
         MAX_DEPTH = 200
 
-        def _walk_calls(node: Node, depth: int):
+        keep_alive: List[Node] = [body_node]
+        stack: List[Tuple[Node, int]] = [(body_node, 0)]
+        while stack:
+            node, depth = stack.pop()
             if depth > MAX_DEPTH:
-                return
+                continue
             if node.type == 'call_expression':
                 call_info = self._parse_call(node, source)
                 if call_info:
@@ -459,10 +497,12 @@ class JSBackendParser(BaseParser):
                 call_info = self._parse_new_expression(node, source)
                 if call_info:
                     calls.append(call_info)
-            for child in node.children:
-                _walk_calls(child, depth + 1)
+            if depth + 1 <= MAX_DEPTH:
+                children = node.children
+                for child in reversed(children):
+                    keep_alive.append(child)
+                    stack.append((child, depth + 1))
 
-        _walk_calls(body_node, 0)
         return calls
 
     def _parse_call(self, node: Node, source: bytes) -> Optional[Dict]:
