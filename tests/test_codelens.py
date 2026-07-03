@@ -24,6 +24,7 @@ from codelens import (
     _suggest_fix,
     resolve_workspace,
     _SEVERITY_ORDER,
+    _force_utf8_stdio,
 )
 
 
@@ -654,6 +655,200 @@ class TestResolveWorkspace(unittest.TestCase):
         result = resolve_workspace(None)
         self.assertIsInstance(result, str)
         self.assertTrue(os.path.isdir(result))
+
+
+# ─── _force_utf8_stdio Tests (issue #179) ─────────────────────
+
+
+class TestForceUtf8Stdio(unittest.TestCase):
+    """Regression tests for issue #179.
+
+    On Windows without ``PYTHONUTF8=1``, the default stdout encoding
+    (``cp1252`` or similar) cannot represent characters like ``\u2192``
+    (the ``\u2192`` arrow used in trace paths such as
+    ``sidepanel.ts \u2192 auth/google-auth-cache.ts``), causing
+    ``UnicodeEncodeError`` crashes.
+
+    ``_force_utf8_stdio`` wraps ``sys.stdout`` / ``sys.stderr`` as
+    UTF-8 ``TextIOWrapper`` so this no longer happens. It must be a
+    no-op on Linux/macOS (encoding already utf-8) and under pytest
+    capsys (encoding also utf-8), and must not crash on streams
+    without a ``.buffer`` attribute (IDLE REPL, custom capture).
+    """
+
+    _ARROW = "\u2192"  # '→', used in trace output paths
+    _ARROW_UTF8_BYTES = b"\xe2\x86\x92"
+
+    def setUp(self):
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+
+    def tearDown(self):
+        sys.stdout = self._orig_stdout
+        sys.stderr = self._orig_stderr
+
+    def test_function_is_callable(self):
+        """Sanity: codelens module exposes _force_utf8_stdio as a callable."""
+        self.assertTrue(callable(_force_utf8_stdio))
+
+    def test_wraps_non_utf8_stdout(self):
+        """cp1252-encoded stdout is rewrapped as UTF-8.
+
+        Reproduces the issue #179 bug scenario: with cp1252 stdout,
+        writing the arrow character crashes. After _force_utf8_stdio,
+        it succeeds and the underlying buffer receives UTF-8 bytes.
+        """
+        import io
+        buf = io.BytesIO()
+        cp1252_stream = io.TextIOWrapper(buf, encoding="cp1252")
+        sys.stdout = cp1252_stream
+        sys.stderr = cp1252_stream  # also exercise stderr path
+
+        # Sanity: the bug exists pre-fix
+        with self.assertRaises(UnicodeEncodeError):
+            cp1252_stream.write(self._ARROW)
+
+        _force_utf8_stdio()
+
+        # Post-fix: encoding is utf-8 and arrow writes without crashing
+        encoding = (sys.stdout.encoding or "").lower().replace("-", "")
+        self.assertEqual(encoding, "utf8")
+        sys.stdout.write(self._ARROW)
+        sys.stdout.flush()
+        self.assertIn(self._ARROW_UTF8_BYTES, buf.getvalue())
+
+    def test_noop_when_stream_already_utf8(self):
+        """If sys.stdout is already utf-8, _force_utf8_stdio is a no-op.
+
+        This guards Linux/macOS behaviour (and pytest capsys, which also
+        reports utf-8) — the stream object must be left untouched so we
+        don't break test capture or replace a working stream with an
+        equivalent-but-different wrapper.
+        """
+        import io
+        utf8_stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        sys.stdout = utf8_stream
+        sys.stderr = utf8_stream
+
+        _force_utf8_stdio()
+
+        self.assertIs(sys.stdout, utf8_stream)
+        self.assertIs(sys.stderr, utf8_stream)
+
+    def test_noop_for_stream_without_buffer(self):
+        """Streams without a .buffer attribute are skipped, not crashed.
+
+        Some environments (IDLE REPL, custom capture objects) replace
+        sys.stdout with an object that doesn't expose the underlying
+        binary buffer. The fix must not crash those — it just leaves
+        them alone.
+        """
+        class BufferlessStream:
+            encoding = "cp1252"
+
+            def write(self, s):
+                pass
+
+            def flush(self):
+                pass
+
+        bufferless = BufferlessStream()
+        sys.stdout = bufferless
+        sys.stderr = bufferless
+
+        # Must not raise
+        _force_utf8_stdio()
+
+        # Stream is left untouched (cannot wrap without .buffer)
+        self.assertIs(sys.stdout, bufferless)
+        self.assertIs(sys.stderr, bufferless)
+
+    def test_handles_stream_with_none_encoding(self):
+        """Streams with encoding=None are wrapped (treated as non-utf8).
+
+        Some custom streams report encoding=None. The fix should
+        treat this as 'not utf-8' and attempt to wrap (subject to
+        the .buffer check).
+        """
+        import io
+        buf = io.BytesIO()
+        none_enc_stream = io.TextIOWrapper(buf, encoding="utf-8")
+        # Force encoding attribute to None via subclass to simulate
+        # environments that don't populate it.
+        class _NoneEncStream:
+            buffer = buf
+            encoding = None
+
+            def write(self, s):
+                pass
+
+            def flush(self):
+                pass
+
+        none_stream = _NoneEncStream()
+        sys.stdout = none_stream
+        sys.stderr = none_stream
+
+        _force_utf8_stdio()
+
+        # Stream should have been replaced with a UTF-8 wrapper
+        self.assertIsNot(sys.stdout, none_stream)
+        encoding = (sys.stdout.encoding or "").lower().replace("-", "")
+        self.assertEqual(encoding, "utf8")
+
+    def test_writes_unicode_arrow_to_replaced_stream(self):
+        """End-to-end: after _force_utf8_stdio, the arrow character used
+        in trace output reaches the underlying buffer as UTF-8 bytes.
+
+        This is the actual user-facing scenario from issue #179: a
+        Windows user runs ``codelens trace`` and the path string
+        ``foo.ts \u2192 bar.ts`` must not crash the CLI.
+        """
+        import io
+        buf = io.BytesIO()
+        # Start with cp1252 (simulating Windows without PYTHONUTF8=1)
+        sys.stdout = io.TextIOWrapper(buf, encoding="cp1252")
+
+        _force_utf8_stdio()
+
+        # The exact pattern the trace command emits
+        sys.stdout.write("sidepanel.ts \u2192 auth/google-auth-cache.ts\n")
+        sys.stdout.flush()
+
+        written = buf.getvalue()
+        self.assertIn(self._ARROW_UTF8_BYTES, written)
+        # Round-trip: bytes decode back to the original string
+        self.assertEqual(
+            written.decode("utf-8"),
+            "sidepanel.ts \u2192 auth/google-auth-cache.ts\n",
+        )
+
+    def test_both_stdout_and_stderr_wrapped(self):
+        """Both sys.stdout and sys.stderr get the UTF-8 treatment.
+
+        stderr matters because the CLI writes error/diagnostic messages
+        there too (e.g. ``[CodeLens] Warning: ...`` lines), and on
+        Windows those would also crash if they contained Unicode.
+        """
+        import io
+        out_buf = io.BytesIO()
+        err_buf = io.BytesIO()
+        sys.stdout = io.TextIOWrapper(out_buf, encoding="cp1252")
+        sys.stderr = io.TextIOWrapper(err_buf, encoding="cp1252")
+
+        _force_utf8_stdio()
+
+        out_enc = (sys.stdout.encoding or "").lower().replace("-", "")
+        err_enc = (sys.stderr.encoding or "").lower().replace("-", "")
+        self.assertEqual(out_enc, "utf8")
+        self.assertEqual(err_enc, "utf8")
+
+        sys.stdout.write("out \u2192 arrow\n")
+        sys.stderr.write("err \u2192 arrow\n")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        self.assertIn(self._ARROW_UTF8_BYTES, out_buf.getvalue())
+        self.assertIn(self._ARROW_UTF8_BYTES, err_buf.getvalue())
 
 
 if __name__ == "__main__":
