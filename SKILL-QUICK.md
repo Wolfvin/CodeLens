@@ -29,6 +29,7 @@ $CLI list --limit 5 --offset 10 --format compact            # → paginated + co
 | `--format ai` | Normalized: `{stats, items[], truncated, recommendations}` |
 | `--format compact` | Token-efficient: single-char keys + abbreviated types (issue #17). ~50% smaller than `json`. Best for high-volume MCP tool calls |
 | `--format sarif` | SARIF v2.1.0 output for GitHub Advanced Security / VS Code |
+| `--format graphml` | GraphML 1.0 XML for graph-producing commands (`scan`, `trace`, `impact`, `circular`). Opens in Gephi/Cytoscape/yEd/Neo4j. Other commands emit a single-node placeholder (issue #59 Phase 3) |
 | `--limit N` / `--offset N` | Pagination on list-type commands (`list`, `search`, `trace`, `symbols`, `outline`). Default limit=20 (issue #17). `--top N` is an alias for `--limit N --offset 0` |
 | `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
 | `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
@@ -160,7 +161,7 @@ python3 scripts/codelens.py serve
 Exposes 73 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
 - 50 statically-defined tools (full JSON schemas in `mcp_server.py`)
 - 17 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
-- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
+- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`). Use `format: "graphml"` for graph-producing commands (`scan`/`trace`/`impact`/`circular`) — emits GraphML 1.0 XML that opens in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3).
 - `watch` and `serve` itself are excluded (long-running)
 
 See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.

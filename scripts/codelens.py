@@ -885,16 +885,12 @@ def main():
         # ``["text", "json"]`` because its default human-readable output is
         # a text table, not JSON. Skipping the global add here lets that
         # command-specific format work without an argparse conflict.
+        # Issue #59 Phase 3: ``graphml`` emits a GraphML 1.0 XML document for
+        # graph-producing commands (scan/trace/impact/circular); other commands
+        # produce a single-node placeholder so the format is always valid.
         if "format" not in existing_dests:
-            # Issue #62 Phase 1: ``affected`` command uses ``-f`` for
-            # ``--filter``. Avoid the ``-f`` shortcut clash by only adding
-            # the global ``-f`` shortcut when the command doesn't already
-            # claim it. The long form ``--format`` is always safe.
-            format_args = ["--format"]
-            if "-f" not in existing_option_strings:
-                format_args.append("-f")
-            sub.add_argument(*format_args, choices=["json", "markdown", "ai", "sarif", "compact"], default=None,
-                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), or compact (token-efficient single-char keys)")
+            sub.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact", "graphml"], default=None,
+                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient single-char keys), or graphml (GraphML 1.0 XML for graph-producing commands)")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
@@ -927,8 +923,8 @@ def main():
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
-    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact"], default=_default_format,
-                        help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default. compact = token-efficient single-char keys)")
+    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact", "graphml"], default=_default_format,
+                        help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default. compact = token-efficient single-char keys. graphml = GraphML XML for graph-producing commands)")
     parser.add_argument("--db-path", default=None,
                         help="Custom path for SQLite database (default: .codelens/codelens.db)")
     # Issue #157: --diff-base <ref> restricts analysis to files changed
@@ -975,11 +971,11 @@ def main():
         arg = sys.argv[i]
         if arg in ('-f', '--format') and i + 1 < len(sys.argv):
             next_arg = sys.argv[i + 1]
-            if next_arg in ('json', 'markdown', 'ai', 'sarif', 'compact'):
+            if next_arg in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
                 global_format = next_arg
-        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown', 'ai', 'sarif', 'compact'):
+        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
             global_format = arg[3:]
-        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown', 'ai', 'sarif', 'compact'):
+        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
             global_format = arg[9:]
         elif arg == '--top' and i + 1 < len(sys.argv):
             try:
