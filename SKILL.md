@@ -336,5 +336,13 @@ CodeLens v8.0+ adds 7 major capability pillars over v7.x:
 5. **Cross-File Dataflow Engine** (`dataflow` v2) — Workspace-wide call graph with import resolution (`from/import`, `require` destructuring) and bidirectional taint propagation.
 6. **OWASP Top 10 + Compliance Mapping** — 89 rules total (A01-A10 + PCI-DSS requirements 1-12 + HIPAA 45 CFR § 164.312).
 7. **CI/CD Quality Gate** (`check` command) — Exits non-zero on failure, SARIF output for GitHub Advanced Security / VS Code.
+8. **Diff-Scoped Analysis** (`--diff-base REF` flag, issue #157) — Global flag that restricts any analysis command to only report findings from files changed relative to a git ref (branch/tag/SHA/`HEAD~1`). Empty diff → early exit with clear message. Invalid ref → clear error + non-zero exit. Useful for CI PR checks where only NEW findings introduced by the PR should fail the gate.
+
+```bash
+# CI PR check — only findings from files changed vs main
+codelens check . --diff-base origin/main --format sarif > codelens.sarif
+codelens taint . --diff-base origin/main
+codelens secrets . --diff-base HEAD~1
+```
 
 v8.1 follows up with F1 benchmark improvements (avg F1 0.803 → 0.872), circular engine depth fixes (F1 0.667 → 1.000), dead-code engine fixes (F1 0.800 → 0.952), and AST taint depth enhancements (return-value propagation, scope-hierarchical TaintState, branch condition refinement).
