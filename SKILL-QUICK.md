@@ -160,7 +160,7 @@ python3 scripts/codelens.py serve
 
 Exposes 73 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
 - 50 statically-defined tools (full JSON schemas in `mcp_server.py`)
-- 14 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
+- 16 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
 - Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`). Use `format: "graphml"` for graph-producing commands (`scan`/`trace`/`impact`/`circular`) — emits GraphML 1.0 XML that opens in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3).
 - `watch` and `serve` itself are excluded (long-running)
 
