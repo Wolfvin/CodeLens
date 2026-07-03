@@ -489,30 +489,40 @@ def _build_import_graph(workspace: str) -> Tuple[Dict[str, Set[str]], Dict[str, 
             ext = os.path.splitext(filename)[1].lower()
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, workspace)
+            # Issue #177: normalize backslashes to forward slashes so
+            # graph keys match the forward-slash input that ``affected``
+            # normalizes changed files to (see cf_norm in
+            # get_affected_files). Without this, Windows scans produce
+            # backslash keys that never match forward-slash lookups.
+            rel_path = rel_path.replace("\\", "/")
 
             if ext in js_extensions:
                 imports = _parse_js_imports(file_path, rel_path, workspace)
                 for imp in imports:
-                    import_graph[rel_path].add(imp)
-                    reverse_graph[imp].add(rel_path)
+                    imp_norm = imp.replace("\\", "/")
+                    import_graph[rel_path].add(imp_norm)
+                    reverse_graph[imp_norm].add(rel_path)
 
             elif ext == '.rs':
                 imports = _parse_rust_imports(file_path, rel_path, workspace)
                 for imp in imports:
-                    import_graph[rel_path].add(imp)
-                    reverse_graph[imp].add(rel_path)
+                    imp_norm = imp.replace("\\", "/")
+                    import_graph[rel_path].add(imp_norm)
+                    reverse_graph[imp_norm].add(rel_path)
 
             elif ext == '.py':
                 imports = _parse_python_imports(file_path, rel_path, workspace)
                 for imp in imports:
-                    import_graph[rel_path].add(imp)
-                    reverse_graph[imp].add(rel_path)
+                    imp_norm = imp.replace("\\", "/")
+                    import_graph[rel_path].add(imp_norm)
+                    reverse_graph[imp_norm].add(rel_path)
 
             elif ext in ('.css', '.scss', '.less', '.sass'):
                 imports = _parse_css_imports(file_path, rel_path, workspace)
                 for imp in imports:
-                    import_graph[rel_path].add(imp)
-                    reverse_graph[imp].add(rel_path)
+                    imp_norm = imp.replace("\\", "/")
+                    import_graph[rel_path].add(imp_norm)
+                    reverse_graph[imp_norm].add(rel_path)
 
     return import_graph, reverse_graph
 
