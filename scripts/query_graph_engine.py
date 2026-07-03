@@ -63,7 +63,7 @@ _NODE_PROPERTIES = {
     "line": "line",
     "node_type": "node_type",
     "node_id": "node_id",
-    "id": "id",
+    "id": "node_id",  # Cypher n.id → SQLite node_id string (not integer PK)
 }
 
 # Valid edge types (from graph_model.py).
