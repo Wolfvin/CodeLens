@@ -470,6 +470,40 @@ _TOOL_DEFINITIONS = {
             "required": ["workspace"]
         }
     },
+    "semantic-query": {
+        "description": (
+            "Semantic symbol search via TF-IDF (issue #11). Finds symbols by "
+            "meaning, not just by name — e.g. querying 'user authentication flow' "
+            "can surface a function named verify_jwt_claims. Returns ranked symbols "
+            "with cosine-similarity scores. Pure-Python, zero dependencies; reads "
+            "from the existing SQLite registry so the index is always in sync with "
+            "the last 'scan' result."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Natural-language or code-fragment query, e.g. "
+                        "'user authentication flow', 'parse jwt', 'error handler'. "
+                        "Symbol names, signatures, kinds, and file paths are all "
+                        "included in the TF-IDF document for each symbol."
+                    )
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Path to workspace root directory"
+                },
+                "top": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 10; use 0 for all).",
+                    "default": 10
+                }
+            },
+            "required": ["query", "workspace"]
+        }
+    },
     "vuln-scan": {
         "description": "Scan dependencies for known CVEs and security vulnerabilities.",
         "parameters": {
