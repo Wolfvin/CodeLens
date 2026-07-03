@@ -571,8 +571,33 @@ def _parse_js_imports(file_path: str, rel_path: str, workspace: str) -> List[str
     imports = []
     file_dir = os.path.dirname(rel_path)
 
-    # ES imports
-    for m in re.finditer(r'import\s+.*?from\s+["\']([^"\']+)["\']', content):
+    # Issue #189: previous regex used `.*?` which doesn't match newlines,
+    # so multi-line imports like `import {\n  foo,\n} from './bar'` were
+    # silently skipped. This left reverse_graph incomplete, which made
+    # `codelens affected` return affected_count: 0 even when real
+    # dependents existed. Use `[\s\S]*?` to match across newlines.
+    #
+    # ES imports (with from) — handles single-line AND multi-line forms.
+    for m in re.finditer(r'import\s+[\s\S]*?from\s+["\']([^"\']+)["\']', content):
+        resolved = _resolve_relative_import(m.group(1), file_dir, workspace)
+        if resolved:
+            imports.append(resolved)
+
+    # Issue #189: side-effect imports — `import './polyfills'` (no `from`).
+    # Must run AFTER the `from` form so we don't double-resolve, but the
+    # regex is disjoint: it requires a quote immediately after `import\s+`,
+    # which the `{ ... } from` form cannot match.
+    for m in re.finditer(r'import\s+["\']([^"\']+)["\']', content):
+        resolved = _resolve_relative_import(m.group(1), file_dir, workspace)
+        if resolved:
+            imports.append(resolved)
+
+    # Issue #189: re-exports — `export { x } from './bar'`,
+    # `export * from './bar'`, `export type { Foo } from './bar'`.
+    # These create a real dependency edge (the re-exporting module
+    # depends on the source module), so the reverse graph must include
+    # them or `codelens affected` will miss downstream consumers.
+    for m in re.finditer(r'export\s+[\s\S]*?from\s+["\']([^"\']+)["\']', content):
         resolved = _resolve_relative_import(m.group(1), file_dir, workspace)
         if resolved:
             imports.append(resolved)
