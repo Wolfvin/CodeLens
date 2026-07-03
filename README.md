@@ -192,6 +192,13 @@ python3 scripts/codelens.py query "myFunction" --lite
 | `medium` | Caution. Run tests. |
 | `low` | Safe, proceed. |
 
+## Interpreting Signals
+
+- `reference_count` / caller count = **how often** something is called, not how important it is. A function called once in the payment flow can be more critical than a utility called 50×.
+- To judge importance, run `trace --direction up <symbol>` to find **who** calls it, then weigh by context (payment, auth, hot path).
+- Use `--format compact` for AI/script consumption (token-efficient single-char keys), `--lite` for minimal output in large repos.
+- First `scan` is intentionally slower — it builds the SQLite graph. Subsequent runs are incremental (pass `--incremental` to only re-scan changed files).
+
 ## Supported Languages & Frameworks
 
 **Tree-sitter parsed (AST-level):** HTML, CSS, SCSS, JavaScript, TypeScript, TSX/JSX, Rust, Python, Vue SFC, Svelte, Blade

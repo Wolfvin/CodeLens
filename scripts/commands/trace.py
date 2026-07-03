@@ -1,11 +1,23 @@
 """Trace command — Trace deep call chain from a symbol."""
 
+import argparse
 from trace_engine import trace_symbol, MAX_CHAIN_RESULTS
 from commands import register_command
 
 
 def add_args(parser):
     """Add trace-specific arguments to the parser."""
+    # Issue #180: surface noise-reduction flags directly in `codelens trace --help`.
+    # trace output can be deep (--depth default 10) — point users at compact/lite
+    # so they don't drown in chain entries when called from AI/script context.
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = (
+        "Notes:\n"
+        "  Use --direction up to find callers (who depends on this symbol),\n"
+        "  --direction down to find callees. For AI/script consumption, use\n"
+        "  --format compact (token-efficient single-char keys) or --lite\n"
+        "  (minimal output). Paginate with --limit / --offset."
+    )
     parser.add_argument("name", help="Symbol name to trace")
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")

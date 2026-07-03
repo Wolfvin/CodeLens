@@ -12,6 +12,7 @@ This prevents the common pattern where agents run 10+ commands and get
 overwhelmed with thousands of findings, most of which are low-priority.
 """
 
+import argparse
 import os
 import re
 import time
@@ -88,6 +89,16 @@ def _detect_android_identity(workspace: str) -> Dict[str, Any]:
 
 
 def add_args(parser):
+    # Issue #180: surface noise-reduction flags directly in `codelens summary --help`.
+    # summary already auto-adapts detail level to codebase size; the epilog points
+    # users at the additional output-shaping flags added by the dispatcher.
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = (
+        "Notes:\n"
+        "  For AI/script consumption, use --format compact (token-efficient\n"
+        "  single-char keys) or --lite (minimal output). For large repos,\n"
+        "  --detail minimal restricts findings to critical severity only."
+    )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--focus", choices=["security", "quality", "architecture", "all"],

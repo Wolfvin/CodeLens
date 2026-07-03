@@ -1,5 +1,6 @@
 """Scan command — Scan workspace and build registry."""
 
+import argparse
 import os
 import json
 import time
@@ -65,6 +66,17 @@ from commands import register_command
 
 def add_args(parser):
     """Add scan-specific arguments to the parser."""
+    # Issue #180: surface incremental behavior + noise-reduction flags directly
+    # in `codelens scan --help`. The flags themselves are added by the dispatcher
+    # in codelens.py; this epilog just points users at them.
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = (
+        "Notes:\n"
+        "  First scan builds the SQLite graph (slower). Subsequent scans are\n"
+        "  incremental — pass --incremental to only re-scan changed files.\n"
+        "  Reduce noise in large repos with --format compact (token-efficient\n"
+        "  single-char keys for AI/script consumption) or --lite (minimal output)."
+    )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--incremental", action="store_true",
