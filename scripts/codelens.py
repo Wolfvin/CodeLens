@@ -893,6 +893,15 @@ def main():
         # Avoid the ``-f`` shortcut clash by only adding the global ``-f``
         # shortcut when the command doesn't already claim it. The long form
         # ``--format`` is always safe.
+        #
+        # Issue #174: This guard is critical. The global parser also registers
+        # ``--format/-f`` (see line ~934). Without this guard, subparsers that
+        # don't define ``-f`` themselves would get ``-f`` added here, causing
+        # ``argparse.ArgumentError: conflicting option string: -f``. PR #153
+        # (graphml) accidentally dropped this guard and broke every CLI
+        # invocation; commit 23487af restored it. The regression test
+        # ``test_no_argparse_f_conflict_regression`` in test_cli.py locks this
+        # behavior so it cannot be dropped again.
         if "format" not in existing_dests:
             format_args = ["--format"]
             if "-f" not in existing_option_strings:
