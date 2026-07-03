@@ -425,3 +425,145 @@ class TestLatestVersionCheck:
             result = doctor_module._check_latest_version()
         assert result["status"] == "warning"
         assert "latest" in result["detail"].lower()
+
+
+# ─── Worktree mismatch check (issue #66 Phase 4) ───────────────
+
+
+def _git_available() -> bool:
+    """Return True if the ``git`` binary is installed."""
+    try:
+        result = subprocess.run(
+            ["git", "--version"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return False
+
+
+pytestmark_worktree = pytest.mark.skipif(
+    not _git_available(),
+    reason="git not available — worktree doctor tests require the git binary",
+)
+
+
+@pytestmark_worktree
+class TestWorktreeMismatchCheck:
+    """The worktree-mismatch check must detect drift without breaking doctor.
+
+    Covers three scenarios:
+
+    * Main checkout — no mismatch, ``status="ok"``.
+    * Worktree with its own ``.codelens/`` — no mismatch, ``status="ok"``.
+    * Worktree using the main checkout's index — MISMATCH,
+      ``status="warning"`` with a multi-line detail message.
+
+    Plus an integration test that verifies the check appears in
+    ``_run_all_checks`` output and runs *before* the writable check
+    (the writable check creates ``.codelens/`` as a side effect, so
+    ordering matters — see comment in ``_run_all_checks``).
+    """
+
+    def _make_repo(self, td: str) -> None:
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=td, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=td, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], cwd=td, check=True
+        )
+        with open(os.path.join(td, "README.md"), "w") as f:
+            f.write("init\n")
+        subprocess.run(["git", "add", "."], cwd=td, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=td, check=True)
+
+    def test_main_checkout_returns_ok(self, tmp_path):
+        """A main checkout with its own ``.codelens/`` reports no mismatch."""
+        self._make_repo(str(tmp_path))
+        os.makedirs(os.path.join(tmp_path, ".codelens"))
+        result = doctor_module._check_worktree_mismatch(str(tmp_path))
+        assert result["name"] == "workspace.worktree_index_mismatch"
+        assert result["status"] == "ok"
+        assert result["fixable"] is False
+
+    def test_worktree_with_own_codelens_returns_ok(self, tmp_path):
+        """A worktree that has its own ``.codelens/`` reports no mismatch."""
+        self._make_repo(str(tmp_path))
+        wt = tmp_path / "wt-feature"
+        subprocess.run(
+            ["git", "worktree", "add", "-q", str(wt), "-b", "feature"],
+            cwd=str(tmp_path), check=True,
+        )
+        os.makedirs(wt / ".codelens")
+        result = doctor_module._check_worktree_mismatch(str(wt))
+        assert result["status"] == "ok"
+        assert result["found"] == "worktree_has_own_index"
+
+    def test_worktree_using_main_index_returns_warning(self, tmp_path):
+        """A worktree without ``.codelens/`` (main has it) → warning."""
+        self._make_repo(str(tmp_path))
+        os.makedirs(tmp_path / ".codelens")  # main has the index
+        wt = tmp_path / "wt-feature"
+        subprocess.run(
+            ["git", "worktree", "add", "-q", str(wt), "-b", "feature"],
+            cwd=str(tmp_path), check=True,
+        )
+        # worktree does NOT have .codelens — would walk up to main's.
+        result = doctor_module._check_worktree_mismatch(str(wt))
+        assert result["status"] == "warning"
+        assert result["found"] == "worktree_uses_main_index"
+        assert "WORKTREE INDEX MISMATCH" in result["detail"]
+        assert str(wt) in result["detail"]
+        assert str(tmp_path) in result["detail"]
+        assert "codelens init" in result["detail"]
+
+    def test_no_workspace_returns_ok(self):
+        """An empty workspace returns ok (doctor is callable without a workspace)."""
+        result = doctor_module._check_worktree_mismatch("")
+        assert result["status"] == "ok"
+        assert result["name"] == "workspace.worktree_index_mismatch"
+
+    def test_check_appears_in_run_all_checks(self, tmp_path):
+        """``_run_all_checks`` includes the worktree check."""
+        self._make_repo(str(tmp_path))
+        os.makedirs(tmp_path / ".codelens")
+        checks = doctor_module._run_all_checks(str(tmp_path))
+        names = [c["name"] for c in checks]
+        assert "workspace.worktree_index_mismatch" in names
+
+    def test_check_runs_before_writable_check(self, tmp_path):
+        """Worktree check runs BEFORE the writable check.
+
+        The writable check creates ``.codelens/`` as a side effect of
+        probing write permissions. If the worktree check ran after, the
+        worktree would appear to have its own index (the just-created
+        empty dir) and the mismatch would never fire.
+
+        This test enforces the ordering comment in ``_run_all_checks``.
+        """
+        self._make_repo(str(tmp_path))
+        # Main has .codelens, worktree won't — so mismatch should be
+        # detected IF the check runs before writable creates .codelens
+        # in the worktree.
+        os.makedirs(tmp_path / ".codelens")
+        wt = tmp_path / "wt-feature"
+        subprocess.run(
+            ["git", "worktree", "add", "-q", str(wt), "-b", "feature"],
+            cwd=str(tmp_path), check=True,
+        )
+        checks = doctor_module._run_all_checks(str(wt))
+        wt_check = next(
+            c for c in checks if c["name"] == "workspace.worktree_index_mismatch"
+        )
+        writable_check = next(
+            c for c in checks if c["name"] == "workspace.codelens_writable"
+        )
+        wt_idx = checks.index(wt_check)
+        writable_idx = checks.index(writable_check)
+        assert wt_idx < writable_idx, (
+            "worktree check must run BEFORE codelens_writable check — "
+            "the writable check creates .codelens/ as a side effect, "
+            "which would mask the mismatch"
+        )
+        # And the mismatch IS detected (proves the ordering matters).
+        assert wt_check["status"] == "warning"
+        assert wt_check["found"] == "worktree_uses_main_index"

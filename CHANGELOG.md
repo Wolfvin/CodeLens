@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.2.0] — Unreleased
 
+### Worktree Index Mismatch Detection (issue #66 Phase 4)
+
+CodeLens's workspace auto-detection walks up the directory tree looking
+for project markers (`.git`, `.codelens`, `pyproject.toml`, etc.). When
+a user runs CodeLens inside a **git worktree** that does not have its
+own `.codelens/` index, the walk-up silently picks up the **main
+checkout's** `.codelens/` — which was built from a *different* branch.
+Every subsequent `query` / `trace` / `dataflow` / `taint` answer is
+then grounded in the wrong file set, with no warning to the user or
+the agent.
+
+**Added:**
+
+- New module `scripts/sync/worktree.py` with:
+  - `detect_worktree_index_mismatch(project_root)` — returns a structured
+    record with `mismatch`, `reason`, `worktree_root`,
+    `main_checkout_root`, `index_root`, and `suggestion` fields.
+  - `format_worktree_warning(mismatch)` — multi-line human-readable
+    warning for CLI output.
+  - `format_worktree_banner(mismatch)` — single-line banner for MCP
+    responses.
+- New `doctor` check `workspace.worktree_index_mismatch` that surfaces
+  a `warning` status when the workspace is a worktree using a foreign
+  index. The check runs **before** `workspace.codelens_writable`
+  (which creates `.codelens/` as a side effect of probing write
+  permissions — running mismatch first gives an honest picture of the
+  pre-doctor state).
+- MCP server attaches a `_worktree_warning` field to read-tool
+  responses when a mismatch is detected. The field contains a
+  human-readable `banner` string plus the full `mismatch` record.
+  Agents that know about the field surface the banner; agents that
+  don't ignore it (per MCP spec — unknown top-level fields are
+  ignored).
+- The mismatch verdict is cached per workspace for the server's
+  lifetime (detection shells out to `git` twice, too expensive to
+  repeat per tool call). The cache is invalidated when `scan` runs —
+  the user may have just run `codelens init -i` in the worktree to
+  fix the mismatch.
+
+**Why a top-level field, not a content prepend:**
+
+Prepending text to the `content` array would corrupt the JSON payload
+agents parse out of the response. A top-level field keeps the JSON
+intact while still surfacing the warning prominently.
+
+**Reason codes returned by `detect_worktree_index_mismatch`:**
+
+| Reason | Mismatch | Meaning |
+|---|---|---|
+| `not_a_git_repo` | `False` | git not installed, or workspace not under git |
+| `not_a_worktree` | `False` | main checkout, no worktree concerns |
+| `worktree_has_own_index` | `False` | worktree with its own `.codelens/` (correct setup) |
+| `no_index_found` | `False` | worktree, but no `.codelens/` anywhere up the tree |
+| `worktree_uses_main_index` | `True` | MISMATCH — worktree reading main's index |
+
 ### LSP Status Entry-Point Unification (issue #33)
 
 The `codelens --lsp-status` top-level flag (intercepted in

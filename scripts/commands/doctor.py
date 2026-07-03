@@ -281,6 +281,78 @@ def _check_codelens_writable(workspace: str) -> Dict[str, Any]:
         }
 
 
+def _check_worktree_mismatch(workspace: str) -> Dict[str, Any]:
+    """Detect git worktree ↔ CodeLens index mismatch (issue #66 Phase 4).
+
+    A mismatch happens when the user runs CodeLens inside a git
+    worktree that does not have its own ``.codelens/`` index, so
+    CodeLens silently walks up and loads the main checkout's index —
+    which was built from a *different* branch. Every subsequent
+    ``query`` / ``trace`` / ``dataflow`` answer is then grounded in
+    the wrong file set.
+
+    This check is a ``warning`` (not ``critical``) because the
+    workspace is still usable — answers are merely stale, not
+    crashes. The user can fix it by running ``codelens init -i`` in
+    the worktree.
+
+    Doctor is the natural place to surface this: it's the "why is
+    CodeLens behaving weirdly?" debugging command, and "I'm in a
+    worktree" is one of the most common answers to that question.
+    """
+    if not workspace:
+        return {
+            "name": "workspace.worktree_index_mismatch",
+            "status": "ok",
+            "found": "no workspace",
+            "required": "workspace not in a worktree, or worktree has own .codelens/",
+            "detail": "no workspace provided — run from a project root, or pass --workspace",
+            "fixable": False,
+        }
+    try:
+        # Import locally so a failure to import the sync subpackage
+        # (e.g., due to a packaging regression) doesn't take down the
+        # entire doctor run. Doctor must always produce a report.
+        from sync.worktree import detect_worktree_index_mismatch, format_worktree_warning
+
+        mismatch = detect_worktree_index_mismatch(workspace)
+    except Exception as exc:
+        # Detection failure must never break doctor — downgrade to ok
+        # with a clear note in the detail field.
+        return {
+            "name": "workspace.worktree_index_mismatch",
+            "status": "ok",
+            "found": "detection skipped",
+            "required": "workspace not in a worktree, or worktree has own .codelens/",
+            "detail": f"worktree detection unavailable: {exc}",
+            "fixable": False,
+        }
+
+    if not mismatch.get("mismatch"):
+        return {
+            "name": "workspace.worktree_index_mismatch",
+            "status": "ok",
+            "found": mismatch.get("reason", "unknown"),
+            "required": "workspace not in a worktree, or worktree has own .codelens/",
+            "detail": (
+                f"worktree_root={mismatch.get('worktree_root')} "
+                f"index_root={mismatch.get('index_root')}"
+            ),
+            "fixable": False,
+        }
+
+    # Mismatch detected — surface the full warning so users can see
+    # all three paths (worktree / main / index) at a glance.
+    return {
+        "name": "workspace.worktree_index_mismatch",
+        "status": "warning",
+        "found": mismatch.get("reason"),
+        "required": "worktree should have its own .codelens/ index",
+        "detail": format_worktree_warning(mismatch),
+        "fixable": False,
+    }
+
+
 def _check_latest_version() -> Dict[str, Any]:
     """Compare installed CodeLens version to the latest GitHub release.
 
@@ -377,6 +449,12 @@ def _run_all_checks(workspace: str) -> List[Dict[str, Any]]:
     checks.append(_check_urllib())
     for bin_name in _EXPECTED_BINARIES:
         checks.append(_check_binary(bin_name))
+    # Worktree mismatch MUST run before _check_codelens_writable — the
+    # writable check creates ``.codelens/`` as a side effect of probing
+    # write permissions, which would mask the mismatch (the worktree
+    # would suddenly appear to have its own index). Running mismatch
+    # first gives the user an honest picture of the pre-doctor state.
+    checks.append(_check_worktree_mismatch(workspace))
     checks.append(_check_codelens_writable(workspace))
     checks.append(_check_latest_version())
     return checks
