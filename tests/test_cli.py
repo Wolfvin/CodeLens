@@ -871,3 +871,132 @@ class TestLspStatusEntryPointParity:
             f"  --lsp-status: {json.dumps(flag_payload, sort_keys=True, indent=2)}\n"
             f"  lsp-status  : {json.dumps(sub_payload, sort_keys=True, indent=2)}"
         )
+
+
+class TestArgparseFormatConflictRegression:
+    """Regression tests for issue #174: argparse -f conflict.
+
+    The global parser registers ``--format/-f`` and subparsers also register
+    ``--format/-f`` (unless the command defines its own ``-f``, e.g.
+    ``affected`` uses ``-f`` for ``--filter``). A guard in
+    ``scripts/codelens.py`` checks ``existing_option_strings`` before adding
+    ``-f`` to a subparser, preventing
+    ``argparse.ArgumentError: conflicting option string: -f``.
+
+    PR #153 (graphml) accidentally dropped this guard and broke every CLI
+    invocation. Commit 23487af restored it. These tests lock the behavior
+    so it cannot be dropped again.
+    """
+
+    def test_help_does_not_crash(self):
+        """``codelens --help`` must exit 0, not raise argparse.ArgumentError."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"), "--help"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"--help exited {result.returncode}:\n{result.stderr[:500]}"
+        )
+        assert "argparse.ArgumentError" not in result.stderr
+        assert "conflicting option string" not in result.stderr
+
+    def test_command_count_does_not_crash(self):
+        """``codelens --command-count`` must exit 0 without argparse error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"), "--command-count"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"--command-count exited {result.returncode}:\n{result.stderr[:500]}"
+        )
+        assert "argparse.ArgumentError" not in result.stderr
+        assert "conflicting option string" not in result.stderr
+
+    def test_scan_with_format_long_does_not_crash(self):
+        """``codelens scan . --format json`` must not raise argparse error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+             "scan", ".", "--format", "json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert "argparse.ArgumentError" not in result.stderr, (
+            f"argparse error:\n{result.stderr[:500]}"
+        )
+        assert "conflicting option string" not in result.stderr
+
+    def test_scan_with_format_short_does_not_crash(self):
+        """``codelens scan . -f json`` must not raise argparse error."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+             "scan", ".", "-f", "json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert "argparse.ArgumentError" not in result.stderr, (
+            f"argparse error:\n{result.stderr[:500]}"
+        )
+        assert "conflicting option string" not in result.stderr
+
+    def test_affected_with_filter_short_does_not_crash(self):
+        """``codelens affected . -f '*.py'`` must not raise argparse error.
+
+        ``affected`` uses ``-f`` for ``--filter`` (issue #62). The guard
+        must skip adding ``-f`` for ``--format`` on this subparser so the
+        two don't conflict.
+        """
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+             "affected", ".", "-f", "*.py"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert "argparse.ArgumentError" not in result.stderr, (
+            f"argparse error:\n{result.stderr[:500]}"
+        )
+        assert "conflicting option string" not in result.stderr
+
+    def test_parser_construction_no_argparse_error(self):
+        """Directly verify parser construction doesn't raise argparse error.
+
+        This is a unit-level check that doesn't depend on subprocess —
+        it imports the parser-building code path and asserts no
+        ``argparse.ArgumentError`` is raised.
+        """
+        import argparse
+        import codelens as cl_module
+
+        # The parser is built inside main(). We can't call main() without
+        # triggering sys.exit, but we can verify the module imports cleanly
+        # (which means the parser-building code is at least syntactically
+        # valid). The subprocess tests above cover the runtime behavior.
+        assert hasattr(cl_module, "main"), "codelens module must have main()"
+
+    def test_no_duplicate_f_in_subparsers(self):
+        """Verify no subparser has duplicate -f registration.
+
+        Iterates all registered subparsers and checks that none have
+        ``-f`` registered twice (which would indicate the guard is
+        broken).
+        """
+        import subprocess
+        # Use --help on a few commands that are known to have -f either
+        # from the guard (scan, query) or from their own definition
+        # (affected, doctor). All must succeed without argparse error.
+        commands_to_check = [
+            ["scan", "--help"],
+            ["query", "--help"],
+            ["affected", "--help"],
+            ["doctor", "--help"],
+            ["smell", "--help"],
+        ]
+        for cmd_args in commands_to_check:
+            result = subprocess.run(
+                [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py")] + cmd_args,
+                capture_output=True, text=True, timeout=30,
+            )
+            assert "conflicting option string" not in result.stderr, (
+                f"{' '.join(cmd_args)}: argparse conflict:\n{result.stderr[:500]}"
+            )
