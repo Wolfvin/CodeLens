@@ -251,6 +251,26 @@ query "name" → context (if exists) → side-effect → write → scan --increm
 
 ---
 
+## Reading the Output — Signal vs. Metric
+
+| Metric | What it actually means | How to interpret |
+|--------|------------------------|------------------|
+| `reference_count` / caller count | **Popularity** — how often a symbol is referenced | Not a criticality signal. A payment-flow function called once is more critical than a utility called 50×. |
+| `status: dead` | Nothing references it | Flag for removal — but verify it's not an entry point (HTTP handler, CLI subcommand, exported API). |
+| `status: duplicate_ref` | Referenced from many places | List all callers with `trace --direction up` before changing. |
+| `high_complexity` | Cyclomatic complexity ≥ threshold | Hotspot for bugs, not necessarily important. Cross-reference with `trace --direction up`. |
+
+**To judge importance:** run `trace --direction up <symbol>` to see **who** calls it, then weigh by context (payment, auth, hot path) — not by raw count.
+
+**To reduce noise:**
+- `--format compact` — token-efficient single-char keys (AI/script consumption)
+- `--lite` — minimal output (decision-making mode, per-command tailored)
+- `--detail minimal` (summary) — critical-severity findings only
+
+**First scan is slow by design** — it builds the SQLite graph. Subsequent scans are incremental (`--incremental`).
+
+---
+
 ## Integration with AI Agent
 
 ### CLI Integration (Recommended)
