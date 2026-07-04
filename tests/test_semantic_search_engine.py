@@ -20,7 +20,7 @@ that match intuition:
 * IDF weighting causes rare, discriminative terms (e.g. ``jwt``) to rank
   higher than ubiquitous terms (e.g. ``function``).
 * The engine degrades gracefully — empty query, missing db, missing
-  ``symbols`` table, and ``top_k=0`` all return well-formed responses
+  ``graph_nodes`` table, and ``top_k=0`` all return well-formed responses
   rather than raising.
 * The cache invalidates on db mtime change, so a re-scan picks up new
   symbols.
@@ -59,50 +59,58 @@ from semantic_search_engine import (
 def _make_db(workspace: str, symbols):
     """Create a fake ``.codelens/codelens.db`` with the given symbol rows.
 
-    ``symbols`` is a list of dicts with keys: name, kind, file_path,
-    line_start, language, signature, extra_json (dict, will be
-    JSON-encoded).
+    Mirrors what ``scan`` actually produces: rows in the ``graph_nodes``
+    table (issue #188). The engine reads from ``graph_nodes``, not the
+    legacy ``symbols`` table declared by ``persistent_registry`` (which
+    the scan flow never populates).
+
+    ``symbols`` is a list of dicts with keys: name, kind (maps to
+    node_type), file_path (maps to file), line_start (maps to line),
+    language, signature, extra_json (dict, will be JSON-encoded).
     """
     codelens_dir = os.path.join(workspace, ".codelens")
     os.makedirs(codelens_dir, exist_ok=True)
     db_path = os.path.join(codelens_dir, "codelens.db")
     conn = sqlite3.connect(db_path)
     try:
+        # Schema mirrors scripts/graph_model.py:_CREATE_GRAPH_NODES so the
+        # engine's SELECT AS mapping has real columns to read from.
         conn.execute(
             """
-            CREATE TABLE symbols (
+            CREATE TABLE graph_nodes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL UNIQUE,
+                node_type TEXT NOT NULL DEFAULT 'function',
                 name TEXT NOT NULL,
-                kind TEXT NOT NULL DEFAULT 'function',
-                file_path TEXT,
-                line_start INTEGER,
-                line_end INTEGER,
-                language TEXT,
-                signature TEXT,
-                hash TEXT,
+                file TEXT,
+                line INTEGER,
                 extra_json TEXT
             )
             """
         )
         for i, s in enumerate(symbols, start=1):
             extra = s.get("extra_json") or {}
+            name = s["name"]
+            file_path = s.get("file_path", "")
+            line = s.get("line_start") or 0
+            # Synthesize a node_id matching the flat-registry convention
+            # (file:line) — what populate_graph_tables would store. This
+            # keeps tests realistic and would let future graph-traversal
+            # integration reuse the same fixtures.
+            node_id = s.get("id") or f"{file_path}:{line}:{name}"
             conn.execute(
                 """
-                INSERT INTO symbols
-                    (id, name, kind, file_path, line_start, line_end,
-                     language, signature, hash, extra_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO graph_nodes
+                    (id, node_id, node_type, name, file, line, extra_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     i,
-                    s["name"],
+                    node_id,
                     s.get("kind", "function"),
-                    s.get("file_path", ""),
-                    s.get("line_start"),
-                    s.get("line_end"),
-                    s.get("language", ""),
-                    s.get("signature", ""),
-                    s.get("hash", ""),
+                    name,
+                    file_path,
+                    line,
                     json.dumps(extra) if extra else None,
                 ),
             )
@@ -255,7 +263,7 @@ class TestSemanticQuery:
     def test_finds_auth_symbol_by_concept(self, auth_workspace):
         """The core issue #11 use case: a query token that doesn't appear
         in any symbol NAME still surfaces relevant symbols because file
-        paths, signatures, and kinds are all part of the TF-IDF document.
+        paths and kinds are part of the TF-IDF document.
 
         Here, the query ``"auth"`` doesn't appear in any symbol name
         (``verify_jwt_claims``, ``loginUser``, ``format_date``, etc.), but
@@ -380,13 +388,14 @@ class TestCacheInvalidation:
         idx1 = build_index(db_path)
         assert len(idx1.symbols) == 1
 
-        # Force mtime change by sleeping then writing new symbols
+        # Force mtime change by sleeping then writing a new graph_nodes
+        # row (what a real re-scan would do).
         time.sleep(0.05)
         conn = sqlite3.connect(db_path)
         try:
             conn.execute(
-                "INSERT INTO symbols (name, kind, file_path, line_start, language) "
-                "VALUES ('bar', 'function', 'b.py', 2, 'python')"
+                "INSERT INTO graph_nodes (node_id, node_type, name, file, line) "
+                "VALUES ('b.py:2:bar', 'function', 'bar', 'b.py', 2)"
             )
             conn.commit()
         finally:
@@ -413,8 +422,9 @@ class TestGracefulDegradation:
         assert result["stats"]["total_symbols"] == 0
         assert result["stats"]["returned"] == 0
 
-    def test_db_without_symbols_table_returns_empty(self, workspace):
-        # Create the db file but no `symbols` table
+    def test_db_without_graph_nodes_table_returns_empty(self, workspace):
+        # Create the db file but no `graph_nodes` table — mirrors a
+        # workspace that has been `codelens init`-ed but never scanned.
         codelens_dir = os.path.join(workspace, ".codelens")
         os.makedirs(codelens_dir, exist_ok=True)
         db_path = os.path.join(codelens_dir, "codelens.db")
@@ -427,7 +437,7 @@ class TestGracefulDegradation:
         assert result["status"] == "ok"
         assert result["results"] == []
 
-    def test_empty_symbols_table_returns_empty(self, workspace):
+    def test_empty_graph_nodes_table_returns_empty(self, workspace):
         _make_db(workspace, [])
         result = semantic_query(workspace, "anything", top_k=10)
         assert result["status"] == "ok"
