@@ -2,10 +2,12 @@
 
 Verifies:
 - All 12 umbrella commands are registered and visible in COMMAND_REGISTRY.
-- --help only shows the 12 umbrella commands (hidden aliases suppressed).
+- --help only shows the 12 umbrella commands (hidden commands suppressed).
 - --command-count reports 12.
 - Each umbrella command's execute() returns the {s, st, r} shape.
-- Deprecated aliases print a redirect warning to stderr when invoked.
+- The 32 deprecated aliases from #195 have been removed (issue #199): they
+  are no longer in COMMAND_REGISTRY and invoking them yields an
+  ``invalid choice`` argparse error instead of a deprecation warning.
 """
 
 from __future__ import annotations
@@ -47,47 +49,32 @@ def test_only_12_visible_commands():
     )
 
 
-def test_absorbed_commands_marked_hidden_and_deprecated():
-    """A sample of absorbed commands must be hidden + deprecated_alias_for set."""
-    samples = {
-        "init": "scan",
-        "symbols": "search",
-        "semantic-query": "search",
-        "dead-code": "audit",
-        "complexity": "audit",
-        "secrets": "security",
-        "taint": "security",
-        "diff": "impact",
-        "dataflow": "impact",
-        "dashboard": "summary",
-        "arch-metrics": "summary",
-        "graph-schema": "api-map",
-        "env-check": "doctor",
-        "ownership": "history",
-        "git-status": "history",
-        "outline": "context",
-        "trace": "context",
-        "orient": "context",
-        "affected": "deps",
-        "dependents": "deps",
-        "circular": "deps",
-        "import-snapshot": "deps",
-        "staleness": "audit",
-        "perf-hint": "audit",
-        "side-effect": "audit",
-        "vuln-scan": "security",
-        "binary-scan": "security",
-        "regex-audit": "security",
-        "query-graph": "graph",
-        "architecture": "summary",
-    }
-    for old_name, umbrella in samples.items():
-        assert old_name in COMMAND_REGISTRY, f"{old_name!r} not in registry"
-        info = COMMAND_REGISTRY[old_name]
-        assert info.get("hidden") is True, f"{old_name!r} not hidden"
-        assert info.get("deprecated_alias_for") == umbrella, (
-            f"{old_name!r} deprecated_alias_for = {info.get('deprecated_alias_for')!r}, "
-            f"expected {umbrella!r}"
+# The 32 deprecated aliases retained after issue #195 were removed in #199.
+DEPRECATED_ALIASES_REMOVED = {
+    "affected", "arch-metrics", "architecture", "binary-scan", "circular",
+    "complexity", "dashboard", "dataflow", "dead-code", "dependents",
+    "diff", "env-check", "git-status", "graph-schema", "import-snapshot",
+    "init", "lsp-status", "orient", "outline", "ownership", "perf-hint",
+    "query-graph", "regex-audit", "secrets", "semantic-query", "side-effect",
+    "smell", "staleness", "symbols", "taint", "trace", "vuln-scan",
+}
+
+
+def test_deprecated_aliases_not_registered():
+    """All 32 deprecated aliases must be absent from COMMAND_REGISTRY (#199)."""
+    still_registered = [a for a in DEPRECATED_ALIASES_REMOVED if a in COMMAND_REGISTRY]
+    assert not still_registered, (
+        f"these aliases should have been removed in #199 but are still "
+        f"registered: {still_registered}"
+    )
+
+
+def test_deprecated_alias_modules_not_registered_as_commands():
+    """No remaining command module may carry a deprecated_alias_for marker."""
+    for name, info in COMMAND_REGISTRY.items():
+        assert "deprecated_alias_for" not in info, (
+            f"{name!r} still carries a deprecated_alias_for marker; the "
+            f"field was removed in #199"
         )
 
 
@@ -102,14 +89,6 @@ def test_dropped_commands_not_registered():
     }
     for name in dropped:
         assert name not in COMMAND_REGISTRY, f"dropped command {name!r} still registered"
-
-
-def test_lsp_status_hidden_redirects_to_doctor():
-    """lsp-status is kept as a utility but hidden + deprecated for doctor."""
-    assert "lsp-status" in COMMAND_REGISTRY
-    info = COMMAND_REGISTRY["lsp-status"]
-    assert info.get("hidden") is True
-    assert info.get("deprecated_alias_for") == "doctor"
 
 
 # ─── 2. CLI smoke tests ─────────────────────────────────────────────
@@ -157,17 +136,26 @@ def test_command_count_reports_12():
     )
 
 
-def test_deprecated_alias_prints_warning():
-    """Invoking a deprecated alias must print a redirect warning to stderr."""
-    # Use a simple workspace with no .codelens so the command fails fast
-    # but the deprecation warning is still emitted before execution.
+@pytest.mark.parametrize("alias", [
+    "dead-code", "secrets", "diff", "staleness", "orient",
+    "query-graph", "init", "vuln-scan", "symbols", "taint",
+])
+def test_deprecated_alias_invalid_choice(alias):
+    """Invoking a removed alias must fail with 'invalid choice' (issue #199).
+
+    Before #199 these printed a deprecation warning and still ran; after #199
+    they are no longer registered and argparse rejects them with exit code 2.
+    """
     with tempfile.TemporaryDirectory() as ws:
-        result = _run_cli("dead-code", ws, expect_success=False)
-        assert "DEPRECATED" in result.stderr, (
-            f"deprecation warning not in stderr: {result.stderr!r}"
+        result = _run_cli(alias, ws, expect_success=False)
+        assert result.returncode != 0, (
+            f"codelens {alias} should fail, got exit {result.returncode}"
         )
-        assert "audit" in result.stderr, (
-            f"redirect target 'audit' not in stderr: {result.stderr!r}"
+        assert "invalid choice" in result.stderr, (
+            f"expected 'invalid choice' for {alias!r}, got stderr: {result.stderr!r}"
+        )
+        assert "DEPRECATED" not in result.stderr, (
+            f"no deprecation warning expected after #199, got: {result.stderr!r}"
         )
 
 

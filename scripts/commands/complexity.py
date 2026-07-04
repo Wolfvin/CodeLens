@@ -26,11 +26,4 @@ def execute(args, workspace):
                               sort_by=args.sort_by, limit=args.limit,
                               max_files=args.max_files)
 
-
-register_command("complexity", "Compute cyclomatic/cognitive complexity", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='audit',
-
-)
+# Issue #199: deprecated "complexity" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

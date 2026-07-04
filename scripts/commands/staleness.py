@@ -138,12 +138,4 @@ def execute(args: argparse.Namespace, workspace: str) -> Dict[str, Any]:
 
     return result
 
-
-register_command(
-    "staleness",
-    "List files whose index entry is stale (issue #66 Phase 1)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='audit',
-)
+# Issue #199: deprecated "staleness" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

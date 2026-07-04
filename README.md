@@ -76,7 +76,7 @@ python3 scripts/codelens.py query "myFunction" --lite
 
 ## Command Reference
 
-CodeLens consolidates 78 legacy commands into **12 focused umbrella commands** (issue #195). Each umbrella command accepts a `--check <category>` flag to select a specific sub-analysis, or runs all sub-analyses by default. Legacy command names still work as deprecated aliases (backward compat for one version) but print a redirect warning to stderr.
+CodeLens consolidates 78 legacy commands into **12 focused umbrella commands** (issue #195). Each umbrella command accepts a `--check <category>` flag to select a specific sub-analysis, or runs all sub-analyses by default. The 32 deprecated aliases retained for one version after #195 have now been removed (issue #199) — see [Deprecated Aliases](#deprecated-aliases) below.
 
 ### The 12 Umbrella Commands
 
@@ -95,9 +95,9 @@ CodeLens consolidates 78 legacy commands into **12 focused umbrella commands** (
 | `history [workspace] [--check history\|ownership\|git-status]` | history, ownership, git-status | Historical trends, code ownership, git scan state. Default `--check history`. |
 | `graph [workspace] "Cypher query"` | query-graph (raw Cypher) | Raw Cypher-subset graph query for power users. Casual callers should prefer `search --mode graph`. |
 
-### Deprecated Aliases (backward compat, 1 version)
+### Deprecated Aliases
 
-All 40+ legacy command names (e.g. `codelens dead-code`, `codelens symbols`, `codelens trace`, `codelens secrets`, `codelens diff`, `codelens dashboard`, `codelens ownership`, `codelens git-status`, `codelens env-check`, `codelens lsp-status`, `codelens arch-metrics`, `codelens architecture`, `codelens impact`, `codelens dataflow`, `codelens circular`, `codelens affected`, `codelens dependents`, `codelens import-snapshot`, `codelens staleness`, `codelens perf-hint`, `codelens side-effect`, `codelens vuln-scan`, `codelens taint`, `codelens binary-scan`, `codelens regex-audit`, `codelens outline`, `codelens orient`, `codelens semantic-query`, `codelens query-graph`, `codelens graph-schema`, `codelens init`) are still callable but hidden from `--help`. Invoking any of them prints a deprecation warning to stderr that redirects to the new umbrella command.
+All deprecated aliases have been removed in this version (issue #199, post-#195 cleanup). The 32 legacy command names that were retained as hidden aliases for one version after the #195 consolidation — `affected`, `arch-metrics`, `architecture`, `binary-scan`, `circular`, `complexity`, `dashboard`, `dataflow`, `dead-code`, `dependents`, `diff`, `env-check`, `git-status`, `graph-schema`, `import-snapshot`, `init`, `lsp-status`, `orient`, `outline`, `ownership`, `perf-hint`, `query-graph`, `regex-audit`, `secrets`, `semantic-query`, `side-effect`, `smell`, `staleness`, `symbols`, `taint`, `trace`, `vuln-scan` — are no longer registered. Invoking any of them now produces an `invalid choice` error from argparse instead of a deprecation warning. Use the 12 umbrella commands above (e.g. `codelens audit --check dead-code` instead of `codelens dead-code`).
 
 ### Dropped Commands (removed in issue #195)
 

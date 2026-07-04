@@ -19,11 +19,4 @@ def execute(args, workspace):
     return detect_perf_hints(workspace, severity=args.severity, category=args.category,
                              max_files=args.max_files)
 
-
-register_command("perf-hint", "Detect performance anti-patterns", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='audit',
-
-)
+# Issue #199: deprecated "perf-hint" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

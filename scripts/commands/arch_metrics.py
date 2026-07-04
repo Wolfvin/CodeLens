@@ -227,12 +227,4 @@ def execute(args: argparse.Namespace, workspace: str) -> Dict[str, Any]:
         "sort_by": args.sort_by,
     }
 
-
-register_command(
-    "arch-metrics",
-    "Compute architecture metrics (fan-in/out, instability, god-module detection) from graph",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='summary',
-)
+# Issue #199: deprecated "arch-metrics" alias registration removed; this module is now an implementation module imported by the "summary" umbrella command.

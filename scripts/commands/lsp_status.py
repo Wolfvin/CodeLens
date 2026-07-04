@@ -39,12 +39,4 @@ def execute(args, workspace):
 
     return get_lsp_status()
 
-
-register_command(
-    "lsp-status",
-    "Check which LSP servers are available for deep analysis",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='doctor',
-)
+# Issue #199: deprecated "lsp-status" alias registration removed; this module is now an implementation module imported by the "doctor" umbrella command.

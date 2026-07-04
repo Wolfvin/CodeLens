@@ -390,13 +390,4 @@ def _render_text(brief: Dict[str, Any]) -> None:
     print(f"  Test framework: {infra.get('test_framework', 'none')}")
     print(f"  Linter: {infra.get('linter', 'none')}")
 
-
-register_command(
-    "orient",
-    "10-second codebase orientation brief (framework, commands, entry points, "
-    "start-here files, CI/Docker)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='context',
-)
+# Issue #199: deprecated "orient" alias registration removed; this module is now an implementation module imported by the "context" umbrella command.

@@ -41,11 +41,4 @@ def execute(args, workspace):
         result["has_more"] = (offset + limit) < total
     return result
 
-
-register_command("outline", "Get file structure outline", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='context',
-
-)
+# Issue #199: deprecated "outline" alias registration removed; this module is now an implementation module imported by the "context" umbrella command.

@@ -848,12 +848,4 @@ def _generate_recommendations(
 
     return recs
 
-
-register_command(
-    "binary-scan",
-    "Scan for binary/compiled artifacts with reverse-engineering analysis (superset of artifact-scan)",
-    add_args,
-    execute,
-    hidden=True,
-    deprecated_alias_for='security',
-)
+# Issue #199: deprecated "binary-scan" alias registration removed; this module is now an implementation module imported by the "security" umbrella command.

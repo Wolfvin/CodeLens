@@ -41,11 +41,4 @@ def execute(args, workspace):
         result["actionable_items"] = actionable
     return result
 
-
-register_command("smell", "Detect code smells across workspace", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='audit',
-
-)
+# Issue #199: deprecated "smell" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

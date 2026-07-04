@@ -85,11 +85,4 @@ def execute(args, workspace):
 
     return result
 
-
-register_command("dashboard", "Generate HTML visualization dashboard", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='summary',
-
-)
+# Issue #199: deprecated "dashboard" alias registration removed; this module is now an implementation module imported by the "summary" umbrella command.

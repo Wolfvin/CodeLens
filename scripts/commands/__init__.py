@@ -1,23 +1,28 @@
 """Command registry for CodeLens CLI.
 
-Issue #195 consolidation: commands carry two optional metadata fields:
+Issue #195 consolidated 78 legacy commands into 12 focused umbrella commands.
+Each umbrella command accepts a ``--check <category>`` flag to select a
+specific sub-analysis. The per-sub-analysis implementations live in sibling
+modules under ``scripts/commands/`` and are imported by their umbrella via
+:func:`importlib.import_module`.
+
+Commands carry one optional metadata field:
 
 - ``hidden`` (bool, default False) — hidden commands are still callable but
   do not appear in ``--help`` output and are excluded from ``--command-count``
-  and the MCP tool count. Used for deprecated aliases that point at the new
-  umbrella commands.
-
-- ``deprecated_alias_for`` (str|None, default None) — when set, invoking this
-  command prints a deprecation warning to stderr that redirects the user to
-  the named umbrella command. The old command still executes normally
-  (backward compat for one version per issue #195 DoD point 2).
+  and the MCP tool count. As of issue #199 the 32 deprecated aliases
+  introduced by #195 have been removed entirely (their registrations were
+  deleted and the two orphaned modules — ``symbols.py`` and
+  ``semantic_query.py`` — were deleted because no umbrella imports them).
+  The remaining hidden commands are the 13 pending-decision commands tracked
+  by issue #200 (analyze, check, config-drift, deps-audit, entrypoints, lsp,
+  list, missing-refs, plugin, query, state-map, test-map, type-infer).
 """
 
 COMMAND_REGISTRY = {}
 
 
-def register_command(name, help_text, add_args_fn, execute_fn,
-                     hidden=False, deprecated_alias_for=None):
+def register_command(name, help_text, add_args_fn, execute_fn, hidden=False):
     """Register a command with the CLI.
 
     Parameters
@@ -33,17 +38,13 @@ def register_command(name, help_text, add_args_fn, execute_fn,
         Function ``(args, workspace) -> result_dict``.
     hidden : bool, optional
         If True, the command is callable but hidden from ``--help`` and
-        excluded from the runtime command count (issue #195).
-    deprecated_alias_for : str, optional
-        If set, the command is a deprecated alias for the named umbrella
-        command. A deprecation warning is printed to stderr before execute.
+        excluded from the runtime command count (issues #195/#200).
     """
     COMMAND_REGISTRY[name] = {
         "help": help_text,
         "add_args": add_args_fn,
         "execute": execute_fn,
         "hidden": hidden,
-        "deprecated_alias_for": deprecated_alias_for,
     }
 
 
@@ -62,7 +63,7 @@ def get_visible_commands():
 
     Used by ``--command-count``, ``--help`` subparser construction, and
     ``sync_command_count.py`` so the headline count reflects the 12
-    umbrella commands rather than the full deprecated-alias set.
+    umbrella commands rather than the full hidden set.
     """
     return {name: info for name, info in COMMAND_REGISTRY.items()
             if not info.get("hidden", False)}

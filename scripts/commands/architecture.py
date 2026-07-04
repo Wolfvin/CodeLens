@@ -65,13 +65,4 @@ def execute(args, workspace):
 
     return get_architecture(workspace, lite=lite)
 
-
-register_command(
-    "architecture",
-    "Single-call codebase overview for AI agents (languages, frameworks, "
-    "entry points, packages, routes, hotspots, total symbols)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='summary',
-)
+# Issue #199: deprecated "architecture" alias registration removed; this module is now an implementation module imported by the "summary" umbrella command.

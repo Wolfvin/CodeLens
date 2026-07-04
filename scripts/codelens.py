@@ -902,8 +902,11 @@ def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, in
 def main():
     # Command count is derived from the visible (non-hidden) command set at
     # runtime so it can never drift from the actual number of umbrella
-    # commands (issue #38). Hidden deprecated aliases are excluded from the
-    # headline count per issue #195 consolidation (78 → 12 focused commands).
+    # commands (issue #38). Hidden commands are excluded from the headline
+    # count per issue #195 consolidation (78 → 12 focused commands). The 32
+    # deprecated aliases introduced by #195 were removed in issue #199; the
+    # remaining hidden commands are the 13 pending-decision commands tracked
+    # by issue #200.
     # The `--command-count` flag below prints it for scripts / CI; the
     # description also includes it so `--help` is self-documenting.
     from commands import get_visible_commands as _get_visible_commands
@@ -925,16 +928,15 @@ def main():
         default=False,
         help="Print the runtime command count (len of visible COMMAND_REGISTRY) "
              "and exit. Single source of truth for issue #38 reconciliation. "
-             "Hidden deprecated aliases are excluded (issue #195).",
+             "Hidden commands are excluded (issues #195/#199/#200).",
     )
     subparsers = parser.add_subparsers(
         dest="command",
         help="Available commands",
         # Issue #195: the default metavar lists every choice including
-        # hidden deprecated aliases. Override with only the 12 visible
-        # umbrella command names so --help is clean. Hidden commands are
-        # still dispatchable (registered below) but don't clutter the
-        # usage line.
+        # hidden commands. Override with only the 12 visible umbrella
+        # command names so --help is clean. Hidden commands are still
+        # dispatchable (intercepted below) but don't clutter the usage line.
         metavar="{" + ",".join(sorted(_visible_registry.keys())) + "}",
     )
 
@@ -942,11 +944,13 @@ def main():
     registry = get_all_commands()
 
     # Build subparsers from the command registry.
-    # Issue #195: hidden commands (deprecated aliases) are NOT registered as
-    # subparsers at all — that way they don't appear in --help choices, body,
-    # or usage line. They are still dispatchable via the manual intercept in
-    # the dispatch block below (we pre-parse sys.argv[1] and if it matches a
-    # hidden command, we build a synthetic namespace and execute directly).
+    # Issue #195: hidden commands are NOT registered as subparsers at all —
+    # that way they don't appear in --help choices, body, or usage line. They
+    # are still dispatchable via the manual intercept in the dispatch block
+    # below (we pre-parse sys.argv[1] and if it matches a hidden command, we
+    # build a synthetic namespace and execute directly). The 32 deprecated
+    # aliases from #195 were removed in #199; the only hidden commands left
+    # are the 13 pending-decision commands tracked by #200.
     _existing_subparser_args = {}
     _hidden_commands = {}
     for cmd_name, cmd_info in sorted(registry.items()):
@@ -1119,12 +1123,14 @@ def main():
             global_diff_base = arg.split('=', 1)[1]
         i += 1
 
-    # Issue #195: intercept hidden deprecated aliases BEFORE argparse rejects
+    # Issue #195/#200: intercept hidden commands BEFORE argparse rejects
     # them as "invalid choice". Hidden commands are not registered as
     # subparsers (so they don't appear in --help), but they remain callable
-    # for backward compat. We detect them by scanning sys.argv for the first
-    # non-flag token that matches a hidden command name, then build a
-    # synthetic namespace and dispatch directly.
+    # (the 13 pending-decision commands from issue #200). We detect them by
+    # scanning sys.argv for the first non-flag token that matches a hidden
+    # command name, then build a synthetic namespace and dispatch directly.
+    # Issue #199 removed the 32 deprecated aliases, so they are no longer
+    # here and now fall through to argparse's "invalid choice" error.
     _hidden_cmd_name = None
     _hidden_cmd_args = None
     if _hidden_commands:
@@ -1309,18 +1315,6 @@ def main():
     try:
         cmd_info = registry[args.command]
 
-        # Issue #195: deprecated alias warning. Old commands still execute
-        # (backward compat for one version) but print a redirect hint to
-        # stderr so users migrate to the new umbrella command.
-        _alias_for = cmd_info.get("deprecated_alias_for")
-        if _alias_for:
-            print(
-                f"[CodeLens] DEPRECATED: '{args.command}' is a deprecated alias. "
-                f"Use 'codelens {_alias_for}' instead. "
-                f"This alias will be removed in the next version (issue #195).",
-                file=sys.stderr,
-            )
-
         result = cmd_info["execute"](args, workspace)
 
         # ─── Dispatch enrichment (scan-specific) ──────
@@ -1396,46 +1390,70 @@ def main():
         # distribution), so Block 1 was deleted and the "unsupported command"
         # hint was folded into the else branch below.)
         deep = getattr(args, 'deep', False)
-        if deep and isinstance(result, dict) and args.command in (
-            "dead-code", "query", "impact", "smell", "complexity"
-        ):
+        # Issue #199: the --deep supported list used the old alias command
+        # names (smell, dead-code, complexity). After #199 these are reached
+        # via the ``audit`` umbrella with ``--check <category>``. Map the
+        # umbrella+check combination back to the alias name so the existing
+        # enhancement logic keeps working.
+        _DEEP_SUPPORTED_ALIASES = ("dead-code", "query", "impact", "smell", "complexity")
+        _AUDIT_DEEP_CHECK_MAP = {
+            "dead-code": "dead-code",
+            "smell": "smell",
+            "complexity": "complexity",
+        }
+        _deep_effective_command = args.command
+        if args.command == "audit" and getattr(args, "check", None):
+            _check_first = str(args.check).split(",")[0].strip()
+            _deep_effective_command = _AUDIT_DEEP_CHECK_MAP.get(_check_first, args.command)
+        if deep and isinstance(result, dict) and _deep_effective_command in _DEEP_SUPPORTED_ALIASES:
             try:
                 from hybrid_engine import create_hybrid_engine, add_confidence_to_result
                 hybrid = create_hybrid_engine(workspace, deep=True)
 
-                if args.command == "dead-code":
+                # Issue #199: umbrella commands wrap sub-results under
+                # result["r"][i]["_check"] == <check_name>. Find the sub-result
+                # matching _deep_effective_command so the enhancement targets
+                # the right dict. Non-umbrella commands use the top-level result.
+                _deep_target = result
+                if isinstance(result.get("r"), list):
+                    for _sub in result["r"]:
+                        if isinstance(_sub, dict) and _sub.get("_check") == _deep_effective_command:
+                            _deep_target = _sub
+                            break
+
+                if _deep_effective_command == "dead-code":
                     # Enhance dead-code findings with LSP verification
                     all_findings = []
-                    for cat_items in result.get("results", {}).values():
+                    for cat_items in _deep_target.get("results", {}).values():
                         if isinstance(cat_items, list):
                             all_findings.extend(cat_items)
                     if all_findings:
                         verified = hybrid.verify_dead_code(all_findings)
-                        result["lsp_verified"] = True
-                        result["lsp_active"] = hybrid.lsp_active
+                        _deep_target["lsp_verified"] = True
+                        _deep_target["lsp_active"] = hybrid.lsp_active
 
-                elif args.command == "query" and result.get("found"):
-                    result = hybrid.enhance_query(result, result.get("query", ""))
-                    result["lsp_active"] = hybrid.lsp_active
+                elif _deep_effective_command == "query" and _deep_target.get("found"):
+                    _deep_target = hybrid.enhance_query(_deep_target, _deep_target.get("query", ""))
+                    _deep_target["lsp_active"] = hybrid.lsp_active
 
-                elif args.command == "impact":
-                    result = hybrid.enhance_impact(result, result.get("symbol", ""))
-                    result["lsp_active"] = hybrid.lsp_active
+                elif _deep_effective_command == "impact":
+                    _deep_target = hybrid.enhance_impact(_deep_target, _deep_target.get("symbol", ""))
+                    _deep_target["lsp_active"] = hybrid.lsp_active
 
-                elif args.command == "smell":
+                elif _deep_effective_command == "smell":
                     all_findings = []
-                    for cat_items in result.get("by_category", {}).values():
+                    for cat_items in _deep_target.get("by_category", {}).values():
                         if isinstance(cat_items, list):
                             all_findings.extend(cat_items)
                     if all_findings:
                         hybrid.enhance_smell(all_findings)
-                    result["lsp_active"] = hybrid.lsp_active
+                    _deep_target["lsp_active"] = hybrid.lsp_active
 
-                elif args.command == "complexity":
-                    funcs = result.get("functions", [])
+                elif _deep_effective_command == "complexity":
+                    funcs = _deep_target.get("functions", [])
                     if funcs:
                         hybrid.enhance_complexity(funcs)
-                    result["lsp_active"] = hybrid.lsp_active
+                    _deep_target["lsp_active"] = hybrid.lsp_active
 
                 # Add confidence distribution to stats
                 result = add_confidence_to_result(result)
@@ -1452,9 +1470,7 @@ def main():
             # from deleted Block 1 — see issue #32.)
             result["deep_analysis"] = False
             result["deep_analysis_hint"] = f"--deep not yet supported for {args.command}"
-        elif not deep and isinstance(result, dict) and args.command in (
-            "dead-code", "query", "impact", "smell", "complexity"
-        ):
+        elif not deep and isinstance(result, dict) and _deep_effective_command in _DEEP_SUPPORTED_ALIASES:
             # Auto-detect: if LSP available and --deep not specified, show hint
             try:
                 from hybrid_engine import get_lsp_status
@@ -1537,40 +1553,63 @@ def main():
         # are NOT filtered because their results are structural (node/edge
         # graphs) rather than file-keyed findings — filtering them would
         # silently corrupt the graph.
-        if diff_scope is not None and isinstance(result, dict) and args.command in (
+        #
+        # Issue #199: the old alias command names (secrets, smell, dead-code,
+        # etc.) were removed from the CLI; the same analyses are now reached
+        # via the 12 umbrella commands (security, audit, etc.) with a
+        # ``--check <category>`` flag. The post-filter now also runs for the
+        # umbrella commands — when the result has the umbrella shape
+        # (``{"s":..., "st":..., "r":[...]}``), each sub-result in ``r`` is
+        # filtered individually and the ``diff_scope`` summary is attached
+        # at the top level so consumers see what was filtered.
+        _DIFF_BASE_FILTERABLE_UMBRELLAS = {
+            "security", "audit", "impact", "context", "deps",
+        }
+        _is_filterable_command = args.command in (
             "secrets", "smell", "complexity", "dead-code", "debug-leak",
             "circular", "taint", "vuln-scan", "check", "analyze",
             "missing-refs", "side-effect", "perf-hint", "regex-audit",
             "a11y", "css-deep", "dataflow", "stack-trace", "config-drift",
             "ownership", "test-map",
-        ):
+        ) or args.command in _DIFF_BASE_FILTERABLE_UMBRELLAS
+        if diff_scope is not None and isinstance(result, dict) and _is_filterable_command:
             _FILTER_KEYS = (
                 "findings", "leaks", "hints", "issues", "violations",
                 "matches", "chains", "results",
             )
+
+            def _filter_one(sub_result):
+                """Filter findings in a single sub-result dict; return (before, after)."""
+                nonlocal total_before, total_after
+                if not isinstance(sub_result, dict):
+                    return
+                for key in _FILTER_KEYS:
+                    val = sub_result.get(key)
+                    if isinstance(val, list):
+                        before = len(val)
+                        sub_result[key] = diff_scope.filter_findings(val)
+                        total_before += before
+                        total_after += len(sub_result[key])
+                    elif isinstance(val, dict):
+                        # Category-keyed (dead-code by_category, smell by_category)
+                        for sub_key, sub_val in val.items():
+                            if isinstance(sub_val, list):
+                                before = len(sub_val)
+                                val[sub_key] = diff_scope.filter_findings(sub_val)
+                                total_before += before
+                                total_after += len(val[sub_key])
+
             total_before = 0
             total_after = 0
-            for key in _FILTER_KEYS:
-                val = result.get(key)
-                if isinstance(val, list):
-                    before = len(val)
-                    result[key] = diff_scope.filter_findings(val)
-                    total_before += before
-                    total_after += len(result[key])
-                elif isinstance(val, dict):
-                    # Category-keyed (dead-code by_category, smell by_category)
-                    for sub_key, sub_val in val.items():
-                        if isinstance(sub_val, list):
-                            before = len(sub_val)
-                            val[sub_key] = diff_scope.filter_findings(sub_val)
-                            total_before += before
-                            total_after += len(val[sub_key])
-            # Also filter the flat ``findings`` list that some commands
-            # (e.g., ``check``) produce at the top level.
-            if "findings" in result and isinstance(result["findings"], list):
-                # Already filtered above if ``findings`` is in _FILTER_KEYS,
-                # but ``check`` stores them under ``findings`` — covered.
-                pass
+            # Issue #199: umbrella commands return {"s":..., "st":..., "r":[...]}.
+            # Filter each sub-result in ``r`` so the post-filter respects the
+            # umbrella structure. Non-umbrella commands are filtered at the
+            # top level (the original pre-#199 behavior).
+            if "r" in result and isinstance(result["r"], list):
+                for sub_result in result["r"]:
+                    _filter_one(sub_result)
+            else:
+                _filter_one(result)
             # Attach diff_scope summary so consumers can see what was filtered
             result["diff_scope"] = diff_scope.summary()
             result["diff_scope"]["findings_before_filter"] = total_before

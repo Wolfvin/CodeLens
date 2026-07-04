@@ -14,11 +14,4 @@ def add_args(parser):
 def execute(args, workspace):
     return check_env_vars(workspace, var_name=args.var_name)
 
-
-register_command("env-check", "Audit environment variables", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='doctor',
-
-)
+# Issue #199: deprecated "env-check" alias registration removed; this module is now an implementation module imported by the "doctor" umbrella command.

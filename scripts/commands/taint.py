@@ -130,11 +130,4 @@ def execute(args, workspace):
 
     return result
 
-
-register_command("taint", "Run AST-based taint analysis for vulnerability detection", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='security',
-
-)
+# Issue #199: deprecated "taint" alias registration removed; this module is now an implementation module imported by the "security" umbrella command.

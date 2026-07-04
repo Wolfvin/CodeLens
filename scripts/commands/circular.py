@@ -16,11 +16,4 @@ def add_args(parser):
 def execute(args, workspace):
     return detect_circular(workspace, domain=args.domain, max_cycles=args.max_cycles)
 
-
-register_command("circular", "Detect circular dependencies", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='deps',
-
-)
+# Issue #199: deprecated "circular" alias registration removed; this module is now an implementation module imported by the "deps" umbrella command.

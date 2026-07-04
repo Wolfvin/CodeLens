@@ -221,9 +221,4 @@ def _generate_actionable_items(result):
 
     return items
 
-
-register_command("dataflow", "Trace data flow source→sink with cross-file call graph analysis",
-                  add_args, execute,
-    hidden=True,
-    deprecated_alias_for='impact',
-    )
+# Issue #199: deprecated "dataflow" alias registration removed; this module is now an implementation module imported by the "impact" umbrella command.

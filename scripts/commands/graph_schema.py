@@ -118,12 +118,4 @@ def execute(args, workspace):
     db_path = getattr(args, "db_path", None)
     return get_graph_schema(workspace, db_path=db_path)
 
-
-register_command(
-    "graph-schema",
-    "Return the shape of the code graph (node/edge counts, type distribution, indexes)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='api-map',
-)
+# Issue #199: deprecated "graph-schema" alias registration removed; this module is now an implementation module imported by the "api-map" umbrella command.

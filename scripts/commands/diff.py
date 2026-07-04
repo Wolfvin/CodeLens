@@ -198,13 +198,4 @@ def cmd_diff_git_aware(workspace: str) -> Dict[str, Any]:
         "impact": impact,
     }
 
-
-register_command(
-    "diff",
-    "Compare registry snapshots (--git-aware for git-diff delta + impact)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='impact',
-)
-
+# Issue #199: deprecated "diff" alias registration removed; this module is now an implementation module imported by the "impact" umbrella command.
