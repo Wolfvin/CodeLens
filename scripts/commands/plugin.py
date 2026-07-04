@@ -333,10 +333,13 @@ def _extract_plugin_name_from_source(source: str) -> Optional[str]:
     return None
 
 
+# Issue #200: plugin is a standalone visible command — it manages plugin
+# lifecycle (install/uninstall/search/validate) which is unique and does not
+# overlap with any umbrella command. It was hidden-pending BOS decision; the
+# decision (issue #200) is to make it visible.
 register_command(
     "plugin",
     "Manage CodeLens plugins (install, list, search, update, info, validate)",
     add_args,
     execute,
-hidden=True,
 )

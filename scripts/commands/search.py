@@ -26,7 +26,7 @@ from typing import Any, Dict
 from commands import register_command
 
 
-_MODES = ("semantic", "symbol", "regex", "graph")
+_MODES = ("semantic", "symbol", "regex", "graph", "list", "query")
 
 
 def add_args(parser):
@@ -38,16 +38,22 @@ def add_args(parser):
         "  symbol    Exact symbol name lookup (fuzzy optional)\n"
         "  regex     Regex code search across workspace files\n"
         "  graph     Cypher-subset graph query (MATCH/WHERE/RETURN/LIMIT)\n"
+        "  list      List all registry entries with optional filter (issue #200)\n"
+        "  query     Query a specific class/id/function with callers/callees (issue #200)\n"
         "\n"
         "Examples:\n"
         "  codelens search . \"google auth\"                    # semantic (default)\n"
         "  codelens search . \"google auth\" --mode symbol      # exact symbol\n"
         "  codelens search . \"handleChange\" --mode regex       # regex code search\n"
         "  codelens search . \"MATCH (n) WHERE n.id CONTAINS x\" --mode graph\n"
+        "  codelens search . --mode list                          # list all entries\n"
+        "  codelens search submit-btn --mode query               # query a symbol\n"
         "\n"
         "For raw Cypher pass-through, prefer ``codelens graph <query>``."
     )
-    parser.add_argument("pattern", help="Search query (semantic query, symbol name, regex, or Cypher)")
+    parser.add_argument("pattern", nargs="?", default=None,
+                        help="Search query (semantic query, symbol name, regex, or Cypher). "
+                             "Optional for --mode list.")
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
     parser.add_argument("--mode", default="semantic", choices=_MODES,
@@ -82,6 +88,16 @@ def add_args(parser):
                         help="regex/symbol mode: pagination offset (default: 0)")
     parser.add_argument("--db-path", default=None,
                         help="Custom SQLite database path (semantic/graph modes)")
+    # list-mode passthroughs (issue #200).
+    parser.add_argument("--filter", dest="filter_type", default=None,
+                        choices=["all", "dead", "duplicate_define", "duplicate_ref",
+                                 "collision", "active"],
+                        help="list mode: filter by status (default: all)")
+    # query-mode passthroughs (issue #200).
+    parser.add_argument("--all", dest="all_results", action="store_true", default=False,
+                        help="query mode: return all callers/callees (no limit)")
+    parser.add_argument("--additional-paths", default=None, metavar="PATHS",
+                        help="query mode: comma-separated extra repo roots for cross-repo query (issue #15)")
 
 
 def _run_semantic(args, workspace) -> Dict[str, Any]:
@@ -162,14 +178,89 @@ def _run_graph(args, workspace) -> Dict[str, Any]:
     return _qg_execute(sub_args, workspace)
 
 
+def _run_list(args, workspace) -> Dict[str, Any]:
+    """List all registry entries with optional filter (issue #200).
+
+    Delegates to ``commands.list.execute()``. The ``pattern`` positional is
+    repurposed as an optional name filter — when None, all entries are listed.
+
+    Because ``pattern`` is the first positional in the search parser, a common
+    invocation is ``search /path/to/ws --mode list`` where the user intends
+    the path to be the workspace, not a name filter. We detect this case
+    (workspace is None and pattern looks like a directory) and swap them.
+    """
+    from commands.list import execute as _list_execute
+    pattern = getattr(args, "pattern", None)
+    ws = getattr(args, "workspace", None)
+    # Heuristic: if workspace wasn't given but pattern is an existing dir,
+    # the user meant the path as the workspace (list mode has no query arg).
+    if ws is None and pattern and os.path.isdir(pattern):
+        ws = pattern
+        pattern = None
+    sub_args = argparse.Namespace(
+        workspace=ws,
+        domain=getattr(args, "domain", None) or "all",
+        filter_type=getattr(args, "filter_type", None) or "all",
+        limit=getattr(args, "limit", None) or 20,
+        offset=getattr(args, "offset", 0),
+        format=getattr(args, "format", None),
+        top=None, max_tokens=None, lite=False, deep=False, db_path=None,
+        diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = _list_execute(sub_args, workspace if workspace else ws)
+    # If a pattern filter was given (and not consumed as workspace), narrow
+    # results by name substring.
+    if pattern and isinstance(result, dict) and "results" in result:
+        filtered = [r for r in result["results"]
+                    if pattern in str(r.get("name", ""))]
+        result["results"] = filtered
+        result["count"] = len(filtered)
+        result["filtered_by"] = pattern
+    return result
+
+
+def _run_query(args, workspace) -> Dict[str, Any]:
+    """Query a specific class/id/function with callers/callees (issue #200).
+
+    Delegates to ``commands.query.execute()``. The ``pattern`` positional is
+    the symbol name to query.
+    """
+    from commands.query import execute as _query_execute
+    sub_args = argparse.Namespace(
+        name=args.pattern,
+        workspace=getattr(args, "workspace", None),
+        domain=getattr(args, "domain", None),
+        file=getattr(args, "file", None),
+        limit=None if getattr(args, "all_results", False) else (getattr(args, "limit", None) or 20),
+        all=getattr(args, "all_results", False),
+        fuzzy=getattr(args, "fuzzy", False),
+        additional_paths=getattr(args, "additional_paths", None),
+        format=getattr(args, "format", None),
+        top=None, max_tokens=None, lite=False, deep=False, db_path=None,
+        diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    return _query_execute(sub_args, workspace)
+
+
 def execute(args, workspace):
     """Dispatch to the selected search mode and normalize output shape.
 
     @FLOW:    SEARCH_DISPATCH
-    @CALLS:   _run_semantic() | _run_symbol() | _run_regex() | _run_graph() -> dict
+    @CALLS:   _run_semantic() | _run_symbol() | _run_regex() | _run_graph()
+              | _run_list() | _run_query() -> dict
     @MUTATES: nothing (read-only)
     """
     mode = getattr(args, "mode", "semantic") or "semantic"
+    pattern = getattr(args, "pattern", None)
+    # Modes that require a pattern. list mode allows pattern=None (list all).
+    _PATTERN_REQUIRED = {"semantic", "symbol", "regex", "graph", "query"}
+    if mode in _PATTERN_REQUIRED and not pattern:
+        return {
+            "s": "error", "st": {"mode": mode}, "r": [],
+            "error": f"--mode {mode} requires a pattern (search query / symbol name).",
+        }
     try:
         if mode == "semantic":
             result = _run_semantic(args, workspace)
@@ -179,6 +270,10 @@ def execute(args, workspace):
             result = _run_regex(args, workspace)
         elif mode == "graph":
             result = _run_graph(args, workspace)
+        elif mode == "list":
+            result = _run_list(args, workspace)
+        elif mode == "query":
+            result = _run_query(args, workspace)
         else:
             return {"s": "error", "st": {"mode": mode}, "r": [],
                     "error": f"unknown mode '{mode}'"}

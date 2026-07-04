@@ -455,4 +455,6 @@ register_command("query", "Query a specific class/id/function", add_args, execut
 
 hidden=True,
 
+deprecated_alias_for='search',
+
 )

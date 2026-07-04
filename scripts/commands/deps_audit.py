@@ -49,5 +49,6 @@ register_command(
     "Scan dependencies for known CVEs via OSV.dev (PyPI/npm/crates.io)",
     add_args,
     execute,
-hidden=True,
+    hidden=True,
+    deprecated_alias_for='security',
 )

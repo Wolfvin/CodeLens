@@ -7,6 +7,8 @@ Umbrella command that absorbs:
   - staleness     Per-file staleness detection
   - perf-hint     Performance anti-patterns
   - side-effect   Pure vs impure function analysis
+  - check         CI/CD quality gate (issue #200)
+  - missing-refs  CSS/HTML mismatch detection (issue #200)
 
 (god-module from the issue mapping is part of arch-metrics, exposed via
 ``summary --check arch-metrics`` — there is no standalone god-module command
@@ -16,6 +18,8 @@ Usage:
     codelens audit <workspace>                              # all checks
     codelens audit <workspace> --check dead-code            # only dead-code
     codelens audit <workspace> --check complexity,smell     # pick subset
+    codelens audit <workspace> --check check                # CI quality gate
+    codelens audit <workspace> --check missing-refs         # CSS/HTML mismatch
 
 Output: ``{"s":"ok", "st":{...}, "r":[...]}`` — one entry per check under
 ``r`` and aggregate counts under ``st``.
@@ -59,6 +63,16 @@ _CHECKS = {
         "module": "commands.side_effect",
         "help": "Pure vs impure function analysis",
     },
+    # Issue #200: absorb the hidden-pending CI quality-gate command.
+    "check": {
+        "module": "commands.check",
+        "help": "CI/CD quality gate (exits non-zero on failure)",
+    },
+    # Issue #200: absorb the hidden-pending CSS/HTML mismatch command.
+    "missing-refs": {
+        "module": "commands.missingrefs",
+        "help": "Detect CSS/HTML mismatch bugs",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -75,11 +89,15 @@ def add_args(parser):
         "  staleness     Per-file staleness detection\n"
         "  perf-hint     Performance anti-patterns\n"
         "  side-effect   Pure vs impure function analysis\n"
+        "  check         CI/CD quality gate (issue #200)\n"
+        "  missing-refs  CSS/HTML mismatch detection (issue #200)\n"
         "\n"
         "Examples:\n"
         "  codelens audit .                          # all checks\n"
         "  codelens audit . --check dead-code        # only dead-code\n"
         "  codelens audit . --check complexity,smell # pick subset\n"
+        "  codelens audit . --check check            # CI quality gate\n"
+        "  codelens audit . --check missing-refs     # CSS/HTML mismatch\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -164,6 +182,33 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.name = getattr(base_args, "name", None)
         ns.file = getattr(base_args, "file", None)
         ns.max_files = getattr(base_args, "max_files", None) or 3000
+    elif check_name == "check":
+        # Issue #200: CI quality-gate. check.py reads many args; under the
+        # audit umbrella we expose the common --severity passthrough and use
+        # sensible defaults for the rest. Users who need the full gate
+        # surface (baseline, diff-scan, strict mode, rule-file) should invoke
+        # ``codelens check`` directly — the deprecated alias still works.
+        ns.severity = getattr(base_args, "severity", None) or "high"
+        ns.max_findings = 0
+        ns.health_min = 0
+        ns.sarif = False
+        # check.py iterates args.commands directly — must be a list.
+        # Mirror the default from check.py add_args().
+        ns.commands = ['secrets', 'dead-code', 'smell', 'complexity',
+                       'debug-leak', 'circular', 'taint']
+        ns.rule_files = None
+        ns.baseline_commit = None
+        ns.save_baseline = False
+        ns.diff_scan = False
+        ns.staged = False
+        ns.diff_vs = None
+        ns.strict = False
+        ns.error = False
+        ns.severity_threshold = None
+    elif check_name == "missing-refs":
+        # missing-refs.execute() only uses the workspace arg (passed
+        # separately); no per-check namespace attributes are required.
+        pass
     return ns
 
 

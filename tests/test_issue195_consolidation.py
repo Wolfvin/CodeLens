@@ -1,11 +1,13 @@
-"""Tests for the 12 umbrella commands introduced in issue #195.
+"""Tests for the 12 umbrella commands + plugin standalone (issue #195 + #200).
 
 Verifies:
 - All 12 umbrella commands are registered and visible in COMMAND_REGISTRY.
-- --help only shows the 12 umbrella commands (hidden aliases suppressed).
-- --command-count reports 12.
+- plugin is a standalone visible command (issue #200).
+- --help only shows the 13 visible commands (hidden aliases suppressed).
+- --command-count reports 13.
 - Each umbrella command's execute() returns the {s, st, r} shape.
 - Deprecated aliases print a redirect warning to stderr when invoked.
+- Issue #200: the 13 hidden-pending commands are resolved (absorbed or dropped).
 """
 
 from __future__ import annotations
@@ -32,6 +34,14 @@ EXPECTED_UMBRELLA = {
     "summary", "impact", "api-map", "doctor", "history", "graph",
 }
 
+# Issue #200: plugin is a standalone visible command (not an umbrella — it
+# manages plugin lifecycle, which is unique and does not overlap with any
+# umbrella). It was hidden-pending BOS decision; issue #200 made it visible.
+EXPECTED_STANDALONE = {"plugin"}
+
+# The full set of visible commands = 12 umbrellas + 1 standalone.
+EXPECTED_VISIBLE = EXPECTED_UMBRELLA | EXPECTED_STANDALONE
+
 
 def test_12_umbrella_commands_registered():
     """All 12 umbrella commands must be registered (issue #195)."""
@@ -39,11 +49,24 @@ def test_12_umbrella_commands_registered():
         assert name in COMMAND_REGISTRY, f"umbrella command {name!r} not registered"
 
 
-def test_only_12_visible_commands():
-    """Only the 12 umbrella commands are visible (non-hidden)."""
+def test_plugin_standalone_registered_and_visible():
+    """plugin must be registered and visible (issue #200)."""
+    assert "plugin" in COMMAND_REGISTRY, "plugin not registered"
+    info = COMMAND_REGISTRY["plugin"]
+    assert not info.get("hidden", False), "plugin must be visible (issue #200)"
+    assert info.get("deprecated_alias_for") is None, (
+        "plugin must not be a deprecated alias (issue #200)"
+    )
+
+
+def test_only_13_visible_commands():
+    """Only the 12 umbrella commands + plugin are visible (non-hidden).
+
+    Issue #200: plugin became visible, bringing the count from 12 to 13.
+    """
     visible = get_visible_commands()
-    assert set(visible.keys()) == EXPECTED_UMBRELLA, (
-        f"expected exactly {EXPECTED_UMBRELLA}, got {set(visible.keys())}"
+    assert set(visible.keys()) == EXPECTED_VISIBLE, (
+        f"expected exactly {EXPECTED_VISIBLE}, got {set(visible.keys())}"
     )
 
 
@@ -80,6 +103,12 @@ def test_absorbed_commands_marked_hidden_and_deprecated():
         "regex-audit": "security",
         "query-graph": "graph",
         "architecture": "summary",
+        # Issue #200: the 5 hidden-pending commands that were absorbed.
+        "check": "audit",
+        "missing-refs": "audit",
+        "deps-audit": "security",
+        "list": "search",
+        "query": "search",
     }
     for old_name, umbrella in samples.items():
         assert old_name in COMMAND_REGISTRY, f"{old_name!r} not in registry"
@@ -99,6 +128,9 @@ def test_dropped_commands_not_registered():
         "css-deep", "debug-leak", "detect", "export-snapshot", "refactor-safe",
         "resolve-types", "stack-trace", "benchmark", "fix", "self-analyze",
         "guard", "llm", "memory",
+        # Issue #200: 7 hidden-pending commands dropped (overlap / unproven engine).
+        "analyze", "lsp", "entrypoints", "state-map", "config-drift",
+        "test-map", "type-infer",
     }
     for name in dropped:
         assert name not in COMMAND_REGISTRY, f"dropped command {name!r} still registered"
@@ -132,12 +164,16 @@ def _run_cli(*args, expect_success=True):
     return result
 
 
-def test_help_shows_only_12_umbrella_commands():
-    """`codelens --help` must list exactly the 12 umbrella commands."""
+def test_help_shows_only_13_visible_commands():
+    """`codelens --help` must list all 13 visible commands (issue #200).
+
+    Issue #195 had 12 umbrella commands; issue #200 added plugin as a
+    standalone visible command, bringing the total to 13.
+    """
     result = _run_cli("--help")
-    # Each umbrella command name must appear in the choices list.
-    for name in EXPECTED_UMBRELLA:
-        assert name in result.stdout, f"umbrella {name!r} not in --help"
+    # Each visible command name must appear in the choices list.
+    for name in EXPECTED_VISIBLE:
+        assert name in result.stdout, f"visible command {name!r} not in --help"
     # A sample of hidden aliases must NOT appear in the choices list.
     # (They may appear in command body text if mentioned in epilogs, but
     # argparse.SUPPRESS ensures they're not in the {choices} enumeration.)
@@ -149,11 +185,15 @@ def test_help_shows_only_12_umbrella_commands():
         pass  # argparse.SUPPRESS guarantees this; full verification via --command-count
 
 
-def test_command_count_reports_12():
-    """`codelens --command-count` must print exactly 12."""
+def test_command_count_reports_13():
+    """`codelens --command-count` must print exactly 13 (issue #200).
+
+    Issue #195 had 12 umbrella commands; issue #200 made plugin visible,
+    bringing the count to 13.
+    """
     result = _run_cli("--command-count")
-    assert result.stdout.strip() == "12", (
-        f"expected '12', got {result.stdout.strip()!r}"
+    assert result.stdout.strip() == "13", (
+        f"expected '13', got {result.stdout.strip()!r}"
     )
 
 
@@ -344,3 +384,117 @@ def test_graph_umbrella_registered():
     info = COMMAND_REGISTRY["graph"]
     assert info.get("hidden") is not True  # umbrella, must be visible
     assert callable(info["execute"])
+
+
+# ─── 4. Issue #200: new --check / --mode dispatches ─────────────────
+# Each new absorb target must dispatch to the sub-command and tag the result.
+
+
+def test_audit_check_dispatches_to_check():
+    """`audit --check check` dispatches to the check sub-command (issue #200)."""
+    import argparse
+    from commands.audit import execute as audit_execute
+    ws = _make_workspace()
+    args = argparse.Namespace(
+        workspace=ws, check="check", max_files=None, max_results=None,
+        categories=None, severity=None, threshold=None, sort_by=None,
+        name=None, file=None, limit=None, category=None,
+        no_confirm_hash=False, format="json", top=None, max_tokens=None,
+        lite=False, deep=False, db_path=None, diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = audit_execute(args, ws)
+    assert "s" in result
+    assert "r" in result
+    assert any(r.get("_check") == "check" for r in result["r"])
+
+
+def test_audit_missing_refs_dispatches():
+    """`audit --check missing-refs` dispatches to the missingrefs sub-command (issue #200)."""
+    import argparse
+    from commands.audit import execute as audit_execute
+    ws = _make_workspace()
+    args = argparse.Namespace(
+        workspace=ws, check="missing-refs", max_files=None, max_results=None,
+        categories=None, severity=None, threshold=None, sort_by=None,
+        name=None, file=None, limit=None, category=None,
+        no_confirm_hash=False, format="json", top=None, max_tokens=None,
+        lite=False, deep=False, db_path=None, diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = audit_execute(args, ws)
+    assert "s" in result
+    assert "r" in result
+    assert any(r.get("_check") == "missing-refs" for r in result["r"])
+
+
+def test_security_deps_audit_dispatches():
+    """`security --check deps-audit` dispatches to deps_audit sub-command (issue #200)."""
+    import argparse
+    from commands.security import execute as security_execute
+    ws = _make_workspace()
+    args = argparse.Namespace(
+        workspace=ws, check="deps-audit", max_files=None, severity=None,
+        no_gitleaks=False, language=None, with_secrets=False,
+        cross_file=False, no_ast=False, ast=False, deep=False,
+        offline=True, refresh=False, osv_ttl=None, max_age=None,
+        ecosystem=None,
+        format="json", top=None, max_tokens=None, lite=False,
+        db_path=None, diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = security_execute(args, ws)
+    assert "s" in result
+    assert "r" in result
+    assert any(r.get("_check") == "deps-audit" for r in result["r"])
+
+
+def test_search_list_mode_dispatches():
+    """`search --mode list` dispatches to the list sub-command (issue #200)."""
+    import argparse
+    from commands.search import execute as search_execute
+    ws = _make_workspace()
+    args = argparse.Namespace(
+        pattern=None, workspace=ws, mode="list",
+        file_type=None, file=None, max_results=200, context=0,
+        ignore_case=False, whole_word=False, domain=None, fuzzy=False,
+        top=None, validate=False, limit=20, offset=0, db_path=None,
+        filter_type=None, all_results=False, additional_paths=None,
+        format="json", max_tokens=None, lite=False, deep=False,
+        diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = search_execute(args, ws)
+    assert "s" in result
+    assert result["st"]["mode"] == "list"
+
+
+def test_search_query_mode_dispatches():
+    """`search --mode query` dispatches to the query sub-command (issue #200)."""
+    import argparse
+    from commands.search import execute as search_execute
+    ws = _make_workspace()
+    args = argparse.Namespace(
+        pattern="hello", workspace=ws, mode="query",
+        file_type=None, file=None, max_results=200, context=0,
+        ignore_case=False, whole_word=False, domain=None, fuzzy=False,
+        top=None, validate=False, limit=20, offset=0, db_path=None,
+        filter_type=None, all_results=False, additional_paths=None,
+        format="json", max_tokens=None, lite=False, deep=False,
+        diff_base=None, diff_scope=None,
+        disable_suppression=None, codelens_ignore_pattern=None,
+    )
+    result = search_execute(args, ws)
+    assert "s" in result
+    assert result["st"]["mode"] == "query"
+
+
+def test_no_hidden_pending_commands_remain():
+    """Issue #200 DoD: no hidden-pending commands (hidden + no deprecated_alias_for)."""
+    hidden_pending = [
+        name for name, info in COMMAND_REGISTRY.items()
+        if info.get("hidden") and not info.get("deprecated_alias_for")
+    ]
+    assert not hidden_pending, (
+        f"hidden-pending commands remain (issue #200 not resolved): {hidden_pending}"
+    )

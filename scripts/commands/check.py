@@ -487,4 +487,5 @@ register_command(
     add_args,
     execute,
     hidden=True,
+    deprecated_alias_for='audit',
 )

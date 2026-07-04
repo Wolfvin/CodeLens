@@ -125,4 +125,6 @@ register_command("list", "List entries with filter", add_args, execute,
 
 hidden=True,
 
+deprecated_alias_for='search',
+
 )

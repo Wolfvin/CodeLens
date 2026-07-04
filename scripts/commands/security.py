@@ -6,12 +6,14 @@ Umbrella command that absorbs:
   - taint         AST-based taint analysis
   - binary-scan   Binary/compiled artifact reverse-engineering
   - regex-audit   Regex ReDoS and issue audit
+  - deps-audit    Dependency vulnerability scan via OSV.dev (issue #200)
 
 Usage:
     codelens security <workspace>                          # all checks
     codelens security <workspace> --check secrets          # only secrets
     codelens security <workspace> --check taint,vuln-scan  # pick subset
     codelens security <workspace> --check binary-scan --deep
+    codelens security <workspace> --check deps-audit --offline
 
 Output: ``{"s":"ok", "st":{...}, "r":[...]}``.
 """
@@ -50,6 +52,11 @@ _CHECKS = {
         "module": "commands.regex_audit",
         "help": "Regex ReDoS and issue audit",
     },
+    # Issue #200: absorb the hidden-pending OSV.dev dependency audit.
+    "deps-audit": {
+        "module": "commands.deps_audit",
+        "help": "Dependency vulnerability scan via OSV.dev (PyPI/npm/crates.io)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -65,12 +72,14 @@ def add_args(parser):
         "  taint         AST-based taint analysis\n"
         "  binary-scan   Binary/compiled artifact reverse-engineering\n"
         "  regex-audit   Regex ReDoS and issue audit\n"
+        "  deps-audit    Dependency vulnerability scan via OSV.dev (issue #200)\n"
         "\n"
         "Examples:\n"
         "  codelens security .                            # all checks\n"
         "  codelens security . --check secrets            # only secrets\n"
         "  codelens security . --check taint,vuln-scan    # pick subset\n"
         "  codelens security . --check binary-scan --deep # deep binary scan\n"
+        "  codelens security . --check deps-audit         # dependency CVEs\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -104,6 +113,10 @@ def add_args(parser):
                         help="vuln-scan: OSV cache TTL in seconds")
     parser.add_argument("--max-age", default=None,
                         help="vuln-scan: max cache age (e.g. 6h, 30m, 2d)")
+    # deps-audit passthroughs (issue #200).
+    parser.add_argument("--ecosystem", default=None,
+                        choices=["PyPI", "npm", "crates.io"],
+                        help="deps-audit: limit scan to one package ecosystem")
 
 
 def _parse_checks(check_arg: str) -> List[str]:
@@ -151,6 +164,11 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
     elif check_name == "regex-audit":
         ns.severity = getattr(base_args, "severity", None)
         ns.max_files = getattr(base_args, "max_files", None) or 1000
+    elif check_name == "deps-audit":
+        # Issue #200: deps_audit.execute() reads severity/ecosystem/offline.
+        ns.severity = getattr(base_args, "severity", None)
+        ns.ecosystem = getattr(base_args, "ecosystem", None)
+        ns.offline = getattr(base_args, "offline", False)
     return ns
 
 

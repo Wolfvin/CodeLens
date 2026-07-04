@@ -6,7 +6,7 @@ CodeLens is an AI-native code intelligence platform that gives AI agents **full 
 
 ## Features
 
-- **12 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
+- **13 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
 - **MCP Server (12 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 12 tools total (auto-discovered from COMMAND_REGISTRY), every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
 - **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
@@ -167,8 +167,8 @@ codelens/
 │   ├── changelog.md               # Older changelog (per-version highlights)
 │   └── agent-integration.md       # AI agent integration guide
 ├── scripts/
-│   ├── codelens.py                # CLI entry point (12 commands registered)
-│   ├── mcp_server.py              # MCP JSON-RPC server (12 tools)
+│   ├── codelens.py                # CLI entry point (13 commands registered)
+│   ├── mcp_server.py              # MCP JSON-RPC server (13 tools)
 │   ├── registry.py                # Registry read/write/build
 │   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
 │   ├── base_parser.py             # Base tree-sitter parser
