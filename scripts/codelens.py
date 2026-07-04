@@ -900,12 +900,15 @@ def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, in
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
-    # Command count is derived from COMMAND_REGISTRY at runtime so it can never
-    # drift from the actual number of registered commands (issue #38). The
-    # `--command-count` flag below prints it for scripts / CI; the description
-    # also includes it so `--help` is self-documenting.
-    from commands import COMMAND_REGISTRY as _cli_registry_for_count
-    _command_count = len(_cli_registry_for_count)
+    # Command count is derived from the visible (non-hidden) command set at
+    # runtime so it can never drift from the actual number of umbrella
+    # commands (issue #38). Hidden deprecated aliases are excluded from the
+    # headline count per issue #195 consolidation (78 → 12 focused commands).
+    # The `--command-count` flag below prints it for scripts / CI; the
+    # description also includes it so `--help` is self-documenting.
+    from commands import get_visible_commands as _get_visible_commands
+    _visible_registry = _get_visible_commands()
+    _command_count = len(_visible_registry)
 
     parser = argparse.ArgumentParser(
         description=(
@@ -920,18 +923,38 @@ def main():
         "--command-count",
         action="store_true",
         default=False,
-        help="Print the runtime command count (len(COMMAND_REGISTRY)) and exit. "
-             "Single source of truth for issue #38 reconciliation.",
+        help="Print the runtime command count (len of visible COMMAND_REGISTRY) "
+             "and exit. Single source of truth for issue #38 reconciliation. "
+             "Hidden deprecated aliases are excluded (issue #195).",
     )
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    subparsers = parser.add_subparsers(
+        dest="command",
+        help="Available commands",
+        # Issue #195: the default metavar lists every choice including
+        # hidden deprecated aliases. Override with only the 12 visible
+        # umbrella command names so --help is clean. Hidden commands are
+        # still dispatchable (registered below) but don't clutter the
+        # usage line.
+        metavar="{" + ",".join(sorted(_visible_registry.keys())) + "}",
+    )
 
     # Import and register all command modules
     registry = get_all_commands()
 
-    # Build subparsers from the command registry
-    # Track which subparsers already have certain args to avoid conflicts
+    # Build subparsers from the command registry.
+    # Issue #195: hidden commands (deprecated aliases) are NOT registered as
+    # subparsers at all — that way they don't appear in --help choices, body,
+    # or usage line. They are still dispatchable via the manual intercept in
+    # the dispatch block below (we pre-parse sys.argv[1] and if it matches a
+    # hidden command, we build a synthetic namespace and execute directly).
     _existing_subparser_args = {}
+    _hidden_commands = {}
     for cmd_name, cmd_info in sorted(registry.items()):
+        _is_hidden = cmd_info.get("hidden", False)
+        if _is_hidden:
+            # Track for manual dispatch, but don't register a subparser.
+            _hidden_commands[cmd_name] = cmd_info
+            continue
         sub = subparsers.add_parser(cmd_name, help=cmd_info["help"])
         cmd_info["add_args"](sub)
 
@@ -1096,7 +1119,68 @@ def main():
             global_diff_base = arg.split('=', 1)[1]
         i += 1
 
-    args = parser.parse_args()
+    # Issue #195: intercept hidden deprecated aliases BEFORE argparse rejects
+    # them as "invalid choice". Hidden commands are not registered as
+    # subparsers (so they don't appear in --help), but they remain callable
+    # for backward compat. We detect them by scanning sys.argv for the first
+    # non-flag token that matches a hidden command name, then build a
+    # synthetic namespace and dispatch directly.
+    _hidden_cmd_name = None
+    _hidden_cmd_args = None
+    if _hidden_commands:
+        # Find the first positional token (skip global flags + their values).
+        _skip_next_value = False
+        _global_value_flags = {
+            "--format", "-f", "--top", "--max-tokens", "--db-path",
+            "--diff-base", "--codelens-ignore-pattern",
+        }
+        for _idx, _tok in enumerate(sys.argv[1:], start=1):
+            if _skip_next_value:
+                _skip_next_value = False
+                continue
+            if _tok in _global_value_flags:
+                _skip_next_value = True
+                continue
+            if _tok.startswith("-"):
+                # Could be --flag=value or -fX; skip either way.
+                continue
+            # First positional token.
+            if _tok in _hidden_commands:
+                _hidden_cmd_name = _tok
+                # Remaining tokens after the command name are its args.
+                _hidden_cmd_args = sys.argv[1 + _idx:]
+            break
+
+    if _hidden_cmd_name:
+        # Build a synthetic namespace by parsing the hidden command's args
+        # with a dedicated parser (not the main parser, which doesn't know
+        # this command).
+        _h_info = _hidden_commands[_hidden_cmd_name]
+        _h_parser = argparse.ArgumentParser(
+            prog=f"codelens {_hidden_cmd_name}",
+            description=_h_info["help"],
+            add_help=True,
+        )
+        _h_info["add_args"](_h_parser)
+        # Add the standard global flags the dispatcher expects.
+        if not any(a.dest == "format" for a in _h_parser._actions):
+            _h_parser.add_argument("--format", "-f", default=None)
+        if not any(a.dest == "top" for a in _h_parser._actions):
+            _h_parser.add_argument("--top", type=int, default=None)
+        if not any(a.dest == "max_tokens" for a in _h_parser._actions):
+            _h_parser.add_argument("--max-tokens", type=int, default=None)
+        if not any(a.dest == "lite" for a in _h_parser._actions):
+            _h_parser.add_argument("--lite", action="store_true", default=False)
+        if not any(a.dest == "deep" for a in _h_parser._actions):
+            _h_parser.add_argument("--deep", action="store_true", default=False)
+        if not any(a.dest == "db_path" for a in _h_parser._actions):
+            _h_parser.add_argument("--db-path", default=None)
+        if not any(a.dest == "diff_base" for a in _h_parser._actions):
+            _h_parser.add_argument("--diff-base", default=None)
+        args = _h_parser.parse_args(_hidden_cmd_args)
+        args.command = _hidden_cmd_name
+    else:
+        args = parser.parse_args()
 
     # Apply global flags to args
     if getattr(args, 'disable_suppression', None) is None:
@@ -1224,6 +1308,19 @@ def main():
 
     try:
         cmd_info = registry[args.command]
+
+        # Issue #195: deprecated alias warning. Old commands still execute
+        # (backward compat for one version) but print a redirect hint to
+        # stderr so users migrate to the new umbrella command.
+        _alias_for = cmd_info.get("deprecated_alias_for")
+        if _alias_for:
+            print(
+                f"[CodeLens] DEPRECATED: '{args.command}' is a deprecated alias. "
+                f"Use 'codelens {_alias_for}' instead. "
+                f"This alias will be removed in the next version (issue #195).",
+                file=sys.stderr,
+            )
+
         result = cmd_info["execute"](args, workspace)
 
         # ─── Dispatch enrichment (scan-specific) ──────

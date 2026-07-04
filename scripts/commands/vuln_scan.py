@@ -90,4 +90,10 @@ def execute(args, workspace):
     )
 
 
-register_command("vuln-scan", "Scan dependencies for known CVEs (OSV.dev + native audit)", add_args, execute)
+register_command("vuln-scan", "Scan dependencies for known CVEs (OSV.dev + native audit)", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='security',
+
+)

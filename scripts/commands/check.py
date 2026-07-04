@@ -486,4 +486,5 @@ register_command(
     '--strict/--error, --baseline-commit, --diff-scan)',
     add_args,
     execute,
+    hidden=True,
 )

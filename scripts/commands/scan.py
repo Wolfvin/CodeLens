@@ -79,6 +79,11 @@ def add_args(parser):
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--check", default=None,
+                        help="Issue #195: comma-separated sub-analyses. "
+                             "Choices: scan, init, rescan. Default: scan. "
+                             "'init' writes .codelens config only. "
+                             "'rescan' is an alias for scan --incremental.")
     parser.add_argument("--incremental", action="store_true",
                         help="Only re-scan changed files")
     parser.add_argument("--plugins", nargs="*", default=None,
@@ -130,8 +135,80 @@ def add_args(parser):
                              "Additive — does not change default scan behavior.")
 
 
+# Issue #195: sub-command dispatch table for the scan umbrella.
+_SCAN_CHECKS = {"scan", "init", "rescan"}
+
+
+def _dispatch_check(args, workspace, check_arg):
+    """Dispatch scan sub-analyses (init / rescan / scan) per --check.
+
+    - ``scan``    : full scan (default; same as no --check)
+    - ``init``    : write .codelens config only (no scan)
+    - ``rescan``  : incremental scan (alias for scan --incremental)
+    """
+    import sys
+    parts = [c.strip() for c in check_arg.split(",") if c.strip()]
+    invalid = [p for p in parts if p not in _SCAN_CHECKS]
+    if invalid:
+        print(
+            f"[CodeLens] scan: unknown --check category '{','.join(invalid)}'. "
+            f"Valid: {', '.join(sorted(_SCAN_CHECKS))}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not parts:
+        parts = ["scan"]
+
+    results = []
+    checks_failed = 0
+    for check_name in parts:
+        try:
+            if check_name == "init":
+                from commands.init import cmd_init
+                sub_result = cmd_init(workspace)
+            elif check_name == "rescan":
+                sub_result = cmd_scan(workspace, incremental=True,
+                                      plugins=getattr(args, "plugins", None),
+                                      max_files=getattr(args, "max_files", None),
+                                      use_prefilter=getattr(args, "use_prefilter", True),
+                                      verbose=getattr(args, "verbose", False),
+                                      scan_stats=getattr(args, "scan_stats", False))
+            else:  # scan
+                sub_result = cmd_scan(workspace, getattr(args, "incremental", False),
+                                      plugins=getattr(args, "plugins", None),
+                                      max_files=getattr(args, "max_files", None),
+                                      use_prefilter=getattr(args, "use_prefilter", True),
+                                      verbose=getattr(args, "verbose", False),
+                                      scan_stats=getattr(args, "scan_stats", False))
+            if not isinstance(sub_result, dict):
+                sub_result = {"status": "ok", "result": sub_result}
+            sub_result["_check"] = check_name
+            results.append(sub_result)
+        except Exception as exc:
+            checks_failed += 1
+            results.append({
+                "_check": check_name,
+                "s": "error",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+            print(f"[CodeLens] scan: --check {check_name} failed: {exc}",
+                  file=sys.stderr)
+
+    return {
+        "s": "ok" if checks_failed == 0 else "partial",
+        "st": {"checks_requested": len(parts), "checks_failed": checks_failed},
+        "r": results,
+    }
+
+
 def execute(args, workspace):
     """Execute the scan command."""
+    # Issue #195: --check dispatch for init / rescan sub-analyses.
+    check_arg = getattr(args, "check", None)
+    if check_arg:
+        return _dispatch_check(args, workspace, check_arg)
+
     # --suggest-ignore short-circuits the normal scan flow.
     if getattr(args, 'suggest_ignore', False):
         return _run_suggest_ignore(workspace)

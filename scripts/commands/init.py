@@ -71,4 +71,10 @@ def cmd_init(workspace: str) -> Dict[str, Any]:
     }
 
 
-register_command("init", "Initialize .codelens with auto-detected config", add_args, execute)
+register_command("init", "Initialize .codelens with auto-detected config", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='scan',
+
+)

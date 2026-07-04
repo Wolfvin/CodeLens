@@ -204,5 +204,7 @@ register_command(
     "Compare registry snapshots (--git-aware for git-diff delta + impact)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='impact',
 )
 

@@ -17,10 +17,21 @@ from commands import COMMAND_REGISTRY
 
 
 def test_every_command_module_registers():
-    """Each commands/*.py module must register at least one CLI command."""
+    """Each commands/*.py module must register at least one CLI command.
+
+    Issue #195: a small allowlist of utility modules (kept for backward
+    compat with tests/scripts but not registered as commands) is excluded.
+    """
+    # Issue #195: migrate.py is a utility wrapper around
+    # PersistentRegistry.migrate_from_json, kept so existing tests that
+    # import cmd_migrate continue to work. It does NOT register a command
+    # (migrate was dropped per the consolidation).
+    _UTILITY_MODULES = {"migrate"}
     missing = []
     for module_path in sorted(COMMANDS_DIR.glob("*.py")):
         if module_path.name == "__init__.py":
+            continue
+        if module_path.stem in _UTILITY_MODULES:
             continue
 
         module_name = f"commands.{module_path.stem}"

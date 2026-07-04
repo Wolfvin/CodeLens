@@ -82,4 +82,6 @@ register_command(
     "Query the code graph with a Cypher-subset query (MATCH/WHERE/RETURN/LIMIT)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='graph',
 )

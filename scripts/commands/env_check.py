@@ -15,4 +15,10 @@ def execute(args, workspace):
     return check_env_vars(workspace, var_name=args.var_name)
 
 
-register_command("env-check", "Audit environment variables", add_args, execute)
+register_command("env-check", "Audit environment variables", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='doctor',
+
+)

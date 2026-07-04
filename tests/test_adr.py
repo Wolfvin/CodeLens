@@ -393,6 +393,7 @@ class TestManageAdrDispatcher:
 # ─── CLI command registration ──────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="adr command dropped in issue #195 consolidation (adr.py deleted; adr_engine still tested above)")
 class TestCliCommandRegistration:
     """The ``adr`` command must auto-register from commands/adr.py."""
 
@@ -425,6 +426,7 @@ class TestCliCommandRegistration:
 # ─── MCP tool registration ─────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="adr command + manage-adr MCP tool dropped in issue #195 consolidation")
 class TestMcpToolRegistration:
     """The ``manage-adr`` MCP tool must be statically defined."""
 
@@ -486,6 +488,7 @@ class TestFileHeaders:
         assert "# @ENTRY:" in head
 
     def test_adr_command_has_file_header(self):
+        pytest.skip("adr.py deleted in issue #195 consolidation")
         path = os.path.join(SCRIPT_DIR, "commands", "adr.py")
         with open(path, "r", encoding="utf-8") as f:
             head = f.read(500)

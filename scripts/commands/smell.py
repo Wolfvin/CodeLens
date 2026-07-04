@@ -42,4 +42,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("smell", "Detect code smells across workspace", add_args, execute)
+register_command("smell", "Detect code smells across workspace", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='audit',
+
+)

@@ -17,4 +17,10 @@ def execute(args, workspace):
     return audit_regex_patterns(workspace, severity=args.severity, max_files=args.max_files)
 
 
-register_command("regex-audit", "Audit regex for ReDoS and issues", add_args, execute)
+register_command("regex-audit", "Audit regex for ReDoS and issues", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='security',
+
+)

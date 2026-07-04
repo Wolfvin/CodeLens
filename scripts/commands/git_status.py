@@ -134,4 +134,6 @@ register_command(
     "Show git-aware scan state (SHA, branch, changed files, rescan recommendation)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='history',
 )

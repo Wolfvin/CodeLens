@@ -1,84 +1,208 @@
-"""context command — DEPRECATED alias for ``query``.
+"""context command — symbol & codebase context (issue #195 consolidation).
 
-The ``context <symbol>`` command returned a subset of what
-``query <symbol>`` already provides (code + callers + callees + quality
-metrics). It added no new information, so it was redundant (issue #99).
+Umbrella command that absorbs:
+  - context   (rich symbol context — legacy, was a query subset)
+  - outline   (file structure outline)
+  - trace     (deep call chain from a symbol)
+  - orient    (10-second codebase orientation brief)
 
-``context`` still works for backward compatibility but prints a
-deprecation warning to stderr and delegates to ``query``'s handler with
-the same args. It will be removed in a future release — switch to
-``codelens query``.
+Usage:
+    codelens context <workspace>                          # orient (default)
+    codelens context <workspace> --check orient           # explicit orient
+    codelens context <workspace> --check outline --file src/app.ts
+    codelens context <workspace> --check trace --name handleAuth
+    codelens context <workspace> --check context --name handleAuth
+
+When --check is omitted, defaults to ``orient`` (the broadest useful default
+for "give me context on this codebase"). Pass ``--name`` for symbol-specific
+checks (trace, context).
+
+Output: ``{"s":"ok", "st":{...}, "r":[...]}``.
 """
 
+# @WHO:   scripts/commands/context.py
+# @WHAT:  Umbrella command for codebase/symbol context.
+# @PART:  commands
+# @ENTRY: execute()
+
+import argparse
+import importlib
 import sys
+from typing import Any, Dict, List
 
 from commands import register_command
 
-# Deprecation notice — printed once per invocation to stderr (NOT stdout,
-# which is reserved for JSON/machine-readable output). Surfaced in both
-# interactive and CI usage so users notice and migrate before the alias
-# is removed.
-_DEPRECATION_WARNING = (
-    "DEPRECATED: codelens context is renamed to codelens query. "
-    "Use query instead.\n"
-)
+
+_CHECKS = {
+    "context": {
+        "module": "commands.query",  # legacy context delegated to query
+        "help": "Rich symbol context (callers, callees, metrics)",
+    },
+    "outline": {
+        "module": "commands.outline",
+        "help": "File structure outline",
+    },
+    "trace": {
+        "module": "commands.trace",
+        "help": "Deep call chain from a symbol",
+    },
+    "orient": {
+        "module": "commands.orient",
+        "help": "10-second codebase orientation brief",
+    },
+}
+
+ALL_CHECKS = list(_CHECKS.keys())
 
 
 def add_args(parser):
-    """Register context (deprecated alias) arguments.
-
-    Kept compatible with the legacy ``context`` interface so existing
-    scripts keep parsing. Flags that ``query`` does not understand
-    (``--context-lines``, ``--no-code``) are accepted but ignored —
-    output now comes from ``query``.
-    """
-    parser.add_argument("name", help="Symbol name")
+    """Add context-specific arguments to the parser."""
+    parser.formatter_class = argparse.RawDescriptionHelpFormatter
+    parser.epilog = (
+        "Sub-analyses (issue #195):\n"
+        "  context   Rich symbol context (callers, callees, metrics)\n"
+        "  outline   File structure outline\n"
+        "  trace     Deep call chain from a symbol\n"
+        "  orient    10-second codebase orientation brief\n"
+        "\n"
+        "Examples:\n"
+        "  codelens context .                                  # orient (default)\n"
+        "  codelens context . --check outline --file src/app.ts\n"
+        "  codelens context . --check trace --name handleAuth\n"
+        "  codelens context . --check context --name handleAuth\n"
+    )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--domain", choices=["frontend", "backend", "auto"], default="auto",
-                        help="Domain")
-    parser.add_argument("--context-lines", type=int, default=5,
-                        help="Lines of code context around symbol (default 5)")
-    parser.add_argument("--no-code", action="store_true", help="Skip source code in output")
+    parser.add_argument("--check", default=None,
+                        help=f"Comma-separated sub-analyses. "
+                             f"Choices: {', '.join(ALL_CHECKS)}. Default: orient.")
+    parser.add_argument("--name", default=None,
+                        help="context/trace: symbol name to analyze")
+    parser.add_argument("--file", default=None,
+                        help="outline: specific file path")
+    parser.add_argument("--all", dest="all_files", action="store_true", default=False,
+                        help="outline: outline all files")
+    parser.add_argument("--detail", default=None,
+                        help="outline: minimal|normal|full")
+    parser.add_argument("--direction", default=None,
+                        help="trace: up|down|both (default up)")
+    parser.add_argument("--depth", type=int, default=None,
+                        help="trace: max call depth (default 10)")
+    parser.add_argument("--domain", default=None,
+                        help="context/trace: frontend|backend|auto")
+    parser.add_argument("--top", type=int, default=None, metavar="N",
+                        help="orient: top-N start-here files (default 8)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="trace/outline: result limit")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="trace/outline: pagination offset")
+
+
+def _parse_checks(check_arg: str) -> List[str]:
+    if not check_arg:
+        return ["orient"]  # sensible default for "give me context on this codebase"
+    parts = [c.strip() for c in check_arg.split(",") if c.strip()]
+    invalid = [p for p in parts if p not in _CHECKS]
+    if invalid:
+        print(
+            f"[CodeLens] context: unknown --check category '{','.join(invalid)}'. "
+            f"Valid: {', '.join(ALL_CHECKS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return parts or ["orient"]
+
+
+def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
+    ns = argparse.Namespace()
+    for attr in ("format", "top", "max_tokens", "lite", "deep", "db_path",
+                 "diff_base", "diff_scope", "disable_suppression",
+                 "codelens_ignore_pattern"):
+        setattr(ns, attr, getattr(base_args, attr, None))
+    ns.workspace = getattr(base_args, "workspace", None)
+    if check_name == "context":
+        # context delegates to query.execute — needs name + file + domain.
+        ns.name = getattr(base_args, "name", None)
+        ns.file = getattr(base_args, "file", None)
+        domain = getattr(base_args, "domain", None)
+        ns.domain = None if domain == "auto" else domain
+    elif check_name == "outline":
+        ns.file = getattr(base_args, "file", None)
+        ns.detail = getattr(base_args, "detail", None) or "normal"
+        ns.all_files = getattr(base_args, "all_files", False)
+        ns.limit = getattr(base_args, "limit", None) or 20
+        ns.offset = getattr(base_args, "offset", 0)
+    elif check_name == "trace":
+        ns.name = getattr(base_args, "name", None)
+        ns.direction = getattr(base_args, "direction", None) or "up"
+        ns.depth = getattr(base_args, "depth", None) or 10
+        ns.domain = getattr(base_args, "domain", None)
+        ns.limit = getattr(base_args, "limit", None) or 20
+        ns.offset = getattr(base_args, "offset", 0)
+        ns.max_results = 1000
+        ns.use_graph = True
+    elif check_name == "orient":
+        # orient reads top via getattr; reuse the base value if set.
+        pass  # ns.top already set above via carry-over
+    return ns
 
 
 def execute(args, workspace):
-    """Execute the deprecated context command.
+    """Run one or more context sub-analyses and merge results.
 
-    Prints a deprecation warning to stderr, then delegates to
-    ``query``'s handler with the same args.
-
-    Args:
-        args: Parsed argparse namespace (``name``, ``workspace``, ...).
-        workspace: Resolved workspace root path.
-
-    Returns:
-        Dict with the query result.
+    @FLOW:    CONTEXT_DISPATCH
+    @CALLS:   _parse_checks() -> List[str]
+              _build_namespace() -> argparse.Namespace
+              commands.<sub>.execute() -> dict per sub
+    @MUTATES: nothing (read-only)
     """
-    print(_DEPRECATION_WARNING, file=sys.stderr, end="")
+    checks = _parse_checks(getattr(args, "check", None))
+    results: List[Dict[str, Any]] = []
+    stats: Dict[str, Any] = {"checks_run": 0, "checks_failed": 0}
 
-    # Lazy import to avoid module-load-order coupling between command
-    # modules (commands/__init__.py auto-imports all of them in sorted
-    # order, and ``context`` sorts before ``query``).
-    from commands import query as query_cmd
+    for check_name in checks:
+        spec = _CHECKS[check_name]
+        try:
+            mod = importlib.import_module(spec["module"])
+            sub_args = _build_namespace(args, check_name)
+            # Special case: orient has its own text-mode printing; force json
+            # so the umbrella can merge it.
+            if check_name == "orient":
+                if not getattr(sub_args, "format", None):
+                    sub_args.format = "json"
+            sub_result = mod.execute(sub_args, workspace)
+            if not isinstance(sub_result, dict):
+                sub_result = {"status": "ok", "result": sub_result}
+            sub_result["_check"] = check_name
+            results.append(sub_result)
+            stats["checks_run"] += 1
+        except Exception as exc:
+            stats["checks_failed"] += 1
+            stats["checks_run"] += 1
+            results.append({
+                "_check": check_name,
+                "s": "error",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+            print(
+                f"[CodeLens] context: --check {check_name} failed: {exc}",
+                file=sys.stderr,
+            )
 
-    # Normalize args for query compatibility. ``query.execute`` reads
-    # ``args.file`` directly and treats ``args.domain`` of None as
-    # "search both domains". ``context`` allowed ``--domain auto``
-    # (default) which query does not understand — map it to None.
-    # query uses getattr-with-default for ``all``/``limit``/``fuzzy`` so
-    # those are safe, but ``file`` must exist as an attribute.
-    if not hasattr(args, "file"):
-        args.file = None
-    if getattr(args, "domain", None) == "auto":
-        args.domain = None
-
-    return query_cmd.execute(args, workspace)
+    return {
+        "s": "ok" if stats["checks_failed"] == 0 else "partial",
+        "st": {
+            "checks_requested": len(checks),
+            **stats,
+        },
+        "r": results,
+    }
 
 
 register_command(
     "context",
-    "DEPRECATED — use `query` instead",
+    "Codebase & symbol context: orient (default) / outline / trace / context (issue #195)",
     add_args,
     execute,
 )

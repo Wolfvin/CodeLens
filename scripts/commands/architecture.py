@@ -72,4 +72,6 @@ register_command(
     "entry points, packages, routes, hotspots, total symbols)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='summary',
 )

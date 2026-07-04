@@ -233,4 +233,6 @@ register_command(
     "Compute architecture metrics (fan-in/out, instability, god-module detection) from graph",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='summary',
 )

@@ -144,4 +144,6 @@ register_command(
     "List files whose index entry is stale (issue #66 Phase 1)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='audit',
 )

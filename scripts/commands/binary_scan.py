@@ -853,5 +853,7 @@ register_command(
     "binary-scan",
     "Scan for binary/compiled artifacts with reverse-engineering analysis (superset of artifact-scan)",
     add_args,
-    execute
+    execute,
+    hidden=True,
+    deprecated_alias_for='security',
 )

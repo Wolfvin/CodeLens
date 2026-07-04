@@ -23,4 +23,8 @@ def execute(args, workspace):
     )
 
 
-register_command("test-map", "Map test coverage for functions", add_args, execute)
+register_command("test-map", "Map test coverage for functions", add_args, execute,
+
+hidden=True,
+
+)

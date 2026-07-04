@@ -82,4 +82,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("trace", "Trace deep call chain from a symbol", add_args, execute)
+register_command("trace", "Trace deep call chain from a symbol", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='context',
+
+)

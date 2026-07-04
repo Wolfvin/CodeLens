@@ -75,23 +75,37 @@ def get_command_count() -> int:
 
     This is the single source of truth. Every doc, metadata file, and test
     sentinel must reconcile to this number.
+
+    Issue #195: only counts visible (non-hidden) commands. Deprecated
+    aliases are still in ``COMMAND_REGISTRY`` so they remain callable for
+    backward compat, but they don't inflate the headline count.
     """
-    return len(COMMAND_REGISTRY)
+    return sum(1 for info in COMMAND_REGISTRY.values()
+               if not info.get("hidden", False))
 
 
 def get_mcp_counts() -> Tuple[int, int, int]:
     """Return ``(total, static, dynamic)`` MCP tool counts.
 
-    - ``total``   = every command except the long-running exclusions
+    - ``total``   = every visible command except the long-running exclusions
                     (``watch`` + ``serve``)
-    - ``static``  = commands with an explicit schema in
-                    ``mcp_server._TOOL_DEFINITIONS``
+    - ``static``  = ``_TOOL_DEFINITIONS`` entries whose command name is
+                    a visible (non-hidden) command (issue #195: static
+                    tool definitions for hidden deprecated aliases are
+                    excluded so they don't inflate the count)
     - ``dynamic`` = ``total - static`` (auto-discovered from COMMAND_REGISTRY)
+
+    Issue #195: hidden deprecated aliases are excluded — they are not
+    exposed as MCP tools (the umbrella commands are).
     """
     if not _MCP_AVAILABLE:
         return (0, 0, 0)
-    total = sum(1 for name in COMMAND_REGISTRY if name not in _MCP_EXCLUDED_COMMANDS)
-    static = len(_TOOL_DEFINITIONS)
+    visible_names = {name for name, info in COMMAND_REGISTRY.items()
+                     if name not in _MCP_EXCLUDED_COMMANDS
+                     and not info.get("hidden", False)}
+    total = len(visible_names)
+    # Only count static tools whose command is visible.
+    static = sum(1 for name in _TOOL_DEFINITIONS if name in visible_names)
     dynamic = total - static
     return (total, static, dynamic)
 

@@ -42,4 +42,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("symbols", "Search symbols in registry by name", add_args, execute)
+register_command("symbols", "Search symbols in registry by name", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='search',
+
+)

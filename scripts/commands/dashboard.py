@@ -86,4 +86,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("dashboard", "Generate HTML visualization dashboard", add_args, execute)
+register_command("dashboard", "Generate HTML visualization dashboard", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='summary',
+
+)
