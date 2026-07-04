@@ -621,3 +621,208 @@ class TestIssue176TypeScriptAffected:
         assert result["workspace"] == os.path.abspath(ts_workspace)
         assert "auth/google-auth-cache.ts" in result["changed_files"]
         assert result["unresolved"] == []
+
+
+# ─── Issue #189: BFS never starts when import parser misses TS patterns ──
+#
+# PR #184 fixed the workspace-as-first-arg heuristic so the existing
+# ts_workspace fixture (single-line `import { x } from './y'`) works. But
+# `_parse_js_imports` still missed three common TS/JS import shapes:
+#
+#   1. Multi-line imports — `import {\n  foo,\n} from './bar'`
+#      Root cause: regex used `.*?` which doesn't cross newlines.
+#   2. Side-effect imports — `import './polyfills'` (no `from` clause).
+#      Root cause: regex required `from`.
+#   3. Re-exports — `export { x } from './bar'`, `export * from './bar'`.
+#      Root cause: regex only matched `import`, not `export ... from`.
+#
+# When the parser misses an import, the reverse_graph loses an edge. If the
+# changed file's only inbound edge was the missed import, BFS finds no
+# dependents and `affected_count` stays at 0 — even though real dependents
+# exist. This is the "BFS never starts" symptom described in issue #189.
+
+
+class TestIssue189ImportParserPatterns:
+    """Regression tests for issue #189: `_parse_js_imports` must handle
+    multi-line imports, side-effect imports, and re-exports — otherwise
+    `_build_import_graph` produces an incomplete reverse_graph and
+    `codelens affected` returns ``affected_count: 0`` even when real
+    dependents exist.
+    """
+
+    @pytest.fixture
+    def ts_workspace_multiline(self, tmp_path):
+        """TS workspace where login.ts uses a multi-line import statement.
+
+        Mirrors the existing `ts_workspace` fixture but exercises the
+        multi-line import shape that real-world TS code uses pervasively
+        (Prettier default, ESLint `multi-line` rule, etc.).
+        """
+        ws = tmp_path / "ws_multiline"
+        ws.mkdir()
+        (ws / "auth").mkdir()
+        (ws / "tests").mkdir()
+        (ws / "auth" / "google-auth-cache.ts").write_text(
+            "export const cache = new Map<string, string>();\n"
+            "export function getCachedToken(key: string): string | null {\n"
+            "  return cache.get(key) || null;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (ws / "auth" / "login.ts").write_text(
+            "import {\n"
+            "  getCachedToken,\n"
+            "} from './google-auth-cache';\n"
+            "export function login(user: string): boolean {\n"
+            "  const token = getCachedToken(user);\n"
+            "  return token !== null;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "login.test.ts").write_text(
+            "import { login } from '../auth/login';\n"
+            "test('login returns false for unknown user', () => {\n"
+            "  expect(login('unknown')).toBe(false);\n"
+            "});\n",
+            encoding="utf-8",
+        )
+        return str(ws)
+
+    @pytest.fixture
+    def ts_workspace_side_effect(self, tmp_path):
+        """TS workspace where app.ts has a side-effect import (no `from`)."""
+        ws = tmp_path / "ws_side_effect"
+        ws.mkdir()
+        (ws / "auth").mkdir()
+        (ws / "tests").mkdir()
+        (ws / "auth" / "polyfills.ts").write_text(
+            "export const POLYFILL_VERSION = '1.0.0';\n",
+            encoding="utf-8",
+        )
+        (ws / "auth" / "app.ts").write_text(
+            "import './polyfills';\n"
+            "export function app(): string { return 'ok'; }\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "app.test.ts").write_text(
+            "import { app } from '../auth/app';\n"
+            "test('app works', () => { expect(app()).toBe('ok'); });\n",
+            encoding="utf-8",
+        )
+        return str(ws)
+
+    @pytest.fixture
+    def ts_workspace_reexport(self, tmp_path):
+        """TS workspace using `export { x } from './core'` (barrel file)."""
+        ws = tmp_path / "ws_reexport"
+        ws.mkdir()
+        (ws / "auth").mkdir()
+        (ws / "tests").mkdir()
+        (ws / "auth" / "core.ts").write_text(
+            "export const TOKEN_KEY = 'cl_token';\n",
+            encoding="utf-8",
+        )
+        (ws / "auth" / "index.ts").write_text(
+            "export { TOKEN_KEY } from './core';\n",
+            encoding="utf-8",
+        )
+        (ws / "tests" / "index.test.ts").write_text(
+            "import { TOKEN_KEY } from '../auth/index';\n"
+            "test('key is string', () => { expect(typeof TOKEN_KEY).toBe('string'); });\n",
+            encoding="utf-8",
+        )
+        return str(ws)
+
+    def test_multiline_import_resolves_and_bfs_finds_dependents(
+        self, ts_workspace_multiline,
+    ):
+        """Multi-line `import {\n foo \n} from './bar'` must be parsed.
+
+        Without the fix, `_parse_js_imports` skipped this import (regex
+        `.*?` did not cross newlines), `reverse_graph` had no edge from
+        `google-auth-cache.ts` to `login.ts`, and `affected_count` was 0.
+        """
+        result = get_affected_files(
+            changed_files=["auth/google-auth-cache.ts"],
+            workspace=ts_workspace_multiline,
+            depth=5,
+        )
+        assert result["status"] == "ok"
+        assert result["unresolved"] == [], (
+            "changed file must resolve; unresolved means graph keys are "
+            "incomplete (the BFS-never-starts symptom from issue #189)"
+        )
+        assert result["stats"]["affected_count"] >= 1, (
+            "BFS must find the transitive test dependent via the multi-line "
+            "import in login.ts"
+        )
+        assert "tests/login.test.ts" in result["affected"]
+
+    def test_side_effect_import_resolves_and_bfs_finds_dependents(
+        self, ts_workspace_side_effect,
+    ):
+        """`import './polyfills'` (no `from`) must be parsed as an edge."""
+        result = get_affected_files(
+            changed_files=["auth/polyfills.ts"],
+            workspace=ts_workspace_side_effect,
+            depth=5,
+        )
+        assert result["status"] == "ok"
+        assert result["unresolved"] == []
+        assert result["stats"]["affected_count"] >= 1, (
+            "side-effect imports create a real dependency edge — BFS must "
+            "find the transitive test dependent"
+        )
+        assert "tests/app.test.ts" in result["affected"]
+
+    def test_reexport_creates_dependency_edge(
+        self, ts_workspace_reexport,
+    ):
+        """`export { x } from './core'` must add core.ts → index.ts edge."""
+        result = get_affected_files(
+            changed_files=["auth/core.ts"],
+            workspace=ts_workspace_reexport,
+            depth=5,
+        )
+        assert result["status"] == "ok"
+        assert result["unresolved"] == []
+        assert result["stats"]["affected_count"] >= 1, (
+            "re-exports create a real dependency edge — BFS must find the "
+            "transitive test dependent via the barrel file"
+        )
+        assert "tests/index.test.ts" in result["affected"]
+
+    def test_existing_ts_workspace_fixture_still_finds_affected(self, ts_workspace):
+        """DoD sanity check: the existing fixture from PR #184 must still
+        return ``affected_count >= 1`` after the parser changes.
+
+        This is the explicit Definition-of-Done assertion from issue #189:
+        "Use existing ts_workspace fixture in tests/test_affected_command.py
+        (from PR #184) and assert affected_count >= 1".
+        """
+        result = get_affected_files(
+            changed_files=["auth/google-auth-cache.ts"],
+            workspace=ts_workspace,
+            depth=5,
+        )
+        assert result["status"] == "ok"
+        assert result["unresolved"] == []
+        assert result["stats"]["affected_count"] >= 1
+        assert "tests/login.test.ts" in result["affected"]
+
+    def test_multiline_include_source_returns_all_dependents(
+        self, ts_workspace_multiline,
+    ):
+        """`--include-source` must also surface non-test dependents reached
+        via multi-line imports (cross-check against the existing
+        `test_ts_include_source_returns_all_dependents`).
+        """
+        result = get_affected_files(
+            changed_files=["auth/google-auth-cache.ts"],
+            workspace=ts_workspace_multiline,
+            depth=5,
+            include_source=True,
+        )
+        affected = set(result["affected"])
+        assert "auth/login.ts" in affected
+        assert "tests/login.test.ts" in affected
