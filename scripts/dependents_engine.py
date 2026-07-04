@@ -750,7 +750,18 @@ def _resolve_relative_import(
     for ext in extensions:
         full_path = os.path.join(workspace, rel_path + ext)
         if os.path.isfile(full_path):
-            return os.path.relpath(full_path, workspace)
+            return os.path.relpath(full_path, workspace).replace(chr(92), "/")
+
+    # TypeScript ESM: imports use .js extension but file on disk is .ts.
+    # Strip .js/.mjs/.cjs and retry with TS extensions. (closes #189)
+    for js_ext in (".js", ".mjs", ".cjs"):
+        if rel_path.endswith(js_ext):
+            base = rel_path[:-len(js_ext)]
+            for ts_ext in (".ts", ".tsx", ".d.ts"):
+                full_path = os.path.join(workspace, base + ts_ext)
+                if os.path.isfile(full_path):
+                    return os.path.relpath(full_path, workspace).replace(chr(92), "/")
+            break
 
     return None
 
