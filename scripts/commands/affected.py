@@ -158,6 +158,9 @@ def execute(args, workspace):
         }
 
     # Default + --json: return the full result dict (formatter handles output)
+    st = result.get("stats", {})
+    if st.get("affected_test_count", 0) == 0 and st.get("visited_total", 0) > 0:
+        result["note"] = "No test files found in dependents. Use --include-source to list all affected source files."
     return result
 
 
