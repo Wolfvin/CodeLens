@@ -223,4 +223,7 @@ def _generate_actionable_items(result):
 
 
 register_command("dataflow", "Trace data flow source→sink with cross-file call graph analysis",
-                  add_args, execute)
+                  add_args, execute,
+    hidden=True,
+    deprecated_alias_for='impact',
+    )

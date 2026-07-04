@@ -338,4 +338,5 @@ register_command(
     "Manage CodeLens plugins (install, list, search, update, info, validate)",
     add_args,
     execute,
+hidden=True,
 )

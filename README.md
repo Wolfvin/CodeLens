@@ -2,12 +2,12 @@
 
 > **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 78 CLI commands, an MCP server with 76 tools (56 static + 20 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
+CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 12 CLI commands, an MCP server with 12 tools (56 static + -44 dynamic), AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
 
 ## Features
 
-- **78 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
-- **MCP Server (76 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 56 statically-defined tools + 20 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
+- **12 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
+- **MCP Server (12 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 56 statically-defined tools + -44 dynamically discovered, every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
 - **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
 - **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
 - **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
@@ -76,102 +76,36 @@ python3 scripts/codelens.py query "myFunction" --lite
 
 ## Command Reference
 
-### Setup & Lifecycle (P0)
+CodeLens consolidates 78 legacy commands into **12 focused umbrella commands** (issue #195). Each umbrella command accepts a `--check <category>` flag to select a specific sub-analysis, or runs all sub-analyses by default. Legacy command names still work as deprecated aliases (backward compat for one version) but print a redirect warning to stderr.
 
-| Command | Description |
-|---------|-------------|
-| `init [workspace]` | Initialize `.codelens` config with auto-detected frameworks |
-| `scan [workspace] [--incremental] [--full] [--max-files N]` | Scan workspace and build registry |
-| `registry-validate [workspace]` | Validate registry vs file system |
-| `detect [workspace]` | Detect frameworks and show recommended config |
-| `watch [workspace] [--git-mode] [--interval SECS]` | Start file watcher (default: watchdog; `--git-mode` polls `git diff --name-only`) |
-| `git-status [workspace]` | Show git-aware scan state: HEAD SHA, last-indexed SHA, changed files, re-scan recommendation |
-| `migrate [workspace]` | Migrate JSON registry to SQLite persistent database |
-| `serve` | Start MCP server for AI agent integration (JSON-RPC over stdio) |
-| `lsp-status` | Check which LSP servers are available for `--deep` analysis |
+### The 12 Umbrella Commands
 
-### Pre-Write Safety (P0 — Always Use)
+| Command | Absorbs | Description |
+|---------|---------|-------------|
+| `scan [workspace] [--check scan\|init\|rescan]` | scan, init, rescan | Scan workspace and build registry. `--check init` writes config only; `--check rescan` is incremental. |
+| `search [workspace] "query" [--mode semantic\|symbol\|regex\|graph]` | symbols, semantic-query, query-graph, search | Unified search. Default mode is semantic (TF-IDF by meaning). `--mode symbol` for exact name lookup, `--mode regex` for code search, `--mode graph` for Cypher-subset queries. |
+| `context [workspace] [--check orient\|outline\|trace\|context]` | context, outline, trace, orient | Codebase & symbol context. Default `--check orient` gives a 10-second orientation brief. `--name <symbol>` required for trace/context sub-analyses. |
+| `deps [workspace] [--check affected\|dependents\|circular\|import-snapshot]` | affected, dependents, circular, import-snapshot | Dependency-graph intelligence. `--check affected` takes `--files`; `--check import-snapshot` takes `--input path.codelens.gz`. |
+| `audit [workspace] [--check dead-code\|complexity\|smell\|staleness\|perf-hint\|side-effect]` | dead-code, complexity, smell, staleness, god-module, perf-hint, side-effect | Code-quality audits. Default runs all checks. |
+| `security [workspace] [--check secrets\|vuln-scan\|taint\|binary-scan\|regex-audit]` | secrets, vuln-scan, taint, binary-scan, regex-audit | Security & vulnerability scans. Default runs all checks. |
+| `summary [workspace] [--check summary\|dashboard\|arch-metrics\|architecture]` | summary, dashboard, arch-metrics, architecture | Auto-summary, dashboards, architecture metrics. Default `--check summary` runs the legacy prioritized-findings aggregator. |
+| `impact [workspace] [--check impact\|diff\|dataflow]` | impact, diff, dataflow | Change-impact & dataflow analysis. Default `--check impact` takes `--name <symbol>`. |
+| `api-map [workspace] [--check api-map\|graph-schema]` | api-map, routes, graph-schema | API surface & graph schema introspection. Default `--check api-map`. |
+| `doctor [workspace] [--check doctor\|env-check\|lsp-status]` | doctor, env-check, lsp-status | Environment audit. Default `--check doctor` runs the full dependency audit. |
+| `history [workspace] [--check history\|ownership\|git-status]` | history, ownership, git-status | Historical trends, code ownership, git scan state. Default `--check history`. |
+| `graph [workspace] "Cypher query"` | query-graph (raw Cypher) | Raw Cypher-subset graph query for power users. Casual callers should prefer `search --mode graph`. |
 
-| Command | Description |
-|---------|-------------|
-| `query "name" [workspace] [--domain] [--file] [--fuzzy]` | Pre-write check: does this name already exist? |
-| `impact "name" [workspace] [--action modify\|delete]` | Change impact analysis |
-| `refactor-safe "name" [workspace] [--action rename\|move]` | Pre-flight rename/move safety check |
-| `guard [workspace] (--pre\|--post) --file PATH` | Pre/post-write verification for AI agents |
-| `check [workspace] [--severity ...] [--max-findings N]` | CI/CD quality gate — exits non-zero on failure |
+### Deprecated Aliases (backward compat, 1 version)
 
-### Search & Understanding (P1)
+All 40+ legacy command names (e.g. `codelens dead-code`, `codelens symbols`, `codelens trace`, `codelens secrets`, `codelens diff`, `codelens dashboard`, `codelens ownership`, `codelens git-status`, `codelens env-check`, `codelens lsp-status`, `codelens arch-metrics`, `codelens architecture`, `codelens impact`, `codelens dataflow`, `codelens circular`, `codelens affected`, `codelens dependents`, `codelens import-snapshot`, `codelens staleness`, `codelens perf-hint`, `codelens side-effect`, `codelens vuln-scan`, `codelens taint`, `codelens binary-scan`, `codelens regex-audit`, `codelens outline`, `codelens orient`, `codelens semantic-query`, `codelens query-graph`, `codelens graph-schema`, `codelens init`) are still callable but hidden from `--help`. Invoking any of them prints a deprecation warning to stderr that redirects to the new umbrella command.
 
-| Command | Description |
-|---------|-------------|
-| `search "pattern" [workspace] [--type] [--context] [--limit N] [--offset N]` | Regex search across workspace (paginated, default limit=20) |
-| `symbols "name" [workspace] [--fuzzy] [--limit N] [--offset N]` | Search symbol in registry (paginated) |
-| `trace "name" [workspace] [--direction up\|down\|both] [--depth N] [--limit N] [--offset N]` | Deep call chain tracing (paginated) |
-| `context "name" [workspace]` | Rich symbol context (definition, callers, callees) |
-| `outline [workspace] [--file] [--all] [--limit N] [--offset N]` | File structure outline (paginated) |
-| `missing-refs [workspace]` | Detect CSS/HTML mismatches |
-| `dependents "file" [workspace]` | Module-level import tracking |
-| `list [workspace] [--domain] [--filter] [--limit N] [--offset N]` | List entries with filter (paginated, default limit=20) |
-| `graph-schema [workspace]` | Return graph shape: node/edge counts, type distribution, indexes (issue #17) |
-| `ask "question"` | Ask a question in natural language (auto-dispatches to relevant commands) |
-| `summary [workspace] [--focus ...] [--detail ...]` | Auto-summary with prioritized findings (anti-overload) |
+### Dropped Commands (removed in issue #195)
 
-### Quality & Security (P0-P1)
+The following commands were removed entirely — broken, no value, or out of scope: `adr`, `a11y`, `handbook`, `ask`, `serve`, `sessions`, `watch`, `registry-validate`, `rule-test`, `rule-validate`, `artifact-scan`, `css-deep`, `debug-leak`, `detect`, `export-snapshot`, `refactor-safe`, `resolve-types`, `stack-trace`, `migrate` (as a command — utility module kept for tests), `benchmark`, `fix`, `self-analyze`, `guard`, `llm`, `memory`.
 
-| Command | Description |
-|---------|-------------|
-| `secrets [workspace] [--severity ...]` | Detect hardcoded API keys, passwords, tokens |
-| `vuln-scan [workspace] [--severity ...] [--offline] [--osv-ttl N] [--refresh] [--max-age Nh]` | Scan dependencies for known CVEs (OSV.dev + native audit). `--refresh` bypasses the OSV cache and forces fresh API calls; `--max-age Nh` treats cache entries older than N hours as stale for this run only (issue #30). Output includes a `cache_info` block (`last_refresh`, `age_hours`, `ttl_hours`, `is_stale`, `stale_packages`) so agents can decide whether to trust the cached CVE data. |
-| `deps-audit [workspace] [--severity ...] [--ecosystem PyPI\|npm\|crates.io] [--offline]` | Pure-Python dependency audit via OSV.dev batch API. Auto-detects `requirements.txt` / `pyproject.toml` / `Pipfile` (PyPI), `package.json` + lock files (npm), `Cargo.toml` + `Cargo.lock` (crates.io). Stores findings as `dependency_vuln` graph nodes linked via `HAS_VULN` edges (issue #158). |
-| `taint [workspace]` | Run AST-based taint analysis for vulnerability detection |
-| `dataflow [workspace] [--source] [--sink]` | Data flow taint analysis with cross-file call graph |
-| `env-check [workspace] [--var NAME]` | Audit environment variables |
-| `smell [workspace] [--categories ...] [--severity ...]` | Code smell detection with health score |
-| `complexity [workspace] [--name FN] [--threshold N]` | Cyclomatic/cognitive complexity scoring |
-| `dead-code [workspace] [--categories ...]` | Enhanced dead code detection |
-| `debug-leak [workspace] [--category ...]` | Detect leftover debug code |
-| `fix [workspace] [--apply]` | Auto-fix issues with confidence scoring (dry-run by default) |
+### Hidden Commands (pending BOS decision)
 
-### Architecture & Understanding (P1)
-
-| Command | Description |
-|---------|-------------|
-| `architecture [workspace] [--lite] [--no-cache]` | Single-call codebase overview for AI agents (languages, frameworks, entry points, packages, routes, hotspots, total symbols). `--lite` omits routes/packages/hotspots for <1k token orientation (issue #19) |
-| `entrypoints [workspace]` | Map execution entry points |
-| `api-map [workspace]` | Map REST/GraphQL/gRPC routes to handlers |
-| `state-map [workspace]` | Track global state management |
-| `diff [workspace]` | Compare registry snapshots |
-| `circular [workspace]` | Detect circular dependencies |
-| `graph-schema [workspace]` | Cheap graph-shape introspection: node/edge counts, type distribution, indexes (issue #17) |
-| `resolve-types [workspace]` | Manually trigger hybrid type resolution (import-aware CALLS edge refinement, issue #13) |
-| `handbook [workspace]` | Generate project handbook for AI agents |
-| `dashboard [workspace]` | Generate HTML visualization dashboard |
-| `history [workspace]` | Show historical trend data and charts |
-
-### Refactoring & Analysis (P2-P3)
-
-| Command | Description |
-|---------|-------------|
-| `side-effect [workspace] [--name FN]` | Pure vs impure function analysis |
-| `stack-trace "name" [workspace]` | Error propagation simulation |
-| `test-map [workspace]` | Test coverage mapping |
-| `config-drift [workspace]` | Dependency drift detection |
-| `type-infer [workspace]` | Lightweight type inference |
-| `ownership [workspace]` | Git blame code ownership |
-| `regex-audit [workspace]` | ReDoS-vulnerable regex auditing |
-| `a11y [workspace]` | Accessibility auditing (WCAG 2.1) |
-| `perf-hint [workspace] [--severity ...] [--category ...]` | Performance anti-pattern detection |
-| `css-deep [workspace]` | Deep CSS analysis (vars, keyframes, specificity) |
-
-### Advanced & Reverse Engineering (P2-P3)
-
-| Command | Description |
-|---------|-------------|
-| `analyze [workspace] [--focus ...] [--timeout SECS]` | Full repo analysis: init + scan + all engines in one command |
-| `binary-scan [workspace]` | Scan for binary/compiled artifacts with Tauri/Electron RE analysis |
-| `artifact-scan [workspace] [--deep]` | Scan for compiled/built artifacts (reverse engineering mode) |
-| `benchmark [workspace]` | Run accuracy and performance benchmarks |
-| `plugin <subcommand>` | Manage plugins: `install`, `list`, `search`, `update`, `info`, `validate` |
+The following 13 commands are not in any absorb list nor explicitly dropped. They are kept callable but hidden from `--help` pending a BOS decision on where they belong: `analyze`, `check`, `config-drift`, `deps-audit`, `entrypoints`, `lsp`, `list`, `missing-refs`, `plugin`, `query`, `state-map`, `test-map`, `type-infer`.
 
 ## Query Decision Rules
 
@@ -233,8 +167,8 @@ codelens/
 │   ├── changelog.md               # Older changelog (per-version highlights)
 │   └── agent-integration.md       # AI agent integration guide
 ├── scripts/
-│   ├── codelens.py                # CLI entry point (78 commands registered)
-│   ├── mcp_server.py              # MCP JSON-RPC server (76 tools)
+│   ├── codelens.py                # CLI entry point (12 commands registered)
+│   ├── mcp_server.py              # MCP JSON-RPC server (12 tools)
 │   ├── registry.py                # Registry read/write/build
 │   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
 │   ├── base_parser.py             # Base tree-sitter parser

@@ -13,4 +13,8 @@ def execute(args, workspace):
     return detect_config_drift(workspace)
 
 
-register_command("config-drift", "Detect dependency drift (package.json vs code)", add_args, execute)
+register_command("config-drift", "Detect dependency drift (package.json vs code)", add_args, execute,
+
+hidden=True,
+
+)

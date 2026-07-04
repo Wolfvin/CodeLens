@@ -8,15 +8,95 @@ from history_engine import list_snapshots, get_trend_data, compare_snapshots
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--check", default=None,
+                        help="Issue #195: comma-separated sub-analyses. "
+                             "Choices: history, ownership, git-status. Default: history.")
     parser.add_argument("--chart", action="store_true",
-                        help="Generate HTML trend chart")
+                        help="history: generate HTML trend chart")
     parser.add_argument("--list", action="store_true",
-                        help="List all available snapshots")
+                        help="history: list all available snapshots")
     parser.add_argument("--compare", nargs=2, metavar=("SNAPSHOT1", "SNAPSHOT2"),
-                        help="Compare two snapshots by filename")
+                        help="history: compare two snapshots by filename")
+    # ownership passthroughs
+    parser.add_argument("--file", default=None,
+                        help="ownership: file path filter")
+    parser.add_argument("--function", dest="function_name", default=None,
+                        help="ownership: function name filter")
 
 
-def execute(args, workspace):
+# Issue #195: sub-command dispatch table for the history umbrella.
+_HISTORY_SUBCOMMANDS = {
+    "history": None,  # handled inline
+    "ownership": "commands.ownership",
+    "git-status": "commands.git_status",
+}
+
+
+def _dispatch_subcommands(args, workspace, check_arg):
+    """Dispatch to one or more absorbed sub-commands per --check."""
+    import importlib as _il
+    import sys as _sys
+    parts = [c.strip() for c in check_arg.split(",") if c.strip()]
+    invalid = [p for p in parts if p not in _HISTORY_SUBCOMMANDS]
+    if invalid:
+        print(
+            f"[CodeLens] history: unknown --check category '{','.join(invalid)}'. "
+            f"Valid: {', '.join(_HISTORY_SUBCOMMANDS.keys())}",
+            file=_sys.stderr,
+        )
+        _sys.exit(1)
+    if not parts:
+        parts = ["history"]
+
+    results = []
+    checks_failed = 0
+    for check_name in parts:
+        try:
+            if check_name == "history":
+                sub_result = _run_legacy_history(args, workspace)
+            else:
+                mod = _il.import_module(_HISTORY_SUBCOMMANDS[check_name])
+                sub_args = _build_subnamespace(args, check_name)
+                sub_result = mod.execute(sub_args, workspace)
+            if not isinstance(sub_result, dict):
+                sub_result = {"status": "ok", "result": sub_result}
+            sub_result["_check"] = check_name
+            results.append(sub_result)
+        except Exception as exc:
+            checks_failed += 1
+            results.append({
+                "_check": check_name,
+                "s": "error",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+            print(f"[CodeLens] history: --check {check_name} failed: {exc}",
+                  file=_sys.stderr)
+
+    return {
+        "s": "ok" if checks_failed == 0 else "partial",
+        "st": {"checks_requested": len(parts), "checks_failed": checks_failed},
+        "r": results,
+    }
+
+
+def _build_subnamespace(base_args, check_name):
+    """Build a synthetic namespace for the dispatched sub-command."""
+    import argparse as _ap
+    ns = _ap.Namespace()
+    for attr in ("format", "top", "max_tokens", "lite", "deep", "db_path",
+                 "diff_base", "diff_scope", "disable_suppression",
+                 "codelens_ignore_pattern"):
+        setattr(ns, attr, getattr(base_args, attr, None))
+    ns.workspace = getattr(base_args, "workspace", None)
+    if check_name == "ownership":
+        ns.file = getattr(base_args, "file", None)
+        ns.function_name = getattr(base_args, "function_name", None)
+    return ns
+
+
+def _run_legacy_history(args, workspace):
+    """Run the original history.execute logic (issue #195: absorbed)."""
     should_chart = getattr(args, 'chart', False)
     should_list = getattr(args, 'list', False)
     compare = getattr(args, 'compare', None)
@@ -49,6 +129,14 @@ def execute(args, workspace):
 
     # Default: show trend table
     return get_trend_data(workspace)
+
+
+def execute(args, workspace):
+    # Issue #195: dispatch to absorbed sub-commands when --check is set.
+    check_arg = getattr(args, "check", None)
+    if check_arg:
+        return _dispatch_subcommands(args, workspace, check_arg)
+    return _run_legacy_history(args, workspace)
 
 
 def _generate_trend_chart(workspace: str) -> dict:

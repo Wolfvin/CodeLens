@@ -17,4 +17,10 @@ def execute(args, workspace):
     return detect_circular(workspace, domain=args.domain, max_cycles=args.max_cycles)
 
 
-register_command("circular", "Detect circular dependencies", add_args, execute)
+register_command("circular", "Detect circular dependencies", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='deps',
+
+)

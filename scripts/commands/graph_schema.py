@@ -124,4 +124,6 @@ register_command(
     "Return the shape of the code graph (node/edge counts, type distribution, indexes)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='api-map',
 )

@@ -1578,7 +1578,13 @@ class MCPServer:
         GraphML XML form for graph-producing commands.
         """
         tools = []
+        # Issue #195: skip static tool definitions for hidden deprecated
+        # aliases — only the 12 umbrella commands are exposed as MCP tools.
+        from commands import COMMAND_REGISTRY as _cr
         for cmd_name, tool_def in sorted(_TOOL_DEFINITIONS.items()):
+            _info = _cr.get(cmd_name)
+            if _info and _info.get("hidden", False):
+                continue
             schema = _inject_format_enum(tool_def["parameters"])
             tools.append({
                 "name": f"codelens_{cmd_name.replace('-', '_')}",
@@ -1597,7 +1603,11 @@ class MCPServer:
         return {"tools": tools}
 
     def _get_dynamic_tools(self) -> List[Dict[str, Any]]:
-        """Dynamically generate tool definitions for any commands not in _TOOL_DEFINITIONS."""
+        """Dynamically generate tool definitions for any commands not in _TOOL_DEFINITIONS.
+
+        Issue #195: hidden deprecated aliases are skipped — only the 12
+        umbrella commands are exposed as MCP tools.
+        """
         tools = []
         try:
             from commands import get_all_commands
@@ -1607,6 +1617,8 @@ class MCPServer:
                     continue
                 if cmd_name in ("watch", "serve"):
                     continue  # Skip long-running commands
+                if cmd_info.get("hidden", False):
+                    continue  # Skip deprecated aliases (issue #195)
                 tool_name = f"codelens_{cmd_name.replace('-', '_')}"
                 tools.append({
                     "name": tool_name,
@@ -2343,8 +2355,9 @@ class MCPServer:
 
         def _watch_loop():
             """Background thread: poll for file changes and invalidate cache."""
-            from commands.watch import _watch_polling
-            # Use the polling watcher's change detection
+            # Issue #195: was ``from commands.watch import _watch_polling``
+            # (unused import — the loop below is self-contained). Removed
+            # so commands/watch.py can be deleted without breaking MCP.
             last_mtimes: Dict[str, float] = {}
             from utils import DEFAULT_IGNORE_DIRS
             _WATCH_EXTENSIONS = frozenset({

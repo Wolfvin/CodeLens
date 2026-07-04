@@ -40,20 +40,28 @@ def _run_sync_check() -> subprocess.CompletedProcess:
 
 
 def test_command_count_helper_matches_runtime_registry():
-    """The sync helper's reported count must equal len(COMMAND_REGISTRY).
+    """The sync helper's reported count must equal the visible (non-hidden) count.
 
-    This guards against the helper accidentally hardcoding a different number.
+    Issue #195: ``get_command_count`` counts only visible umbrella commands
+    (12), not the hidden deprecated aliases still present in
+    ``COMMAND_REGISTRY`` for backward compat. The headline count must match
+    what ``--help`` and ``--command-count`` show.
     """
     sys.path.insert(0, _SCRIPTS_DIR)
-    from commands import COMMAND_REGISTRY  # type: ignore
+    from commands import COMMAND_REGISTRY, get_visible_commands  # type: ignore
     from sync_command_count import get_command_count  # type: ignore
 
-    assert get_command_count() == len(COMMAND_REGISTRY)
+    visible = get_visible_commands()
+    assert get_command_count() == len(visible), (
+        f"get_command_count()={get_command_count()} != "
+        f"len(visible)={len(visible)} (total registry={len(COMMAND_REGISTRY)})"
+    )
 
 
 def test_mcp_tool_count_math_is_consistent():
-    """MCP total = (commands not in {watch, serve}); static + dynamic = total.
+    """MCP total = (visible commands not in {watch, serve}); static + dynamic = total.
 
+    Issue #195: hidden deprecated aliases are excluded from MCP tool exposure.
     Catches the kind of drift that caused issue #38's MCP tool count
     inconsistency (README said 55, SKILL said 54, SKILL-QUICK said 58).
     """
@@ -62,10 +70,15 @@ def test_mcp_tool_count_math_is_consistent():
     from sync_command_count import get_mcp_counts, _MCP_EXCLUDED_COMMANDS  # type: ignore
 
     total, static, dynamic = get_mcp_counts()
-    expected_total = sum(1 for c in COMMAND_REGISTRY if c not in _MCP_EXCLUDED_COMMANDS)
+    # Expected = visible commands (non-hidden) minus excluded long-running ones.
+    expected_total = sum(
+        1 for name, info in COMMAND_REGISTRY.items()
+        if name not in _MCP_EXCLUDED_COMMANDS
+        and not info.get("hidden", False)
+    )
     assert total == expected_total, (
         f"MCP total {total} != expected {expected_total} "
-        f"(commands minus excluded {sorted(_MCP_EXCLUDED_COMMANDS)})"
+        f"(visible commands minus excluded {sorted(_MCP_EXCLUDED_COMMANDS)})"
     )
     assert static + dynamic == total, (
         f"static({static}) + dynamic({dynamic}) != total({total})"

@@ -85,4 +85,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("dead-code", "Enhanced dead code detection", add_args, execute)
+register_command("dead-code", "Enhanced dead code detection", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='audit',
+
+)

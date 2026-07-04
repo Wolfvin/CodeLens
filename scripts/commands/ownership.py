@@ -20,4 +20,10 @@ def execute(args, workspace):
     )
 
 
-register_command("ownership", "Git blame-based code ownership", add_args, execute)
+register_command("ownership", "Git blame-based code ownership", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='history',
+
+)

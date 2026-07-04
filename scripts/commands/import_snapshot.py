@@ -175,4 +175,6 @@ register_command(
     "use --merge to deduplicate with the existing graph (issue #12)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='deps',
 )

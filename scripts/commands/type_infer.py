@@ -20,4 +20,8 @@ def execute(args, workspace):
     )
 
 
-register_command("type-infer", "Lightweight type inference for JS/Python", add_args, execute)
+register_command("type-infer", "Lightweight type inference for JS/Python", add_args, execute,
+
+hidden=True,
+
+)

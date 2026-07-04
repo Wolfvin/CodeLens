@@ -27,4 +27,10 @@ def execute(args, workspace):
                               max_files=args.max_files)
 
 
-register_command("complexity", "Compute cyclomatic/cognitive complexity", add_args, execute)
+register_command("complexity", "Compute cyclomatic/cognitive complexity", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='audit',
+
+)

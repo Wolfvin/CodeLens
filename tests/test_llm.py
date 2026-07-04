@@ -687,6 +687,7 @@ class TestLLMTool:
 # ─── CLI command ───────────────────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="llm command dropped in issue #195 consolidation (llm_framework.py deleted)")
 class TestLlmCommand:
     """The ``codelens llm`` CLI command is registered and dispatches correctly."""
 
@@ -782,6 +783,7 @@ class TestLlmCommand:
 # ─── CLI subprocess smoke test ─────────────────────────────────────────────
 
 
+@pytest.mark.skip(reason="llm command dropped in issue #195 consolidation — subprocess invocation will fail")
 class TestCLISmoke:
     """End-to-end: invoke ``codelens llm <subcommand>`` as a real subprocess."""
 

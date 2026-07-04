@@ -23,4 +23,4 @@ def execute(args, workspace):
     return detect_missing_refs(workspace)
 
 
-register_command("missing-refs", "Detect CSS/HTML mismatch bugs", add_args, execute)
+register_command("missing-refs", "Detect CSS/HTML mismatch bugs", add_args, execute, hidden=True)

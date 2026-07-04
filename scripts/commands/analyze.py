@@ -143,7 +143,7 @@ def analyze_repository(
     # ─── Phase 2: Project Identity ───────────────────────────
 
     try:
-        from commands.handbook import _extract_project_identity
+        from handbook_helpers import _extract_project_identity
         identity = _extract_project_identity(workspace)
         result["identity"] = {
             "name": identity.get("name", os.path.basename(workspace)),
@@ -859,4 +859,5 @@ register_command(
     "Full repository analysis: init + scan + all engines in one command (v6.0)",
     add_args,
     execute,
+hidden=True,
 )

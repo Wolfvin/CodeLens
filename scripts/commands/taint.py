@@ -131,4 +131,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("taint", "Run AST-based taint analysis for vulnerability detection", add_args, execute)
+register_command("taint", "Run AST-based taint analysis for vulnerability detection", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='security',
+
+)

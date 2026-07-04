@@ -15,4 +15,8 @@ def execute(args, workspace):
     return map_state(workspace, store_name=args.store_name)
 
 
-register_command("state-map", "Track global state management", add_args, execute)
+register_command("state-map", "Track global state management", add_args, execute,
+
+hidden=True,
+
+)

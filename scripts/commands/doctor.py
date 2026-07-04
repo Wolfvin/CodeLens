@@ -561,6 +561,9 @@ def add_args(parser):
     dispatcher auto-detects from cwd (same pattern as ``scan``,
     ``query``, etc.). doctor uses it to check ``.codelens/``
     writability.
+
+    Issue #195: ``--check`` dispatches to absorbed sub-commands
+    (env-check, lsp-status). Without --check, runs the legacy doctor audit.
     """
     parser.add_argument(
         "workspace",
@@ -569,29 +572,155 @@ def add_args(parser):
         help="Path to workspace root (auto-detected if omitted)",
     )
     parser.add_argument(
+        "--check",
+        default=None,
+        help="Issue #195: comma-separated sub-analyses. "
+             "Choices: doctor, env-check, lsp-status. Default: doctor.",
+    )
+    parser.add_argument(
         "--fix",
         action="store_true",
         default=False,
-        help="Auto-install missing Python deps via 'pip install --user'",
+        help="doctor: auto-install missing Python deps via 'pip install --user'",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
-        help="Show resolved versions and install paths for every check",
+        help="doctor: show resolved versions and install paths for every check",
     )
     parser.add_argument(
         "--format",
         choices=["text", "json"],
         default="text",
-        help="Output format (default: text). 'json' for CI parsing.",
+        help="doctor: output format (default: text). 'json' for CI parsing.",
+    )
+    # env-check passthrough
+    parser.add_argument(
+        "--var",
+        dest="var_name",
+        default=None,
+        help="env-check: filter to a specific environment variable name",
     )
     # The global --format flag from codelens.py also works; we honor
     # whichever the user set. The local one wins if both are present.
 
 
+# Issue #195: sub-command dispatch table for the doctor umbrella.
+_DOCTOR_SUBCOMMANDS = {
+    "doctor": None,  # handled inline
+    "env-check": "commands.env_check",
+    "lsp-status": "commands.lsp_status",  # kept as utility module
+}
+
+
+def _dispatch_subcommands(args, workspace, check_arg):
+    """Dispatch to one or more absorbed sub-commands per --check."""
+    import importlib as _il
+    parts = [c.strip() for c in check_arg.split(",") if c.strip()]
+    invalid = [p for p in parts if p not in _DOCTOR_SUBCOMMANDS]
+    if invalid:
+        import sys as _sys
+        print(
+            f"[CodeLens] doctor: unknown --check category '{','.join(invalid)}'. "
+            f"Valid: {', '.join(_DOCTOR_SUBCOMMANDS.keys())}",
+            file=_sys.stderr,
+        )
+        _sys.exit(1)
+    if not parts:
+        parts = ["doctor"]
+
+    results = []
+    checks_failed = 0
+    for check_name in parts:
+        try:
+            if check_name == "doctor":
+                # Run the legacy doctor logic. Force JSON output so the
+                # umbrella can merge it into the unified result shape.
+                args.format = "json"
+                sub_result = _run_legacy_doctor(args, workspace)
+            else:
+                mod = _il.import_module(_DOCTOR_SUBCOMMANDS[check_name])
+                sub_args = _build_subnamespace(args, check_name)
+                sub_result = mod.execute(sub_args, workspace)
+            if not isinstance(sub_result, dict):
+                sub_result = {"status": "ok", "result": sub_result}
+            sub_result["_check"] = check_name
+            results.append(sub_result)
+        except Exception as exc:
+            checks_failed += 1
+            results.append({
+                "_check": check_name,
+                "s": "error",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+            import sys as _sys
+            print(f"[CodeLens] doctor: --check {check_name} failed: {exc}",
+                  file=_sys.stderr)
+
+    return {
+        "s": "ok" if checks_failed == 0 else "partial",
+        "st": {"checks_requested": len(parts), "checks_failed": checks_failed},
+        "r": results,
+    }
+
+
+def _build_subnamespace(base_args, check_name):
+    """Build a synthetic namespace for the dispatched sub-command."""
+    import argparse as _ap
+    ns = _ap.Namespace()
+    for attr in ("format", "top", "max_tokens", "lite", "deep", "db_path",
+                 "diff_base", "diff_scope", "disable_suppression",
+                 "codelens_ignore_pattern"):
+        setattr(ns, attr, getattr(base_args, attr, None))
+    ns.workspace = getattr(base_args, "workspace", None)
+    if check_name == "env-check":
+        ns.var_name = getattr(base_args, "var_name", None)
+    return ns
+
+
+def _run_legacy_doctor(args, workspace):
+    """Run the original doctor.execute logic (issue #195: absorbed)."""
+    verbose = bool(getattr(args, "verbose", False))
+    do_fix = bool(getattr(args, "fix", False))
+    fmt = getattr(args, "format", None)
+    if fmt not in ("text", "json"):
+        fmt = "text"
+    checks = _run_all_checks(workspace)
+    fixes = []
+    if do_fix:
+        fixes = _apply_fixes(checks, verbose)
+        checks = _run_all_checks(workspace)
+    overall, exit_code = _aggregate_status(checks)
+    summary = {
+        "ok": sum(1 for c in checks if c["status"] == "ok"),
+        "warning": sum(1 for c in checks if c["status"] == "warning"),
+        "critical": sum(1 for c in checks if c["status"] == "critical"),
+        "total": len(checks),
+    }
+    result = {
+        "status": overall,
+        "exit_code": exit_code,
+        "checks": checks,
+        "fixes": fixes,
+        "summary": summary,
+        "platform": {
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "executable": sys.executable,
+        },
+        "workspace": workspace,
+    }
+    return result
+
+
 def execute(args, workspace):
     """Run the environment audit, optionally apply fixes, return result dict.
+
+    Issue #195: when --check is set, dispatch to absorbed sub-commands
+    (env-check, lsp-status) and merge results into the umbrella shape.
 
     The result always includes:
 
@@ -602,6 +731,11 @@ def execute(args, workspace):
     * ``summary``        — counts by status
     * ``platform``       — OS / arch / Python interpreter info
     """
+    # Issue #195: dispatch to absorbed sub-commands when --check is set.
+    check_arg = getattr(args, "check", None)
+    if check_arg:
+        return _dispatch_subcommands(args, workspace, check_arg)
+
     verbose = bool(getattr(args, "verbose", False))
     do_fix = bool(getattr(args, "fix", False))
 

@@ -451,4 +451,8 @@ def cmd_query(query_name: str, workspace: str, domain: str = None,
     }
 
 
-register_command("query", "Query a specific class/id/function", add_args, execute)
+register_command("query", "Query a specific class/id/function", add_args, execute,
+
+hidden=True,
+
+)

@@ -121,4 +121,8 @@ def cmd_list(workspace: str, domain: str, filter_type: str = "all",
     }
 
 
-register_command("list", "List entries with filter", add_args, execute)
+register_command("list", "List entries with filter", add_args, execute,
+
+hidden=True,
+
+)

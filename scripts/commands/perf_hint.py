@@ -20,4 +20,10 @@ def execute(args, workspace):
                              max_files=args.max_files)
 
 
-register_command("perf-hint", "Detect performance anti-patterns", add_args, execute)
+register_command("perf-hint", "Detect performance anti-patterns", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='audit',
+
+)

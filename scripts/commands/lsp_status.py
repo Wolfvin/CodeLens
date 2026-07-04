@@ -45,4 +45,6 @@ register_command(
     "Check which LSP servers are available for deep analysis",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='doctor',
 )

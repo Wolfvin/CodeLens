@@ -42,4 +42,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("outline", "Get file structure outline", add_args, execute)
+register_command("outline", "Get file structure outline", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='context',
+
+)

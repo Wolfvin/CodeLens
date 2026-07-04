@@ -92,36 +92,69 @@ def add_args(parser):
     # Issue #180: surface noise-reduction flags directly in `codelens summary --help`.
     # summary already auto-adapts detail level to codebase size; the epilog points
     # users at the additional output-shaping flags added by the dispatcher.
+    # Issue #195: --check dispatches to absorbed commands (dashboard, arch-metrics,
+    # architecture). Without --check, runs the legacy summary aggregator.
     parser.formatter_class = argparse.RawDescriptionHelpFormatter
     parser.epilog = (
         "Notes:\n"
         "  For AI/script consumption, use --format compact (token-efficient\n"
         "  single-char keys) or --lite (minimal output). For large repos,\n"
-        "  --detail minimal restricts findings to critical severity only."
+        "  --detail minimal restricts findings to critical severity only.\n"
+        "\n"
+        "Issue #195 sub-analyses (use --check to dispatch):\n"
+        "  dashboard      Generate HTML visualization dashboard\n"
+        "  arch-metrics   Architecture metrics (fan-in/out, instability, god-module)\n"
+        "  architecture   Single-call codebase overview for AI agents\n"
+        "  summary        Legacy auto-summary with prioritized findings (default)\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
+    parser.add_argument("--check", default=None,
+                        help="Issue #195: comma-separated sub-analyses. "
+                             "Choices: summary, dashboard, arch-metrics, architecture. "
+                             "Default: summary (legacy aggregator).")
     parser.add_argument("--focus", choices=["security", "quality", "architecture", "all"],
                         default="all",
-                        help="Focus area for the summary (default: all)")
+                        help="summary: focus area (default: all)")
     parser.add_argument("--max-items", type=int, default=10,
-                        help="Maximum items per category (default: 10)")
+                        help="summary: maximum items per category (default: 10)")
     parser.add_argument("--detail", choices=["minimal", "standard", "full", "auto"],
                         default="auto",
-                        help="Detail level: minimal (critical only), standard (critical+high), "
-                             "full (all), auto (adapts to codebase size, default)")
+                        help="summary: detail level (default: auto)")
     parser.add_argument("--max-files", type=int, default=2000,
-                        help="Maximum number of files to scan (default: 2000). "
+                        help="summary: maximum number of files to scan (default: 2000). "
                              "Prevents timeout on very large repos.")
     parser.add_argument("--timeout", type=int, default=120,
-                        help="Total time budget in seconds for all engines (default: 120)")
+                        help="summary: total time budget in seconds (default: 120)")
     parser.add_argument("--write-agent-md", action="store_true",
-                        help="Write a condensed AGENT.md file to .codelens/ for AI context")
+                        help="summary: write a condensed AGENT.md file to .codelens/ for AI context")
     parser.add_argument("--max-tokens", type=int, default=8000,
-                        help="Approximate max output tokens before smart truncation (default: 8000)")
+                        help="summary: approximate max output tokens before smart truncation (default: 8000)")
+    # dashboard passthroughs
+    parser.add_argument("--output", "-o", default=None,
+                        help="dashboard: output HTML path")
+    parser.add_argument("--open", action="store_true", default=False,
+                        help="dashboard: open in browser after generation")
+    parser.add_argument("--compare", nargs=2, default=None, metavar=("SNAP1", "SNAP2"),
+                        help="dashboard: compare two snapshots")
+    # arch-metrics passthroughs
+    parser.add_argument("--threshold-fanin", type=int, default=None,
+                        help="arch-metrics: fan-in threshold (default 10)")
+    parser.add_argument("--threshold-fanout", type=int, default=None,
+                        help="arch-metrics: fan-out threshold (default 15)")
+    parser.add_argument("--sort-by", default=None,
+                        help="arch-metrics: instability|fan-in|fan-out|name (default instability)")
+    # architecture passthroughs
+    parser.add_argument("--no-cache", action="store_true", default=False,
+                        help="architecture: bypass .codelens/architecture_cache.json")
 
 
 def execute(args, workspace):
+    # Issue #195: dispatch to absorbed sub-commands when --check is set.
+    check_arg = getattr(args, "check", None)
+    if check_arg:
+        return _dispatch_subcommands(args, workspace, check_arg)
+    # Default: legacy summary aggregator.
     max_files = getattr(args, 'max_files', 2000)
     return generate_summary(
         workspace,
@@ -133,6 +166,98 @@ def execute(args, workspace):
         write_agent_md=getattr(args, 'write_agent_md', False),
         max_tokens=getattr(args, 'max_tokens', 8000),
     )
+
+
+# Issue #195: sub-command dispatch table for the summary umbrella.
+_SUMMARY_SUBCOMMANDS = {
+    "summary": "commands.summary",  # self — calls generate_summary directly
+    "dashboard": "commands.dashboard",
+    "arch-metrics": "commands.arch_metrics",
+    "architecture": "commands.architecture",
+}
+
+
+def _dispatch_subcommands(args, workspace, check_arg):
+    """Dispatch to one or more absorbed sub-commands per --check."""
+    import importlib
+    parts = [c.strip() for c in check_arg.split(",") if c.strip()]
+    invalid = [p for p in parts if p not in _SUMMARY_SUBCOMMANDS]
+    if invalid:
+        import sys
+        print(
+            f"[CodeLens] summary: unknown --check category '{','.join(invalid)}'. "
+            f"Valid: {', '.join(_SUMMARY_SUBCOMMANDS.keys())}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not parts:
+        parts = ["summary"]
+
+    results = []
+    checks_failed = 0
+    for check_name in parts:
+        try:
+            if check_name == "summary":
+                # Avoid recursion: call generate_summary directly.
+                sub_result = generate_summary(
+                    workspace,
+                    focus=args.focus,
+                    max_items=args.max_items,
+                    detail=args.detail,
+                    max_files=getattr(args, "max_files", 2000),
+                    timeout=getattr(args, "timeout", 120),
+                    write_agent_md=getattr(args, "write_agent_md", False),
+                    max_tokens=getattr(args, "max_tokens", 8000),
+                )
+            else:
+                mod = importlib.import_module(_SUMMARY_SUBCOMMANDS[check_name])
+                sub_args = _build_subnamespace(args, check_name)
+                sub_result = mod.execute(sub_args, workspace)
+            if not isinstance(sub_result, dict):
+                sub_result = {"status": "ok", "result": sub_result}
+            sub_result["_check"] = check_name
+            results.append(sub_result)
+        except Exception as exc:
+            checks_failed += 1
+            results.append({
+                "_check": check_name,
+                "s": "error",
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+            })
+            import sys
+            print(f"[CodeLens] summary: --check {check_name} failed: {exc}",
+                  file=sys.stderr)
+
+    return {
+        "s": "ok" if checks_failed == 0 else "partial",
+        "st": {"checks_requested": len(parts), "checks_failed": checks_failed},
+        "r": results,
+    }
+
+
+def _build_subnamespace(base_args, check_name):
+    """Build a synthetic namespace for the dispatched sub-command."""
+    import argparse as _ap
+    ns = _ap.Namespace()
+    for attr in ("format", "top", "max_tokens", "lite", "deep", "db_path",
+                 "diff_base", "diff_scope", "disable_suppression",
+                 "codelens_ignore_pattern"):
+        setattr(ns, attr, getattr(base_args, attr, None))
+    ns.workspace = getattr(base_args, "workspace", None)
+    if check_name == "dashboard":
+        ns.output = getattr(base_args, "output", None)
+        ns.open = getattr(base_args, "open", False)
+        ns.watch = False
+        ns.compare = getattr(base_args, "compare", None)
+    elif check_name == "arch-metrics":
+        ns.threshold_fanin = getattr(base_args, "threshold_fanin", None) or 10
+        ns.threshold_fanout = getattr(base_args, "threshold_fanout", None) or 15
+        ns.sort_by = getattr(base_args, "sort_by", None) or "instability"
+    elif check_name == "architecture":
+        ns.lite = getattr(base_args, "lite", False)
+        ns.no_cache = getattr(base_args, "no_cache", False)
+    return ns
 
 
 def _time_left(start: float, budget: float = 90) -> float:
@@ -215,7 +340,7 @@ def generate_summary(
 
     # ─── 1. Quick Identity ────────────────────────────────
     try:
-        from commands.handbook import _extract_project_identity
+        from handbook_helpers import _extract_project_identity
         identity = _extract_project_identity(workspace)
         result["identity"] = {
             "name": identity.get("name", os.path.basename(workspace)),

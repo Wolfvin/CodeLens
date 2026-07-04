@@ -397,4 +397,6 @@ register_command(
     "start-here files, CI/Docker)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='context',
 )

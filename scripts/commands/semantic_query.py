@@ -63,4 +63,6 @@ register_command(
     "Semantic symbol search via TF-IDF (find symbols by meaning, not just name)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='search',
 )

@@ -169,4 +169,6 @@ register_command(
     "Identify test files affected by source changes (issue #62 Phase 1)",
     add_args,
     execute,
+hidden=True,
+deprecated_alias_for='deps',
 )

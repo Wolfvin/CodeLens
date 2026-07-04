@@ -23,4 +23,8 @@ def execute(args, workspace):
                            max_files=args.max_files)
 
 
-register_command("entrypoints", "Map execution entry points", add_args, execute)
+register_command("entrypoints", "Map execution entry points", add_args, execute,
+
+hidden=True,
+
+)

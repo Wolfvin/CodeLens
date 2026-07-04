@@ -86,4 +86,10 @@ def execute(args, workspace):
     return result
 
 
-register_command("secrets", "Detect hardcoded secrets and API keys", add_args, execute)
+register_command("secrets", "Detect hardcoded secrets and API keys", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='security',
+
+)

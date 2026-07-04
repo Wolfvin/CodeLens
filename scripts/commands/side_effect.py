@@ -22,4 +22,10 @@ def execute(args, workspace):
     )
 
 
-register_command("side-effect", "Analyze function side effects (pure vs impure)", add_args, execute)
+register_command("side-effect", "Analyze function side effects (pure vs impure)", add_args, execute,
+
+hidden=True,
+
+deprecated_alias_for='audit',
+
+)

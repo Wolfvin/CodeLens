@@ -481,8 +481,15 @@ class TestRefineCallEdges:
 
 
 # ─── 7. resolve-types command ────────────────────────────────
+# Issue #195: resolve-types was dropped as a standalone command.
+# The underlying HybridTypeResolver engine is still tested above.
+# Skip the command-level tests since the command no longer exists.
 
 
+import pytest as _pytest
+
+
+@_pytest.mark.skip(reason="resolve-types command dropped in issue #195 consolidation")
 class TestResolveTypesCommand:
     """Verify the resolve-types CLI command."""
 

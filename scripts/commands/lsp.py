@@ -131,4 +131,5 @@ register_command(
     "Run CodeLens as a native LSP 3.17 server (stdio by default; --tcp for debug)",
     add_args,
     execute,
+hidden=True,
 )
