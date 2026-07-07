@@ -50,6 +50,13 @@ grammars = [
     "tree-sitter-typescript",
     "tree-sitter-rust",
     "tree-sitter-python",
+    # Issue #198: 5 new languages
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "tree-sitter-php",
+    "tree-sitter-ruby",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
 ]
 watch = [
     "watchdog",

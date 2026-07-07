@@ -156,3 +156,138 @@ css:
 html:
   attribute:
     - attribute
+
+# ─── Go (issue #198) ────────────────────────────────────────────────
+go:
+  function_def:
+    - function_declaration
+    - method_declaration
+  class_def:
+    - struct_type
+    - interface_type
+  import:
+    - import_declaration
+  call:
+    - call_expression
+  type_alias:
+    - type_declaration
+  const:
+    - const_declaration
+    - var_declaration
+  identifier:
+    - identifier
+    - field_identifier
+    - package_identifier
+    - selector_expression
+
+# ─── Java (issue #198) ──────────────────────────────────────────────
+java:
+  function_def:
+    - method_declaration
+    - constructor_declaration
+  class_def:
+    - class_declaration
+    - interface_declaration
+    - enum_declaration
+    - record_declaration
+  import:
+    - import_declaration
+  call:
+    - method_invocation
+  annotation:
+    - annotation
+    - marker_annotation
+  field:
+    - field_declaration
+  identifier:
+    - identifier
+    - scoped_identifier
+    - field_access
+
+# ─── PHP (issue #198) ───────────────────────────────────────────────
+php:
+  function_def:
+    - function_definition
+    - method_declaration
+  class_def:
+    - class_declaration
+    - interface_declaration
+    - trait_declaration
+  import:
+    - include_expression
+    - require_expression
+    - use_declaration
+  call:
+    - function_call_expression
+    - method_call_expression
+  namespace:
+    - namespace_declaration
+  identifier:
+    - name
+    - scoped_call_expression
+    - member_access_expression
+
+# ─── Ruby (issue #198) ──────────────────────────────────────────────
+ruby:
+  function_def:
+    - method
+    - singleton_method
+  class_def:
+    - class
+    - module
+  import:
+    - require
+    - require_relative
+  call:
+    - call
+  identifier:
+    - identifier
+    - constant
+    - scope_resolution
+
+# ─── C (issue #198) ─────────────────────────────────────────────────
+c:
+  function_def:
+    - function_definition
+  class_def:
+    - struct_specifier
+    - union_specifier
+    - enum_specifier
+  import:
+    - preproc_include
+  call:
+    - call_expression
+  type_alias:
+    - type_definition
+  identifier:
+    - identifier
+    - field_identifier
+    - type_identifier
+
+# ─── C++ (issue #198) ───────────────────────────────────────────────
+cpp:
+  function_def:
+    - function_definition
+  class_def:
+    - class_specifier
+    - struct_specifier
+    - union_specifier
+    - enum_specifier
+  import:
+    - preproc_include
+    - using_declaration
+  call:
+    - call_expression
+  namespace:
+    - namespace_definition
+  template:
+    - template_declaration
+  type_alias:
+    - type_alias_declaration
+    - type_definition
+  identifier:
+    - identifier
+    - field_identifier
+    - type_identifier
+    - qualified_identifier
+    - scoped_identifier
