@@ -930,10 +930,20 @@ def _collect_js_exports_imports(
     # Re-exports: export { X } from ...  vs  local exports: export { X }
     # export { X } without 'from' is a local definition being made public API.
     # export { X } from './other' is a re-export from another module.
+    # export type { X } from './other' is a TypeScript type-only re-export.
     # We distinguish these because local exports should not be flagged as unused
     # (they are intentionally public API), while re-exports from other modules
     # may be unnecessary if nothing imports them.
-    for m in re.finditer(r'export\s+\{([^}]+)\}(\s+from\s+[\'"\w./@-]+)?', content):
+    #
+    # Bug fix: a re-export ("export {X} from './y'" or "export type {X} from
+    # './y'") consumes X from the source module './y' — it IS a usage of X as
+    # far as the source file's own unused-exports check is concerned. Without
+    # recording these names in `imports`, any symbol that is only ever
+    # re-exported (never plain-imported) is incorrectly flagged as unused in
+    # its defining file (found via real-codebase validation: ProductAccess in
+    # google-auth-cache.ts, re-exported via `export type {...} from` in
+    # google-auth.ts, was a false positive).
+    for m in re.finditer(r'export\s+(?:type\s+)?\{([^}]+)\}(\s+from\s+[\'"\w./@-]+)?', content):
         has_from = m.group(2) is not None
         export_type = "re_export" if has_from else "local_export"
         names = [n.strip().split(' as ')[0].strip() for n in m.group(1).split(',')]
@@ -944,6 +954,8 @@ def _collect_js_exports_imports(
                     "type": export_type,
                     "line": content[:m.start()].count('\n') + 1
                 })
+                if has_from:
+                    imports[rel_path].add(name)
 
     # Imports (including TypeScript type-only imports)
     for m in re.finditer(r'import\s+(?:type\s+)?(?:\{([^}]+)\}|\*\s+as\s+(\w+)|(\w+))\s+from', content):
