@@ -93,7 +93,7 @@ def _run_semantic(args, workspace) -> Dict[str, Any]:
 
 
 def _run_symbol(args, workspace) -> Dict[str, Any]:
-    from symbols_engine import search_symbols
+    from search_engine import search_symbols
     domain = getattr(args, "domain", None) or "all"
     fuzzy = getattr(args, "fuzzy", False)
     limit = getattr(args, "limit", None) or 20

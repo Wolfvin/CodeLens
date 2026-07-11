@@ -136,7 +136,12 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.name = getattr(base_args, "name", None)
         ns.direction = getattr(base_args, "direction", None) or "up"
         ns.depth = getattr(base_args, "depth", None) or 10
-        ns.domain = getattr(base_args, "domain", None)
+        # trace_engine.trace_symbol() checks `domain in ("backend", "auto")`
+        # / `("frontend", "auto")` — a bare None here matches neither branch,
+        # so every trace silently returned 0 callers/callees regardless of
+        # symbol or workspace. Must default to "auto" like trace.py's own
+        # standalone add_args default, not fall through to None.
+        ns.domain = getattr(base_args, "domain", None) or "auto"
         ns.limit = getattr(base_args, "limit", None) or 20
         ns.offset = getattr(base_args, "offset", 0)
         ns.max_results = 1000
