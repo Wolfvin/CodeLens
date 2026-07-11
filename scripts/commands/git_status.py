@@ -128,12 +128,4 @@ def cmd_git_status(workspace: str) -> Dict[str, Any]:
         "rescan_recommended": rescan,
     }
 
-
-register_command(
-    "git-status",
-    "Show git-aware scan state (SHA, branch, changed files, rescan recommendation)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='history',
-)
+# Issue #199: deprecated "git-status" alias registration removed; this module is now an implementation module imported by the "history" umbrella command.

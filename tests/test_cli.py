@@ -788,12 +788,12 @@ class TestLspStatusEntryPointParity:
     hint/recommendation field names — so CLI users and MCP agents got
     different answers to the same question.
 
-    After the fix, both entry points delegate to ``hybrid_engine.get_lsp_status``
-    (single source of truth). These tests assert structural parity: the set of
-    top-level keys must be identical, and the set of per-server keys must be
-    identical. The byte-identical check is covered by the repro diff in the
-    PR description; these tests guard against future regressions in the
-    test suite itself.
+    After the fix, both entry points delegated to ``hybrid_engine.get_lsp_status``
+    (single source of truth). Issue #199 then removed the ``lsp-status`` CLI
+    alias entirely (the ``--lsp-status`` flag remains as the sole CLI entry
+    point). These tests now exercise only the ``--lsp-status`` flag form and
+    assert it returns a well-formed payload so any future regression in the
+    flag-intercept path is caught.
     """
 
     @staticmethod
@@ -816,60 +816,18 @@ class TestLspStatusEntryPointParity:
         assert idx >= 0, f"No JSON in stdout: {proc.stdout!r}"
         return json.loads(proc.stdout[idx:])
 
-    def test_top_level_keys_match(self):
-        """``--lsp-status`` and ``lsp-status`` must have identical top-level keys."""
-        flag_payload = self._run_codelens(["--lsp-status"])
-        sub_payload = self._run_codelens(["lsp-status"])
-
-        flag_keys = set(flag_payload.keys())
-        sub_keys = set(sub_payload.keys())
-
-        assert flag_keys == sub_keys, (
-            f"Top-level key sets differ between --lsp-status and lsp-status.\n"
-            f"  --lsp-status only: {flag_keys - sub_keys}\n"
-            f"  lsp-status   only: {sub_keys - flag_keys}\n"
-            f"  common            : {flag_keys & sub_keys}"
+    def test_flag_payload_has_servers_key(self):
+        """``--lsp-status`` must return a payload with a ``servers`` dict."""
+        payload = self._run_codelens(["--lsp-status"])
+        assert "servers" in payload, (
+            f"--lsp-status payload missing 'servers' key; got: {list(payload.keys())}"
         )
 
-    def test_per_server_keys_match(self):
-        """Per-server field sets must be identical across both entry points."""
-        flag_payload = self._run_codelens(["--lsp-status"])
-        sub_payload = self._run_codelens(["lsp-status"])
-
-        flag_servers = flag_payload.get("servers", {})
-        sub_servers = sub_payload.get("servers", {})
-
-        # Same set of server names
-        assert set(flag_servers.keys()) == set(sub_servers.keys()), (
-            f"Server name sets differ:\n"
-            f"  --lsp-status only: {set(flag_servers) - set(sub_servers)}\n"
-            f"  lsp-status   only: {set(sub_servers) - set(flag_servers)}"
-        )
-
-        # For each server, same set of field names
-        for name in flag_servers:
-            flag_fields = set(flag_servers[name].keys())
-            sub_fields = set(sub_servers[name].keys())
-            assert flag_fields == sub_fields, (
-                f"Per-server field sets differ for server {name!r}:\n"
-                f"  --lsp-status only: {flag_fields - sub_fields}\n"
-                f"  lsp-status   only: {sub_fields - flag_fields}"
-            )
-
-    def test_payloads_byte_identical(self):
-        """Full payload equality — the strongest possible parity guarantee.
-
-        Both entry points must produce byte-identical JSON (after canonical
-        formatting), not just structural parity. This catches any future
-        regression that introduces a divergent field value.
-        """
-        flag_payload = self._run_codelens(["--lsp-status"])
-        sub_payload = self._run_codelens(["lsp-status"])
-
-        assert flag_payload == sub_payload, (
-            "Payloads differ between --lsp-status and lsp-status:\n"
-            f"  --lsp-status: {json.dumps(flag_payload, sort_keys=True, indent=2)}\n"
-            f"  lsp-status  : {json.dumps(sub_payload, sort_keys=True, indent=2)}"
+    def test_flag_payload_has_status_ok(self):
+        """``--lsp-status`` must report status=ok (or at least not error)."""
+        payload = self._run_codelens(["--lsp-status"])
+        assert payload.get("status") in ("ok", "partial", "degraded"), (
+            f"--lsp-status status unexpected: {payload.get('status')!r}"
         )
 
 

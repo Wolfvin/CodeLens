@@ -76,12 +76,4 @@ def execute(args, workspace):
     from query_graph_engine import execute_query
     return execute_query(query, workspace, db_path=db_path)
 
-
-register_command(
-    "query-graph",
-    "Query the code graph with a Cypher-subset query (MATCH/WHERE/RETURN/LIMIT)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='graph',
-)
+# Issue #199: deprecated "query-graph" alias registration removed; this module is now an implementation module imported by the "graph" umbrella command.

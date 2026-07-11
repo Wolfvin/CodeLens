@@ -84,11 +84,4 @@ def execute(args, workspace):
                 result["stats"]["confidence_distribution"] = dist
     return result
 
-
-register_command("dead-code", "Enhanced dead code detection", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='audit',
-
-)
+# Issue #199: deprecated "dead-code" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

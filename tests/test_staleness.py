@@ -472,13 +472,23 @@ class TestDetectStaleFilesModuleFunction:
 
 
 class TestStalenessCommand:
-    """The ``codelens staleness`` CLI command."""
+    """The ``staleness`` CLI alias was removed in issue #199.
+
+    The implementation module ``commands.staleness`` survives because the
+    ``audit`` umbrella command imports it for its ``--check staleness``
+    sub-analysis. The CLI alias ``codelens staleness`` is no longer
+    registered and must yield an ``invalid choice`` argparse error.
+    """
 
     def test_command_is_registered(self):
-        assert "staleness" in COMMAND_REGISTRY
-        info = COMMAND_REGISTRY["staleness"]
-        assert callable(info["execute"])
-        assert callable(info["add_args"])
+        assert "staleness" not in COMMAND_REGISTRY, (
+            "staleness alias should have been removed in #199"
+        )
+        # The implementation module must still be importable (audit dep).
+        import importlib
+        mod = importlib.import_module("commands.staleness")
+        assert callable(mod.execute)
+        assert callable(mod.add_args)
 
     def test_no_workspace_returns_error(self):
         from commands import staleness as cmd
@@ -536,7 +546,11 @@ class TestStalenessCommand:
 
 
 class TestCLISmoke:
-    """End-to-end: invoke ``codelens staleness`` as a real subprocess."""
+    """End-to-end: invoke ``codelens audit --check staleness`` as a real subprocess.
+
+    Issue #199 removed the ``codelens staleness`` CLI alias; the staleness
+    sub-analysis is now reached via the ``audit`` umbrella command.
+    """
 
     def _run_cli(self, workspace, *extra_args):
         env = os.environ.copy()
@@ -546,8 +560,10 @@ class TestCLISmoke:
             [
                 sys.executable,
                 os.path.join(_SCRIPTS_DIR, "codelens.py"),
-                "staleness",
+                "audit",
                 workspace,
+                "--check",
+                "staleness",
                 "--format",
                 "json",
                 *extra_args,
@@ -569,8 +585,10 @@ class TestCLISmoke:
         start = out.find("{")
         assert start >= 0
         payload = json.loads(out[start:])
-        assert payload["status"] == "ok"
-        assert payload["stale_count"] == 0
+        # audit umbrella wraps staleness under payload["r"][0]
+        assert payload["s"] == "ok"
+        assert payload["r"][0]["_check"] == "staleness"
+        assert payload["r"][0]["stale_count"] == 0
 
 
 # ─── Regression: positional workspace arg (issue #178) ────────────────────
@@ -586,15 +604,23 @@ class TestStalenessWorkspaceArgRegression:
     been fixed, but these tests pin the expected behavior so any future
     regression is caught immediately.
 
+    Issue #199 removed the ``staleness`` CLI alias; these regression tests
+    now exercise the positional ``workspace`` arg via the ``audit``
+    umbrella (``codelens audit --check staleness <workspace>``), which is
+    the post-#199 entry point for the staleness sub-analysis. The
+    underlying argparse behavior (optional ``workspace`` positional with
+    ``nargs="?"``) is identical because ``audit.add_args`` registers
+    ``workspace`` the same way the old ``staleness.add_args`` did.
+
     Definition of Done (from issue #178):
-      - ``codelens staleness /path/to/workspace`` works without error
-      - ``codelens staleness`` (no args) still auto-detects as before
+      - ``codelens audit --check staleness /path/to/workspace`` works without error
+      - ``codelens audit --check staleness`` (no args) still auto-detects as before
       - Consistent with how other commands handle the optional ``workspace``
         positional
     """
 
     def _run_cli(self, *args):
-        """Invoke ``codelens staleness`` with arbitrary args, capture result."""
+        """Invoke ``codelens audit --check staleness`` with arbitrary args."""
         env = os.environ.copy()
         env["PYTHONPATH"] = _SCRIPTS_DIR
         env["PYTHONUTF8"] = "1"
@@ -602,6 +628,8 @@ class TestStalenessWorkspaceArgRegression:
             [
                 sys.executable,
                 os.path.join(_SCRIPTS_DIR, "codelens.py"),
+                "audit",
+                "--check",
                 "staleness",
                 *args,
             ],
@@ -660,7 +688,7 @@ class TestStalenessWorkspaceArgRegression:
         )
 
     def test_positional_workspace_with_json_format(self, tmp_path):
-        """``codelens staleness <workspace> --format json`` produces valid JSON.
+        """``codelens audit --check staleness <workspace> --format json`` produces valid JSON.
 
         Combines the positional arg with the format flag to verify they
         don't conflict. This is the exact pattern used in CI pipelines.
@@ -674,8 +702,10 @@ class TestStalenessWorkspaceArgRegression:
         start = out.find("{")
         assert start >= 0, f"no JSON in stdout:\n{out}"
         payload = json.loads(out[start:])
-        assert payload["status"] == "ok"
-        assert payload["workspace"] == os.path.abspath(str(tmp_path))
+        # audit umbrella wraps staleness under payload["r"][0]
+        assert payload["s"] == "ok"
+        assert payload["r"][0]["_check"] == "staleness"
+        assert payload["r"][0]["workspace"] == os.path.abspath(str(tmp_path))
 
     def test_workspace_positional_is_optional_nargs_question(self):
         """The ``workspace`` arg is registered with ``nargs="?"`` (optional).
@@ -741,12 +771,29 @@ class TestStalenessWorkspaceArgRegression:
         )
 
     def test_help_shows_workspace_positional(self):
-        """``staleness --help`` lists ``[workspace]`` as a positional arg.
+        """``audit --check staleness --help`` lists ``[workspace]`` as a positional arg.
 
-        A regression that removes the positional would also remove it
-        from ``--help``. This test catches that.
+        Issue #199: the ``staleness`` alias is gone; the help entry point
+        is now ``audit --help``. The ``workspace`` positional must still
+        appear (it is registered by ``audit.add_args``).
         """
-        result = self._run_cli("--help")
+        # Bypass _run_cli because it injects --check staleness before --help,
+        # which argparse would reject. Invoke audit --help directly.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _SCRIPTS_DIR
+        env["PYTHONUTF8"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable,
+                os.path.join(_SCRIPTS_DIR, "codelens.py"),
+                "audit",
+                "--help",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
         # argparse exits 0 on --help.
         assert result.returncode == 0, (
             f"exit={result.returncode}\nstderr={result.stderr}"
@@ -754,7 +801,7 @@ class TestStalenessWorkspaceArgRegression:
         # The usage line should contain "workspace" as a positional.
         help_text = result.stdout + result.stderr
         assert "workspace" in help_text, (
-            f"staleness --help does not mention 'workspace' positional.\n"
+            f"audit --help does not mention 'workspace' positional.\n"
             f"stdout={result.stdout}\nstderr={result.stderr}"
         )
 

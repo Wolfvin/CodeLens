@@ -89,11 +89,4 @@ def execute(args, workspace):
         max_age=max_age_seconds,
     )
 
-
-register_command("vuln-scan", "Scan dependencies for known CVEs (OSV.dev + native audit)", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='security',
-
-)
+# Issue #199: deprecated "vuln-scan" alias registration removed; this module is now an implementation module imported by the "security" umbrella command.

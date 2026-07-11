@@ -21,12 +21,32 @@ def test_every_command_module_registers():
 
     Issue #195: a small allowlist of utility modules (kept for backward
     compat with tests/scripts but not registered as commands) is excluded.
+
+    Issue #199: the 30 deprecated alias modules retained after #195 had
+    their register_command() calls removed. They survive as implementation
+    modules imported by the 12 umbrella commands via importlib (e.g.
+    audit.py imports commands.dead_code, security.py imports
+    commands.secrets). Their .py files are kept; only the CLI alias
+    registration is gone. The 2 alias modules that no umbrella imports
+    (symbols.py, semantic_query.py) were deleted entirely.
     """
     # Issue #195: migrate.py is a utility wrapper around
     # PersistentRegistry.migrate_from_json, kept so existing tests that
     # import cmd_migrate continue to work. It does NOT register a command
     # (migrate was dropped per the consolidation).
     _UTILITY_MODULES = {"migrate"}
+    # Issue #199: these modules are implementation-only — their
+    # register_command() calls were removed because the CLI alias is gone,
+    # but the umbrella commands import them for --check sub-analyses.
+    _DEPRECATED_ALIAS_MODULES = {
+        "affected", "arch_metrics", "architecture", "binary_scan",
+        "circular", "complexity", "dashboard", "dataflow", "dead_code",
+        "dependents", "diff", "env_check", "git_status", "graph_schema",
+        "import_snapshot", "init", "lsp_status", "orient", "outline",
+        "ownership", "perf_hint", "query_graph", "regex_audit", "secrets",
+        "side_effect", "smell", "staleness", "taint", "trace", "vuln_scan",
+    }
+    _UTILITY_MODULES |= _DEPRECATED_ALIAS_MODULES
     missing = []
     for module_path in sorted(COMMANDS_DIR.glob("*.py")):
         if module_path.name == "__init__.py":

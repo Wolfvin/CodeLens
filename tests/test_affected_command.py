@@ -450,14 +450,23 @@ def test_command_execute_stdin_with_comments_and_blanks(small_workspace, monkeyp
 
 
 def test_command_registered_in_registry():
-    """The command should be auto-registered via commands/__init__.py."""
+    """The ``affected`` CLI alias was removed in issue #199.
+
+    The implementation module ``commands.affected`` survives because the
+    ``deps`` umbrella command imports it for its ``--check affected`` sub-
+    analysis. The CLI alias ``codelens affected`` is no longer registered
+    and must yield an ``invalid choice`` argparse error.
+    """
     from commands import COMMAND_REGISTRY
 
-    assert "affected" in COMMAND_REGISTRY
-    entry = COMMAND_REGISTRY["affected"]
-    assert entry["help"]
-    assert callable(entry["add_args"])
-    assert callable(entry["execute"])
+    assert "affected" not in COMMAND_REGISTRY, (
+        "affected alias should have been removed in #199"
+    )
+    # The implementation module must still be importable (umbrella dep).
+    import importlib
+    mod = importlib.import_module("commands.affected")
+    assert callable(mod.execute)
+    assert callable(mod.add_args)
 
 
 # ─── Issue #176: TypeScript affected + workspace-as-first-arg ─────────────

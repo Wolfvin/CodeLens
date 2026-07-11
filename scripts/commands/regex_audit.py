@@ -16,11 +16,4 @@ def add_args(parser):
 def execute(args, workspace):
     return audit_regex_patterns(workspace, severity=args.severity, max_files=args.max_files)
 
-
-register_command("regex-audit", "Audit regex for ReDoS and issues", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='security',
-
-)
+# Issue #199: deprecated "regex-audit" alias registration removed; this module is now an implementation module imported by the "security" umbrella command.

@@ -381,13 +381,15 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("--diff-base", proc.stdout)
 
     def test_invalid_ref_exits_nonzero(self):
-        proc = self._run_cli("secrets", "tests/fixtures", "--diff-base", "nonexistent-ref-xyz")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("security", "tests/fixtures", "--check", "secrets", "--diff-base", "nonexistent-ref-xyz")
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("diff_scope_error", proc.stderr + proc.stdout)
 
     def test_valid_ref_produces_diff_scope_in_output(self):
         """--diff-base HEAD~1 should add a diff_scope key to the JSON output."""
-        proc = self._run_cli("secrets", "tests/fixtures", "--diff-base", "HEAD~1")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("security", "tests/fixtures", "--check", "secrets", "--diff-base", "HEAD~1")
         # Find JSON in output (skip stderr hint lines)
         import json
         out = proc.stdout
@@ -414,7 +416,8 @@ class TestCliIntegration(unittest.TestCase):
             env["PYTHONUTF8"] = "1"
             env.pop("CODELENS_AI_MODE", None)
             proc = subprocess.run(
-                [sys.executable, self.cli, "secrets", tmpdir, "--diff-base", "HEAD"],
+                # Issue #199: `secrets` alias removed — use `security --check secrets`
+                [sys.executable, self.cli, "security", tmpdir, "--check", "secrets", "--diff-base", "HEAD"],
                 capture_output=True, text=True, env=env, timeout=60,
                 cwd=self.codelens_repo,
             )
@@ -424,13 +427,17 @@ class TestCliIntegration(unittest.TestCase):
             json_start = out.find("{")
             self.assertGreater(json_start, -1)
             data = json.loads(out[json_start:])
+            # Issue #199: empty-diff early-exit returns a flat payload with
+            # status/message/diff_scope at the top level (the umbrella never
+            # runs because codelens.py short-circuits before dispatch).
             self.assertEqual(data["status"], "ok")
             self.assertIn("No changed files", data.get("message", ""))
             self.assertEqual(data["diff_scope"]["changed_count"], 0)
 
     def test_diff_base_before_subcommand(self):
         """--diff-base works both before and after the subcommand."""
-        proc = self._run_cli("--diff-base", "HEAD~1", "secrets", "tests/fixtures")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("--diff-base", "HEAD~1", "security", "tests/fixtures", "--check", "secrets")
         import json
         out = proc.stdout
         json_start = out.find("{")

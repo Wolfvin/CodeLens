@@ -163,12 +163,4 @@ def execute(args, workspace):
         result["note"] = "No test files found in dependents. Use --include-source to list all affected source files."
     return result
 
-
-register_command(
-    "affected",
-    "Identify test files affected by source changes (issue #62 Phase 1)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='deps',
-)
+# Issue #199: deprecated "affected" alias registration removed; this module is now an implementation module imported by the "deps" umbrella command.

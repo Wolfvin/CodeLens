@@ -364,13 +364,23 @@ class TestGraphSchemaCommand:
         assert schema["indexes"] == 0
 
     def test_command_registered(self):
-        """graph-schema must be auto-registered in the command registry."""
+        """graph-schema CLI alias was removed in issue #199.
+
+        The implementation module ``commands.graph_schema`` survives
+        because the ``api-map`` umbrella command imports it for its
+        ``--check graph-schema`` sub-analysis. The CLI alias
+        ``codelens graph-schema`` is no longer registered.
+        """
         from commands import get_all_commands
         cmds = get_all_commands()
-        assert "graph-schema" in cmds
-        info = cmds["graph-schema"]
-        assert "add_args" in info
-        assert "execute" in info
+        assert "graph-schema" not in cmds, (
+            "graph-schema alias should have been removed in #199"
+        )
+        # The implementation module must still be importable (api-map dep).
+        import importlib
+        mod = importlib.import_module("commands.graph_schema")
+        assert callable(mod.execute)
+        assert callable(mod.add_args)
 
 
 # ─── 7. MCP codelens_graph_schema tool exists ────────────────

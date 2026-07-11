@@ -70,11 +70,4 @@ def cmd_init(workspace: str) -> Dict[str, Any]:
         "hooks_json_created": os.path.exists(hooks_path),
     }
 
-
-register_command("init", "Initialize .codelens with auto-detected config", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='scan',
-
-)
+# Issue #199: deprecated "init" alias registration removed; this module is now an implementation module imported by the "scan" umbrella command.

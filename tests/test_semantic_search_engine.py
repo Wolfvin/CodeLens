@@ -522,26 +522,24 @@ class TestRankingSignal:
 # ─── CLI registration smoke test ──────────────────────────────
 
 class TestCommandRegistration:
-    """Verify the semantic-query command is registered and importable."""
+    """Issue #199 removed the ``semantic-query`` CLI alias entirely.
 
-    def test_command_registered(self):
-        # Importing commands.semantic_query should register it
+    The ``commands.semantic_query`` module was deleted because no umbrella
+    command imports it (semantic search is reached via ``search --mode
+    semantic``). These tests verify the removal is complete: the module
+    must not be importable and the alias must not be in COMMAND_REGISTRY.
+    """
+
+    def test_command_not_registered(self):
         from commands import COMMAND_REGISTRY
-        assert "semantic-query" in COMMAND_REGISTRY, (
-            "semantic-query must be in COMMAND_REGISTRY after import"
+        assert "semantic-query" not in COMMAND_REGISTRY, (
+            "semantic-query alias should have been removed in #199"
         )
 
-    def test_command_has_help_text(self):
-        from commands import COMMAND_REGISTRY
-        info = COMMAND_REGISTRY["semantic-query"]
-        assert info["help"]
-        assert "semantic" in info["help"].lower() or "tf-idf" in info["help"].lower()
-
-    def test_command_module_imports_cleanly(self):
-        # Re-import to make sure no import-time errors
+    def test_module_deleted(self):
         import importlib
-        import commands.semantic_query as mod
-        importlib.reload(mod)
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("commands.semantic_query")
 
 
 if __name__ == "__main__":

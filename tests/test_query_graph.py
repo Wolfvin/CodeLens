@@ -577,31 +577,29 @@ class TestErrorHandling:
 # ─── CLI command registration ──────────────────────────────────────────────
 
 
-class TestCliCommandRegistration:
-    """The ``query-graph`` command must auto-register from commands/query_graph.py."""
+class TestQueryGraphModule:
+    """``commands.query_graph`` is the implementation module invoked by the
+    ``graph`` umbrella command. Issue #199 removed the ``query-graph`` alias
+    registration; the module itself is retained because the ``graph`` (and
+    ``search --mode graph``) umbrella commands import it.
+    """
 
-    def test_command_registered(self):
-        from commands import COMMAND_REGISTRY
-        assert "query-graph" in COMMAND_REGISTRY
-        info = COMMAND_REGISTRY["query-graph"]
-        assert "help" in info
-        assert "add_args" in info
-        assert "execute" in info
-        assert callable(info["add_args"])
-        assert callable(info["execute"])
+    def test_module_exposes_execute_and_add_args(self):
+        from commands.query_graph import execute, add_args
+        assert callable(execute)
+        assert callable(add_args)
 
-    def test_command_help_mentions_match(self):
+    def test_alias_not_registered(self):
         from commands import COMMAND_REGISTRY
-        help_text = COMMAND_REGISTRY["query-graph"]["help"]
-        assert "MATCH" in help_text
-        assert "Cypher" in help_text
+        assert "query-graph" not in COMMAND_REGISTRY, (
+            "query-graph alias should have been removed in #199"
+        )
 
     def test_execute_with_validate_flag(self, graph_db):
         """--validate flag checks syntax without touching the DB."""
-        from commands import COMMAND_REGISTRY
+        from commands.query_graph import execute
         from argparse import Namespace
         ws, _ = graph_db
-        info = COMMAND_REGISTRY["query-graph"]
         args = Namespace(
             query="MATCH (f:Function) RETURN f.name",
             workspace=ws,
@@ -609,15 +607,14 @@ class TestCliCommandRegistration:
             limit=None,
             validate=True,
         )
-        r = info["execute"](args, ws)
+        r = execute(args, ws)
         assert r["valid"] is True
 
     def test_execute_with_cli_limit(self, graph_db):
         """--limit flag on CLI appends LIMIT to query."""
-        from commands import COMMAND_REGISTRY
+        from commands.query_graph import execute
         from argparse import Namespace
         ws, db_path = graph_db
-        info = COMMAND_REGISTRY["query-graph"]
         args = Namespace(
             query="MATCH (f:Function) RETURN f.name",
             workspace=ws,
@@ -625,7 +622,7 @@ class TestCliCommandRegistration:
             limit=2,
             validate=False,
         )
-        r = info["execute"](args, ws)
+        r = execute(args, ws)
         assert r["status"] == "ok"
         assert r["count"] == 2
         assert r["truncated"] is True

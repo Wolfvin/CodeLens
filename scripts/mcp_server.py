@@ -2225,10 +2225,37 @@ class MCPServer:
 
         cmd_info = self._command_registry.get(cmd_name)
         if cmd_info is None:
-            return {
-                "status": "error",
-                "error": f"Unknown command: {cmd_name}",
-                "available_commands": sorted(self._command_registry.keys())
+            # Issue #199: the 32 deprecated CLI aliases were removed from
+            # COMMAND_REGISTRY, but their implementation modules remain
+            # (umbrella commands import them via importlib for their --check
+            # sub-analyses). Several MCP tools (codelens_architecture,
+            # codelens_secrets, codelens_symbols, codelens_trace, etc.) still
+            # dispatch to these modules. Fall back to importing the module
+            # directly and use its execute()/add_args() callables so the MCP
+            # surface keeps working after the CLI aliases are gone.
+            import importlib
+            module_name = "commands." + cmd_name.replace("-", "_")
+            try:
+                mod = importlib.import_module(module_name)
+            except ImportError as exc:
+                return {
+                    "status": "error",
+                    "error": f"Unknown command: {cmd_name} ({exc})",
+                    "available_commands": sorted(self._command_registry.keys())
+                }
+            execute_fn = getattr(mod, "execute", None)
+            add_args_fn = getattr(mod, "add_args", None)
+            if execute_fn is None or add_args_fn is None:
+                return {
+                    "status": "error",
+                    "error": f"Module {module_name} does not expose execute()/add_args()",
+                    "available_commands": sorted(self._command_registry.keys())
+                }
+            cmd_info = {
+                "help": getattr(mod, "__doc__", "") or "",
+                "add_args": add_args_fn,
+                "execute": execute_fn,
+                "hidden": True,
             }
 
         # Issue #58, Phase 1: validate any agent-supplied ``file`` /

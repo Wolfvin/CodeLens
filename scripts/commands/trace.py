@@ -81,11 +81,4 @@ def execute(args, workspace):
         result["limit"] = limit
     return result
 
-
-register_command("trace", "Trace deep call chain from a symbol", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='context',
-
-)
+# Issue #199: deprecated "trace" alias registration removed; this module is now an implementation module imported by the "context" umbrella command.

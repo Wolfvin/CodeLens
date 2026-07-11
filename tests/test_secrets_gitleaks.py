@@ -503,40 +503,46 @@ class TestCliIntegration(unittest.TestCase):
         return proc
 
     def test_no_gitleaks_flag_in_help(self):
-        proc = self._run_cli("secrets", "--help")
+        # Issue #199: `secrets` alias removed — use `security --help`
+        proc = self._run_cli("security", "--help")
         self.assertIn("--no-gitleaks", proc.stdout)
 
     def test_secrets_runs_with_regex_backend_when_gitleaks_absent(self):
         """When gitleaks is not installed, backend should be 'regex'."""
-        proc = self._run_cli("secrets", "tests/fixtures")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("security", "tests/fixtures", "--check", "secrets")
         import json as _json
         out = proc.stdout
         json_start = out.find("{")
         self.assertGreater(json_start, -1, "No JSON in output")
         data = _json.loads(out[json_start:])
-        self.assertEqual(data["backend"], "regex")
+        # security umbrella wraps secrets under data["r"][0]
+        self.assertEqual(data["r"][0]["backend"], "regex")
         # gitleaks_hint should be present (telling user how to install)
-        self.assertTrue(data.get("gitleaks_hint"))
-        self.assertIn("gitleaks", data["gitleaks_hint"])
+        self.assertTrue(data["r"][0].get("gitleaks_hint"))
+        hint = data["r"][0].get("gitleaks_hint", "")
+        self.assertIn("gitleaks", hint)
 
     def test_no_gitleaks_flag_suppresses_hint(self):
         """--no-gitleaks should suppress the gitleaks_hint."""
-        proc = self._run_cli("secrets", "tests/fixtures", "--no-gitleaks")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("security", "tests/fixtures", "--check", "secrets", "--no-gitleaks")
         import json as _json
         out = proc.stdout
         json_start = out.find("{")
         data = _json.loads(out[json_start:])
-        self.assertEqual(data["backend"], "regex")
-        self.assertFalse(data.get("gitleaks_hint"))
+        self.assertEqual(data["r"][0]["backend"], "regex")
+        self.assertFalse(data["r"][0].get("gitleaks_hint"))
 
     def test_stats_backend_field_set(self):
         """stats.backend should be set so compact/ai formatters pick it up."""
-        proc = self._run_cli("secrets", "tests/fixtures")
+        # Issue #199: `secrets` alias removed — use `security --check secrets`
+        proc = self._run_cli("security", "tests/fixtures", "--check", "secrets")
         import json as _json
         out = proc.stdout
         json_start = out.find("{")
         data = _json.loads(out[json_start:])
-        self.assertEqual(data["stats"]["backend"], "regex")
+        self.assertEqual(data["r"][0]["stats"]["backend"], "regex")
 
 
 if __name__ == "__main__":

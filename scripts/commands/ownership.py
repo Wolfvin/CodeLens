@@ -19,11 +19,4 @@ def execute(args, workspace):
         function_name=args.function_name
     )
 
-
-register_command("ownership", "Git blame-based code ownership", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='history',
-
-)
+# Issue #199: deprecated "ownership" alias registration removed; this module is now an implementation module imported by the "history" umbrella command.

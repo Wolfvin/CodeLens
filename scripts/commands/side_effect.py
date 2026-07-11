@@ -21,11 +21,4 @@ def execute(args, workspace):
         max_files=args.max_files
     )
 
-
-register_command("side-effect", "Analyze function side effects (pure vs impure)", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='audit',
-
-)
+# Issue #199: deprecated "side-effect" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.

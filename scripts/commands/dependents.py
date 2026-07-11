@@ -42,11 +42,4 @@ def execute(args, workspace):
             return {"status": "error", "error": "No file specified. Usage: codelens dependents <file> [workspace]"}
         return get_dependents(file_path, workspace, depth=args.depth)
 
-
-register_command("dependents", "Module-level import tracking", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='deps',
-
-)
+# Issue #199: deprecated "dependents" alias registration removed; this module is now an implementation module imported by the "deps" umbrella command.

@@ -167,9 +167,10 @@ class TestHybridIntegration:
             test_file = os.path.join(tmpdir, "test.xyz")
             with open(test_file, "w") as f:
                 f.write("hello")
+            # Issue #199: `dead-code` alias removed — use `audit --check dead-code`
             result = subprocess.run(
                 [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-                 "dead-code", tmpdir, "--deep"],
+                 "audit", tmpdir, "--check", "dead-code", "--deep"],
                 capture_output=True, text=True
             )
             assert result.returncode == 0
@@ -224,10 +225,11 @@ class TestDeepSingleInvocation:
 
                 # Call main() in-process with patched argv so the mock
                 # is visible. Redirect stdout to suppress JSON output.
+                # Issue #199: `smell` alias removed — use `audit --check smell`
                 old_argv = sys.argv
                 import io
                 old_stdout = sys.stdout
-                sys.argv = ["codelens.py", "smell", ws, "--deep", "--format", "json"]
+                sys.argv = ["codelens.py", "audit", ws, "--check", "smell", "--deep", "--format", "json"]
                 sys.stdout = io.StringIO()
                 try:
                     from codelens import main
@@ -260,10 +262,12 @@ class TestDeepSingleInvocation:
             from commands.scan import cmd_scan
             cmd_scan(ws)
 
-            # symbols is NOT in the --deep supported list
+            # Issue #199: `symbols` alias removed — `search --mode symbol`
+            # is the post-#199 entry point. search is NOT in the --deep
+            # supported list.
             proc = subprocess.run(
                 [sys.executable, "scripts/codelens.py",
-                 "symbols", "foo", ws, "--deep", "--format", "json"],
+                 "search", "--mode", "symbol", "foo", ws, "--deep", "--format", "json"],
                 capture_output=True, text=True, timeout=60,
                 env={**os.environ, "PYTHONPATH": "scripts"},
             )
@@ -279,8 +283,10 @@ class TestDeepSingleInvocation:
             assert "deep_analysis_hint" in output, (
                 "deep_analysis_hint must be set for unsupported --deep command"
             )
-            assert "symbols" in output["deep_analysis_hint"], (
-                f"hint should mention the command name, got: {output['deep_analysis_hint']}"
+            # The hint should mention the command name (search or symbol)
+            hint = output["deep_analysis_hint"]
+            assert "search" in hint or "symbol" in hint, (
+                f"hint should mention the command name, got: {hint}"
             )
         finally:
             shutil.rmtree(ws, ignore_errors=True)

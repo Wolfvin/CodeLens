@@ -168,13 +168,4 @@ def cmd_import_snapshot(
         "tables": list(SNAPSHOT_TABLES),
     }
 
-
-register_command(
-    "import-snapshot",
-    "Import a CodeLens graph snapshot (.codelens.gz) into the database; "
-    "use --merge to deduplicate with the existing graph (issue #12)",
-    add_args,
-    execute,
-hidden=True,
-deprecated_alias_for='deps',
-)
+# Issue #199: deprecated "import-snapshot" alias registration removed; this module is now an implementation module imported by the "deps" umbrella command.

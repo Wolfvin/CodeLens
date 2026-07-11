@@ -85,11 +85,4 @@ def execute(args, workspace):
                 stats["backend"] = "regex"
     return result
 
-
-register_command("secrets", "Detect hardcoded secrets and API keys", add_args, execute,
-
-hidden=True,
-
-deprecated_alias_for='security',
-
-)
+# Issue #199: deprecated "secrets" alias registration removed; this module is now an implementation module imported by the "security" umbrella command.
