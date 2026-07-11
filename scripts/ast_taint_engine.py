@@ -3762,17 +3762,31 @@ class ASTTaintAnalyzer:
         }
         found = []
         for lang, markers in lang_markers.items():
+            lang_found = False
             for root, dirs, files in os.walk(workspace):
                 dirs[:] = [d for d in dirs if not d.startswith('.') and d not in DEFAULT_IGNORE_DIRS]
                 for f in files:
                     for marker in markers:
-                        if marker.startswith('.') and f.endswith(marker):
-                            found.append(lang)
+                        if (marker.startswith('.') and f.endswith(marker)) or \
+                           (not marker.startswith('.') and f == marker):
+                            # Bug: found.append(lang) fired once per matching
+                            # FILE (the inner `break` only exits the marker
+                            # loop, not the file loop), and the `if lang in
+                            # found: break` guard only ran after an entire
+                            # directory's files were exhausted — so every
+                            # matching file in the first directory walked got
+                            # appended before the early-exit kicked in. Found
+                            # via real-codebase validation: languages_analyzed
+                            # returned ["typescript","typescript","typescript"]
+                            # for a workspace with 3+ .ts files in its first
+                            # directory. Use a local flag instead so we append
+                            # at most once per language.
+                            lang_found = True
                             break
-                        elif not marker.startswith('.') and f == marker:
-                            found.append(lang)
-                            break
-                if lang in found:
+                    if lang_found:
+                        break
+                if lang_found:
+                    found.append(lang)
                     break
         return found if found else ["python"]
 
