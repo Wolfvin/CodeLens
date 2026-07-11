@@ -785,6 +785,17 @@ def _parse_js_imports(content: str, file_rel_path: str, workspace: str) -> List[
     imports = []
     file_dir = os.path.dirname(file_rel_path)
 
+    # Strip comments before scanning. Without this, an `import ... from '...'`
+    # example inside a `//` line comment or a docstring-style block comment
+    # gets matched as a real import, producing false self-import "cycles"
+    # (found via real-codebase validation: permission-gate.ts's own usage
+    # example comment — `// import { requirePermission } from
+    # '../middleware/permission-gate'` — was detected as the file importing
+    # itself).
+    from complexity_engine import _remove_comments
+    ext = os.path.splitext(file_rel_path)[1].lower()
+    content = _remove_comments(content, ext)
+
     # ES module imports: import X from './path' or '../path'
     for m in re.finditer(r'import\s+.*?from\s+["\'](\.{1,2}/[^"\']+)["\']', content):
         raw = m.group(1)
