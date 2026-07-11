@@ -296,8 +296,19 @@ def analyze_impact(
         test_patterns = [
             f"{base}.test.ts", f"{base}.test.js", f"{base}.spec.ts", f"{base}.spec.js",
             f"{base}.test.tsx", f"{base}.spec.tsx",
-            f.replace(".rs", "_test.rs").replace(".py", "_test.py"),
         ]
+        # Rust/Python "_test" suffix convention — only applicable to files of
+        # that extension. Bug: str.replace() is a no-op when the extension
+        # doesn't match (e.g. a .ts file has no ".rs"/".py" substring), so the
+        # "pattern" silently degenerated into the original filename `f` itself
+        # — which trivially exists on disk, causing EVERY affected file to be
+        # misclassified as its own test file (found via real-codebase
+        # validation: impact --name signInWithGoogle listed calculator_widget.ts,
+        # errors.ts, sidepanel.ts as "tests", none of which are test files).
+        if f.endswith(".rs"):
+            test_patterns.append(f[:-3] + "_test.rs")
+        elif f.endswith(".py"):
+            test_patterns.append(f[:-3] + "_test.py")
         for tf in test_patterns:
             full_path = os.path.join(workspace, tf)
             if os.path.exists(full_path):

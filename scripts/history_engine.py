@@ -151,7 +151,12 @@ def collect_metrics(workspace: str, scan_result: Dict[str, Any]) -> Dict[str, An
     try:
         from circular_engine import detect_circular
         circ = detect_circular(workspace)
-        metrics["circular_deps_count"] = circ.get("cycle_count", 0)
+        # Bug: detect_circular() returns "total_cycles", never "cycle_count" —
+        # this always silently fell back to the 0 default regardless of how
+        # many cycles were actually found (found via real-codebase validation:
+        # circular_deps_count read 0 while the circular_deps list right below
+        # had 5 entries populated from the same detect_circular() call).
+        metrics["circular_deps_count"] = circ.get("total_cycles", 0)
         metrics["circular_deps"] = []
         cycles = circ.get("cycles", circ.get("chains", {}))
         if isinstance(cycles, dict):
