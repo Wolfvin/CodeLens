@@ -3546,8 +3546,19 @@ class ASTTaintAnalyzer:
                 findings = analyzer.analyze_file(fpath, content=content,
                                                   language=lang, rules=lang_rules)
 
-                # Track which engine was used
-                if findings and findings[0].get('engine') == 'ast_taint':
+                # Track which engine was used. Bug: inferring this from
+                # findings[0]['engine'] silently miscounts every CLEAN file
+                # (0 findings) as regex_fallback regardless of which engine
+                # actually ran, since `if findings` is False on an empty list.
+                # Found via real-codebase validation: KDS backend had 0 taint
+                # findings total, so treesitter_used read 0 / regex_fallback
+                # read 50 even though tree-sitter was available and likely
+                # used for every file. Check parser availability directly
+                # instead — this mirrors _analyze_with_treesitter's own check
+                # and doesn't depend on there being at least one finding.
+                ts_lang = 'typescript' if lang == 'typescript' else (
+                    'tsx' if lang == 'tsx' else lang)
+                if TREE_SITTER_AVAILABLE and _get_parser(ts_lang):
                     treesitter_used += 1
                 else:
                     regex_fallback += 1
