@@ -79,25 +79,37 @@ REGEX_DEFINITION_PATTERNS = {
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
         (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
+    # Bug fix: only .js had "regex_literal_inline" (bare /pattern/flags used
+    # directly as a call argument, e.g. `.replace(/[-:T]/g, '')`) — .mjs/.cjs/
+    # .ts/.tsx/.jsx were missing it, so any inline (non-variable-assigned)
+    # regex literal in TypeScript/JSX went completely undetected. Found via
+    # real-codebase validation (Coretax-Auto-Downloader KDS backend, all .ts):
+    # regex-audit reported total_patterns:0 despite genuine inline regex
+    # literals like `.replace(/[-:T]/g, '')` and `.replace(/\s+/g, '.')`.
     ".mjs": [
         (r'(?:const|let|var)\s+\w+\s*=\s*(/[^/\n]+/[gimsuy]*)', "regex_literal"),
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
+        (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
     ".cjs": [
         (r'(?:const|let|var)\s+\w+\s*=\s*(/[^/\n]+/[gimsuy]*)', "regex_literal"),
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
+        (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
     ".ts": [
         (r'(?:const|let|var)\s+\w+\s*(?::\s*\w+(?:<[^>]+>)?)?\s*=\s*(/[^/\n]+/[gimsuy]*)', "regex_literal"),
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
+        (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
     ".tsx": [
         (r'(?:const|let|var)\s+\w+\s*(?::\s*\w+(?:<[^>]+>)?)?\s*=\s*(/[^/\n]+/[gimsuy]*)', "regex_literal"),
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
+        (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
     ".jsx": [
         (r'(?:const|let|var)\s+\w+\s*=\s*(/[^/\n]+/[gimsuy]*)', "regex_literal"),
         (r'new\s+RegExp\s*\(\s*("([^"]*)"|\'([^\']*)\')', "regexp_constructor"),
+        (r'/([^/\n]+)/[gimsuy]*', "regex_literal_inline"),
     ],
     ".py": [
         (r're\.compile\s*\(\s*(?:r)?["\']([^"\']+)["\']', "re_compile"),
