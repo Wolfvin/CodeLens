@@ -883,10 +883,8 @@ def execute_query(
         }
 
     # Add LIMIT
-    truncated = False
     if ast.limit is not None:
         sql += f" LIMIT {ast.limit}"
-        truncated = True
 
     # Execute
     try:
@@ -924,6 +922,13 @@ def execute_query(
     num_nodes = len(ast.pattern.nodes)
     raw_results = [_row_to_result(r, num_nodes) for r in rows]
     projected = _project_return(raw_results, ast.return_items, ast.return_star, ast.pattern.nodes)
+
+    # truncated means "results were actually cut off by LIMIT", not merely
+    # "the query happened to contain a LIMIT clause" — a LIMIT 5 query that
+    # only matches 1 row is not truncated (fixed: previously always True
+    # whenever ast.limit was set, misleading callers into thinking more
+    # results existed).
+    truncated = ast.limit is not None and len(rows) >= ast.limit
 
     return {
         "status": "ok",
