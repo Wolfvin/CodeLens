@@ -9,7 +9,10 @@ Handles:
 - async variants of all above
 - Method calls: obj.method() → tracked as "method"
 - Member expression calls: HttpClient.new()
-- Anonymous/inline callbacks → IGNORED
+- Module-top-level calls (issue #210): router.post(...) at file root
+- Calls inside inline arrow/function-expression callbacks (issue #210):
+  e.g., the (req, res) => {...} handler passed to router.post(...)
+- Anonymous/inline callbacks -> body calls now extracted (issue #210)
 - Built-in keywords filtered out
 """
 
@@ -201,6 +204,39 @@ class JSBackendParser(BaseParser):
                     for child in reversed(children):
                         keep_alive.append(child)
                         stack.append((child, depth + 1))
+
+            # Issue #210: module-top-level pass.
+            # The main walk above only extracts calls via _parse_and_collect_calls,
+            # which is invoked on declaration nodes (function_declaration,
+            # variable_declarator, class_declaration, export_statement children).
+            # Calls that live outside any registered declaration body are missed:
+            #   - Module-top-level calls (e.g. `router.post(path, fn, handler)` at
+            #     file root) — including calls passed as arguments like
+            #     `requirePermission('admin')` inside `router.post(...)`.
+            #   - Calls inside inline arrow/function-expression callbacks (e.g.
+            #     the `(req, res) => { hasPermission(...) }` handler passed to
+            #     `router.post(...)`).
+            # Walk the root again, skipping subtrees of registered declarations
+            # to avoid double-count, and extract remaining call_expression /
+            # new_expression nodes with a synthetic `<module>` caller.
+            module_calls = self._find_module_level_calls(root, source, file_path)
+            if module_calls:
+                # Synthetic source_id (no corresponding node entry) — mirrors
+                # the convention used by hybrid_type_resolver._file_node_id for
+                # IMPORTS edges. CALLS-traversal code naturally skips dangling
+                # source_ids, and ref_count is computed from the target side,
+                # so no node is needed. This keeps `list`/`search` output free
+                # of fake `<module>` function entries.
+                module_node_id = f"{file_path}:0:<module>"
+                for call_info in module_calls:
+                    edge = {
+                        "from": module_node_id,
+                        "to_fn": call_info["fn_name"],
+                        "via_self": call_info.get("via_self", False)
+                    }
+                    if call_info.get("is_ipc_call"):
+                        edge["is_ipc_call"] = True
+                    edges.append(edge)
 
             return {"nodes": nodes, "edges": edges, "skipped": []}
         finally:
@@ -497,6 +533,105 @@ class JSBackendParser(BaseParser):
                 call_info = self._parse_new_expression(node, source)
                 if call_info:
                     calls.append(call_info)
+            if depth + 1 <= MAX_DEPTH:
+                children = node.children
+                for child in reversed(children):
+                    keep_alive.append(child)
+                    stack.append((child, depth + 1))
+
+        return calls
+
+    def _find_module_level_calls(self, root: Node, source: bytes,
+                                  file_path: str) -> List[Dict]:
+        """Find call sites that live outside any registered function declaration.
+
+        Issue #210: the main walk in :meth:`extract_references` only extracts
+        calls via :meth:`_parse_and_collect_calls`, which is invoked on
+        declaration nodes. Two patterns slip through and cause
+        reference_count undercounting:
+
+        1. Module-top-level calls. Express/Router modular route files typically
+           do `router.post(path, requirePermission('admin'), handler)` at the
+           file root — not inside any function. The whole call expression
+           (including the `requirePermission('admin')` argument) is invisible
+           to the per-function pass.
+        2. Calls inside inline arrow/function-expression callbacks. Route
+           handlers like `(req, res) => { hasPermission(...) }` are passed as
+           arguments to `router.post(...)` and are NOT registered as function
+           declarations (they're not assigned to a name), so the per-function
+           pass never visits their bodies.
+
+        This pass walks the AST root and extracts every call_expression /
+        new_expression that hasn't already been covered, by skipping the
+        subtrees of registered declarations:
+
+          - function_declaration / generator_function_declaration
+          - class_declaration (its method_definition bodies are walked by the
+            per-function pass via the class_body)
+          - variable_declarator whose value is arrow_function /
+            function_expression / defineStore(...) call (registered as a
+            function node or Pinia store)
+
+        Everything else — including inline arrow functions and the argument
+        lists of call_expressions — is walked normally, so calls inside them
+        are extracted with a synthetic `<module>` caller.
+
+        Uses the same iterative DFS + ``keep_alive`` pattern as
+        :meth:`_find_calls_in_scope` (issue #116/#163) so tree-sitter Node
+        references don't dangle mid-walk.
+        """
+        calls: List[Dict] = []
+        MAX_DEPTH = 200
+
+        def _is_registered_value(child: Node) -> bool:
+            """Return True if a variable_declarator child is a registered value.
+
+            Registered values are arrow_function, function_expression, or a
+            defineStore(...) call_expression (Pinia store pattern).
+            """
+            if child.type in ('arrow_function', 'function_expression'):
+                return True
+            if child.type == 'call_expression':
+                func_node = child.child_by_field_name('function')
+                if func_node:
+                    fn_text = source[func_node.start_byte:func_node.end_byte].decode(
+                        'utf-8', errors='replace')
+                    if fn_text == 'defineStore':
+                        return True
+            return False
+
+        keep_alive: List[Node] = [root]
+        stack: List[Tuple[Node, int]] = [(root, 0)]
+        while stack:
+            node, depth = stack.pop()
+            if depth > MAX_DEPTH:
+                continue
+
+            # Skip subtrees already covered by the per-function pass to
+            # avoid double-counting call sites.
+            skip_subtree = False
+            if node.type in ('function_declaration',
+                             'generator_function_declaration',
+                             'class_declaration'):
+                skip_subtree = True
+            elif node.type == 'variable_declarator':
+                for child in node.children:
+                    if _is_registered_value(child):
+                        skip_subtree = True
+                        break
+
+            if skip_subtree:
+                continue
+
+            if node.type == 'call_expression':
+                call_info = self._parse_call(node, source)
+                if call_info:
+                    calls.append(call_info)
+            elif node.type == 'new_expression':
+                call_info = self._parse_new_expression(node, source)
+                if call_info:
+                    calls.append(call_info)
+
             if depth + 1 <= MAX_DEPTH:
                 children = node.children
                 for child in reversed(children):
