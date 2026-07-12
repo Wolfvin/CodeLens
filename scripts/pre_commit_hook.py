@@ -21,6 +21,12 @@ import os
 import subprocess
 import json
 
+# subprocess.run(..., text=True) below also passes encoding='utf-8',
+# errors='replace' — without it, Windows decodes with cp1252 (platform
+# default) and crashes on git/codelens output containing non-cp1252 bytes
+# (accented file/author names, non-ASCII findings text). Same class of bug
+# fixed in ownership_engine.py (PR #216).
+
 # Add scripts directory to path
 SCRIPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts')
 CODELENS = os.path.join(SCRIPT_DIR, 'codelens.py')
@@ -33,7 +39,8 @@ def main():
     try:
         result = subprocess.run(
             ['git', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'],
-            capture_output=True, text=True, cwd=workspace
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            cwd=workspace
         )
         staged_files = [f.strip() for f in result.stdout.strip().split('\n') if f.strip()]
     except Exception:
@@ -67,7 +74,10 @@ def main():
                '--max-findings', str(max_findings),
                '--commands'] + commands
 
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=workspace, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+            cwd=workspace, timeout=120
+        )
 
         if result.returncode != 0:
             # Gate failed
