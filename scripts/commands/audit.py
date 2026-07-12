@@ -110,6 +110,13 @@ def add_args(parser):
                         help="perf-hint: single category filter")
     parser.add_argument("--no-confirm-hash", action="store_true", default=False,
                         help="staleness: skip content-hash confirmation")
+    parser.add_argument("--no-verify-impact", dest="verify_impact",
+                        action="store_false", default=True,
+                        help="dead-code: skip per-finding deletion_safety cross-check "
+                             "against impact analysis (issue #238)")
+    parser.add_argument("--verify-impact-limit", type=int, default=None,
+                        help="dead-code: max findings to cross-check with impact "
+                             "analysis (default: 20)")
 
 
 def _parse_checks(check_arg: str) -> List[str]:
@@ -138,6 +145,8 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.categories = getattr(base_args, "categories", None)
         ns.max_files = getattr(base_args, "max_files", None) or 3000
         ns.max_results = getattr(base_args, "max_results", None) or 100
+        ns.verify_impact = getattr(base_args, "verify_impact", True)
+        ns.verify_impact_limit = getattr(base_args, "verify_impact_limit", None) or 20
     elif check_name == "complexity":
         ns.name = getattr(base_args, "name", None)
         ns.file = getattr(base_args, "file", None)
