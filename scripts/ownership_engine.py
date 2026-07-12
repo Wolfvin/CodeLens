@@ -18,6 +18,15 @@ import subprocess
 import json
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
+
+# All subprocess.run(..., text=True) calls below also pass
+# encoding='utf-8', errors='replace'. Without an explicit encoding,
+# subprocess decodes with the platform's default locale codec — cp1252 on
+# Windows — which crashes with UnicodeDecodeError on git blame/log output
+# containing non-cp1252 bytes (e.g. accented author names, non-ASCII commit
+# text). Found via real-codebase validation: `history --check ownership`
+# crashed with "'NoneType' object has no attribute 'split'" against a repo
+# whose git history has UTF-8 characters outside cp1252's range.
 from datetime import datetime, timezone
 from utils import DEFAULT_IGNORE_DIRS, logger
 
@@ -74,7 +83,7 @@ def _is_git_repo(workspace: str) -> bool:
     try:
         result = subprocess.run(
             ['git', 'rev-parse', '--is-inside-work-tree'],
-            cwd=workspace, capture_output=True, text=True, timeout=5
+            cwd=workspace, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         )
         return result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
@@ -86,7 +95,7 @@ def _run_git_blame(workspace: str, file_path: str) -> Optional[List[Dict]]:
     try:
         result = subprocess.run(
             ['git', 'blame', '--line-porcelain', file_path],
-            cwd=workspace, capture_output=True, text=True, timeout=30
+            cwd=workspace, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
         )
         if result.returncode != 0:
             return None
@@ -280,7 +289,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
     try:
         result = subprocess.run(
             ['git', 'rev-parse', '--is-shallow-repository'],
-            cwd=workspace, capture_output=True, text=True, timeout=5
+            cwd=workspace, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         )
         if result.returncode == 0 and result.stdout.strip().lower() == 'true':
             is_shallow = True
@@ -296,7 +305,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
         # Get commit count per author
         result = subprocess.run(
             ['git', 'shortlog', '-sn', '--all'],
-            cwd=workspace, capture_output=True, text=True, timeout=15
+            cwd=workspace, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15
         )
         if result.returncode == 0:
             for line in result.stdout.strip().split('\n'):
@@ -343,7 +352,7 @@ def _analyze_workspace_ownership(workspace: str) -> Dict[str, Any]:
         try:
             result = subprocess.run(
                 ['git', 'log', '-1', '--format=%ct', '--', rel_path],
-                cwd=workspace, capture_output=True, text=True, timeout=5
+                cwd=workspace, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
             )
             if result.returncode == 0 and result.stdout.strip():
                 ts = int(result.stdout.strip())
