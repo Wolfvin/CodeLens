@@ -66,8 +66,11 @@ def add_args(parser):
                              f"Choices: {', '.join(ALL_CHECKS)}. Default: impact.")
     parser.add_argument("--name", default=None,
                         help="impact: symbol name to analyze")
-    parser.add_argument("--action", choices=["modify", "delete"], default="modify",
+    parser.add_argument("--action", choices=["modify", "delete", "rename"], default="modify",
                         help="impact: planned action (default: modify)")
+    parser.add_argument("--new-name", default=None,
+                        help="impact: new symbol name, required with --action rename "
+                             "(issue #241)")
     parser.add_argument("--domain", default="auto",
                         help="impact: frontend|backend|auto (default: auto)")
     parser.add_argument("--depth", type=int, default=None,
@@ -118,7 +121,42 @@ def _run_legacy_impact(args, workspace):
     action = getattr(args, "action", "modify")
     domain = getattr(args, "domain", "auto")
     depth = getattr(args, "depth", None) or 5
+    new_name = getattr(args, "new_name", None)
+
+    # Issue #241: rename simulation — every real call site needs updating
+    # to the new name, unlike modify (same signature, callers unaffected)
+    # or delete (callers need to stop referencing it entirely).
+    if action == "rename" and not new_name:
+        return {
+            "status": "error",
+            "error": "--action rename requires --new-name <new symbol name>",
+        }
+
     result = analyze_impact(name, workspace, action=action, domain=domain, depth=depth)
+    if action == "rename" and result.get("status") == "ok":
+        result["new_name"] = new_name
+        checklist = []
+        for item in result.get("affected", {}).get("direct", []):
+            checklist.append({
+                "file": item.get("file"),
+                "line": item.get("line"),
+                "caller": item.get("name"),
+            })
+        result["rename_checklist"] = checklist
+        result["rename_caveat"] = (
+            f"This lists {len(checklist)} statically-resolved call site(s) that "
+            f"reference '{name}' and need updating to '{new_name}'. It does NOT "
+            "catch dynamic/string-based references (e.g. dynamic import(), "
+            "reflection, string-keyed dispatch tables, or the identifier "
+            "appearing in comments/docs) — grep for the old name as a final "
+            "check before considering the rename complete."
+        )
+        result.setdefault("recommendations", []).insert(
+            0,
+            f"Update {len(checklist)} call site(s) listed in rename_checklist, "
+            f"then grep for remaining '{name}' references (dynamic/string-based "
+            "usage is not covered by this analysis).",
+        )
     if result.get("status") == "ok":
         engine_risk = result.get("risk", "low")
         stats = result.get("stats", {})
