@@ -41,10 +41,11 @@ def test_every_command_module_registers():
     _DEPRECATED_ALIAS_MODULES = {
         "affected", "arch_metrics", "architecture", "binary_scan",
         "circular", "complexity", "dashboard", "dataflow", "dead_code",
-        "dependents", "diff", "env_check", "git_status", "graph_schema",
-        "import_snapshot", "init", "lsp_status", "orient", "outline",
-        "ownership", "perf_hint", "query_graph", "regex_audit", "secrets",
-        "side_effect", "smell", "staleness", "taint", "trace", "vuln_scan",
+        "dependents", "diff", "env_check", "export_snapshot", "git_status",
+        "graph_schema", "import_snapshot", "init", "lsp_status", "orient",
+        "outline", "ownership", "perf_hint", "query_graph", "regex_audit",
+        "secrets", "side_effect", "smell", "staleness", "taint", "trace",
+        "vuln_scan",
     }
     _UTILITY_MODULES |= _DEPRECATED_ALIAS_MODULES
     missing = []

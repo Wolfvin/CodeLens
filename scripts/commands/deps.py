@@ -50,7 +50,16 @@ _CHECKS = {
         "module": "commands.import_snapshot",
         "help": "Import a .codelens.gz snapshot into the graph DB",
     },
+    "export-snapshot": {
+        "module": "commands.export_snapshot",
+        "help": "Export the graph DB to a .codelens.gz snapshot (issue #218)",
+    },
 }
+
+# Checks that are NOT run by default when --check is omitted (import/export
+# are explicit opt-in actions with side effects — a bare `codelens deps .`
+# should only run the read-only analyses).
+_DEFAULT_EXCLUDED_CHECKS = {"import-snapshot", "export-snapshot"}
 
 ALL_CHECKS = list(_CHECKS.keys())
 
@@ -64,12 +73,17 @@ def add_args(parser):
         "  dependents        Module-level import tracking\n"
         "  circular          Circular dependency detection\n"
         "  import-snapshot   Import .codelens.gz into graph DB\n"
+        "  export-snapshot   Export graph DB to .codelens.gz (issue #218)\n"
         "\n"
         "Examples:\n"
-        "  codelens deps .                              # all checks\n"
+        "  codelens deps .                              # affected/dependents/circular\n"
         "  codelens deps . --check circular             # only circular\n"
         "  codelens deps . --check affected,dependents  # pick subset\n"
+        "  codelens deps . --check export-snapshot --output s.codelens.gz\n"
         "  codelens deps . --check import-snapshot --input s.codelens.gz\n"
+        "\n"
+        "NOTE: import-snapshot/export-snapshot are NOT run by the bare\n"
+        "`codelens deps <workspace>` default (side-effecting, opt-in only).\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -94,6 +108,8 @@ def add_args(parser):
                         help="circular: max cycles per type")
     parser.add_argument("--input", default=None,
                         help="import-snapshot: path to .codelens.gz file")
+    parser.add_argument("--output", default=None,
+                        help="export-snapshot: path to write .codelens.gz file")
     parser.add_argument("--merge", action="store_true", default=False,
                         help="import-snapshot: deduplicate with existing graph")
     parser.add_argument("--db-path", default=None,
@@ -103,7 +119,13 @@ def add_args(parser):
 def _parse_checks(check_arg: str) -> List[str]:
     """Parse --check argument into a list of valid check names."""
     if not check_arg:
-        return list(ALL_CHECKS)
+        # import-snapshot/export-snapshot are explicit opt-in actions with
+        # side effects (write to the graph DB / filesystem) and always fail
+        # by default (no snapshot file present yet) — excluded from the
+        # bare `codelens deps <workspace>` "run everything" default so it
+        # doesn't always show a spurious error entry. Still runnable via
+        # explicit --check import-snapshot / --check export-snapshot.
+        return [c for c in ALL_CHECKS if c not in _DEFAULT_EXCLUDED_CHECKS]
     parts = [c.strip() for c in check_arg.split(",") if c.strip()]
     invalid = [p for p in parts if p not in _CHECKS]
     if invalid:
@@ -156,6 +178,9 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
     elif check_name == "import-snapshot":
         ns.input = getattr(base_args, "input", None)
         ns.merge = getattr(base_args, "merge", False)
+        ns.db_path = getattr(base_args, "db_path", None)
+    elif check_name == "export-snapshot":
+        ns.output = getattr(base_args, "output", None)
         ns.db_path = getattr(base_args, "db_path", None)
     return ns
 
