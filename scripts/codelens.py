@@ -998,6 +998,69 @@ def compute_confidence_distribution_flat(result: Dict[str, Any]) -> Dict[str, in
     return dist
 
 
+# ─── Always-Warm Registry (issue #237) ─────────────────────────
+
+_AUTO_RESCAN_FILE_THRESHOLD = 20
+
+
+def _check_staleness(workspace: str, args) -> Optional[Dict[str, Any]]:
+    """Check registry staleness vs git HEAD and auto-rescan small diffs.
+
+    Registry staleness vs git HEAD was previously only surfaced passively via
+    `history --check git-status`'s "re-scan recommendation" field — nothing
+    else read it. Every other analysis command could silently answer from a
+    stale graph. Note: deliberately NOT gated on the same _REGISTRY_COMMANDS
+    set as the auto-setup block in main() — that set still lists pre-#195
+    leaf command names and is missing several current umbrella commands
+    (audit, security, deps, doctor — see issue #244); "every command except
+    scan itself" is simpler and correct without depending on that list
+    being fixed.
+
+    Returns:
+        None if not stale (or staleness can't be determined — e.g. not a
+        git repo, git unavailable, no registry yet). Otherwise a dict with
+        ``was_stale``, ``auto_rescanned``, ``changed_files_count``, and
+        (when not auto-rescanned) a ``hint`` field.
+    """
+    if args.command == "scan" or not _registry_exists(workspace):
+        return None
+    try:
+        import git_aware
+        from utils import default_db_path
+        db_path = getattr(args, "db_path", None) or default_db_path(workspace)
+        if not git_aware.rescan_recommended(workspace, db_path):
+            return None
+        last_sha = git_aware.get_last_indexed_sha(workspace, db_path)
+        changed_files = (
+            git_aware.get_changed_files(workspace, since_sha=last_sha)
+            if last_sha else []
+        )
+        changed_count = len(changed_files)
+        if 0 < changed_count <= _AUTO_RESCAN_FILE_THRESHOLD:
+            from commands.scan import cmd_scan
+            cmd_scan(workspace, incremental=True)
+            return {
+                "was_stale": True,
+                "auto_rescanned": True,
+                "changed_files_count": changed_count,
+            }
+        return {
+            "was_stale": True,
+            "auto_rescanned": False,
+            "changed_files_count": changed_count,
+            "hint": (
+                "Registry may be stale vs current git HEAD "
+                f"(>{_AUTO_RESCAN_FILE_THRESHOLD} files changed or "
+                "branch switch detected). Run 'scan --incremental' "
+                "to refresh before trusting these results."
+            ),
+        }
+    except Exception:
+        # Best-effort — never block the actual command on staleness
+        # detection failing (e.g. not a git repo, git binary missing).
+        return None
+
+
 # ─── CLI Entry Point ──────────────────────────────────────────
 
 def main():
@@ -1413,10 +1476,15 @@ def main():
                 "message": f"Auto-setup failed at {auto_setup_result.get('stage')}: {auto_setup_result.get('error')}",
             }
 
+    staleness_info = _check_staleness(workspace, args)
+
     try:
         cmd_info = registry[args.command]
 
         result = cmd_info["execute"](args, workspace)
+
+        if staleness_info and isinstance(result, dict):
+            result["_staleness"] = staleness_info
 
         # ─── Dispatch enrichment (scan-specific) ──────
         if args.command == "scan":
