@@ -77,6 +77,15 @@ def _run_doctor(workspace=None, fix=False, verbose=False, fmt="json"):
     args.verbose = verbose
     args.format = fmt
     args.workspace = workspace
+    # Issue #195 added a --check dispatch to doctor.execute(): when
+    # getattr(args, "check", None) is truthy, execution goes through
+    # _dispatch_subcommands() instead of the normal full-checks path.
+    # MagicMock auto-vivifies any attribute access (args.check returns a
+    # fresh MagicMock, not None), so without this explicit assignment every
+    # test using this helper silently exercised the wrong code path and got
+    # the umbrella {s, st, r} shape instead of doctor's own
+    # {status, exit_code, checks, ...} shape.
+    args.check = None
     return doctor_module.execute(args, workspace or "")
 
 
@@ -346,6 +355,7 @@ class TestFixMode:
                     args.verbose = False
                     args.format = "json"
                     args.workspace = str(tmp_path)
+                    args.check = None  # see _run_doctor() docstring
                     result = doctor_module.execute(args, str(tmp_path))
 
         assert mock_run.called
@@ -372,6 +382,7 @@ class TestFixMode:
                 args.verbose = False
                 args.format = "json"
                 args.workspace = str(tmp_path)
+                args.check = None  # see _run_doctor() docstring
                 result = doctor_module.execute(args, str(tmp_path))
 
         # pip should NOT have been called.
