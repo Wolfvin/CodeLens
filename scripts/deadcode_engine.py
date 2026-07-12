@@ -17,7 +17,7 @@ import re
 import json
 import time
 from typing import Dict, List, Any, Optional, Set
-from collections import defaultdict
+from collections import defaultdict, Counter
 from utils import DEFAULT_IGNORE_DIRS, safe_read_file, MAX_FILE_SIZE, logger, time_budget_expired
 
 SOURCE_EXTENSIONS = {
@@ -136,30 +136,42 @@ def detect_dead_code(
 
             elif ext == ".go":
                 _collect_go_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_go_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext == ".rs":
                 _collect_rust_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_rust_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext in {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"}:
                 _collect_c_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_c_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext == ".lua":
                 _collect_lua_exports_imports(content, rel_path, all_exports, all_imports)
 
             elif ext == ".php":
                 _collect_php_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_php_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext in {".ex", ".exs"}:
                 _collect_elixir_exports_imports(content, rel_path, all_exports, all_imports)
 
             elif ext == ".rb":
                 _collect_ruby_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_ruby_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext in {".nim", ".nims"}:
                 _collect_nim_exports_imports(content, rel_path, all_exports, all_imports)
 
             elif ext == ".java":
                 _collect_java_exports_imports(content, rel_path, all_exports, all_imports)
+                # Issue #220: track same-file usage for non-Python languages
+                _collect_java_same_file_usages(content, rel_path, same_file_usages)
 
             elif ext == ".cs":
                 _collect_csharp_exports_imports(content, rel_path, all_exports, all_imports)
@@ -215,7 +227,11 @@ def detect_dead_code(
     # v6: Use the backend registry's ref_count data when available.
     #     Functions with ref_count == 0 and status == "dead" from the scan
     #     should be reported as dead code.
-    registry_dead = _detect_dead_from_registry(workspace)
+    # Issue #220: pass same_file_usages so _detect_dead_from_registry can
+    # exempt symbols that are referenced within their own file (e.g. a Rust
+    # const used 10+ times in-file but never appearing as a CALLS edge
+    # because consts are not "called").
+    registry_dead = _detect_dead_from_registry(workspace, same_file_usages)
     if registry_dead:
         results["registry_dead"] = registry_dead[:max_results]
 
@@ -1032,6 +1048,240 @@ def _collect_py_same_file_usages(
         used_names.add(name)
 
     usages[rel_path] = used_names
+
+
+# ─── Issue #220: same-file-usage collectors for non-Python languages ────────
+# These mirror _collect_py_same_file_usages() but with language-specific
+# keyword filters and syntax patterns. Without these, same_file_usages is
+# always empty for non-Python files, causing _detect_unused_exports() to
+# flag any export that's used only within its own file (never imported
+# cross-file) as dead. The _detect_dead_from_registry() path also needs
+# same_file_usages to exempt consts/statics that are referenced in-file
+# but never appear as CALLS edges in the backend registry (consts/statics
+# are not "called", so ref_count==0 even when used 10+ times in-file).
+#
+# Design principle (per issue #220 constraint): "False negative (skip
+# flagging simbol yang benar2 dead) lebih baik daripada false positive".
+# Each collector uses a BROAD identifier match (\b\w+\b) to catch all
+# references — string/comment content is intentionally NOT stripped
+# because the cost of a false positive (flagging genuinely-used code as
+# dead) is higher than a false negative (missing a genuinely-dead symbol).
+
+# Shared keyword sets — kept in sync with _collect_name_references() to
+# avoid exempting a name that's actually a language keyword rather than a
+# real usage.
+_RUST_KW = {'fn', 'pub', 'let', 'if', 'while', 'for', 'match', 'return',
+            'use', 'mod', 'struct', 'enum', 'impl', 'trait', 'type',
+            'where', 'unsafe', 'async', 'await', 'self', 'Self', 'super',
+            'crate', 'true', 'false', 'as', 'break', 'continue', 'else',
+            'loop', 'move', 'mut', 'ref', 'static', 'const', 'extern',
+            'dyn', 'in', 'box', 'yield', 'try', 'union', 'macro_rules',
+            'default', 'existential', 'become', 'unsized', 'abi'}
+
+_GO_KW = {'func', 'type', 'var', 'const', 'import', 'package',
+          'return', 'defer', 'go', 'select', 'switch', 'if',
+          'for', 'range', 'map', 'chan', 'interface', 'struct',
+          'true', 'false', 'nil', 'error', 'string', 'bool',
+          'int', 'int8', 'int16', 'int32', 'int64', 'uint', 'uint8',
+          'uint16', 'uint32', 'uint64', 'uintptr', 'float32', 'float64',
+          'byte', 'rune', 'make', 'new', 'len', 'cap', 'append', 'copy',
+          'delete', 'close', 'panic', 'recover', 'print', 'println',
+          'complex', 'real', 'imag', 'iota', 'else', 'case', 'default',
+          'break', 'continue', 'goto', 'fallthrough'}
+
+_JAVA_KW = {'if', 'else', 'for', 'while', 'switch', 'return', 'new',
+            'class', 'interface', 'extends', 'implements', 'import',
+            'package', 'public', 'private', 'protected', 'static',
+            'final', 'abstract', 'void', 'int', 'long', 'double',
+            'float', 'boolean', 'char', 'byte', 'short', 'true',
+            'false', 'null', 'this', 'super', 'try', 'catch',
+            'throw', 'throws', 'finally', 'synchronized', 'volatile',
+            'transient', 'native', 'enum', 'assert', 'instanceof',
+            'do', 'break', 'continue', 'case', 'default', 'const',
+            'goto', 'strictfp', 'var', 'yield', 'record', 'sealed',
+            'permits', 'non-sealed'}
+
+_PHP_KW = {'if', 'else', 'elseif', 'for', 'while', 'switch', 'return',
+           'function', 'class', 'new', 'public', 'private', 'protected',
+           'static', 'abstract', 'final', 'try', 'catch', 'throw',
+           'foreach', 'isset', 'unset', 'echo', 'print', 'list',
+           'array', 'namespace', 'use', 'require', 'include',
+           'require_once', 'include_once', 'true', 'false', 'null',
+           'as', 'extends', 'implements', 'interface', 'trait',
+           'const', 'var', 'case', 'break', 'continue', 'default',
+           'do', 'global', 'print', 'clone', 'instanceof', 'insteadof',
+           'yield', 'fn', 'match', 'enum', 'readonly', 'never', 'void',
+           'int', 'float', 'bool', 'string', 'object', 'mixed', 'iterable',
+           'self', 'parent', 'static'}
+
+_RUBY_KW = {'def', 'class', 'module', 'if', 'else', 'elsif', 'unless',
+            'while', 'until', 'for', 'do', 'begin', 'rescue', 'ensure',
+            'raise', 'return', 'yield', 'nil', 'true', 'false',
+            'require', 'include', 'extend', 'attr', 'attr_accessor',
+            'attr_reader', 'attr_writer', 'new', 'end', 'then',
+            'and', 'or', 'not', 'in', 'case', 'when', 'break',
+            'next', 'redo', 'retry', 'super', 'self', 'defined?',
+            'lambda', 'proc', 'puts', 'print', 'p', 'pp', 'alias',
+            'undef', 'BEGIN', 'END', '__FILE__', '__LINE__', '__dir__'}
+
+# C and C++ share a keyword set (C++ is a superset). This collector is
+# used for all C/C++ extensions: .c, .cpp, .cxx, .cc, .h, .hpp, .hxx.
+_C_CPP_KW = {'if', 'for', 'while', 'switch', 'return', 'sizeof', 'typeof',
+             'catch', 'class', 'struct', 'enum', 'union', 'namespace',
+             'template', 'typename', 'new', 'delete', 'void', 'int',
+             'char', 'float', 'double', 'long', 'short', 'unsigned',
+             'signed', 'const', 'static', 'extern', 'inline', 'virtual',
+             'override', 'final', 'public', 'private', 'protected',
+             'true', 'false', 'nullptr', 'NULL', 'auto', 'register',
+             'volatile', 'typedef', 'using', 'else', 'case', 'default',
+             'break', 'continue', 'goto', 'do', 'try', 'throw', 'throws',
+             'operator', 'friend', 'this', 'explicit', 'mutable',
+             'constexpr', 'noexcept', 'thread_local', 'alignas', 'alignof',
+             'decltype', 'static_assert', 'nullptr_t', 'size_t',
+             'int8_t', 'int16_t', 'int32_t', 'int64_t',
+             'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+             'wchar_t', 'char16_t', 'char32_t', 'bool', 'std', 'string',
+             'vector', 'map', 'set', 'pair', 'shared_ptr', 'unique_ptr',
+             'weak_ptr', 'make_shared', 'make_unique', 'static_cast',
+             'dynamic_cast', 'reinterpret_cast', 'const_cast'}
+
+
+def _collect_rust_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a Rust file (issue #220).
+
+    Rust uses: function calls (name(), qualified access (module::name),
+    macro invocations (name!), struct/enum instantiation (Name{...}),
+    const/static references (bare identifier in expression position).
+    A broad \\b\\w+\\b match catches all of these; macro invocations
+    need an additional (\\w+)! pattern because the `!` breaks the word
+    boundary match.
+
+    Only names appearing 2+ times are added to the usage set. This
+    prevents a symbol's own definition (e.g. `const RED` or `fn foo`)
+    from counting as a "usage" — a symbol that appears only in its
+    definition line is NOT used within the file and should remain
+    eligible for dead-code flagging. The broad match intentionally
+    includes string/comment occurrences because the issue's principle
+    is "false negative > false positive" (better to miss a genuinely
+    dead symbol than to flag a genuinely used one).
+    """
+    counts: Counter = Counter()
+    # Broad identifier match — catches bare const refs, function names,
+    # type names, field names, etc.
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _RUST_KW:
+            counts[name] += 1
+    # Macro invocations: name!(...) — the `!` is not a word char so the
+    # broad match above catches `name` but we add it explicitly for
+    # clarity and in case the broad match is tightened later.
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\s*!', content):
+        counts[m.group(1)] += 1
+    # Only exempt names that appear 2+ times (definition + ≥1 usage).
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
+
+def _collect_go_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a Go file (issue #220).
+
+    Only names appearing 2+ times are added (see _collect_rust_same_file_usages
+    docstring for rationale).
+    """
+    counts: Counter = Counter()
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _GO_KW:
+            counts[name] += 1
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
+
+def _collect_java_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a Java file (issue #220).
+
+    Only names appearing 2+ times are added (see _collect_rust_same_file_usages
+    docstring for rationale).
+    """
+    counts: Counter = Counter()
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _JAVA_KW:
+            counts[name] += 1
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
+
+def _collect_php_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a PHP file (issue #220).
+
+    PHP variables start with `$` — those are tracked separately by the
+    unused_vars detector. For same-file-usage of exports (function/class
+    names), we match non-variable identifiers.
+
+    Only names appearing 2+ times are added (see _collect_rust_same_file_usages
+    docstring for rationale).
+    """
+    counts: Counter = Counter()
+    # Match non-variable identifiers (not preceded by $)
+    for m in re.finditer(r'(?<!\$)\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _PHP_KW:
+            counts[name] += 1
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
+
+def _collect_ruby_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a Ruby file (issue #220).
+
+    Ruby method calls don't require parentheses, so a broad identifier
+    match is essential. Symbols (:name) are also references.
+
+    Only names appearing 2+ times are added (see _collect_rust_same_file_usages
+    docstring for rationale).
+    """
+    counts: Counter = Counter()
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _RUBY_KW:
+            counts[name] += 1
+    # Symbol references: :method_name
+    for m in re.finditer(r':([a-zA-Z_]\w*)', content):
+        counts[m.group(1)] += 1
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
+
+def _collect_c_same_file_usages(
+    content: str, rel_path: str,
+    usages: Dict[str, Set[str]]
+):
+    """Collect names referenced within a C/C++ file (issue #220).
+
+    Handles all C/C++ extensions: .c, .cpp, .cxx, .cc, .h, .hpp, .hxx.
+    Uses a combined C/C++ keyword set since C++ is a superset of C.
+
+    Only names appearing 2+ times are added (see _collect_rust_same_file_usages
+    docstring for rationale).
+    """
+    counts: Counter = Counter()
+    for m in re.finditer(r'\b([a-zA-Z_]\w*)\b', content):
+        name = m.group(1)
+        if name not in _C_CPP_KW:
+            counts[name] += 1
+    usages[rel_path] = {name for name, cnt in counts.items() if cnt >= 2}
+
 
 def _collect_go_exports_imports(
     content: str, rel_path: str,
@@ -1901,9 +2151,23 @@ def _detect_unused_exports(
 
     return unused[:200]
 
-def _detect_dead_from_registry(workspace: str) -> List[Dict]:
+def _detect_dead_from_registry(
+    workspace: str,
+    same_file_usages: Dict[str, Set[str]] = None
+) -> List[Dict]:
     """v6: Read the backend registry from .codelens/backend.json and report
-    functions with ref_count == 0 and status == 'dead' as dead code."""
+    functions with ref_count == 0 and status == 'dead' as dead code.
+
+    Issue #220: ``same_file_usages`` (file → set of names referenced in that
+    file) is used to exempt symbols that are used within their own file but
+    never appear as CALLS edges in the backend registry. This is critical
+    for non-function symbols like Rust consts/statics, Go vars, C
+    #defines — they're "referenced" (used in expressions) but not "called"
+    (no ``()`` invocation), so the call-graph builder produces 0 CALLS
+    edges even when the symbol is used 10+ times in the same file.
+    Without this exemption, such symbols are false-positive flagged as
+    ``registry_dead``.
+    """
     registry_path = os.path.join(workspace, '.codelens', 'backend.json')
     if not os.path.isfile(registry_path):
         return []
@@ -1955,6 +2219,23 @@ def _detect_dead_from_registry(workspace: str) -> List[Dict]:
             # Skip components (React/PascalCase classes) — consumed externally
             if node.get("component", False):
                 continue
+
+            # Issue #220: Skip symbols that are referenced within their own
+            # file. The backend registry's ref_count is computed from CALLS
+            # edges, which only capture function calls — not const/static
+            # references, type usages, or macro invocations. A symbol used
+            # 10+ times in its own file (e.g. `const RED` referenced in
+            # `println!("{}", RED)`) will have ref_count==0 but is NOT dead.
+            # The same_file_usages dict (populated by _collect_<lang>_same_file_usages
+            # collectors) captures these in-file references.
+            if same_file_usages:
+                _in_file_usages = same_file_usages.get(file_path, set())
+                if name in _in_file_usages:
+                    continue
+                # Also check the bare name (without :: qualifier) for Rust/C++
+                # qualified names like `Module::func`
+                if '::' in name and bare_name in _in_file_usages:
+                    continue
             # Skip test fixtures and example files
             # v6.4: Expanded to catch examples/, e2e/, __tests__/, stories/
             _test_example_patterns = [
