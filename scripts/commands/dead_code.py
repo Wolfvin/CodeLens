@@ -13,6 +13,15 @@ def add_args(parser):
                         help="Max files to scan (default: 3000)")
     parser.add_argument("--max-results", type=int, default=100,
                         help="Max results per category (default: 100)")
+    parser.add_argument("--no-verify-impact", dest="verify_impact",
+                        action="store_false", default=True,
+                        help="Skip per-finding deletion_safety cross-check against "
+                             "impact analysis (issue #238). On by default; disable "
+                             "on very large result sets if it's too slow.")
+    parser.add_argument("--verify-impact-limit", type=int, default=20,
+                        help="Max number of findings to cross-check with impact "
+                             "analysis per run (default: 20, highest-confidence "
+                             "findings first)")
 
 
 def execute(args, workspace):
@@ -82,6 +91,47 @@ def execute(args, workspace):
                 if "stats" not in result:
                     result["stats"] = {}
                 result["stats"]["confidence_distribution"] = dist
+
+        # Issue #238: per-finding deletion_safety cross-check.
+        #
+        # "status: dead" in the registry only means "no CALLS edge found" — it
+        # does NOT mean safe to delete (entry points like HTTP handlers, CLI
+        # subcommands, and exported APIs routinely have zero inbound edges but
+        # are still critical). Previously an agent had to manually chain
+        # `audit --check dead-code` -> `context --check trace --direction up`
+        # to verify this per finding; analyze_impact() already computes exactly
+        # this signal for the "delete" action, it just wasn't wired in here.
+        if getattr(args, "verify_impact", True):
+            try:
+                from impact_engine import analyze_impact
+                all_items = []
+                for cat_items in result.get("results", {}).values():
+                    if isinstance(cat_items, list):
+                        all_items.extend(cat_items)
+                limit = max(0, getattr(args, "verify_impact_limit", 20) or 0)
+                _risk_to_safety = {
+                    "low": "safe",
+                    "medium": "caution",
+                    "high": "entry_point_likely",
+                    "critical": "entry_point_likely",
+                }
+                for item in all_items[:limit]:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("name")
+                    if not name:
+                        continue
+                    try:
+                        impact_result = analyze_impact(
+                            name, workspace, action="delete", depth=3
+                        )
+                        risk = impact_result.get("risk", "low")
+                        item["deletion_safety"] = _risk_to_safety.get(risk, "caution")
+                        item["deletion_impact_stats"] = impact_result.get("stats")
+                    except Exception:
+                        item["deletion_safety"] = "unknown"
+            except ImportError:
+                pass
     return result
 
 # Issue #199: deprecated "dead-code" alias registration removed; this module is now an implementation module imported by the "audit" umbrella command.
