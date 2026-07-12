@@ -3471,14 +3471,18 @@ def _parse_bun_lock(content: str) -> List[Tuple[str, str]]:
     except json.JSONDecodeError:
         return packages
 
-    # Extract from workspaces dependencies (top-level declared deps)
-    workspaces = data.get("workspaces", {})
-    for ws_name, ws_data in workspaces.items():
-        for dep_type in ("dependencies", "devDependencies"):
-            deps = ws_data.get(dep_type, {})
-            for name, version in deps.items():
-                if name and version:
-                    packages.append((name, version))
+    # Note: workspaces.dependencies/devDependencies are declared semver RANGES
+    # from package.json (e.g. "^9.0.0", "~1.2.0") — not concrete installed
+    # versions. They must NOT be checked directly against vulnerable_range:
+    # _is_version_vulnerable()/_compare_versions() parse a leading "^"/"~" as
+    # a non-digit, silently truncating "^9.0.0" to [0,0,0] and making the
+    # package match ANY "<X.Y.Z" vulnerability range, regardless of the real
+    # installed version. Found via real-codebase validation: jsonwebtoken
+    # "installed_version": "^9.0.0" (the declared range) was flagged against
+    # "vulnerable_range": "<9.0.0" — 9.0.0 is not less than 9.0.0, so this was
+    # a false positive purely from checking the range string instead of the
+    # resolved version. Only the "packages" section below (resolved installs)
+    # has concrete versions suitable for vulnerability matching.
 
     # Extract from packages (resolved packages with exact versions)
     # Format: "pkg-name": ["pkg-name@version", "", {...}, "hash"]
