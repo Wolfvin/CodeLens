@@ -124,7 +124,15 @@ def _force_utf8_stdio() -> None:
         setattr(
             sys,
             _name,
-            io.TextIOWrapper(_buffer, encoding='utf-8', errors='replace'),
+            # newline='' disables TextIOWrapper's default write-side
+            # translation of '\n' to os.linesep. Without it, every '\n' in
+            # JSON/text output becomes '\r\n' on Windows even though the
+            # source strings only ever contain '\n' — silently breaking
+            # byte-exact comparisons and any downstream tool that assumes
+            # Unix line endings (matches the already-UTF-8 no-op path
+            # above, which never translates on Linux/macOS since
+            # os.linesep is '\n' there).
+            io.TextIOWrapper(_buffer, encoding='utf-8', errors='replace', newline=''),
         )
 
 
@@ -657,7 +665,36 @@ def _apply_max_tokens(result: Dict[str, Any], max_tokens: int) -> Dict[str, Any]
 # ─── Post-Processing: --lite ───────────────────────────────────
 
 def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
-    """Reduce output to minimum viable for AI decision-making."""
+    """Reduce output to minimum viable for AI decision-making.
+
+    Umbrella commands (issue #195) wrap sub-analysis output as
+    ``{"s":.., "st":.., "r":[{"_check": name, ...}, ...]}``. The per-check
+    reducers below (``_apply_lite_single``) were written against the old
+    pre-umbrella leaf commands (``smell``, ``dead-code``, ``query``, ...)
+    and keyed off the top-level command name. Since #195/#199/#200,
+    ``command`` is always one of the 12 umbrella names (``context``,
+    ``audit``, ``security``, ...) which never match any branch below —
+    every umbrella command's --lite output silently collapsed to
+    ``{"status": "ok"}`` with all data dropped. Fix: unwrap the envelope,
+    apply the existing per-check reducer to each item keyed by its own
+    ``_check`` name, then re-wrap.
+    """
+    if isinstance(result, dict) and isinstance(result.get("r"), list) and "_check" in (
+        result["r"][0] if result["r"] and isinstance(result["r"][0], dict) else {}
+    ):
+        lite_items = [
+            _apply_lite_single(item, item.get("_check", command)) if isinstance(item, dict) else item
+            for item in result["r"]
+        ]
+        for lite_item, orig_item in zip(lite_items, result["r"]):
+            if isinstance(lite_item, dict) and isinstance(orig_item, dict) and "_check" in orig_item:
+                lite_item["_check"] = orig_item["_check"]
+        return {"s": result.get("s", "ok"), "st": result.get("st"), "r": lite_items}
+    return _apply_lite_single(result, command)
+
+
+def _apply_lite_single(result: Dict[str, Any], command: str) -> Dict[str, Any]:
+    """Reduce a single (non-enveloped) sub-result to minimum viable output."""
     if not isinstance(result, dict):
         return result
 
@@ -678,6 +715,70 @@ def _apply_lite(result: Dict[str, Any], command: str) -> Dict[str, Any]:
             "risk": result.get("risk") or result.get("safety"),
             "action": result.get("recommended_action") or result.get("action"),
         }
+
+    if command == "history":
+        # Same class of bug as "summary" above: history's real payload
+        # (snapshots count, latest snapshot's health metrics, trends,
+        # deltas) lives under keys the generic fallback doesn't know about
+        # (only checks a fixed scalar-key allowlist plus a couple of
+        # well-known list keys), so --lite collapsed to just
+        # {"status", "workspace"} with zero actual history data.
+        lite = {
+            "status": result.get("status", "ok"),
+            "workspace": result.get("workspace"),
+            "snapshots": result.get("snapshots"),
+        }
+        latest = result.get("latest")
+        if isinstance(latest, dict):
+            lite["latest"] = {
+                k: latest[k] for k in (
+                    "timestamp", "health_score", "total_findings",
+                    "findings_by_severity", "avg_complexity",
+                    "high_complexity_count",
+                ) if k in latest
+            }
+        if result.get("trends"):
+            lite["trends"] = result["trends"]
+        if result.get("deltas"):
+            lite["deltas"] = result["deltas"]
+        return lite
+
+    if command == "summary":
+        # Summary's own job is "anti-overload prioritized findings" (its
+        # --help description), so --lite must actually be minimal. The
+        # generic fallback below only trims the outer `findings` list, not
+        # each finding's nested `top_items` (and dataflow findings nest a
+        # full flow_chain per item) — a --lite summary on a real workspace
+        # was coming back with thousands of tokens of untouched detail,
+        # defeating the point of the flag.
+        lite = {
+            "status": result.get("status", "ok"),
+        }
+        for key in ("workspace", "identity", "frameworks", "is_monorepo"):
+            if key in result:
+                lite[key] = result[key]
+        if result.get("recommendations"):
+            lite["recommendations"] = result["recommendations"][:3]
+        findings = result.get("findings", [])
+        if findings:
+            lite_findings = []
+            for f in findings:
+                if not isinstance(f, dict):
+                    continue
+                lf = {k: v for k, v in f.items() if k != "top_items"}
+                top_items = f.get("top_items")
+                if isinstance(top_items, list) and top_items:
+                    trimmed = []
+                    for item in top_items[:3]:
+                        if isinstance(item, dict) and "flow_chain" in item:
+                            item = {k: v for k, v in item.items() if k != "flow_chain"}
+                        trimmed.append(item)
+                    lf["top_items"] = trimmed
+                    if len(top_items) > 3:
+                        lf["top_items_total"] = len(top_items)
+                lite_findings.append(lf)
+            lite["findings"] = lite_findings
+        return lite
 
     if command == "smell":
         # Smell lite: health score + top 5 actionable items + action

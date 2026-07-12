@@ -406,6 +406,63 @@ class TestApplyLite(unittest.TestCase):
     def test_non_dict_result_passthrough(self):
         self.assertEqual(_apply_lite("not a dict", "query"), "not a dict")
 
+    def test_summary_lite_trims_nested_top_items_and_flow_chain(self):
+        """Regression: summary's own job is anti-overload prioritized
+        findings, but --lite fell through to the generic fallback which
+        only trims the outer `findings` list, not each finding's nested
+        `top_items` (and dataflow findings nest a full flow_chain per
+        item) — a real workspace's --lite summary came back with
+        thousands of tokens of untouched detail."""
+        result = {
+            "status": "ok",
+            "workspace": "/ws",
+            "findings": [
+                {
+                    "category": "dataflow_violations",
+                    "total": 6,
+                    "top_items": [
+                        {"source": {"file": "a.rs"}, "sink": {"file": "a.rs"},
+                         "flow_chain": [{"line": 1}, {"line": 2}]}
+                        for _ in range(6)
+                    ],
+                    "action": "Add sanitizers",
+                },
+            ],
+        }
+        lite = _apply_lite(result, "summary")
+        finding = lite["findings"][0]
+        self.assertEqual(len(finding["top_items"]), 3)
+        self.assertEqual(finding["top_items_total"], 6)
+        self.assertNotIn("flow_chain", finding["top_items"][0])
+
+    def test_history_lite_keeps_latest_and_trends(self):
+        """Regression: history's real payload (snapshots count, latest
+        snapshot's health metrics, trends, deltas) lives under keys the
+        generic fallback doesn't recognize, so --lite collapsed to just
+        {"status", "workspace"} with zero actual history data."""
+        result = {
+            "status": "ok",
+            "workspace": "/ws",
+            "snapshots": 3,
+            "latest": {
+                "timestamp": "2026-07-12T00:00:00Z",
+                "health_score": 70,
+                "total_findings": 1291,
+                "findings_by_severity": {"critical": 116},
+                "avg_complexity": 2.21,
+                "high_complexity_count": 21,
+                "irrelevant_internal_field": "should be dropped",
+            },
+            "trends": {"health_score": [70, 70, 70]},
+            "deltas": {"health_score": 0},
+        }
+        lite = _apply_lite(result, "history")
+        self.assertEqual(lite["snapshots"], 3)
+        self.assertEqual(lite["latest"]["health_score"], 70)
+        self.assertNotIn("irrelevant_internal_field", lite["latest"])
+        self.assertIn("trends", lite)
+        self.assertIn("deltas", lite)
+
     def test_css_deep_lite(self):
         result = {
             "status": "ok",

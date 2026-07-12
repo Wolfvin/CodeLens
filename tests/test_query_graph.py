@@ -573,6 +573,18 @@ class TestErrorHandling:
         r2 = execute_query("MATCH (f:Function) RETURN f.name", ws, db_path=db_path)
         assert r2["truncated"] is False
 
+    def test_truncated_flag_false_when_limit_exceeds_match_count(self, graph_db):
+        """LIMIT present but under-filled must not report truncated=True
+        (regression: truncated used to be set whenever ast.limit was not
+        None, regardless of whether any rows were actually cut off)."""
+        ws, db_path = graph_db
+        r = execute_query(
+            "MATCH (f:Function) WHERE f.name = 'main' RETURN f.name LIMIT 50",
+            ws, db_path=db_path,
+        )
+        assert r["count"] < 50
+        assert r["truncated"] is False
+
 
 # ─── CLI command registration ──────────────────────────────────────────────
 
