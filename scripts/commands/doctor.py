@@ -591,9 +591,13 @@ def add_args(parser):
     )
     parser.add_argument(
         "--format",
-        choices=["text", "json"],
+        choices=["text", "json", "markdown", "ai", "sarif", "compact", "graphml"],
         default="text",
-        help="doctor: output format (default: text). 'json' for CI parsing.",
+        help="doctor: output format (default: text). Any non-'text' value "
+             "(json/markdown/ai/sarif/compact/graphml) is handled by the "
+             "shared top-level formatter, same as every other umbrella "
+             "command (issue: doctor previously only accepted "
+             "text/json, rejecting --format compact with 'invalid choice').",
     )
     # env-check passthrough
     parser.add_argument(
@@ -741,8 +745,8 @@ def execute(args, workspace):
 
     # The local --format argument overrides the global one.
     fmt = getattr(args, "format", None)
-    if fmt not in ("text", "json"):
-        # Fall back to the global format flag if the local one wasn't set.
+    if fmt not in ("text", "json", "markdown", "ai", "sarif", "compact", "graphml"):
+        # Fall back to text only when nothing valid was set at all.
         fmt = "text"
 
     checks = _run_all_checks(workspace)
@@ -778,12 +782,17 @@ def execute(args, workspace):
         "workspace": workspace,
     }
 
-    if fmt == "json":
-        # In JSON mode, print the result and let codelens.py's
-        # formatter handle it. But we set args.format to json so
-        # the dispatcher uses JSON output.
+    if fmt != "text":
+        # Any non-"text" format (json/markdown/ai/sarif/compact/graphml) is
+        # a plain dict return — let the shared top-level formatter in
+        # codelens.py handle the transformation, same as every other
+        # umbrella command. Previously only "json" took this path; every
+        # other global format silently fell through to the text branch
+        # below (or, before this fix, argparse rejected them outright with
+        # "invalid choice" since the local --format choices list didn't
+        # include them).
         try:
-            args.format = "json"
+            args.format = fmt
         except Exception:
             pass
     else:
