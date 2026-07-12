@@ -195,6 +195,16 @@ class JSBackendParser(BaseParser):
                         node, source, file_path, nodes, edges,
                     )
 
+                elif node.type == 'pair':
+                    # Issue #210: Object-literal property whose value is an
+                    # arrow_function or function_expression, e.g.:
+                    #   const service = { list: (ctx) => { ... } }
+                    # Register as <varName>.<key> so calls inside the body
+                    # are attributed correctly instead of being lost.
+                    self._parse_and_collect_object_pair(
+                        node, source, file_path, nodes, edges,
+                    )
+
                 # Push children in reverse so they pop in source order
                 if depth + 1 <= MAX_DEPTH:
                     children = node.children
@@ -202,10 +212,92 @@ class JSBackendParser(BaseParser):
                         keep_alive.append(child)
                         stack.append((child, depth + 1))
 
+            # Issue #210: Collect module-scope calls (calls outside any
+            # registered function body). We track body byte ranges during
+            # the walk so we can attribute unattributed calls to a synthetic
+            # <module> node. This catches patterns like:
+            #   router.post(path, requirePermission('admin'), handler)
+            # at the top level of a route file, where requirePermission is
+            # a real call but has no enclosing function declaration.
+            #
+            # Also collect object-literal pair arrow functions (e.g.
+            # ``const svc = { list: (ctx) => {...} }``) in a separate pass
+            # so they are registered even when nested inside
+            # export_statement (which the main walk above does not descend
+            # into, to avoid double-counting function/class declarations).
+            self._collect_object_literal_pairs(
+                root, source, file_path, nodes, edges, keep_alive,
+            )
+
+            module_calls = self._find_module_scope_calls(
+                root, source, nodes, keep_alive,
+            )
+            if module_calls:
+                module_node_id = f"{file_path}:0"
+                module_node = {
+                    "id": module_node_id,
+                    "fn": "<module>",
+                    "file": file_path,
+                    "line": 0,
+                    "async": False,
+                    "exported": True,      # module scope is never dead code
+                    "node_type": "module",
+                }
+                nodes.append(module_node)
+                for call_info in module_calls:
+                    edge = {
+                        "from": module_node_id,
+                        "to_fn": call_info["fn_name"],
+                        "via_self": call_info.get("via_self", False)
+                    }
+                    if call_info.get("is_ipc_call"):
+                        edge["is_ipc_call"] = True
+                    edges.append(edge)
+
             return {"nodes": nodes, "edges": edges, "skipped": []}
         finally:
             if _gc_was_enabled:
                 _gc.enable()
+
+    def _collect_object_literal_pairs(
+        self,
+        root: Node,
+        source: bytes,
+        file_path: str,
+        nodes: List[Dict],
+        edges: List[Dict],
+        keep_alive: List[Node],
+    ) -> None:
+        """Walk the entire AST and register every ``pair`` node whose value
+        is an arrow_function or function_expression as a function node.
+
+        Issue #210: The main walk in :meth:`extract_references` skips
+        children of ``export_statement`` (to avoid double-counting function
+        and class declarations). As a side effect, ``pair`` nodes inside
+        exported object literals (e.g.
+        ``export const svc = { list: (ctx) => {...} }``) were never
+        visited. This separate pass ensures they are registered.
+        """
+        MAX_DEPTH = 200
+        local_keep_alive: List[Node] = [root]
+        stack: List[Tuple[Node, int]] = [(root, 0)]
+        while stack:
+            node, depth = stack.pop()
+            if depth > MAX_DEPTH:
+                continue
+
+            if node.type == 'pair':
+                self._parse_and_collect_object_pair(
+                    node, source, file_path, nodes, edges,
+                )
+
+            if depth + 1 <= MAX_DEPTH:
+                children = node.children
+                for child in reversed(children):
+                    local_keep_alive.append(child)
+                    stack.append((child, depth + 1))
+
+        keep_alive.extend(local_keep_alive)
 
     def _parse_and_collect_calls(
         self,
@@ -260,6 +352,188 @@ class JSBackendParser(BaseParser):
         # Don't return body_node — let it be GC'd
         decl_info.pop("body_node", None)
         return decl_info
+
+    def _parse_and_collect_object_pair(
+        self,
+        pair_node: Node,
+        source: bytes,
+        file_path: str,
+        nodes: List[Dict],
+        edges: List[Dict],
+    ) -> None:
+        """Parse a ``pair`` node whose value is an arrow_function or
+        function_expression and collect call edges from its body.
+
+        Issue #210: Arrow functions assigned to object-literal properties
+        (e.g. ``const service = { list: (ctx) => { ... } }``) were
+        invisible to the call graph because the enclosing
+        ``variable_declarator`` value is an ``object`` node, not an
+        ``arrow_function``, so ``_parse_variable_declarator`` returned
+        None and the body calls were lost.
+
+        We register each such arrow function as a node named
+        ``<enclosingVarName>.<key>`` so calls inside its body are properly
+        attributed. The enclosing var name is found by walking up to the
+        nearest ``variable_declarator`` ancestor.
+        """
+        key_node = None
+        value_node = None
+        for child in pair_node.children:
+            if child.type in ('property_identifier', 'identifier'):
+                key_node = child
+            elif child.type in ('arrow_function', 'function_expression'):
+                value_node = child
+
+        if key_node is None or value_node is None:
+            return
+
+        # Find the enclosing variable_declarator to use as the name prefix.
+        # Stop at function boundaries — we don't want to attribute a pair
+        # inside a function body to an outer-scope variable.
+        prefix = ""
+        parent = pair_node.parent
+        while parent is not None:
+            if parent.type == 'variable_declarator':
+                for pc in parent.children:
+                    if pc.type == 'identifier':
+                        prefix = self.get_text(pc, source)
+                        break
+                break
+            if parent.type in ('function_declaration', 'generator_function_declaration',
+                               'arrow_function', 'function_expression',
+                               'method_definition'):
+                break
+            parent = parent.parent
+
+        key_name = self.get_text(key_node, source)
+        fn_name = f"{prefix}.{key_name}" if prefix else key_name
+
+        # Check async
+        is_async = False
+        for vc in value_node.children:
+            if vc.type == 'async':
+                is_async = True
+                break
+
+        line = self.get_line(pair_node)
+        node_id = f"{file_path}:{line}"
+
+        # Find the body
+        body_node = None
+        for child in value_node.children:
+            if child.type in ('statement_block', 'expression'):
+                body_node = child
+                break
+
+        node_dict = {
+            "id": node_id,
+            "fn": fn_name,
+            "file": file_path,
+            "line": line,
+            "async": is_async,
+            "node_type": "object_method",
+        }
+        nodes.append(node_dict)
+
+        if body_node is not None:
+            fn_calls = self._find_calls_in_scope(body_node, source, file_path)
+            for call_info in fn_calls:
+                edge = {
+                    "from": node_id,
+                    "to_fn": call_info["fn_name"],
+                    "via_self": call_info.get("via_self", False)
+                }
+                if call_info.get("is_ipc_call"):
+                    edge["is_ipc_call"] = True
+                edges.append(edge)
+
+    def _find_module_scope_calls(
+        self,
+        root: Node,
+        source: bytes,
+        registered_nodes: List[Dict],
+        keep_alive: List[Node],
+    ) -> List[Dict]:
+        """Find all call_expression / new_expression nodes that are NOT
+        inside any registered function body.
+
+        Issue #210: Calls at module scope (e.g.
+        ``router.post(path, requirePermission('admin'), handler)`` at the
+        top level of a route file) were silently dropped because no
+        enclosing function declaration existed to collect them.
+
+        We re-walk the AST and check each call's byte range against the
+        registered function body ranges (derived from the nodes list).
+        Calls outside all ranges are returned for attribution to the
+        synthetic ``<module>`` node.
+
+        ``keep_alive`` is extended with any new Node references we hold
+        (none in this implementation, but the parameter is kept for
+        symmetry with the caller's keep_alive list).
+        """
+        # Build body byte ranges from registered nodes. We don't have the
+        # body_node anymore (it was popped in _parse_and_collect_calls), so
+        # we approximate by using the node's line to find the body. Actually,
+        # we can re-parse and find the body by walking. But that's expensive.
+        #
+        # Simpler approach: walk the AST, and for each call_expression, walk
+        # up parents to check if any ancestor is a function_declaration,
+        # generator_function_declaration, arrow_function, function_expression,
+        # or method_definition. If so, the call is inside a function body and
+        # already collected (or will be, if the function is anonymous and
+        # unregistered — but those are best-effort skipped per the existing
+        # "anonymous callbacks IGNORED" doc). If not, it's module-scope.
+        FN_BODY_TYPES = {
+            'function_declaration', 'generator_function_declaration',
+            'arrow_function', 'function_expression',
+            'method_definition',
+        }
+
+        calls: List[Dict] = []
+        MAX_DEPTH = 200
+
+        local_keep_alive: List[Node] = [root]
+        stack: List[Tuple[Node, int]] = [(root, 0)]
+        while stack:
+            node, depth = stack.pop()
+            if depth > MAX_DEPTH:
+                continue
+
+            if node.type == 'call_expression':
+                # Walk up parents to check if inside a function body
+                inside_fn = False
+                parent = node.parent
+                while parent is not None:
+                    if parent.type in FN_BODY_TYPES:
+                        inside_fn = True
+                        break
+                    parent = parent.parent
+                if not inside_fn:
+                    call_info = self._parse_call(node, source)
+                    if call_info:
+                        calls.append(call_info)
+            elif node.type == 'new_expression':
+                inside_fn = False
+                parent = node.parent
+                while parent is not None:
+                    if parent.type in FN_BODY_TYPES:
+                        inside_fn = True
+                        break
+                    parent = parent.parent
+                if not inside_fn:
+                    call_info = self._parse_new_expression(node, source)
+                    if call_info:
+                        calls.append(call_info)
+
+            if depth + 1 <= MAX_DEPTH:
+                children = node.children
+                for child in reversed(children):
+                    local_keep_alive.append(child)
+                    stack.append((child, depth + 1))
+
+        # Keep alive until end of method
+        keep_alive.extend(local_keep_alive)
+        return calls
 
     def _find_function_declarations(self, root: Node, source: bytes,
                                      file_path: str) -> List[Dict]:
