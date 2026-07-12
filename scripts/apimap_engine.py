@@ -60,6 +60,10 @@ AUTH_MIDDLEWARE_PATTERNS = {
     "authenticate", "auth", "jwt", "passport", "requireAuth",
     "isAuthenticated", "verifyToken", "checkAuth", "ensureAuthenticated",
     "login_required", "permission_required", "auth_required",
+    # camelCase form of permission_required — common in TS/JS backends
+    # (e.g. requirePermission('admin') used as Express router middleware).
+    # Added for issue #214: router.use(requirePermission(...)) must classify as auth.
+    "requirepermission",
 }
 
 CORS_MIDDLEWARE_PATTERNS = {
@@ -350,6 +354,24 @@ def map_api_routes(
                     "file": mw["file"],
                     "line": mw["line"],
                 })
+        elif scope.startswith("router:"):
+            # Router-instance-scoped middleware (issue #214):
+            # <routerVar>.use(mw) attaches only to routes registered on the
+            # same router variable, in the same file. We require both the file
+            # and the router_var to match — this prevents middleware attached
+            # to accountingRouter in accounting.ts from leaking onto routes
+            # in assignments.ts (which has its own assignmentsRouter).
+            router_var = scope.split(":", 1)[1]
+            mw_file = mw.get("file")
+            for route in routes:
+                if (route.get("file") == mw_file
+                        and route.get("router_var") == router_var):
+                    route.setdefault("middleware_chain", []).append({
+                        "name": mw["name"],
+                        "type": mw.get("type", "unknown"),
+                        "file": mw["file"],
+                        "line": mw["line"],
+                    })
 
     # Build middleware map
     for route in routes:
@@ -456,18 +478,7 @@ def _extract_js_routes(
         frameworks.add("hono")
 
     # Track current router variable names and prefixes
-    router_vars: Dict[str, str] = {}  # var_name → prefix
-
-    # Detect Router() assignments: const router = Router({ prefix: '/api' })
-    for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?(?:Router|router)\s*\(([^)]*)\)',
-        content
-    ):
-        var_name = m.group(1)
-        args = m.group(2)
-        prefix_match = re.search(r'prefix\s*:\s*[\'"]([^\'"]+)[\'"]', args)
-        prefix = prefix_match.group(1) if prefix_match else ""
-        router_vars[var_name] = prefix
+    router_vars: Dict[str, str] = _detect_router_vars(content)  # var_name → prefix
 
     # Detect app.route('/path') chains
     for m in re.finditer(
@@ -527,6 +538,14 @@ def _extract_js_routes(
         # Detect request/response types from nearby code
         req_type, resp_type = _detect_request_response_types(content, m.start())
 
+        # Track which router/app instance received this route, so that
+        # router-scoped middleware (e.g. `accountingRouter.use(authMiddleware)`)
+        # can be attached to exactly the routes registered on the same instance.
+        # Only set when the receiver is a detected Router() variable — for
+        # app/server/fastify/hono receivers we leave it as None (those are
+        # handled by the global-middleware path).
+        router_var = obj_name if obj_name in router_vars else None
+
         routes.append({
             "method": http_method,
             "path": full_path,
@@ -537,9 +556,36 @@ def _extract_js_routes(
             "request_type": req_type,
             "response_type": resp_type,
             "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+            "router_var": router_var,
         })
 
     return routes
+
+
+def _detect_router_vars(content: str) -> Dict[str, str]:
+    """Detect Router() instance assignments and return var_name -> prefix map.
+
+    Catches both bare ``Router()`` / ``router()`` / ``new Router()`` and the
+    fully-qualified ``express.Router()`` (or any ``obj.Router()``) form. The
+    bare form was already handled; the qualified form was missed before
+    issue #214 — that pattern is the standard way Express modular routers are
+    created in TypeScript backends (``const r = express.Router()``), so
+    missing it silently broke router-scoped middleware tracking.
+
+    Shared between _extract_js_routes (for path prefix) and
+    _extract_js_middleware (for router-scoped .use() tracking).
+    """
+    router_vars: Dict[str, str] = {}
+    for m in re.finditer(
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?(?:[\w]+\s*\.\s*)?(?:Router|router)\s*\(([^)]*)\)',
+        content
+    ):
+        var_name = m.group(1)
+        args = m.group(2)
+        prefix_match = re.search(r'prefix\s*:\s*[\'"]([^\'"]+)[\'"]', args)
+        prefix = prefix_match.group(1) if prefix_match else ""
+        router_vars[var_name] = prefix
+    return router_vars
 
 
 def _detect_js_framework(is_express, is_fastify, is_koa, is_hono) -> str:
@@ -716,14 +762,32 @@ def _detect_request_response_types(
 # ─── JS Middleware Extraction ──────────────────────────────────
 
 def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
-    """Extract global/app-level middleware from JS files."""
+    """Extract global/app-level and router-level middleware from JS files.
+
+    Three scopes are emitted:
+      * ``global`` — receiver is app/server/fastify/hono; attaches to every
+        route in the workspace (existing behavior, unchanged).
+      * ``path:<path>`` — receiver is app/server/fastify/hono AND a path arg
+        is given (``app.use('/api', mw)``). Collected for completeness; the
+        assembly layer does not currently attach these (pre-existing behavior).
+      * ``router:<var>`` — receiver is a detected ``Router()`` instance
+        variable (e.g. ``accountingRouter.use(authMiddleware)``). Attached
+        only to routes registered on the same router variable in the same
+        file. Added in issue #214 to fix false-negative auth_protected for
+        the standard Express modular-router pattern.
+    """
     middleware = []
     lines = content.split('\n')
+
+    # Detect router instance variables so we can scope .use() calls to them.
+    router_vars = _detect_router_vars(content)
+    # Receivers that are always treated as global — never as router-scoped.
+    global_receivers = ("app", "server", "fastify", "hono")
 
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # app.use(middleware) patterns
+        # app.use(middleware) patterns — global scope
         m = re.match(
             r'(?:app|server|fastify|hono)\s*\.\s*use\s*\(\s*(\w+)',
             stripped
@@ -767,6 +831,33 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
                     "name": mw_name,
                     "type": mw_type,
                     "scope": f"path:{mw_path}",
+                    "file": rel_path,
+                    "line": i + 1,
+                })
+
+        # Router-scoped middleware: <routerVar>.use(mw) — apply only to routes
+        # registered on the same router instance in the same file. Catches the
+        # common Express modular pattern (issue #214):
+        #   const accountingRouter = express.Router();
+        #   accountingRouter.use(authMiddleware);
+        #   accountingRouter.get('/invoices', handler);   <- auth-protected
+        # Skip receivers already handled as global above. The bare-name capture
+        # (\w+) also covers call-style middleware like requirePermission('admin')
+        # because the regex stops at the '(' — the captured identifier is enough
+        # for classification via _classify_middleware.
+        m = re.match(
+            r'(\w+)\s*\.\s*use\s*\(\s*(\w+)',
+            stripped
+        )
+        if m:
+            recv = m.group(1)
+            mw_name = m.group(2)
+            if recv in router_vars and recv not in global_receivers:
+                mw_type = _classify_middleware(mw_name)
+                middleware.append({
+                    "name": mw_name,
+                    "type": mw_type,
+                    "scope": f"router:{recv}",
                     "file": rel_path,
                     "line": i + 1,
                 })
