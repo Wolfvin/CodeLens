@@ -12,8 +12,10 @@ from commands import register_command
 def add_args(parser):
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
-    parser.add_argument("--language", choices=["python", "javascript", "typescript"], default=None,
-                        help="Filter analysis to a specific language")
+    parser.add_argument("--language", choices=["python", "javascript", "typescript", "rust"], default=None,
+                        help="Filter analysis to a specific language. 'rust' runs only the "
+                             "#[tauri::command] parameter-to-sink MVP scanner (issue #240) — "
+                             "see docs/design/0240-tauri-command-param-taint.md for its scope.")
     parser.add_argument("--with-secrets", action="store_true", default=False,
                         help="Include secrets engine findings as taint sources")
     parser.add_argument("--severity", choices=["critical", "high", "medium", "low"], default=None,
@@ -31,6 +33,29 @@ def execute(args, workspace):
     cross_file = getattr(args, 'cross_file', False)
     no_ast = getattr(args, 'no_ast', False)
     use_ast = getattr(args, 'ast', False)
+
+    # Issue #240 MVP: --language rust runs ONLY the Rust
+    # #[tauri::command]-parameter scanner — ast_taint_engine's
+    # get_supported_languages() doesn't include Rust at all, so routing
+    # "rust" through it would either error or silently match nothing.
+    # See docs/design/0240-tauri-command-param-taint.md for scope.
+    if language == "rust":
+        from rust_command_taint import scan_workspace as scan_rust_taint
+        findings = scan_rust_taint(workspace)
+        result = {
+            "status": "ok",
+            "engine": "rust_command_taint",
+            "languages_analyzed": ["rust"],
+            "findings": findings,
+            "total_findings": len(findings),
+        }
+        if getattr(args, 'severity', None):
+            severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            min_sev = severity_order.get(args.severity, 3)
+            result["findings"] = [f for f in result["findings"]
+                                  if severity_order.get(f.get("severity", "low"), 3) <= min_sev]
+            result["total_findings"] = len(result["findings"])
+        return result
 
     # Issue #49 Phase 1: unified entry point through ast_taint_engine.
     # The AST engine now handles both intra-file (default) and cross-file
@@ -68,6 +93,25 @@ def execute(args, workspace):
             result["engine"] = "semantic_regex"
             result["cross_file"] = False
             result["cross_file_fallback"] = cross_file
+
+    # Issue #240 MVP: on a default (no --language filter) scan, also merge
+    # in Rust #[tauri::command] parameter-to-sink findings. Only makes
+    # sense when the caller didn't restrict to a specific non-Rust
+    # language — --language rust itself is handled by the early return
+    # above, and --language python/javascript/typescript means the caller
+    # wants just that language.
+    if language is None and result.get("status") == "ok":
+        try:
+            from rust_command_taint import scan_workspace as scan_rust_taint
+            rust_findings = scan_rust_taint(workspace)
+            if rust_findings:
+                result.setdefault("findings", []).extend(rust_findings)
+                result["total_findings"] = len(result["findings"])
+                langs = result.setdefault("languages_analyzed", [])
+                if "rust" not in langs:
+                    langs.append("rust")
+        except Exception:
+            pass
 
     # Optionally enhance with secrets findings
     if getattr(args, 'with_secrets', False):

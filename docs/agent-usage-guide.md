@@ -195,14 +195,21 @@ test debt, not product bugs.
 
 ## Known limitations (not fixed — scope, not a quick bug)
 
-- **No Rust taint analysis.** `security --check taint` only analyzes
-  Python/JS/TS/TSX (`ast_taint_engine.get_supported_languages()`). A Tauri
-  app that shells out via `std::process::Command` (verified: this workspace
-  has several `Command::new(...)` sinks fed by `std::env::var()` sources in
-  `.rs` files) gets zero taint coverage on the Rust side. This is a real
-  feature gap for `harus berkerja di rs` — building Rust source/sink rules
-  + AST walking is a multi-day feature, not a bug fix, so it wasn't
-  attempted this session. Tracked as a GitHub issue for follow-up.
+- **Rust taint is a narrow MVP, not general-purpose** (issue #240, MVP
+  shipped). `security --check taint` now covers one Rust pattern:
+  a `#[tauri::command]` function parameter (untrusted-by-construction, since
+  that's exactly how Tauri's IPC delivers frontend data) reaching a
+  dangerous sink (`Command::new`, `std::process::Command`, `std::fs`
+  path ops) **within the same function body**. It's regex-based (documented
+  trade-off — possible false positives on sanitized params, since v1 has no
+  sanitizer allowlist) and reports every param→sink flow for review. What's
+  still NOT covered: (a) full cross-language IPC correlation — tracing a
+  value from a TS `invoke("cmd", {...})` call across the boundary into the
+  matching Rust command (needs cross-language graph edges the current
+  architecture doesn't build); (b) general Rust taint for non-Tauri-command
+  functions; (c) full AST precision matching the Python/JS engine. See
+  `docs/design/0240-tauri-command-param-taint.md`. Run it standalone with
+  `security --check taint --language rust`.
 - **Rust `impl`-block dead-code false positives** (issue #228) — separate,
   deeper false-positive source than the test-function one fixed this
   session. Still open.
