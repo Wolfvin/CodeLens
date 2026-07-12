@@ -25,6 +25,7 @@ Output: ``{"s":"ok", "st":{...}, "r":[...]}`` shape.
 
 import argparse
 import os
+import re
 import sys
 from typing import Any, Dict
 
@@ -171,6 +172,34 @@ def _run_graph(args, workspace) -> Dict[str, Any]:
     return _qg_execute(sub_args, workspace)
 
 
+_CYPHER_START_RE = re.compile(r"^\s*MATCH\s*\(", re.IGNORECASE)
+
+
+def _detect_pattern_workspace_swap(pattern, workspace):
+    """Heuristic for issue #239: `search` is the only umbrella command with
+    pattern before workspace (opposite of every other command) — a very easy
+    mistake, and one that doesn't error, it just silently searches for the
+    real workspace path as the pattern and returns an empty "ok" result.
+
+    Returns a hint string if ``pattern`` looks like it's actually a
+    workspace path (an existing directory) — a strong signal the two
+    arguments were swapped — else None.
+    """
+    if not pattern or not isinstance(pattern, str):
+        return None
+    try:
+        if os.path.isdir(pattern):
+            return (
+                f"pattern {pattern!r} is an existing directory — this looks like "
+                "the pattern/workspace arguments may be swapped. `search` takes "
+                "pattern first, workspace second (opposite of every other "
+                "umbrella command): `search \"query\" <workspace>`."
+            )
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def execute(args, workspace):
     """Dispatch to the selected search mode and normalize output shape.
 
@@ -179,6 +208,25 @@ def execute(args, workspace):
     @MUTATES: nothing (read-only)
     """
     mode = getattr(args, "mode", "semantic") or "semantic"
+    pattern = getattr(args, "pattern", None)
+    hints = []
+
+    swap_hint = _detect_pattern_workspace_swap(pattern, workspace)
+    if swap_hint:
+        hints.append(swap_hint)
+
+    # Issue #239: auto-route Cypher-shaped patterns to graph mode. Only
+    # fires on high-confidence matches (starts with "MATCH (") to avoid
+    # second-guessing genuine regex/symbol/semantic queries.
+    if mode != "graph" and pattern and _CYPHER_START_RE.match(pattern):
+        hints.append(
+            f"pattern looks like a Cypher query but --mode was '{mode}' — "
+            "auto-routed to --mode graph. Pass --mode graph explicitly to "
+            "silence this hint."
+        )
+        mode = "graph"
+        args.mode = "graph"
+
     try:
         if mode == "semantic":
             result = _run_semantic(args, workspace)
@@ -192,13 +240,19 @@ def execute(args, workspace):
             return {"s": "error", "st": {"mode": mode}, "r": [],
                     "error": f"unknown mode '{mode}'"}
     except Exception as exc:
-        return {"s": "error", "st": {"mode": mode},
-                "r": [], "error": str(exc),
-                "error_type": type(exc).__name__}
+        out = {"s": "error", "st": {"mode": mode},
+               "r": [], "error": str(exc),
+               "error_type": type(exc).__name__}
+        if hints:
+            out["_hints"] = hints
+        return out
 
     # Normalize to {s, st, r} shape while preserving original payload.
     if not isinstance(result, dict):
-        return {"s": "ok", "st": {"mode": mode}, "r": [{"result": result}]}
+        out = {"s": "ok", "st": {"mode": mode}, "r": [{"result": result}]}
+        if hints:
+            out["_hints"] = hints
+        return out
     status = result.pop("status", "ok")
     # Move large payload lists into ``r`` if present, keep stats in ``st``.
     rows = None
@@ -206,11 +260,14 @@ def execute(args, workspace):
         if key in result and isinstance(result[key], list):
             rows = result.pop(key)
             break
-    return {
+    out = {
         "s": status,
         "st": {"mode": mode, **result},
         "r": rows if rows is not None else [],
     }
+    if hints:
+        out["_hints"] = hints
+    return out
 
 
 register_command(
