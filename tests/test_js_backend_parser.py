@@ -321,3 +321,183 @@ class TestIssue210ModuleLevelCalls:
             f"router.post call not extracted at module top-level. "
             f"edges={edge_to_fns}"
         )
+
+
+@pytest.mark.skipif(not _js_be_parser_available, reason="Tree-sitter JavaScript grammar not installed")
+class TestJSBackendParserIssue222ObjectLiteralMethods:
+    """Issue #222 regression tests: arrow functions assigned to object-literal
+    properties must be registered as function nodes.
+
+    Mirrors TestTSBackendParserIssue222ObjectLiteralMethods for the JS parser
+    (which uses a different code path — single-pass iterative walk with
+    keep_alive, vs. TS parser's two-pass design).
+    """
+
+    def test_object_literal_arrow_function_registered_as_node(self):
+        """``const svc = { list: (ctx) => {} }`` → node ``svc.list``."""
+        js = """\
+const svc = {
+  list: (ctx) => { return helper(); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "svc.list" in fn_names, (
+            f"Object-literal arrow function should be registered as "
+            f"svc.list, got fn_names={fn_names}"
+        )
+
+    def test_object_literal_function_expression_registered_as_node(self):
+        """``const svc = { list: function() {} }`` → node ``svc.list``."""
+        js = """\
+const svc = {
+  list: function(ctx) { return helper(); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "svc.list" in fn_names, (
+            f"Object-literal function expression should be registered as "
+            f"svc.list, got fn_names={fn_names}"
+        )
+
+    def test_object_literal_method_calls_attributed_to_method_node(self):
+        """Calls inside an object-literal arrow function body must be
+        attributed to the ``<varName>.<key>`` node id, not to ``<module>``."""
+        js = """\
+const svc = {
+  list: (ctx) => { return helper(); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected exactly 1 helper edge (no double-count), got "
+            f"{len(helper_edges)}. edges={helper_edges}"
+        )
+        edge_from = helper_edges[0]["from"]
+        assert ":0:<module>" not in edge_from, (
+            f"helper edge should come from svc.list's node id, not <module>. "
+            f"edge={helper_edges[0]}"
+        )
+
+    def test_object_literal_multiple_methods_all_registered(self):
+        """Multiple arrow functions in the same object literal must all
+        be registered as separate nodes."""
+        js = """\
+export const assignmentService = {
+  list: (ctx) => { return hasPermission(ctx.user, 'read'); },
+  create: (ctx) => { return hasPermission(ctx.user, 'write'); },
+  remove: (ctx) => { return hasPermission(ctx.user, 'delete'); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "assignmentService.list" in fn_names
+        assert "assignmentService.create" in fn_names
+        assert "assignmentService.remove" in fn_names
+
+        hp_edges = [e for e in result["edges"] if e.get("to_fn") == "hasPermission"]
+        assert len(hp_edges) == 3, (
+            f"Expected 3 hasPermission edges (one per method), got "
+            f"{len(hp_edges)}. edges={hp_edges}"
+        )
+        for e in hp_edges:
+            assert ":0:<module>" not in e["from"], (
+                f"hasPermission edge should come from method node, not <module>. "
+                f"edge={e}"
+            )
+
+    def test_object_literal_method_ref_count_correct(self):
+        """End-to-end: hasPermission called only via object-literal arrow
+        functions must have correct ref_count after edge resolution."""
+        from edge_resolver import resolve_edges
+        js_permissions = """\
+export function hasPermission(user, perm) {
+  return user && user.permissions && user.permissions.includes(perm);
+}
+"""
+        js_service = """\
+import { hasPermission } from './permissions';
+export const assignmentService = {
+  list: (ctx) => { if (!hasPermission(ctx.user, 'read')) return null; return []; },
+  create: (ctx) => { if (!hasPermission(ctx.user, 'write')) throw new Error('no'); return {}; },
+  remove: (ctx) => { if (!hasPermission(ctx.user, 'delete')) throw new Error('no'); return true; },
+};
+"""
+        all_nodes = []
+        all_edges = []
+        for fpath, content in [
+            ("src/lib/permissions.js", js_permissions),
+            ("src/services/assignments.js", js_service),
+        ]:
+            r = _js_be_parser.extract_references(content, fpath)
+            all_nodes.extend(r.get("nodes", []))
+            all_edges.extend(r.get("edges", []))
+
+        resolved_nodes, _ = resolve_edges(all_nodes, all_edges)
+        for n in resolved_nodes:
+            if n["fn"] == "hasPermission":
+                assert n.get("ref_count", 0) == 3, (
+                    f"hasPermission ref_count should be 3 (3 call sites in "
+                    f"object-literal arrow functions), got {n.get('ref_count', 0)}"
+                )
+                return
+        pytest.fail("hasPermission node not found in resolved nodes")
+
+    def test_object_literal_with_non_arrow_pairs_not_affected(self):
+        """Object literals with non-arrow pairs (e.g. ``count: 5``) must
+        not break parsing — non-arrow pairs are simply skipped."""
+        js = """\
+const config = {
+  count: 5,
+  name: 'svc',
+  handler: (ctx) => { return helper(ctx); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "config.handler" in fn_names, (
+            f"config.handler should be registered, got fn_names={fn_names}"
+        )
+        assert "config.count" not in fn_names
+        assert "config.name" not in fn_names
+
+    def test_no_double_count_object_literal_arrow_and_module_level(self):
+        """Calls inside object-literal arrow functions must NOT be
+        double-counted by the module-level pass."""
+        js = """\
+const svc = {
+  list: (ctx) => { return helper(); },
+};
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected exactly 1 helper edge (no double-count between "
+            f"per-function pass and module-level pass), got {len(helper_edges)}. "
+            f"edges={helper_edges}"
+        )
+
+    def test_object_literal_in_function_body_not_double_counted(self):
+        """Object literal returned from a function: the function body
+        is already walked by the per-function pass, so the object-literal
+        method pass must not re-walk the same pairs."""
+        js = """\
+function makeService() {
+  return {
+    list: (ctx) => { return helper(); },
+  };
+}
+"""
+        result = _js_be_parser.extract_references(js, "test.js")
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected 1 helper edge (from makeService), got {len(helper_edges)}. "
+            f"edges={helper_edges}"
+        )
+        from_text = helper_edges[0]["from"]
+        assert ":0:<module>" not in from_text, (
+            f"helper edge should come from makeService's node id, not <module>. "
+            f"edge={helper_edges[0]}"
+        )

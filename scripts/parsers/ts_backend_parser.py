@@ -54,6 +54,20 @@ class TSBackendParser(BaseParser):
 
         Returns:
             {"nodes": [...], "edges": [...]}
+
+        Issue #222: arrow functions assigned to object-literal properties
+        (e.g. ``const svc = { list: (ctx) => { ... } }``) are now registered
+        as function nodes named ``<varName>.<key>`` so that:
+          - ``trace``/``impact`` can resolve them as call targets
+          - ``search --mode symbol`` finds them by name
+          - calls inside their bodies are attributed to the named method
+            rather than to the synthetic ``<module>`` caller
+
+        Previously these arrow functions were invisible as nodes — calls
+        inside their bodies were extracted by the module-level pass
+        (issue #210) and attributed to ``<module>``, so ``ref_count`` was
+        correct but ``trace``/``impact``/``search`` could not see the
+        method itself.
         """
         source = content.encode('utf-8')
         tree = self.parse(source)
@@ -63,6 +77,14 @@ class TSBackendParser(BaseParser):
 
         # First pass: find all function declarations
         fn_declarations = self._find_function_declarations(tree, source, file_path)
+
+        # Issue #222: also find arrow functions / function expressions
+        # assigned to object-literal properties (e.g.
+        # ``const svc = { list: (ctx) => { ... } }``) and register them
+        # as ``<varName>.<key>`` nodes so trace/impact/search can see them.
+        fn_declarations.extend(
+            self._find_object_literal_method_decls(tree, source, file_path)
+        )
 
         # Build a map of line -> function for scope resolution
         fn_scope_map = self._build_scope_map(fn_declarations)
@@ -375,6 +397,113 @@ class TSBackendParser(BaseParser):
         self.walk_tree(body_node, source, visit)
         return calls
 
+    def _find_object_literal_method_decls(self, root: Node, source: bytes,
+                                            file_path: str) -> List[Dict]:
+        """Find arrow functions / function expressions assigned to
+        object-literal properties and register them as function nodes.
+
+        Issue #222: ``const svc = { list: (ctx) => { ... } }`` — the
+        ``variable_declarator`` value is an ``object`` node (not
+        ``arrow_function``), so ``_parse_variable_declarator`` returns
+        None and the arrow function is invisible as a node.
+
+        This pass walks the AST and, for every ``variable_declarator``
+        whose value is an ``object`` literal, iterates the object's
+        ``pair`` children. Each pair whose value is an ``arrow_function``
+        or ``function_expression`` is registered as a function node named
+        ``<varName>.<key>`` — mirroring the Pinia store convention so
+        downstream tools (``trace``, ``impact``, ``search --mode symbol``)
+        can resolve the method by name.
+
+        Returns a list of declaration dicts in the same shape as
+        :meth:`_find_function_declarations`, so the caller can merge
+        them into ``fn_declarations`` and let the per-function pass
+        collect body calls uniformly.
+
+        Naming:
+          - ``const svc = { list: (ctx) => {} }`` → node ``svc.list``
+          - Nested object: ``const svc = { api: { list: () => {} } }``
+            only the outermost var name is used → ``svc.list`` (the
+            inner ``api`` key is not part of the name; this keeps
+            naming simple and matches how Pinia store methods are
+            named today).
+          - Object literal not assigned to a variable (e.g. returned
+            from a function or passed as a call argument): skipped —
+            there is no stable name to use, and the module-level pass
+            (issue #210) already extracts body calls for those.
+        """
+        declarations: List[Dict] = []
+
+        def visit(node: Node, _, depth):
+            if node.type != 'variable_declarator':
+                return True
+            # Find the identifier (var name) and the object value.
+            var_name = None
+            object_node = None
+            for child in node.children:
+                if child.type == 'identifier' and var_name is None:
+                    var_name = self.get_text(child, source)
+                elif child.type == 'object':
+                    object_node = child
+            if not var_name or not object_node:
+                return True
+
+            # Walk the object's pair children and register arrow/function
+            # values as method declarations.
+            for pair in object_node.children:
+                if pair.type != 'pair':
+                    continue
+                key_node = None
+                value_node = None
+                for pc in pair.children:
+                    if pc.type in ('property_identifier', 'identifier') and key_node is None:
+                        key_node = pc
+                    elif pc.type in ('arrow_function', 'function_expression'):
+                        value_node = pc
+                if key_node is None or value_node is None:
+                    continue
+
+                key_name = self.get_text(key_node, source)
+                fn_name = f"{var_name}.{key_name}"
+
+                # Check async
+                is_async = False
+                for vc in value_node.children:
+                    if vc.type == 'async':
+                        is_async = True
+                        break
+
+                line = self.get_line(pair)
+                node_id = f"{file_path}:{line}"
+
+                # Find the body
+                body_node = None
+                for vc in value_node.children:
+                    if vc.type in ('statement_block', 'expression'):
+                        body_node = vc
+                        break
+
+                declarations.append({
+                    "node": {
+                        "id": node_id,
+                        "fn": fn_name,
+                        "file": file_path,
+                        "line": line,
+                        "async": is_async,
+                        "node_type": "object_method",
+                    },
+                    "body_node": body_node,
+                    "scope_start": pair.start_point.row,
+                    "scope_end": pair.end_point.row,
+                })
+            # Don't recurse into the object — pairs are handled above,
+            # and nested non-arrow values (e.g. numbers, strings) have
+            # no calls to extract.
+            return False
+
+        self.walk_tree(root, source, visit)
+        return declarations
+
     def _find_module_level_calls(self, root: Node, source: bytes,
                                   file_path: str) -> List[Dict]:
         """Find call sites that live outside any registered function declaration.
@@ -438,6 +567,18 @@ class TSBackendParser(BaseParser):
             if node.type == 'variable_declarator':
                 for child in node.children:
                     if _is_registered_value(child):
+                        return False
+            # Issue #222: skip pair nodes whose value is an arrow_function
+            # or function_expression — these are now registered as
+            # ``<varName>.<key>`` method nodes by
+            # :meth:`_find_object_literal_method_decls`, so their body
+            # calls are already collected by the per-function pass.
+            # Without this skip, calls inside the arrow body would be
+            # double-counted (once as ``<varName>.<key>`` → callee, once
+            # as ``<module>`` → callee).
+            if node.type == 'pair':
+                for child in node.children:
+                    if child.type in ('arrow_function', 'function_expression'):
                         return False
 
             if node.type == 'call_expression':

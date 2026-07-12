@@ -253,3 +253,222 @@ class TestTSBackendParserIssue210ModuleLevel:
             f"Expected exactly 1 helper edge (no double-count from exported "
             f"arrow function), got {len(helper_edges)}. edges={helper_edges}"
         )
+
+
+@pytest.mark.skipif(not _ts_be_parser_available, reason="Tree-sitter TypeScript grammar not installed")
+class TestTSBackendParserIssue222ObjectLiteralMethods:
+    """Issue #222 regression tests: arrow functions assigned to object-literal
+    properties must be registered as function nodes.
+
+    Before fix: ``const svc = { list: (ctx) => { ... } }`` — the
+    ``variable_declarator`` value is an ``object`` node (not
+    ``arrow_function``), so ``_parse_variable_declarator`` returned None
+    and the arrow function was invisible as a node. Calls inside the
+    arrow body were extracted by the module-level pass (issue #210) and
+    attributed to ``<module>``, so ``ref_count`` was correct but
+    ``trace``/``impact``/``search --mode symbol`` could not resolve the
+    method by name.
+
+    After fix: each arrow/function pair in an object literal is registered
+    as a node named ``<varName>.<key>``, and calls inside its body are
+    attributed to that node id.
+    """
+
+    def test_object_literal_arrow_function_registered_as_node(self):
+        """``const svc = { list: (ctx) => {} }`` → node ``svc.list``."""
+        ts = """\
+const svc = {
+  list: (ctx: any) => { return helper(); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "svc.list" in fn_names, (
+            f"Object-literal arrow function should be registered as "
+            f"svc.list, got fn_names={fn_names}"
+        )
+
+    def test_object_literal_function_expression_registered_as_node(self):
+        """``const svc = { list: function() {} }`` → node ``svc.list``."""
+        ts = """\
+const svc = {
+  list: function(ctx: any) { return helper(); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "svc.list" in fn_names, (
+            f"Object-literal function expression should be registered as "
+            f"svc.list, got fn_names={fn_names}"
+        )
+
+    def test_object_literal_method_calls_attributed_to_method_node(self):
+        """Calls inside an object-literal arrow function body must be
+        attributed to the ``<varName>.<key>`` node id, not to ``<module>``.
+
+        Before fix: calls were attributed to ``<module>`` (via the
+        module-level pass). After fix: calls are attributed to the
+        method node id, and the module-level pass skips the pair subtree
+        to avoid double-counting.
+        """
+        ts = """\
+const svc = {
+  list: (ctx: any) => { return helper(); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected exactly 1 helper edge (no double-count), got "
+            f"{len(helper_edges)}. edges={helper_edges}"
+        )
+        # The edge should come from svc.list's node id, not <module>
+        edge_from = helper_edges[0]["from"]
+        assert ":0:<module>" not in edge_from, (
+            f"helper edge should come from svc.list's node id, not <module>. "
+            f"edge={helper_edges[0]}"
+        )
+
+    def test_object_literal_multiple_methods_all_registered(self):
+        """Multiple arrow functions in the same object literal must all
+        be registered as separate nodes."""
+        ts = """\
+export const assignmentService = {
+  list: (ctx: any) => { return hasPermission(ctx.user, 'read'); },
+  create: (ctx: any) => { return hasPermission(ctx.user, 'write'); },
+  remove: (ctx: any) => { return hasPermission(ctx.user, 'delete'); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "assignmentService.list" in fn_names
+        assert "assignmentService.create" in fn_names
+        assert "assignmentService.remove" in fn_names
+
+        # 3 hasPermission edges, one per method
+        hp_edges = [e for e in result["edges"] if e.get("to_fn") == "hasPermission"]
+        assert len(hp_edges) == 3, (
+            f"Expected 3 hasPermission edges (one per method), got "
+            f"{len(hp_edges)}. edges={hp_edges}"
+        )
+        # None should come from <module>
+        for e in hp_edges:
+            assert ":0:<module>" not in e["from"], (
+                f"hasPermission edge should come from method node, not <module>. "
+                f"edge={e}"
+            )
+
+    def test_object_literal_method_ref_count_correct(self):
+        """End-to-end: hasPermission called only via object-literal arrow
+        functions must have correct ref_count after edge resolution."""
+        from edge_resolver import resolve_edges
+        ts_permissions = """\
+export function hasPermission(user: any, perm: string): boolean {
+  return user?.permissions?.includes(perm) ?? false;
+}
+"""
+        ts_service = """\
+import { hasPermission } from './permissions';
+export const assignmentService = {
+  list: (ctx: any) => { if (!hasPermission(ctx.user, 'read')) return null; return []; },
+  create: (ctx: any) => { if (!hasPermission(ctx.user, 'write')) throw new Error('no'); return {}; },
+  remove: (ctx: any) => { if (!hasPermission(ctx.user, 'delete')) throw new Error('no'); return true; },
+};
+"""
+        all_nodes = []
+        all_edges = []
+        for fpath, content in [
+            ("src/lib/permissions.ts", ts_permissions),
+            ("src/services/assignments.ts", ts_service),
+        ]:
+            r = _ts_be_parser.extract_references(content, fpath)
+            all_nodes.extend(r.get("nodes", []))
+            all_edges.extend(r.get("edges", []))
+
+        resolved_nodes, _ = resolve_edges(all_nodes, all_edges)
+        for n in resolved_nodes:
+            if n["fn"] == "hasPermission":
+                assert n.get("ref_count", 0) == 3, (
+                    f"hasPermission ref_count should be 3 (3 call sites in "
+                    f"object-literal arrow functions), got {n.get('ref_count', 0)}"
+                )
+                return
+        pytest.fail("hasPermission node not found in resolved nodes")
+
+    def test_object_literal_with_non_arrow_pairs_not_affected(self):
+        """Object literals with non-arrow pairs (e.g. ``count: 5``) must
+        not break parsing — non-arrow pairs are simply skipped."""
+        ts = """\
+const config = {
+  count: 5,
+  name: 'svc',
+  handler: (ctx: any) => { return helper(ctx); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        fn_names = [n["fn"] for n in result["nodes"]]
+        assert "config.handler" in fn_names, (
+            f"config.handler should be registered, got fn_names={fn_names}"
+        )
+        # Non-arrow pairs should not produce nodes
+        assert "config.count" not in fn_names
+        assert "config.name" not in fn_names
+
+    def test_no_double_count_object_literal_arrow_and_module_level(self):
+        """Calls inside object-literal arrow functions must NOT be
+        double-counted by the module-level pass.
+
+        Before fix #222: the module-level pass would extract calls inside
+        the arrow body AND the per-function pass would also extract them
+        (after registering the arrow as a node), leading to ref_count=2x.
+        After fix: the module-level pass skips pair subtrees with
+        arrow/function values.
+        """
+        ts = """\
+const svc = {
+  list: (ctx: any) => { return helper(); },
+};
+"""
+        result = _parse(ts, "test.ts")
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected exactly 1 helper edge (no double-count between "
+            f"per-function pass and module-level pass), got {len(helper_edges)}. "
+            f"edges={helper_edges}"
+        )
+
+    def test_object_literal_in_function_body_not_double_counted(self):
+        """Object literal returned from a function: the function body
+        is already walked by the per-function pass, so the object-literal
+        method pass must not re-walk the same pairs.
+
+        Note: object literals inside function bodies don't have a
+        variable_declarator parent at module scope, so they are skipped
+        by _find_object_literal_method_decls (no stable var name).
+        """
+        ts = """\
+function makeService() {
+  return {
+    list: (ctx: any) => { return helper(); },
+  };
+}
+"""
+        result = _parse(ts, "test.ts")
+        # helper() is inside the arrow function inside the object literal
+        # inside makeService's body. The per-function pass for makeService
+        # walks its body and extracts helper() attributed to makeService.
+        # The object-literal method pass skips this pair (no
+        # variable_declarator parent with object value at module scope).
+        # The module-level pass skips makeService's subtree (registered decl).
+        # So helper should have exactly 1 edge, from makeService.
+        helper_edges = [e for e in result["edges"] if e.get("to_fn") == "helper"]
+        assert len(helper_edges) == 1, (
+            f"Expected 1 helper edge (from makeService), got {len(helper_edges)}. "
+            f"edges={helper_edges}"
+        )
+        # Should NOT come from <module> — makeService is a registered decl
+        from_text = helper_edges[0]["from"]
+        assert ":0:<module>" not in from_text, (
+            f"helper edge should come from makeService's node id, not <module>. "
+            f"edge={helper_edges[0]}"
+        )
