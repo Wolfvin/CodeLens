@@ -572,10 +572,17 @@ class PersistentRegistry:
             return None
 
         conn = self._connect()
+        # Tiebreak on the autoincrement id (monotonic) in addition to
+        # timestamp: set_cached_result() does a plain INSERT (not an
+        # upsert), so two writes for the same (command, file_set_hash) in
+        # quick succession can land on the same time.time() value (limited
+        # clock resolution) — ORDER BY timestamp alone then returns
+        # whichever row SQLite picks arbitrarily on the tie, which can be
+        # the stale one.
         row = conn.execute(
             """SELECT result_json FROM analysis_cache
                WHERE command = ? AND file_set_hash = ?
-               ORDER BY timestamp DESC LIMIT 1
+               ORDER BY timestamp DESC, id DESC LIMIT 1
             """,
             (command, file_set_hash),
         ).fetchone()

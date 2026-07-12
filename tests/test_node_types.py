@@ -162,10 +162,13 @@ class TestGetLanguageConfig:
 
 
 class TestGetSupportedLanguages:
-    """``get_supported_languages()`` lists all 7 tree-sitter languages."""
+    """``get_supported_languages()`` lists all 13 tree-sitter languages."""
 
+    # Issue #198 added go/java/php/ruby/c/cpp (6 languages) alongside the
+    # original 7 (python/rust/javascript/typescript/tsx/css/html) -> 13 total.
     EXPECTED_LANGUAGES = {
-        "python", "rust", "javascript", "typescript", "tsx", "css", "html"
+        "python", "rust", "javascript", "typescript", "tsx", "css", "html",
+        "go", "java", "php", "ruby", "c", "cpp",
     }
 
     def test_all_expected_languages_present(self):
