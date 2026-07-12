@@ -71,9 +71,23 @@ def project_tree(tmp_path):
     (src / "app.py").write_text("print('hi')\n", encoding="utf-8")
     (src / "utils.py").write_text("def x(): pass\n", encoding="utf-8")
 
+    # Symlink creation requires SeCreateSymbolicLinkPrivilege on Windows
+    # (Administrator or Developer Mode enabled) — it raises OSError
+    # WinError 1314 otherwise. Without this guard, every one of the ~26
+    # tests in this file errors out at fixture setup (even tests that
+    # don't test symlink behavior at all), since they all depend on this
+    # shared fixture. Fall back to a plain file so non-symlink-specific
+    # tests still run; symlink-specific tests check `symlinks_supported`
+    # and skip themselves individually.
+    symlinks_supported = True
+
     # Inside symlink: points to a file inside the project.
     inside = proj / "inside_link"
-    inside.symlink_to(src / "app.py")
+    try:
+        inside.symlink_to(src / "app.py")
+    except OSError:
+        symlinks_supported = False
+        inside.write_text("print('hi')\n", encoding="utf-8")
 
     # Outside symlink: points to a system file outside the project.
     # /etc/hostname exists on virtually every POSIX system; if not,
@@ -82,13 +96,18 @@ def project_tree(tmp_path):
     if not os.path.exists(target):
         target = tempfile.gettempdir()
     outside = proj / "outside_link"
-    outside.symlink_to(target)
+    try:
+        outside.symlink_to(target)
+    except OSError:
+        symlinks_supported = False
+        outside.write_text("placeholder\n", encoding="utf-8")
 
     return {
         "root": str(proj),
         "src_app": str(src / "app.py"),
         "inside_link": str(inside),
         "outside_link": str(outside),
+        "symlinks_supported": symlinks_supported,
     }
 
 
@@ -143,10 +162,14 @@ class TestIsPathWithinProject:
         assert is_path_within_project(str(proj), candidate) is False
 
     def test_symlink_inside_project(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         # The realpath of inside_link is src/app.py, which IS inside.
         assert is_path_within_project(project_tree["root"], project_tree["inside_link"]) is True
 
     def test_symlink_escape(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         # The realpath of outside_link is /etc/hostname (or /tmp), which
         # is NOT inside the project.
         assert is_path_within_project(project_tree["root"], project_tree["outside_link"]) is False
@@ -183,11 +206,15 @@ class TestResolvePathWithinProject:
         assert os.path.isfile(result)
 
     def test_returns_realpath_for_symlink_inside(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         result = resolve_path_within_project(project_tree["root"], project_tree["inside_link"])
         # The symlink is resolved to its target — which is inside the project.
         assert result == os.path.realpath(project_tree["src_app"])
 
     def test_raises_for_symlink_escape(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         with pytest.raises(PathRefusalError) as exc_info:
             resolve_path_within_project(project_tree["root"], project_tree["outside_link"])
         err = exc_info.value
@@ -227,6 +254,8 @@ class TestResolvePathWithinProject:
         and ``OSError`` so existing error handlers in callers continue
         to work without modification.
         """
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         try:
             resolve_path_within_project(project_tree["root"], project_tree["outside_link"])
         except PathRefusalError as exc:
@@ -247,6 +276,8 @@ class TestSafeResolvePath:
         assert result == os.path.realpath(project_tree["src_app"])
 
     def test_returns_none_on_refusal(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         result = safe_resolve_path(project_tree["root"], project_tree["outside_link"])
         assert result is None
 
@@ -266,6 +297,8 @@ class TestSafeReadFileWithinProject:
         assert "print('hi')" in content
 
     def test_returns_none_for_symlink_escape(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         # The symlink target is /etc/hostname (or /tmp) — readable by
         # the OS, but our security boundary must refuse it regardless
         # of OS permissions.
@@ -338,6 +371,8 @@ class TestMcpPathValidation:
         assert "suggestion" in result
 
     def test_symlink_escape_returns_structured_error(self, project_tree):
+        if not project_tree["symlinks_supported"]:
+            pytest.skip("symlink creation requires elevated privilege on this platform")
         srv = self._make_server()
         args = {"file": project_tree["outside_link"]}
         result = srv._validate_path_args(args, project_tree["root"])
