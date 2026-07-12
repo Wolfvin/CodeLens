@@ -170,6 +170,7 @@ def parse_js_backend_fallback(content, file_path):
     # Detect function calls (simplified — within function bodies)
     # For each function found, scan its approximate scope for calls
     lines = content.split('\n')
+    covered_lines = [False] * len(lines)
     for node in nodes:
         start_line = node["line"] - 1  # 0-indexed
         # Approximate: scan from function start to next function or 50 lines
@@ -177,9 +178,29 @@ def parse_js_backend_fallback(content, file_path):
         for i in range(start_line, end_line):
             if i >= len(lines):
                 break
+            covered_lines[i] = True
             for m in re.finditer(r'\b([a-zA-Z_]\w*)\s*\(', lines[i]):
                 call_name = m.group(1)
                 if call_name not in skip_names and call_name != node["fn"]:
                     edges.append({"from": node["id"], "to_fn": call_name})
+
+    # Issue #210: module-top-level calls. The per-function loop above only
+    # scans lines inside an approximate function scope. Calls at file root
+    # (e.g., `router.post(path, requirePermission('admin'), handler)` in an
+    # Express modular route file) and calls inside inline arrow-function
+    # callbacks that aren't assigned to a variable are missed entirely,
+    # undercounting reference_count for any function only called via those
+    # patterns. Scan remaining uncovered lines and emit edges with a
+    # synthetic `<module>` caller (no node entry — mirrors the IMPORTS-edge
+    # convention in hybrid_type_resolver._file_node_id).
+    module_node_id = f"{file_path}:0:<module>"
+    for i, line in enumerate(lines):
+        if covered_lines[i]:
+            continue
+        for m in re.finditer(r'\b([a-zA-Z_]\w*)\s*\(', line):
+            call_name = m.group(1)
+            if call_name in skip_names:
+                continue
+            edges.append({"from": module_node_id, "to_fn": call_name})
 
     return {"nodes": nodes, "edges": edges}
